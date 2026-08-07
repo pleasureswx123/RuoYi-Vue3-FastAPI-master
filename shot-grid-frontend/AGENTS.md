@@ -1,0 +1,1 @@
+以 ruoyi-fastapi-backend 后端服务与ruoyi-fastapi-frontend后台管理系统 为基建，在 shot-grid-frontend 里搭建业务场景系统。
