@@ -3220,3 +3220,11 @@ NAS I/O 不得在数据库事务内执行。`sg_storage_operation` 和 `sg_versi
 9. 22 张基础表、迁移、种子及第一批项目与导入 API 已转化为代码；其余普通 CRUD、NAS Worker、任务动作、版本审核和前端能力继续按本契约分批实现。
 
 上述 1—8 是评审、部署或数据治理参数，不得由页面开发临时猜测。第 9 项只说明当前第一批实现边界，未落地的契约章节仍是设计，不是已实现能力。
+
+## Shot Grid 独立前端认证与请求契约
+
+Shot Grid 业务前端复用平台的 `POST /login`、`GET /getInfo`、`GET /captchaImage` 与 `POST /logout`，不读取管理端 `/getRouters`。登录态使用同源 `Admin-Token` Cookie（`Path=/`）并通过 `Authorization: Bearer <token>` 发送；用户状态仅保留平台用户身份、角色、权限与恢复标记。
+
+普通 JSON API 根据后端公开传输策略使用 RSA-OAEP + AES-256-GCM 请求信封并解密响应信封。公钥版本失效时清除公钥缓存并最多重试一次。文件下载、Blob/ArrayBuffer、`/common/download`、`/common/download/resource`、`/common/files/`、`/system/file/download/`、Shot Grid 文件/媒体路径和带 `Range` 的媒体请求排除应用层信封，但继续携带 Bearer Token、项目上下文头并接受后端项目权限校验。
+
+请求层统一解析 `code/msg/data`。401 触发单次提示、平台退出尝试和本地会话清理；403、404、409、413、416 与 5xx 分别保留可区分错误，409 保留后端冲突消息与 `errorKey/data`，5xx 必须 reject，禁止转换为空列表。Blob 形式 JSON 错误必须先解析再交给统一错误处理。

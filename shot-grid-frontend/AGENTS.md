@@ -459,3 +459,11 @@ MVP 不能只以页面数量验收，至少需要真实走通：
 - 不在一次变更中同时完成脚手架、全量业务页面、后端表结构和全部 E2E；按主链拆分可审查、可验证的增量。
 - 保留用户已有设计和文档，不因生成脚手架覆盖 `docs/` 或本文件。
 - 汇报时明确区分：静态原型、Mock 可交互、真实 API 已接入、集成测试通过、完整 E2E 通过。
+
+## 16. 已确认的独立请求层契约
+
+- Shot Grid 已在 `src/utils/` 独立维护认证 Cookie、统一 Axios 请求、传输加密策略与 RSA-OAEP/AES-256-GCM 信封实现，不运行时导入管理端源码。
+- 认证仅接入平台 `/login`、`/getInfo`、`/captchaImage`、`/logout`，业务端不调用 `/getRouters`。
+- `/common/download`、`/common/download/resource`、`/common/files/`、`/system/file/download/`、Shot Grid 文件/媒体二进制接口以及带 `Range` 的请求排除应用层加密；请求仍携带 Bearer Token，业务接口还需由后端校验项目权限。
+- 传输密钥失效只允许刷新后重试一次；并发 401 只执行一次提示与退出清理。401 清理 Token、身份权限、项目上下文和媒体临时状态。
+- 请求层必须区分 401、403、404、409、413、416 与 5xx，服务错误保持 rejected 状态，不得回退为空列表。
