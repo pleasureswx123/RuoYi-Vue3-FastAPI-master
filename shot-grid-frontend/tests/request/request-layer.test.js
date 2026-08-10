@@ -36,6 +36,8 @@ test('401 并发响应共享一次退出处理', async () => {
 
 test('统一 envelope 保留业务冲突，不把服务失败转换为空列表', () => {
   assert.deepEqual(parseResponseEnvelope({ code: 200, msg: '成功', data: [1] }), [1])
+  assert.deepEqual(parseResponseEnvelope({ code: 202, msg: '已受理', data: { projectId: 1 } }), { projectId: 1 })
+  assert.deepEqual(parseResponseEnvelope({ code: 200, rows: [1], total: 1, pageNum: 1, pageSize: 10 }), { rows: [1], total: 1, pageNum: 1, pageSize: 10 })
   assert.throws(() => parseResponseEnvelope({ code: 409, msg: '版本冲突', data: { version: 2 } }), (error) => {
     assert.equal(error.code, 409)
     assert.equal(error.message, '版本冲突')
