@@ -1617,7 +1617,14 @@ Permission: shotgrid:navigation:list
 ```text
 POST /login
 GET  /getInfo
+POST /logout
 ```
+
+上述路径是剥离网关前缀后的后端路由。浏览器侧前缀固定为开发 `/dev-api`、生产 `/api`、Docker `/docker-api`，Shot Grid 领域请求相应为 `/dev-api/shot-grid/...`、`/api/shot-grid/...` 或 `/docker-api/shot-grid/...`。MVP 使用同域不同路径部署：管理端 `/admin/`、业务端 `/shot-grid/`，共同通过同一个 API 前缀访问同一 FastAPI 实例；Swagger、ReDoc、OpenAPI 和传输加密公开接口也必须使用同一前缀。
+
+Shot Grid 有独立登录页面，但没有独立认证服务或账号表。它与管理端共享 `Admin-Token` Cookie（`Path=/`），并使用相同的 `Authorization: Bearer <token>` 协议。任一应用主动退出或处理已确认的 401/Token 过期时，调用 `/logout` 后清除共享 Cookie，两个应用同时失去登录态。跨应用跳转只传目标业务路径，不得通过 URL、`postMessage` 或额外存储复制 Token；目标应用读取 Cookie、调用 `/getInfo`，成功后恢复目标页，失败则清理会话并跳转本应用登录页。刷新页面也遵循相同恢复流程。
+
+传输加密继续复用公开的 `GET /transport/crypto/frontend-config` 与 `GET /transport/crypto/public-key`。业务端实现必须与管理端的请求加密、响应解密、AAD 路径去前缀、公钥缓存及密钥失效单次重试行为保持协议一致，但代码由独立前端维护。完整代理矩阵、`APP_ROOT_PATH` 约束和验收步骤见 `部署说明.md`。
 
 ### 9.2 请求与响应命名
 
@@ -3125,6 +3132,19 @@ NAS I/O 不得在数据库事务内执行。`sg_storage_operation` 和 `sg_versi
 | `SG_IMPORT_READONLY_COLUMNS_IGNORED` | warning | 工作簿 | 状态等只读列已忽略，不参与写入 |
 
 ## 20. 第一批验收用例
+
+### 20.0 认证、会话与跨应用验收
+
+认证验收必须在管理端、Shot Grid、同一个真实后端、PostgreSQL 和 Redis 均已启动后执行；静态检查或构建不能替代以下浏览器 E2E：
+
+1. **登录成功**：从 `/shot-grid/login?redirect=/shot-grid/projects` 登录，确认仅调用平台 `/login`、`/getInfo`，写入 `Admin-Token` 且请求使用 Bearer Token，最终回到目标页；数据库中不产生 Shot Grid 账号。
+2. **刷新恢复**：登录后刷新受保护业务页，确认从共享 Cookie 恢复 Token、重新调用 `/getInfo`，且不出现登录页闪回、不丢失原目标 URL。
+3. **Token 过期**：使 Redis 会话或 JWT 过期后发起领域请求，确认只出现一次重新登录提示；确认后调用 `/logout`（服务端已失效时允许其失败）、清除共享 Cookie并进入 Shot Grid 登录页，取消提示不得形成重复弹窗循环。
+4. **HTTP/body 401**：分别模拟真实 HTTP 401 与 HTTP 200、响应体 `code=401`，两者均走相同会话失效流程；并发请求只能触发一次退出/提示，不能继续重试业务写操作。
+5. **主动退出**：在任一应用退出，确认调用同一 `/logout` 并清除 `Admin-Token`；随后刷新另一个应用必须进入其登录页，不能保留仅前端可见的伪登录态。
+6. **管理端跳业务端**：管理端已登录时跳转 `/shot-grid/...`，URL 不含 Token；Shot Grid 调用 `/getInfo` 后直接进入有权目标页，无权用户显示业务无权而不是创建另一会话。
+7. **业务端跳管理端**：Shot Grid 已登录时跳转 `/admin/...`，URL 不含 Token；管理端读取同一 Cookie 并按 `/getInfo`、`/getRouters` 恢复，有权进入目标页，无权按平台权限拒绝。
+8. **传输加密与前缀**：分别在开发、生产和 Docker 前缀下访问两个公开加密接口并完成登录；确认 AAD 使用剥离外部 API 前缀后的后端路径，密钥轮换只重试一次，Swagger/OpenAPI 的 Server URL 与实际代理前缀一致。
 
 ### 20.1 正向闭环
 
