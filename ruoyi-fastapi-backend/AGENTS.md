@@ -230,7 +230,8 @@ PostgreSQL 迁移是当前项目的必需交付物。只有插件清单继续声
 - 当前 head `20260810_05` 在任何 DDL 前预检 `sg_storage_operation` 的状态、重试时间、租约和完成时间组合，冲突时以 `SG_STORAGE_OPERATION_EXECUTION_STATE_CONFLICT` 整体失败；通过后增加执行状态一致性 `CHECK` 以及“项目+聚合+最新操作”和“项目+创建时间”两个非唯一索引。05 的 downgrade 会恢复 04 版 `target_relative_path` 列注释，并移除本 revision 新增的一个约束和两个索引，但不修改目录操作数据。
 - Shot Grid 只承诺 PostgreSQL；非 PostgreSQL 环境不得把 `sg_` 模型加入平台元数据，Shot Grid revision 的升级和降级必须保持 no-op。
 - 已有平台 PostgreSQL 库通过 Alembic 执行增量迁移；新库通过同步后的 PostgreSQL 初始化 SQL 建立全量结构并写入 Alembic head。当前仍不存在完整平台 Alembic baseline，不得声称首个 Shot Grid revision 能从真正空库独立建立 RuoYi 平台。
-- 项目创建、成员变更、Excel 正式提交和目录人工重试必须由 Service 在同一数据库事务写领域数据、Outbox 与 `SysOperLog`；不得使用会异步入 Redis 的平台 `@Log` 冒充同事务审计。项目编辑/归档、手工 CRUD、任务动作、版本文件发布和审核闭环仍待后续实现。
+- 项目创建/编辑/归档、成员变更、集/场次/镜头/资产普通管理、Excel 正式提交和目录人工重试必须由 Service 在同一数据库事务写领域数据、必要的 Outbox 与 `SysOperLog`；不得使用会异步入 Redis 的平台 `@Log` 冒充同事务审计。项目、集、场次、镜头、资产和制作分项已实现业务归档而非物理删除；任务动作、资产需求人工处理、版本文件发布和审核闭环仍待后续实现。
+- 资产创建时同时冻结 `asset_type/asset_name/asset_name_key/storage_dir_name/storage_path_key`；普通编辑只允许描述、排序和备注，重命名、改类型或目录迁移必须使用后续受控动作。制作分项无版本时可补充，已有版本后主数据冻结。未来任何正式版本创建事务必须先按统一锁序取得所属项目行锁，再锁任务/提交/版本资源，避免与项目类型或画幅修改产生 TOCTOU。
 - 目录 Worker 默认关闭，仅在 PostgreSQL 且 `SHOT_GRID_STORAGE_WORKER_ENABLED=true` 时由 Application Leader 注册内部任务 `_shot_grid_storage_outbox`。每条操作执行前再次检查 Leader；数据库以 `FOR UPDATE SKIP LOCKED` 提供领取互斥，并以有期限租约和 owner + attempt fencing 拒绝旧持有者迟到回写。租约接管窗口不承诺旧、新 Worker 的物理 I/O 完全不重叠，因此当前执行器只能承载幂等目录创建和随机 `O_EXCL` 写探针。内部任务不得被数据库 Scheduler 同步当成普通 `sys_job` 删除或记录成高频任务日志。
 - `initialize_project` 及项目级 `reconcile_directory` 的 `target_relative_path` 相对 NAS 存储根目录，值等于项目绑定的 `project_relative_path`；集、镜头、资产级 `ensure_*` 及 `reconcile_directory` 的目标相对项目根目录。不得把这两个作用域混为一套路径拼接规则。
 - Worker 必须先提交领取短事务，再在线程中执行路径校验、幂等建目录和写探针，最后以短事务回写结果；软超时只做诊断并继续心跳续租，不能声称能够硬终止仍在运行的 SMB I/O。APScheduler 的 AsyncIOExecutor 不会等待已取消 Job，因此正常关机和 Leader 失锁必须显式 drain 已登记的 NAS Job，完成当前 I/O 与租约收尾后才能关闭数据库或重新竞争。当前单轮批次串行消费，尚未启用批内并发。

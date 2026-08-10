@@ -16,12 +16,15 @@ from module_shot_grid.entity.do.project_do import ShotGridProject, ShotGridProje
 from module_shot_grid.entity.do.storage_do import ShotGridProjectStorage, ShotGridStorageOperation
 from module_shot_grid.entity.vo.access_vo import ShotGridProjectAccessModel
 from module_shot_grid.entity.vo.project_vo import (
+    ShotGridProjectArchiveModel,
     ShotGridProjectCreateModel,
     ShotGridProjectCreationAcceptedModel,
     ShotGridProjectDetailModel,
     ShotGridProjectListItemModel,
     ShotGridProjectListQueryModel,
+    ShotGridProjectMutationResultModel,
     ShotGridProjectStorageStatusModel,
+    ShotGridProjectUpdateModel,
 )
 from module_shot_grid.exceptions import ShotGridDomainException, shot_grid_error
 from module_shot_grid.service.project_overview_service import ShotGridProjectOverviewService
@@ -35,6 +38,7 @@ class ShotGridProjectService:
 
     PROJECT_ACTION_PERMISSIONS = {
         'project.edit': 'shotgrid:project:edit',
+        'project.archive': 'shotgrid:project:archive',
         'member.manage': ('shotgrid:member:add', 'shotgrid:member:edit', 'shotgrid:member:remove'),
         'scene.create': 'shotgrid:scene:add',
         'shot.create': 'shotgrid:shot:add',
@@ -288,11 +292,205 @@ class ShotGridProjectService:
             raise
 
     @classmethod
+    async def update_project(
+        cls,
+        db: AsyncSession,
+        project_id: int,
+        command: ShotGridProjectUpdateModel,
+        current_user: CurrentUserModel,
+        access: ShotGridProjectAccessModel,
+    ) -> ShotGridProjectMutationResultModel:
+        """在项目行锁与乐观锁保护下修改项目基本信息。"""
+        try:
+            user_id, actor_name, dept_name = cls._actor(current_user)
+            cls._require_mutation_access(access, project_id, user_id)
+            project = await cls._lock_mutable_project(db, project_id)
+            cls._ensure_lock_version(project.lock_version, command.lock_version)
+
+            version_sensitive_change = (
+                project.project_type != command.project_type or project.aspect_ratio != command.aspect_ratio
+            )
+            if version_sensitive_change and await ShotGridProjectDao.has_formal_versions(db, project_id):
+                raise shot_grid_error(
+                    409,
+                    'SG_PROJECT_VERSIONED_METADATA_IMMUTABLE',
+                    '项目已有正式版本，不能普通修改项目类型或画幅',
+                )
+
+            now = datetime.now()
+            updated = await ShotGridProjectDao.update_project(
+                db,
+                project_id,
+                command.lock_version,
+                {
+                    'project_name': command.project_name,
+                    'project_description': command.project_description,
+                    'project_type': command.project_type,
+                    'aspect_ratio': command.aspect_ratio,
+                    'planned_duration_ms': command.planned_duration_ms,
+                    'delivery_date': command.delivery_date,
+                    'current_phase': command.current_phase,
+                    'remark': command.remark,
+                    'update_by': actor_name,
+                    'update_time': now,
+                },
+            )
+            if updated is None:
+                raise cls._optimistic_lock_error()
+            result = ShotGridProjectMutationResultModel.model_validate(updated)
+            await cls._audit_project_mutation(
+                db,
+                actor_name=actor_name,
+                dept_name=dept_name,
+                business_type=2,
+                method='update_project',
+                request_method='PUT',
+                oper_url=f'/shot-grid/projects/{project_id}',
+                oper_param={
+                    'projectId': project_id,
+                    'projectName': command.project_name,
+                    'projectDescription': command.project_description,
+                    'projectType': command.project_type,
+                    'aspectRatio': command.aspect_ratio,
+                    'plannedDurationMs': command.planned_duration_ms,
+                    'deliveryDate': command.delivery_date.isoformat() if command.delivery_date else None,
+                    'currentPhase': command.current_phase,
+                    'remark': command.remark,
+                    'lockVersion': command.lock_version,
+                },
+                result={
+                    'projectId': project_id,
+                    'projectStatus': result.project_status,
+                    'lockVersion': result.lock_version,
+                },
+            )
+            await db.commit()
+        except ShotGridDomainException:
+            await db.rollback()
+            raise
+        except Exception:
+            await db.rollback()
+            raise
+        return result
+
+    @classmethod
+    async def archive_project(
+        cls,
+        db: AsyncSession,
+        project_id: int,
+        command: ShotGridProjectArchiveModel,
+        current_user: CurrentUserModel,
+        access: ShotGridProjectAccessModel,
+    ) -> ShotGridProjectMutationResultModel:
+        """归档项目；保留业务记录且不提供普通恢复路径。"""
+        try:
+            user_id, actor_name, dept_name = cls._actor(current_user)
+            cls._require_mutation_access(access, project_id, user_id)
+            project = await cls._lock_mutable_project(db, project_id)
+            cls._ensure_lock_version(project.lock_version, command.lock_version)
+
+            updated = await ShotGridProjectDao.update_project(
+                db,
+                project_id,
+                command.lock_version,
+                {
+                    'project_status': 'archived',
+                    'update_by': actor_name,
+                    'update_time': datetime.now(),
+                },
+            )
+            if updated is None:
+                raise cls._optimistic_lock_error()
+            result = ShotGridProjectMutationResultModel.model_validate(updated)
+            await cls._audit_project_mutation(
+                db,
+                actor_name=actor_name,
+                dept_name=dept_name,
+                business_type=3,
+                method='archive_project',
+                request_method='POST',
+                oper_url=f'/shot-grid/projects/{project_id}/archive',
+                oper_param={
+                    'projectId': project_id,
+                    'reason': command.reason,
+                    'lockVersion': command.lock_version,
+                },
+                result={
+                    'projectId': project_id,
+                    'projectStatus': result.project_status,
+                    'lockVersion': result.lock_version,
+                },
+            )
+            await db.commit()
+        except ShotGridDomainException:
+            await db.rollback()
+            raise
+        except Exception:
+            await db.rollback()
+            raise
+        return result
+
+    @classmethod
     def _build_list_item(cls, row: dict[str, Any]) -> ShotGridProjectListItemModel:
         values = dict(row)
         overview = ShotGridProjectOverviewService.build_model(values)
         values.update(overview.model_dump())
         return ShotGridProjectListItemModel.model_validate(values)
+
+    @classmethod
+    async def _lock_mutable_project(cls, db: AsyncSession, project_id: int) -> ShotGridProject:
+        project = await ShotGridProjectDao.get_project_by_id(db, project_id, for_update=True)
+        if project is None:
+            raise shot_grid_error(404, 'SG_PROJECT_NOT_FOUND', '项目不存在或不可见')
+        if project.project_status == 'archived':
+            raise shot_grid_error(409, 'SG_INVALID_STATE_TRANSITION', '归档项目只允许读取')
+        return project
+
+    @staticmethod
+    def _ensure_lock_version(actual_lock_version: int, expected_lock_version: int) -> None:
+        if actual_lock_version != expected_lock_version:
+            raise ShotGridProjectService._optimistic_lock_error()
+
+    @staticmethod
+    def _optimistic_lock_error() -> ShotGridDomainException:
+        return shot_grid_error(409, 'SG_OPTIMISTIC_LOCK_CONFLICT', '项目已被其他操作修改，请刷新后重试')
+
+    @staticmethod
+    def _require_mutation_access(
+        access: ShotGridProjectAccessModel,
+        project_id: int,
+        user_id: int,
+    ) -> None:
+        if access.project_id != project_id or access.user_id != user_id:
+            raise shot_grid_error(403, 'SG_PROJECT_ACCESS_DENIED', '项目访问上下文不一致')
+        if not (access.has_all_scope or access.project_role == 'director'):
+            raise shot_grid_error(403, 'SG_PROJECT_ACCESS_DENIED', '当前项目角色无权修改项目')
+
+    @staticmethod
+    async def _audit_project_mutation(
+        db: AsyncSession,
+        *,
+        actor_name: str,
+        dept_name: str | None,
+        business_type: int,
+        method: str,
+        request_method: str,
+        oper_url: str,
+        oper_param: dict[str, Any],
+        result: dict[str, Any],
+    ) -> None:
+        await ShotGridProjectAuditDao.add_success_log(
+            db,
+            title='Shot Grid 项目管理',
+            business_type=business_type,
+            method=f'module_shot_grid.service.project_service.ShotGridProjectService.{method}()',
+            request_method=request_method,
+            oper_name=actor_name,
+            dept_name=dept_name,
+            oper_url=oper_url,
+            oper_param=oper_param,
+            result=result,
+        )
 
     @classmethod
     def _allowed_actions(
@@ -321,7 +519,7 @@ class ShotGridProjectService:
     def _actor(current_user: CurrentUserModel) -> tuple[int, str, str | None]:
         user = current_user.user
         if user is None or user.user_id is None or not user.user_name:
-            raise shot_grid_error(403, 'SG_PROJECT_ACCESS_DENIED', '无法识别当前用户')
+            raise shot_grid_error(401, 'SG_CURRENT_USER_INVALID', '无法识别当前用户')
         dept_name = user.dept.dept_name if user.dept is not None else None
         return user.user_id, user.user_name, dept_name
 

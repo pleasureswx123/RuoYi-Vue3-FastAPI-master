@@ -33,7 +33,7 @@ async def test_project_access_dependency_accepts_contract_and_python_path_parame
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('path_value', [None, 'abc', '0', '-1'])
+@pytest.mark.parametrize('path_value', [None, 'abc', '0', '-1', '9223372036854775808'])
 async def test_project_access_dependency_rejects_invalid_project_id_with_stable_error(
     path_value: str | None,
 ) -> None:

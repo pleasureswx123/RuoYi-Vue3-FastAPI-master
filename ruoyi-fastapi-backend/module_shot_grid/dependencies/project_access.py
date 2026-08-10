@@ -7,6 +7,8 @@ from module_shot_grid.entity.vo.access_vo import ShotGridProjectAccessModel
 from module_shot_grid.exceptions import shot_grid_error
 from module_shot_grid.service.project_access_service import ShotGridProjectAccessService
 
+SQL_BIGINT_MAX = 9_223_372_036_854_775_807
+
 
 class CheckShotGridProjectAccess:
     """校验路径参数中的 Shot Grid 项目访问范围。"""
@@ -23,7 +25,7 @@ class CheckShotGridProjectAccess:
             project_id = int(project_id_value)
         except (TypeError, ValueError) as exc:
             raise shot_grid_error(422, 'SG_PROJECT_ID_INVALID', '项目ID不正确') from exc
-        if project_id <= 0:
+        if project_id <= 0 or project_id > SQL_BIGINT_MAX:
             raise shot_grid_error(422, 'SG_PROJECT_ID_INVALID', '项目ID不正确')
         current_user = RequestContext.get_current_user()
         return await ShotGridProjectAccessService.resolve_access(db, current_user, project_id)

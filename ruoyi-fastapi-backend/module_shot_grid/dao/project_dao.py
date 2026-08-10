@@ -1,6 +1,6 @@
 from typing import Any
 
-from sqlalchemy import asc, desc, func, literal, or_, select
+from sqlalchemy import asc, desc, exists, func, literal, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 from sqlalchemy.orm.util import AliasedClass
@@ -9,6 +9,7 @@ from sqlalchemy.sql.selectable import Subquery
 from module_shot_grid.dao.project_overview_dao import ShotGridProjectOverviewDao
 from module_shot_grid.entity.do.project_do import ShotGridProject, ShotGridProjectMember
 from module_shot_grid.entity.do.storage_do import ShotGridProjectStorage
+from module_shot_grid.entity.do.version_do import ShotGridVersion
 from module_shot_grid.entity.vo.project_vo import ShotGridProjectListQueryModel
 
 
@@ -141,6 +142,56 @@ class ShotGridProjectDao:
         db.add(project)
         await db.flush()
         return project
+
+    @classmethod
+    async def has_formal_versions(cls, db: AsyncSession, project_id: int) -> bool:
+        """判断项目是否已经形成任何正式版本记录。"""
+        statement = select(
+            exists().where(
+                ShotGridVersion.project_id == project_id,
+            )
+        )
+        return bool((await db.execute(statement)).scalar_one())
+
+    @classmethod
+    async def update_project(
+        cls,
+        db: AsyncSession,
+        project_id: int,
+        expected_lock_version: int,
+        values: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """按乐观锁更新项目并返回事务内响应快照。"""
+        statement = (
+            update(ShotGridProject)
+            .where(
+                ShotGridProject.project_id == project_id,
+                ShotGridProject.del_flag == '0',
+                ShotGridProject.lock_version == expected_lock_version,
+            )
+            .values(
+                **values,
+                lock_version=ShotGridProject.lock_version + 1,
+            )
+            .returning(
+                ShotGridProject.project_id,
+                ShotGridProject.project_code,
+                ShotGridProject.project_name,
+                ShotGridProject.project_type,
+                ShotGridProject.project_description,
+                ShotGridProject.aspect_ratio,
+                ShotGridProject.planned_duration_ms,
+                ShotGridProject.delivery_date,
+                ShotGridProject.project_status,
+                ShotGridProject.current_phase,
+                ShotGridProject.remark,
+                ShotGridProject.lock_version,
+                ShotGridProject.update_time,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        row = (await db.execute(statement)).mappings().one_or_none()
+        return dict(row) if row is not None else None
 
     @staticmethod
     def _project_columns(overview: Subquery, current_member: AliasedClass) -> list[Any]:

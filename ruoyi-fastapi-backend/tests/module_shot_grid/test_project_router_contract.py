@@ -18,7 +18,9 @@ PROJECT_ID = 1001
 EXPECTED_ROUTES = {
     ('GET', '/shot-grid/projects'): 'shotgrid:project:list',
     ('POST', '/shot-grid/projects'): 'shotgrid:project:add',
+    ('PUT', '/shot-grid/projects/{projectId}'): 'shotgrid:project:edit',
     ('GET', '/shot-grid/projects/{projectId}'): 'shotgrid:project:query',
+    ('POST', '/shot-grid/projects/{projectId}/archive'): 'shotgrid:project:archive',
     ('GET', '/shot-grid/projects/{projectId}/storage'): 'shotgrid:storage:path',
     ('GET', '/shot-grid/projects/{projectId}/overview'): 'shotgrid:project:overview',
     ('GET', '/shot-grid/projects/{projectId}/members'): 'shotgrid:member:list',

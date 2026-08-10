@@ -11,20 +11,25 @@ from common.aspect.pre_auth import CurrentUserDependency, PreAuthDependency
 from common.router import APIRouterPro
 from common.vo import DataResponseModel, PageResponseModel
 from module_admin.entity.vo.user_vo import CurrentUserModel
-from module_shot_grid.dependencies.project_access import ProjectAccessDependency
+from module_shot_grid.dependencies.project_access import ProjectAccessDependency, ProjectRoleDependency
 from module_shot_grid.entity.vo.access_vo import ShotGridProjectAccessModel
 from module_shot_grid.entity.vo.project_vo import (
+    ShotGridProjectArchiveModel,
     ShotGridProjectCreateModel,
     ShotGridProjectCreationAcceptedResponseModel,
     ShotGridProjectDetailModel,
     ShotGridProjectListItemModel,
     ShotGridProjectListQueryModel,
+    ShotGridProjectMutationResultModel,
     ShotGridProjectOverviewModel,
     ShotGridProjectStorageStatusModel,
+    ShotGridProjectUpdateModel,
 )
 from module_shot_grid.service.project_overview_service import ShotGridProjectOverviewService
 from module_shot_grid.service.project_service import ShotGridProjectService
 from utils.response_util import ResponseUtil
+
+SQL_BIGINT_MAX = 9_223_372_036_854_775_807
 
 project_controller = APIRouterPro(
     prefix='/shot-grid/projects',
@@ -77,6 +82,54 @@ async def create_shot_grid_project(
     return JSONResponse(status_code=202, content=jsonable_encoder(response_model.model_dump(by_alias=True)))
 
 
+@project_controller.put(
+    '/{projectId}',
+    summary='修改项目基本信息',
+    response_model=DataResponseModel[ShotGridProjectMutationResultModel],
+    dependencies=[UserInterfaceAuthDependency('shotgrid:project:edit')],
+)
+async def update_shot_grid_project(
+    request: Request,
+    project_id: Annotated[int, Path(alias='projectId', gt=0, le=SQL_BIGINT_MAX)],
+    command: ShotGridProjectUpdateModel,
+    query_db: Annotated[AsyncSession, DBSessionDependency()],
+    current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
+    access: Annotated[ShotGridProjectAccessModel, ProjectRoleDependency('director')],
+) -> Response:
+    result = await ShotGridProjectService.update_project(
+        query_db,
+        project_id,
+        command,
+        current_user,
+        access,
+    )
+    return ResponseUtil.success(msg='修改成功', data=result)
+
+
+@project_controller.post(
+    '/{projectId}/archive',
+    summary='归档项目',
+    response_model=DataResponseModel[ShotGridProjectMutationResultModel],
+    dependencies=[UserInterfaceAuthDependency('shotgrid:project:archive')],
+)
+async def archive_shot_grid_project(
+    request: Request,
+    project_id: Annotated[int, Path(alias='projectId', gt=0, le=SQL_BIGINT_MAX)],
+    command: ShotGridProjectArchiveModel,
+    query_db: Annotated[AsyncSession, DBSessionDependency()],
+    current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
+    access: Annotated[ShotGridProjectAccessModel, ProjectRoleDependency('director')],
+) -> Response:
+    result = await ShotGridProjectService.archive_project(
+        query_db,
+        project_id,
+        command,
+        current_user,
+        access,
+    )
+    return ResponseUtil.success(msg='归档成功', data=result)
+
+
 @project_controller.get(
     '/{projectId}',
     summary='获取项目详情',
@@ -85,7 +138,7 @@ async def create_shot_grid_project(
 )
 async def get_shot_grid_project_detail(
     request: Request,
-    project_id: Annotated[int, Path(alias='projectId', gt=0)],
+    project_id: Annotated[int, Path(alias='projectId', gt=0, le=SQL_BIGINT_MAX)],
     query_db: Annotated[AsyncSession, DBSessionDependency()],
     current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
     access: Annotated[ShotGridProjectAccessModel, ProjectAccessDependency()],
@@ -107,7 +160,7 @@ async def get_shot_grid_project_detail(
 )
 async def get_shot_grid_project_storage_status(
     request: Request,
-    project_id: Annotated[int, Path(alias='projectId', gt=0)],
+    project_id: Annotated[int, Path(alias='projectId', gt=0, le=SQL_BIGINT_MAX)],
     query_db: Annotated[AsyncSession, DBSessionDependency()],
     access: Annotated[ShotGridProjectAccessModel, ProjectAccessDependency()],
 ) -> Response:
@@ -123,7 +176,7 @@ async def get_shot_grid_project_storage_status(
 )
 async def get_shot_grid_project_overview(
     request: Request,
-    project_id: Annotated[int, Path(alias='projectId', gt=0)],
+    project_id: Annotated[int, Path(alias='projectId', gt=0, le=SQL_BIGINT_MAX)],
     query_db: Annotated[AsyncSession, DBSessionDependency()],
     access: Annotated[ShotGridProjectAccessModel, ProjectAccessDependency()],
 ) -> Response:

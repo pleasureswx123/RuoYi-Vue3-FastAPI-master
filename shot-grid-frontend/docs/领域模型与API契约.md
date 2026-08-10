@@ -4,8 +4,8 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 版本 | v1.3 |
-| 状态 | 数据库约束、第一批项目与 Excel 导入 API、NAS 目录 Outbox Worker 及目录诊断/人工重试已落地；Worker 默认关闭，版本发布与其余业务主体仍按设计分批实现 |
+| 版本 | v1.4 |
+| 状态 | 数据库约束、第一批普通管理与 Excel 导入 API、NAS 目录 Outbox Worker 及目录诊断/人工重试已落地；Worker 默认关闭，任务动作、版本发布与审核仍按设计分批实现 |
 | 建立日期 | 2026-08-07 |
 | 最近修订 | 2026-08-10 |
 | 数据库 | PostgreSQL |
@@ -406,7 +406,7 @@ MVP 项目角色：
 - “制作人”不存在直接的 `sg_shot.assignee_user_id`；直接显示镜头唯一视频任务的负责人。
 - “当前最新版本”按镜头唯一任务中的 `version_no DESC` 确定。
 - “当前最新反馈”优先取当前最新版本的未解决意见；没有未解决意见时取该版本最近一条可见意见，没有意见时返回 `null`。
-- 缩略图只取当前最新版本中 `file_role = 'thumbnail'` 的主文件；当前版本没有缩略图时返回 `null`，不得静默回退到旧版本图片。
+- 缩略图只取当前最新版本中 `file_role = 'thumbnail'` 且按 `sort_order ASC, file_id ASC` 排序的首个文件；`is_primary` 只用于 `review_media`，不用于缩略图。当前版本没有缩略图时返回 `null`，不得静默回退到旧版本图片。
 - 缩略图返回稳定 `fileId` 和 Shot Grid 专用授权访问地址，不保存 Blob URL、本机路径或未经授权的公开 URL；访问时仍按第 17 节实时校验项目、任务和平台文件 deny 决策。
 
 ### 6.6 `sg_asset`
@@ -439,8 +439,8 @@ MVP 项目角色：
 
 - MVP 只允许 `Character`、`Environment`、`Prop`，不接受 `other` 或任意自定义类型。
 - 将来扩展类型时必须同步数据库约束、后端枚举/校验、字典、导入映射、目录与文件命名测试；不能只在字典管理中增加显示值。
-- `asset_name_key` 必须由后端统一算法生成，手工创建、编辑和 Excel 导入共用同一实现；前端不得自行提交该值。
-- 资产创建时按 Windows/SMB 安全规则生成并确认 `storage_dir_name`；同类型目录下大小写不敏感唯一，创建后保持不可变。
+- `asset_name_key` 必须由后端统一算法生成，手工创建和 Excel 导入共用同一实现；前端不得自行提交该值。
+- 资产创建时按 Windows/SMB 安全规则生成并确认 `storage_dir_name`；`asset_type`、`asset_name`、规范键和目录快照共同构成稳定身份，创建后普通编辑均不可修改。
 - 制作分项、任务描述、状态、制作人、缩略图、最新版本和批准版本来自 `sg_asset_item` 及其唯一任务；资产完成状态按全部活动制作分项聚合。
 - 参考图片使用平台文件引用，业务类型为 `shotgrid_asset_reference`。
 
@@ -448,8 +448,8 @@ MVP 项目角色：
 
 | 顺序 | 表头 | API 字段 | 数据来源 | 编辑方式 |
 | --- | --- | --- | --- | --- |
-| 1 | 类型 | `assetType` | `sg_asset.asset_type` | 可编辑，限三种固定类型 |
-| 2 | 名称 | `assetName` | `sg_asset.asset_name` | 可编辑 |
+| 1 | 类型 | `assetType` | `sg_asset.asset_type` | 创建时选择，创建后普通编辑不可修改 |
+| 2 | 名称 | `assetName` | `sg_asset.asset_name` | 创建时填写，创建后普通编辑不可修改 |
 | 3 | 制作分项 | `productionItem` | `sg_asset_item.production_item` | 可空；版本提交前必须补齐 |
 | 4 | 资产描述 | `description` | `sg_asset.description` | 可编辑 |
 | 5 | 任务描述 | `taskDescription` | 当前制作分项唯一任务的 `requirements` | 通过任务分配或任务编辑动作修改 |
@@ -1074,6 +1074,7 @@ pending → publishing → published → committing → committed
 - `UNIQUE(task_id, submitted_by, idempotency_key)`；相同请求重试返回同一提交记录、版本号、时间戳和业务文件名。
 - 每个任务同时最多一个 `pending/publishing/published/committing` 活动提交，使用 PostgreSQL 部分唯一索引保证。
 - 暂存创建时锁定任务并保留版本号；任务仍保持 `in_progress` 或 `revision`，直到正式版本提交成功。
+- 暂存和正式版本事务在锁任务、提交与版本资源前，必须先锁定所属项目行并复核项目未归档；统一锁序为 `project → task/submission → version`。这是防止首个版本与项目类型/画幅修改并发穿透冻结规则的上线门禁。
 - `publishing` 使用同一 NAS 目录临时文件，校验大小和 SHA-256 后执行原子改名；目标已存在且摘要一致视为幂等成功，摘要不同返回冲突。
 - `committing` 在一个短数据库事务中创建 `sg_version`、`sg_version_file`、`sys_file_reference`、自动审核单和关系，并把任务改为 `pending_review`。
 - 只有 `committed` 产生通过 `sg_version.submission_id` 关联的正式版本并对业务列表可见；`failed` 只在提交状态页和管理员诊断页可见。
@@ -1952,14 +1953,13 @@ Permission: shotgrid:project:edit
   "aspectRatio": "2.39:1",
   "plannedDurationMs": 510000,
   "deliveryDate": "2026-09-20",
-  "projectStatus": "active",
   "currentPhase": "shot_production",
   "remark": "",
   "lockVersion": 0
 }
 ```
 
-项目代号、NAS 根目录、项目目录名和路径快照不能通过本接口修改。项目已经存在正式版本时，项目类型和画幅也禁止普通修改；如确有需要，必须使用独立管理员动作、迁移方案和审计。
+项目状态不能通过本接口修改，只能使用独立的启动、完成和归档动作。项目代号、NAS 根目录、项目目录名和路径快照也不能通过本接口修改；请求携带这些额外字段时返回 422。项目已经存在正式版本时，项目类型和画幅也禁止普通修改；如确有需要，必须使用独立管理员动作、迁移方案和审计。
 
 ### 10.5 归档项目
 
@@ -2286,7 +2286,7 @@ isAsc
   "thumbnail": {
     "fileId": "5ed39e04-2f29-45ab-a58c-4f8168f5131a",
     "name": "WGZR_EP001_001_S001_YJF_V004_1786094626499-thumbnail.jpg",
-    "url": "/shot-grid/files/5ed39e04-2f29-45ab-a58c-4f8168f5131a/download"
+    "url": "/shot-grid/versions/9004/files/5ed39e04-2f29-45ab-a58c-4f8168f5131a/download"
   },
   "latestVersion": {
     "versionId": 9004,
@@ -2851,7 +2851,7 @@ Permissions:
 5. 制作分项提供单一主制作人时，为该分项创建唯一 `asset_image` 任务；
 6. 提交后异步确保 NAS 目录。
 
-资产详情返回制作分项列表、每个分项的唯一任务及最新/最终版本、使用镜头数和 `directoryStatus`。资产类型、资产名和存储目录已有版本后不能普通修改；制作分项已有版本后也不能普通修改。归档不能级联删除历史版本。
+资产详情返回制作分项列表、每个分项的唯一任务及最新/最终版本、使用镜头数和 `directoryStatus`。资产类型、显示名称、规范键和 `storageDirName/storagePathKey` 在创建时组成不可拆分的稳定身份，普通 PUT 只接受描述、排序、备注和 `lockVersion`；该 PUT 是三项非身份主数据的完整快照，省略描述或备注表示清空，省略排序表示归零。重命名、改类型或目录迁移必须使用后续受控动作。制作分项尚无版本时可补充或纠正主数据；已有版本后，其名称、描述、排序和备注等主数据均禁止普通修改。归档不能级联删除历史版本。
 
 ### 15.7 任务查询与编辑 API
 
@@ -3053,6 +3053,7 @@ NAS I/O 不得在数据库事务内执行。`sg_storage_operation` 和 `sg_versi
 | `SG_CURRENT_USER_INVALID` | 401 | 当前登录用户上下文缺少有效用户标识 |
 | `SG_PROJECT_ID_INVALID` | 422 | 路径中的项目 ID 非法 |
 | `SG_PROJECT_NOT_FOUND` | 404 | 项目不存在或不可见 |
+| `SG_PROJECT_VERSIONED_METADATA_IMMUTABLE` | 409 | 项目已有正式版本，类型或画幅不能普通修改 |
 | `SG_PROJECT_CODE_CONFLICT` | 409 | 项目编码重复 |
 | `SG_PROJECT_CREATE_CONFLICT` | 409 | 并发创建项目发生不可重放冲突 |
 | `SG_PROJECT_NOT_READY` | 409 | 项目 NAS 存储尚未就绪，禁止业务写入 |
@@ -3066,6 +3067,8 @@ NAS I/O 不得在数据库事务内执行。`sg_storage_operation` 和 `sg_versi
 | `SG_PRODUCER_CODE_REQUIRED` | 422 | 被分配制作任务的成员缺少制作人缩写 |
 | `SG_PRODUCER_CODE_CONFLICT` | 409 | 同一项目制作人缩写重复 |
 | `SG_EPISODE_NO_CONFLICT` | 409 | 项目内集号重复 |
+| `SG_EPISODE_NOT_FOUND` | 404 | 集不存在、不属于目标项目或不可见 |
+| `SG_EPISODE_HAS_ACTIVE_SCENES` | 409 | 集仍有活动场次，不能归档 |
 | `SG_STORAGE_ROOT_NOT_FOUND` | 404 | NAS 根目录配置不存在或不可见 |
 | `SG_STORAGE_ROOT_DISABLED` | 409 | NAS 根目录已停用，不能创建新项目 |
 | `SG_STORAGE_ROOT_UNAVAILABLE` | 503 | NAS 根目录不可达或不可写 |
@@ -3076,13 +3079,22 @@ NAS I/O 不得在数据库事务内执行。`sg_storage_operation` 和 `sg_versi
 | `SG_STORAGE_OPERATION_NOT_RETRYABLE` | 409 | 当前目录操作状态不可重试 |
 | `SG_SCENE_NO_CONFLICT` | 409 | 集内场次号重复 |
 | `SG_SCENE_HAS_ACTIVE_SHOTS` | 409 | 场次仍有镜头 |
+| `SG_SCENE_NOT_FOUND` | 404 | 场次不存在、不属于目标项目或不可见 |
+| `SG_SCENE_PROLOGUE_INVALID` | 422 | 序场次与 `sceneNo=0/sceneName=序` 规则不一致 |
 | `SG_SHOT_NO_CONFLICT` | 409 | 集内镜头号重复 |
+| `SG_SHOT_NOT_FOUND` | 404 | 镜头不存在、不属于目标项目或不可见 |
+| `SG_ASSET_NAME_REQUIRED` | 422 | 资产创建或导入时，名称规范化后为空或超长 |
 | `SG_ASSET_NAME_CONFLICT` | 409 | 项目内同类型资产名称或目录冲突 |
+| `SG_ASSET_NOT_FOUND` | 404 | 资产不存在、不属于目标项目或不可见 |
+| `SG_ASSET_ITEM_NOT_FOUND` | 404 | 资产制作分项不存在、不属于目标项目或不可见 |
+| `SG_ASSET_VERSIONED_METADATA_IMMUTABLE` | 409 | 资产制作分项已有版本，禁止普通修改其主数据 |
 | `SG_ASSET_PRODUCTION_ITEM_INVALID` | 422 | 已填写的制作分项安全规范化后不可用 |
 | `SG_ASSET_PRODUCTION_ITEM_CONFLICT` | 409 | 同一资产内非空制作分项名称重复 |
 | `SG_ASSET_PRODUCTION_ITEM_REQUIRED` | 422 | 提交资产图片版本时制作分项仍为空 |
+| `SG_TASK_ASSIGNEE_INVALID` | 422 | 普通创建任务时，制作人不是活动项目成员或平台账号已停用/删除 |
 | `SG_TASK_ASSIGNEE_AMBIGUOUS` | 422 | 制作人字段包含多名候选，无法确定唯一主制作人 |
 | `SG_CROSS_PROJECT_REFERENCE` | 409 | 跨项目关联 |
+| `SG_RESOURCE_WRITE_CONFLICT` | 409 | 集、场次、镜头或资产写入遇到未归类的并发数据库约束冲突 |
 | `SG_OPTIMISTIC_LOCK_CONFLICT` | 409 | 乐观锁冲突 |
 | `SG_IDEMPOTENCY_KEY_INVALID` | 422 | 幂等键缺失、为空或超过长度限制 |
 | `SG_IDEMPOTENCY_CONFLICT` | 409 | 同一幂等键绑定了不同规范化命令或选中行 |
@@ -3233,6 +3245,6 @@ NAS I/O 不得在数据库事务内执行。`sg_storage_operation` 和 `sg_versi
 6. 决定已完成任务是否需要“重新打开”；MVP 当前禁止，未来动作必须有原因和审计。
 7. 两类样表、模板版本、默认最大行数、文件大小、预览 TTL 和资产名称规范化已冻结；上传原文件仅临时解析、不长期留存，确需留存时必须另走受保护文件引用。
 8. 决定资产模板是否增加跨重新保存仍保留的稳定 `sourceRowId/rowUid`；未引入前需冻结人工去重治理流程。
-9. 22 张基础表、`20260810_01 → 05` 迁移链、种子、第一批项目与导入 API，以及默认关闭的 NAS 目录 Outbox Worker、目录诊断和人工重试已转化为代码；真实 UNC/NAS 部署验收、其余普通 CRUD、任务动作、版本文件发布、审核和前端能力继续按本契约分批实现。
+9. 22 张基础表、`20260810_01 → 05` 迁移链、种子、项目/成员/集/场次/镜头/资产/制作分项普通管理、两类导入 API，以及默认关闭的 NAS 目录 Outbox Worker、目录诊断和人工重试已转化为代码；真实 UNC/NAS 部署验收、任务动作、资产需求人工处理、版本文件发布、审核和前端能力继续按本契约分批实现。
 
 上述 1—8 是评审、部署或数据治理参数，不得由页面开发临时猜测。第 9 项只说明当前第一批实现边界，未落地的契约章节仍是设计，不是已实现能力。

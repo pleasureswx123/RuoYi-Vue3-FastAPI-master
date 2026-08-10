@@ -2,10 +2,10 @@ import re
 from datetime import date, datetime
 from typing import Any, Literal
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import ConfigDict, Field, field_validator, model_validator
 
 from common.vo import ResponseBaseModel
-from module_shot_grid.entity.vo.common_vo import ShotGridApiModel, ShotGridPageQueryModel
+from module_shot_grid.entity.vo.common_vo import ShotGridApiModel, ShotGridLockVersionModel, ShotGridPageQueryModel
 from module_shot_grid.entity.vo.project_member_vo import ShotGridInitialMemberModel
 
 ProjectStatus = Literal['preparing', 'active', 'completed', 'archived']
@@ -39,7 +39,7 @@ class ShotGridProjectCreateModel(ShotGridApiModel):
         description='计划总时长（毫秒）',
     )
     delivery_date: date | None = Field(default=None, description='交付日期')
-    storage_root_id: int = Field(gt=0, description='NAS 根目录ID')
+    storage_root_id: int = Field(gt=0, le=SQL_BIGINT_MAX, description='NAS 根目录ID')
     project_directory_name: str = Field(min_length=1, max_length=240, description='项目目录名称')
     director_user_ids: list[int] = Field(min_length=1, description='初始项目总监用户ID')
     members: list[ShotGridInitialMemberModel] = Field(default_factory=list, description='初始项目成员')
@@ -93,6 +93,79 @@ class ShotGridProjectCreateModel(ShotGridApiModel):
         if len(producer_codes) != len(set(producer_codes)):
             raise ValueError('同一项目内制作人缩写不能重复')
         return self
+
+
+class ShotGridProjectUpdateModel(ShotGridLockVersionModel):
+    """修改项目基本信息请求。
+
+    项目状态、项目代号和 NAS 绑定不属于普通编辑范围。额外字段采用拒绝策略，
+    防止调用方误以为被忽略的生命周期或路径字段已经生效。
+    """
+
+    model_config = ConfigDict(extra='forbid')
+
+    project_name: str = Field(min_length=1, max_length=200, description='项目名称')
+    project_description: str | None = Field(description='项目描述')
+    project_type: Literal['ai_short_film'] = Field(description='项目类型')
+    aspect_ratio: AspectRatio = Field(description='画幅')
+    planned_duration_ms: int | None = Field(
+        ge=0,
+        le=SQL_BIGINT_MAX,
+        description='计划总时长（毫秒）',
+    )
+    delivery_date: date | None = Field(description='交付日期')
+    current_phase: ProjectPhase = Field(description='当前阶段')
+    remark: str | None = Field(max_length=500, description='备注')
+
+    @field_validator('project_name', mode='before')
+    @classmethod
+    def normalize_project_name(cls, value: Any) -> str:
+        if not isinstance(value, str):
+            raise ValueError('项目名称必须是字符串')
+        return value.strip()
+
+    @field_validator('project_description', 'remark', mode='before')
+    @classmethod
+    def normalize_optional_text(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise ValueError('项目描述和备注必须是字符串')
+        normalized = value.strip()
+        return normalized or None
+
+
+class ShotGridProjectArchiveModel(ShotGridLockVersionModel):
+    """归档项目请求。"""
+
+    model_config = ConfigDict(extra='forbid')
+
+    reason: str = Field(min_length=1, max_length=500, description='归档原因')
+
+    @field_validator('reason', mode='before')
+    @classmethod
+    def normalize_reason(cls, value: Any) -> str:
+        if not isinstance(value, str):
+            raise ValueError('归档原因必须是字符串')
+        return value.strip()
+
+
+class ShotGridProjectMutationResultModel(ShotGridApiModel):
+    """项目编辑或归档后的稳定响应快照。"""
+
+    project_id: int = Field(description='项目ID')
+    project_code: str = Field(description='项目代号')
+    project_name: str = Field(description='项目名称')
+    project_type: str = Field(description='项目类型')
+    project_description: str | None = Field(default=None, description='项目描述')
+    aspect_ratio: AspectRatio = Field(description='画幅')
+    planned_duration_ms: int | None = Field(default=None, description='计划总时长（毫秒）')
+    delivery_date: date | None = Field(default=None, description='交付日期')
+    project_status: ProjectStatus = Field(description='项目状态')
+    current_phase: ProjectPhase = Field(description='当前阶段')
+    remark: str | None = Field(default=None, description='备注')
+    lock_version: int = Field(ge=0, description='更新后的乐观锁版本')
+    update_time: datetime = Field(description='更新时间')
 
 
 class ShotGridProjectCreationAcceptedModel(ShotGridApiModel):
