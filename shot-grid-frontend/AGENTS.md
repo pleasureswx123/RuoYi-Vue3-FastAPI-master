@@ -294,6 +294,15 @@ shot-grid-frontend/
 
 ## 8. 路由、认证与权限
 
+MVP 的认证与部署边界已经冻结：
+
+- 管理端部署在 `/admin/`，Shot Grid 部署在 `/shot-grid/`，两者是同一 Origin 下的独立 SPA 和独立构建产物；`/api/` 统一反向代理到同一个 RuoYi FastAPI 实例。
+- Shot Grid 提供自己的业务风格登录页，但只复用平台 `POST /login`、`GET /getInfo`、`POST /logout` 和 Bearer Token 协议；不得新增认证服务、JWT 规则或业务账号表。
+- 两个应用共享 Cookie 键 `Admin-Token`，Cookie `Path=/`。任一应用主动退出或确认处理 401/Token 过期时，必须调用平台退出接口并清除此键，因此两个应用同时退出；跨应用跳转不复制、不把 Token 放入 URL，目标应用直接读取共享 Cookie 并以 `GET /getInfo` 恢复身份。
+- 共享键意味着任一前端发生 XSS 都可能影响两个应用的会话。MVP 只允许同域、同信任边界部署；不得把 Shot Grid 放到第三方托管页面或降低 CSP、依赖审计等安全门禁。未来若拆分信任边界，应改为不同 Cookie 键并分别登录，不能在两个前端间传递明文 Token。
+- Shot Grid 必须独立维护与管理端等价的统一请求、认证和传输加密适配，不得运行时深层导入管理端源码。实现时逐项对齐 `request.js` 的 Bearer/401 行为、`auth.js` 的 Cookie 语义、`transportCrypto.js` 的 AAD 路径规范化和密钥刷新、`permission.js` 的刷新恢复逻辑。
+- API 前缀冻结为：本地开发 `/dev-api`，生产 `/api`，Docker `/docker-api`。代理必须剥离浏览器侧前缀再转发；后端单实例的 `APP_ROOT_PATH` 必须与对外 API 前缀一致，不能让管理端和 Shot Grid 以两个不同 root path 直连同一实例。详见 `docs/部署说明.md`。
+
 建议业务路由至少覆盖：
 
 ```text
@@ -313,7 +322,7 @@ shot-grid-frontend/
 ```
 
 - 路由参数进入 API 前必须校验，不能只依赖 TypeScript 或组件 Props。
-- 登录和用户信息可以复用 `/login`、`/getInfo` 等平台接口。
+- 登录和用户信息必须按上述冻结方案复用 `/login`、`/getInfo` 等平台接口。
 - 不得直接把后台管理端 `/getRouters` 返回的全部管理菜单加载到业务应用。业务端使用 `/shot-grid/navigation` 获取 `route_name='ShotGrid'` 根节点下的范围菜单，并只通过本地白名单解析稳定路由键。
 - 前端路由守卫和按钮权限只改善用户体验；项目成员、资源归属和动作权限必须由后端逐接口校验。
 - 后端项目权限必须在平台接口权限之外增加项目成员、项目角色和资源归属校验；现有部门型 `DataScopeDependency` 不能代替项目成员关系。
