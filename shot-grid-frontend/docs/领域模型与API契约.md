@@ -4,8 +4,8 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 版本 | v1.0 |
-| 状态 | 数据库、状态机、API 与权限设计已完成，待业务评审确认；确认后作为前后端实现基线 |
+| 版本 | v1.1 |
+| 状态 | 数据库约束已落地；状态机、API 与权限主体设计已形成，剩余业务参数和验收项见《项目完成计划》 |
 | 建立日期 | 2026-08-07 |
 | 最近修订 | 2026-08-10 |
 | 数据库 | PostgreSQL |
@@ -294,7 +294,7 @@ MVP 项目角色：
 约束：
 
 - `episode_no > 0`。
-- `(project_id, episode_no)` 在活动记录中唯一。
+- `(project_id, episode_no)` 在 `del_flag='0'` 的记录中唯一；业务归档仍占用原集号，避免历史 NAS 路径被新集复用。
 - 镜头业务文件名中的集号由 `episode_no` 左侧补零至至少 3 位并增加 `EP` 前缀，不在数据库重复保存 `EP001` 字符串。
 - `storage_dir_name` 创建时由后端按 `EP{episode_no:至少2位}` 生成并保持不可变；NAS 目录示例 `EP01` 与业务文件名集代码 `EP001` 是两个明确概念。
 - 集存在未归档场次时不能直接归档。
@@ -318,7 +318,7 @@ MVP 项目角色：
 约束：
 
 - `scene_no >= 0`；`0` 仅用于“序”，规范名称为“序”，API 派生代码为 `000`。
-- `(episode_id, scene_no)` 在活动记录中唯一。
+- `(episode_id, scene_no)` 在 `del_flag='0'` 的记录中唯一；业务归档仍占用原场次号，避免历史层级和路径产生歧义。
 - `episode_id` 必须属于同一个 `project_id`。
 - API 派生 `sceneCode = sceneNo 左侧补零至至少 3 位`。
 - `(episode_id, sort_order)` 不强制唯一，但必须稳定排序。
@@ -352,7 +352,7 @@ MVP 项目角色：
 约束：
 
 - `shot_no > 0`。
-- `(episode_id, shot_no)` 在活动记录中唯一；镜头号在整集内连续使用，不因场次切换重新从 `S001` 开始。
+- `(episode_id, shot_no)` 在 `del_flag='0'` 的记录中唯一；业务归档仍占用原镜头号，镜头号在整集内连续使用，不因场次切换重新从 `S001` 开始。
 - API 派生 `shotCode = "S" + shotNo 左侧补零至至少 3 位`。
 - `duration_ms >= 0`。
 - `focal_length` 去除首尾空格后原样保存或为空，不把 `35/25` 等组合焦段强制换算为单一数值。
@@ -546,6 +546,7 @@ CHECK (
 | `high` | 高 |
 | `normal` | 中 |
 | `low` | 低 |
+| `urgent` | 紧急 |
 
 关键约束：
 
@@ -647,7 +648,7 @@ WHERE version_status = 'final';
 | `nas_sha256` | char(64) | 条件必填 | NAS 文件摘要；主审核文件必须填写 |
 | `nas_file_size` | bigint | 条件必填 | NAS 文件字节数；主审核文件必须填写 |
 | `published_time` | timestamp(0) | 条件必填 | NAS 发布完成时间 |
-| `is_primary` | char(1) | 是 | 是否主文件 |
+| `is_primary` | char(1) | 是 | 是否主文件：`1` 是、`0` 否 |
 | `sort_order` | integer | 是 | 展示顺序 |
 | `create_by` | varchar(64) | 是 | 创建账号 |
 | `create_time` | timestamp(0) | 是 | 创建时间 |
@@ -665,10 +666,17 @@ WHERE version_status = 'final';
 | `last_frame` | 尾帧 |
 | `reference` | 参考媒体 |
 
+主键：
+
+```text
+(version_id, file_id, file_role)
+```
+
 规则：
 
-- `(version_id, file_id, file_role)` 唯一。
-- 每个版本最多一个主 `review_media`。
+- `is_primary` 只允许 `0` 或 `1`。
+- 每个版本最多一个 `is_primary='1' AND file_role='review_media'`，由 PostgreSQL 部分唯一索引保证。
+- `is_primary='1'` 时 `file_role` 必须为 `review_media`，且 `nas_relative_path`、`nas_sha256`、`nas_file_size`、`published_time` 全部必填；`nas_file_size >= 0`。
 - 每个版本的主 `review_media` 必须具有唯一且不可变的 `business_file_name`。
 - 主 `review_media` 只有在 NAS 临时写入、摘要校验和原子改名完成后才能写入本表，因此本表不存在 `publishing` 半成品状态。
 - 创建版本和 `sg_version_file`、`sys_file_reference` 必须处于同一事务。
@@ -756,7 +764,7 @@ ASSET\{asset.asset_type}\{asset.storage_dir_name}\{business_file_name}
 | `content` | text | 是 | 文字意见 |
 | `media_time_ms` | bigint | 否 | 视频时间点 |
 | `annotations` | jsonb | 否 | 结构化批注数组 |
-| `is_mandatory` | char(1) | 是 | 是否必须修改 |
+| `is_mandatory` | char(1) | 是 | 是否必须修改：`1` 是、`0` 否 |
 | `note_status` | varchar(20) | 是 | 处理状态 |
 | `create_time` | timestamp(0) | 是 | 创建时间 |
 | `update_time` | timestamp(0) | 是 | 更新时间 |
@@ -771,6 +779,7 @@ ASSET\{asset.asset_type}\{asset.storage_dir_name}\{business_file_name}
 规则：
 
 - 意见和版本必须属于同一个项目。
+- `is_mandatory` 只允许 `0` 或 `1`。
 - `media_time_ms >= 0` 且不能超过已知媒体时长。
 - 版本切换后必须以请求中的 `versionId` 为准重新校验。
 - 已提交意见不保存整张 Canvas Data URL。
@@ -838,6 +847,7 @@ ASSET\{asset.asset_type}\{asset.storage_dir_name}\{business_file_name}
 | `description` | text | 否 | 说明 |
 | `review_date` | date | 否 | 审核日期 |
 | `review_mode` | varchar(20) | 是 | `auto_single` 或 `manual_batch` |
+| `auto_version_id` | bigint | 条件必填 | 自动单对应版本；`auto_single` 必填，`manual_batch` 必须为空 |
 | `review_status` | varchar(20) | 是 | 审核单状态 |
 | 通用审计字段 |  | 是 | 见 5.2 |
 
@@ -853,9 +863,10 @@ ASSET\{asset.asset_type}\{asset.storage_dir_name}\{business_file_name}
 规则：
 
 - 每次成功提交版本时自动创建一个 `auto_single` 审核单，并加入且只加入当前版本。
+- `auto_single` 必须保存 `auto_version_id`，`manual_batch` 的该字段必须为空；数据库使用模式/字段一致性 `CHECK` 兜底。
 - 自动审核单创建失败时，版本、版本文件关系、业务文件引用和任务状态全部回滚。
 - 人工创建的 `manual_batch` 审核单可以组织多个待审核版本，用于集中审核。
-- 同一版本只能有一个自动审核单，但可以按权限加入人工批量审核单。
+- `auto_version_id` 使用非空部分唯一索引，保证同一版本只能有一个自动审核单；该版本仍可按权限加入人工批量审核单。
 
 ### 6.14 `sg_review_list_version`
 
@@ -869,9 +880,14 @@ ASSET\{asset.asset_type}\{asset.storage_dir_name}\{business_file_name}
 | `create_by` | varchar(64) | 是 | 创建账号 |
 | `create_time` | timestamp(0) | 是 | 创建时间 |
 
+主键：
+
+```text
+(review_list_id, version_id)
+```
+
 约束：
 
-- `(review_list_id, version_id)` 唯一。
 - `(review_list_id, sort_order)` 唯一。
 - 审核单和版本必须属于同一个项目。
 - 调整顺序在一个事务内完成。

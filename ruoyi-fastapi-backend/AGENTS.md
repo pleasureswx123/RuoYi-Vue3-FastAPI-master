@@ -222,6 +222,14 @@ PostgreSQL 迁移是当前项目的必需交付物。只有插件清单继续声
 - 如果公共代码仍声称双数据库兼容，新查询至少做双方言静态检查；只面向 PostgreSQL 的实现必须明确标注适用范围。
 - 初始 SQL 中的平台菜单、权限码和默认任务应与代码保持一致。
 
+### 7.4 Shot Grid 当前数据库边界
+
+- Shot Grid 第一版领域基础位于 `module_shot_grid/`，包含 22 张 `sg_` 表 DO、项目访问依赖和 `/shot-grid/navigation` 骨架。
+- 首个增量迁移为 `20260810_01`，并已同步 `sql/ruoyi-fastapi-pg.sql`、菜单、权限和字典种子。
+- Shot Grid 只承诺 PostgreSQL；非 PostgreSQL 环境不得把 `sg_` 模型加入平台元数据，Shot Grid revision 的升级和降级必须保持 no-op。
+- 已有平台 PostgreSQL 库通过 Alembic 执行增量迁移；新库通过同步后的 PostgreSQL 初始化 SQL 建立全量结构并写入 Alembic head。当前仍不存在完整平台 Alembic baseline，不得声称首个 Shot Grid revision 能从真正空库独立建立 RuoYi 平台。
+- 当前骨架尚未实现项目 CRUD、Excel 导入、NAS I/O、任务动作、版本发布和审核闭环；后续必须在 Service 事务与资源归属校验下逐项实现。
+
 ## 8. Redis、缓存和日志
 
 Redis 用于：

@@ -66,7 +66,7 @@ class ImportUtil:
         project_root = cls.find_project_root()
 
         sys.path.append(str(project_root))
-        print(f'⏰️ 开始在项目根目录 {project_root} 中查找模型...')
+        print(f'开始在项目根目录 {project_root} 中查找模型...')
 
         # 排除目录扩展
         exclude_dirs = {
@@ -112,12 +112,12 @@ class ImportUtil:
                             seen_models.add(obj)
                             seen_tables.add(table_name)
                             models.append(obj)
-                            print(f'✅️ 找到有效模型: {obj.__module__}.{obj.__name__} (表: {table_name})')
+                            print(f'[OK] 找到有效模型: {obj.__module__}.{obj.__name__} (表: {table_name})')
 
                     except ImportError as e:
                         if 'cannot import name' not in str(e):
-                            print(f'❗️ 警告: 无法导入模块 {module_name}: {e}')
+                            print(f'警告: 无法导入模块 {module_name}: {e}')
                     except Exception as e:
-                        print(f'❌️ 处理模块 {module_name} 时出错: {e}')
+                        print(f'错误: 处理模块 {module_name} 时出错: {e}')
 
         return models

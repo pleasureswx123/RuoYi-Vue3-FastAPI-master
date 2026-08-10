@@ -331,7 +331,7 @@ git status --short
 
 1. 当前主分支是 `main`，但 GitHub Actions 只监听 `master`。
 2. 后端 `.env.*` 被 Git 跟踪，其中包含示例密码和私钥材料。
-3. Alembic 已接入，但当前 PostgreSQL 平台没有已提交的 `versions` 迁移链。
+3. Alembic 当前只有 Shot Grid 增量 revision `20260810_01`，仍缺少能够从真正空库独立建立全部 RuoYi 平台表的完整 baseline；新库使用同步后的 PostgreSQL 初始化 SQL 并写入 head，已有平台库执行增量迁移。
 4. 前端没有提交依赖锁文件，Docker 使用 `npm install`。
 5. 完整部署 Compose 没有数据库和 Redis 数据持久化卷。
 6. 后端 CORS 当前允许任意 Origin，生产环境需要收紧。

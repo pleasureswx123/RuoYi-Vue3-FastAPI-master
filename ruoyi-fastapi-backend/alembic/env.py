@@ -12,6 +12,7 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from config.database import ASYNC_SQLALCHEMY_DATABASE_URL, Base
+from config.env import DataBaseConfig
 from utils.import_util import ImportUtil
 
 # 判断vesrions目录是否存在，如果不存在则创建
@@ -22,6 +23,14 @@ if not os.path.exists(alembic_veresions_path):
 
 # 自动查找所有模型
 found_models = ImportUtil.find_models(Base)
+
+# Shot Grid 明确只支持 PostgreSQL。递归模型发现可能直接导入子模块，
+# 因此在 MySQL 自动生成迁移前再次从 target metadata 移除 sg_ 表，
+# 避免把 PostgreSQL 部分索引和 CHECK 误生成为 MySQL 结构。
+if DataBaseConfig.db_type != 'postgresql':
+    for table_name in tuple(Base.metadata.tables):
+        if table_name.startswith('sg_'):
+            Base.metadata.remove(Base.metadata.tables[table_name])
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
