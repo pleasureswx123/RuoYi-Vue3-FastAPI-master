@@ -1,7 +1,7 @@
 import hashlib
 import json
 from datetime import datetime
-from typing import Any
+from typing import Any, NoReturn
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -412,3 +412,57 @@ class ShotGridProjectService:
             if known in message:
                 return known
         return None
+
+    @classmethod
+    async def update_project(cls, db, project_id, command, current_user):  # noqa: ANN001, ANN206
+        values = command.model_dump(exclude={'lock_version'})
+        values.update(update_by=current_user.user.user_name, update_time=datetime.now())
+        changed = await ShotGridProjectDao.optimistic_update(db, project_id, command.lock_version, values)
+        if not changed:
+            await cls._raise_project_stale(db, project_id)
+        await db.commit()
+        return await ShotGridProjectDao.get_project_by_id(db, project_id)
+
+    @classmethod
+    async def change_project_status(cls, db, project_id, command, current_user):  # noqa: ANN001, ANN206
+        project = await ShotGridProjectDao.get_project_by_id(db, project_id)
+        if not project:
+            raise shot_grid_error(404, 'SG_PROJECT_NOT_FOUND', '项目不存在')
+        transitions = {
+            ('preparing', 'activate'): 'active',
+            ('active', 'complete'): 'completed',
+            ('completed', 'reopen'): 'active',
+            ('preparing', 'archive'): 'archived',
+            ('active', 'archive'): 'archived',
+            ('completed', 'archive'): 'archived',
+        }
+        target = transitions.get((project.project_status, command.action))
+        if not target:
+            raise shot_grid_error(409, 'SG_PROJECT_STATUS_TRANSITION_INVALID', '当前项目状态不允许该动作')
+        changed = await ShotGridProjectDao.optimistic_update(
+            db,
+            project_id,
+            command.lock_version,
+            {
+                'project_status': target,
+                'update_by': current_user.user.user_name,
+                'update_time': datetime.now(),
+                'del_flag': '0',
+            },
+        )
+        if not changed:
+            await cls._raise_project_stale(db, project_id)
+        await db.commit()
+        return await ShotGridProjectDao.get_project_by_id(db, project_id)
+
+    @staticmethod
+    async def _raise_project_stale(db, project_id) -> NoReturn:  # noqa: ANN001
+        project = await ShotGridProjectDao.get_project_by_id(db, project_id)
+        if project:
+            raise shot_grid_error(
+                409,
+                'SG_LOCK_VERSION_CONFLICT',
+                '项目已被其他用户修改，请刷新后重试',
+                details={'currentLockVersion': project.lock_version},
+            )
+        raise shot_grid_error(404, 'SG_PROJECT_NOT_FOUND', '项目不存在')

@@ -229,7 +229,7 @@ PostgreSQL 迁移是当前项目的必需交付物。只有插件清单继续声
 - 当前 head `20260810_04` 是无版本历史库的采用/向前修复迁移：统一秒级时间精度和空字符串审计默认值，补强序场次、资产制作分项、主文件及集/场次编号约束；不得改写历史 01/02/03 代替修复。无 `alembic_version` 的历史库只能在备份和克隆核验后 stamp 01，再执行 upgrade head。04 必须在任何 ALTER 前预检冲突并整体失败，不能猜测修复业务数据；downgrade 不恢复从未被正式 revision 声明的旧弱漂移，秒以下精度只能从升级前备份恢复。
 - Shot Grid 只承诺 PostgreSQL；非 PostgreSQL 环境不得把 `sg_` 模型加入平台元数据，Shot Grid revision 的升级和降级必须保持 no-op。
 - 已有平台 PostgreSQL 库通过 Alembic 执行增量迁移；新库通过同步后的 PostgreSQL 初始化 SQL 建立全量结构并写入 Alembic head。当前仍不存在完整平台 Alembic baseline，不得声称首个 Shot Grid revision 能从真正空库独立建立 RuoYi 平台。
-- 项目创建、成员变更和 Excel 正式提交必须由 Service 在同一数据库事务写领域数据、Outbox 与 `SysOperLog`；不得使用会异步入 Redis 的平台 `@Log` 冒充同事务审计。NAS I/O、项目编辑/归档、手工 CRUD、任务动作、版本发布和审核闭环仍待后续实现。
+- 项目创建、成员变更和 Excel 正式提交必须由 Service 在同一数据库事务写领域数据、Outbox 与 `SysOperLog`；不得使用会异步入 Redis 的平台 `@Log` 冒充同事务审计。项目编辑/归档以及集、场次、镜头、资产、资产制作分项的手工 CRUD 已实现项目范围校验、数据库业务键约束和 `lock_version` 乐观锁；归档保持 `del_flag='0'`。NAS I/O、任务动作、版本发布和审核闭环仍待后续实现。
 - Excel 正式提交使用 `selectedRows[{sheetName,rowNumber}]`，不能只用跨 Sheet 不唯一的物理行号；预览明文 Token 和行明细只短期存 Redis，PostgreSQL `sg_import_batch.selection_hash/result_summary` 负责跨 Redis 生命周期的幂等重放。
 
 ## 8. Redis、缓存和日志
