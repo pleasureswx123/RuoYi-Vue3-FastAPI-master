@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.vite/
+coverage/
+*.local
+*.log
+
+# package-lock.json 是本应用的可复现安装基线，必须提交。
