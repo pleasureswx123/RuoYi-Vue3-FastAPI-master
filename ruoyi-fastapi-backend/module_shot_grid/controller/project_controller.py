@@ -22,6 +22,7 @@ from module_shot_grid.entity.vo.project_vo import (
     ShotGridProjectOverviewModel,
     ShotGridProjectStorageStatusModel,
 )
+from module_shot_grid.entity.vo.resource_vo import ShotGridProjectActionModel, ShotGridProjectUpdateModel
 from module_shot_grid.service.project_overview_service import ShotGridProjectOverviewService
 from module_shot_grid.service.project_service import ShotGridProjectService
 from utils.response_util import ResponseUtil
@@ -32,6 +33,38 @@ project_controller = APIRouterPro(
     tags=['Shot Grid-项目'],
     dependencies=[PreAuthDependency()],
 )
+
+
+@project_controller.put(
+    '/{projectId}', summary='修改项目', dependencies=[UserInterfaceAuthDependency('shotgrid:project:edit')]
+)
+async def update_shot_grid_project(
+    request: Request,
+    project_id: Annotated[int, Path(alias='projectId', gt=0)],
+    command: ShotGridProjectUpdateModel,
+    query_db: Annotated[AsyncSession, DBSessionDependency()],
+    current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
+    access: Annotated[ShotGridProjectAccessModel, ProjectAccessDependency()],
+) -> Response:
+    result = await ShotGridProjectService.update_project(query_db, project_id, command, current_user)
+    return ResponseUtil.success(data=result)
+
+
+@project_controller.put(
+    '/{projectId}/actions',
+    summary='执行项目状态动作',
+    dependencies=[UserInterfaceAuthDependency('shotgrid:project:edit')],
+)
+async def change_shot_grid_project_status(
+    request: Request,
+    project_id: Annotated[int, Path(alias='projectId', gt=0)],
+    command: ShotGridProjectActionModel,
+    query_db: Annotated[AsyncSession, DBSessionDependency()],
+    current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
+    access: Annotated[ShotGridProjectAccessModel, ProjectAccessDependency()],
+) -> Response:
+    result = await ShotGridProjectService.change_project_status(query_db, project_id, command, current_user)
+    return ResponseUtil.success(data=result)
 
 
 @project_controller.get(

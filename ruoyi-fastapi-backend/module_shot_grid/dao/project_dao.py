@@ -1,6 +1,6 @@
 from typing import Any
 
-from sqlalchemy import asc, desc, func, literal, or_, select
+from sqlalchemy import asc, desc, func, literal, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 from sqlalchemy.orm.util import AliasedClass
@@ -141,6 +141,21 @@ class ShotGridProjectDao:
         db.add(project)
         await db.flush()
         return project
+
+    @classmethod
+    async def optimistic_update(
+        cls, db: AsyncSession, project_id: int, lock_version: int, values: dict[str, Any]
+    ) -> bool:
+        result = await db.execute(
+            update(ShotGridProject)
+            .where(
+                ShotGridProject.project_id == project_id,
+                ShotGridProject.del_flag == '0',
+                ShotGridProject.lock_version == lock_version,
+            )
+            .values(**values, lock_version=ShotGridProject.lock_version + 1)
+        )
+        return result.rowcount == 1
 
     @staticmethod
     def _project_columns(overview: Subquery, current_member: AliasedClass) -> list[Any]:

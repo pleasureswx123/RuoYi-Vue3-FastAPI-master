@@ -1,5 +1,16 @@
 # Shot Grid 后端模块
 
+## 手工业务资源接口契约
+
+项目修改、状态动作，以及集、场次、镜头、资产和资产制作分项的列表、详情、创建、修改、归档接口统一位于
+`/shot-grid/projects/{projectId}`。接口同时执行平台 RBAC 与项目访问校验；嵌套写入会核对父资源的
+`project_id`，镜头还会核对集与场次层级。
+
+所有修改、状态动作和归档请求必须携带 `lockVersion`。版本过期返回 HTTP 409 和稳定错误键
+`SG_LOCK_VERSION_CONFLICT`。归档只写业务状态 `archived`，并保持 `del_flag='0'`；`del_flag='2'`
+仅保留给真正删除语义。集号、场次号、集内镜头号、项目内资产名称/路径键与制作分项名称的唯一性，
+继续由 PostgreSQL 初始化 SQL、Alembic head 与 SQLAlchemy DO 中现有的唯一索引和检查约束共同保证。
+
 ## 当前边界
 
 本模块是 Shot Grid 业务后端的 PostgreSQL 领域模块。当前已交付：
