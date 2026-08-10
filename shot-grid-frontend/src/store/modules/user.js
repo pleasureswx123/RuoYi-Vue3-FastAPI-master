@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { getInfo, login, logout } from '@/api/auth'
 import { getToken, removeToken, setToken } from '@/utils/auth'
 import { clearClientSession } from '@/utils/sessionCleanup'
+import { useNavigationStore } from './navigation'
 
 function normalizeIdentity(payload = {}) {
   return {
@@ -23,6 +24,7 @@ export const useUserStore = defineStore('user', {
       this.restored = true
     },
     async signIn(credentials) {
+      useNavigationStore().clear()
       const result = await login(credentials)
       const token = result?.token || result?.access_token
       if (!token) throw new Error('登录响应缺少 Token')
@@ -50,6 +52,7 @@ export const useUserStore = defineStore('user', {
       } finally {
         removeToken()
         clearClientSession()
+        useNavigationStore().clear()
         this.$reset()
         this.restored = true
       }

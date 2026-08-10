@@ -1,0 +1,1 @@
+<script setup>import { useRoute } from 'vue-router'; defineProps({ projectId: { type: String, required: true } }); const route = useRoute()</script><template><section class="page"><span class="eyebrow">PROJECT / {{ projectId }}</span><h1>项目{{ route.meta.section }}</h1></section></template>
