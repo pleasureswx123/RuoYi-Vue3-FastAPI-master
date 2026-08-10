@@ -9,7 +9,14 @@ export const STATUS_MESSAGES = {
 
 export function parseResponseEnvelope(body) {
   if (!body || typeof body !== 'object' || Array.isArray(body) || !Object.hasOwn(body, 'code')) return body
-  if (Number(body.code) === 200) return body.data
+  if (Number(body.code) >= 200 && Number(body.code) < 300) {
+    if (Object.hasOwn(body, 'data')) return body.data
+    if (Object.hasOwn(body, 'rows')) {
+      const { code, msg, success, time, ...result } = body
+      return result
+    }
+    return undefined
+  }
   const error = new Error(body.msg || '请求失败')
   error.code = Number(body.code)
   error.errorKey = body.errorKey
