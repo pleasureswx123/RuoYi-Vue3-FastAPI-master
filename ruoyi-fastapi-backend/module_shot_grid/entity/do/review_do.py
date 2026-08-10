@@ -6,7 +6,6 @@ from sqlalchemy import (
     CheckConstraint,
     Column,
     Date,
-    DateTime,
     ForeignKey,
     ForeignKeyConstraint,
     Index,
@@ -18,7 +17,12 @@ from sqlalchemy import (
 )
 
 from config.database import Base
-from module_shot_grid.entity.do.base_do import SHOT_GRID_JSON, ShotGridCreateAuditMixin, ShotGridMutableAuditMixin
+from module_shot_grid.entity.do.base_do import (
+    SHOT_GRID_DATETIME,
+    SHOT_GRID_JSON,
+    ShotGridCreateAuditMixin,
+    ShotGridMutableAuditMixin,
+)
 
 
 class ShotGridNote(Base):
@@ -42,9 +46,9 @@ class ShotGridNote(Base):
     annotations = Column(SHOT_GRID_JSON, nullable=True, comment='结构化批注数组')
     is_mandatory = Column(CHAR(1), nullable=False, server_default='0', comment='是否必须修改')
     note_status = Column(String(20), nullable=False, server_default='open', comment='处理状态')
-    create_time = Column(DateTime, nullable=False, default=datetime.now, comment='创建时间')
+    create_time = Column(SHOT_GRID_DATETIME, nullable=False, default=datetime.now, comment='创建时间')
     update_time = Column(
-        DateTime,
+        SHOT_GRID_DATETIME,
         nullable=False,
         default=datetime.now,
         onupdate=datetime.now,
@@ -85,7 +89,7 @@ class ShotGridNoteReply(Base):
         comment='回复用户ID',
     )
     content = Column(Text, nullable=False, comment='回复内容')
-    create_time = Column(DateTime, nullable=False, default=datetime.now, comment='回复时间')
+    create_time = Column(SHOT_GRID_DATETIME, nullable=False, default=datetime.now, comment='回复时间')
 
     __table_args__ = (
         ForeignKeyConstraint(
@@ -120,7 +124,7 @@ class ShotGridReviewAction(Base):
     from_status = Column(String(20), nullable=False, comment='操作前版本状态')
     to_status = Column(String(20), nullable=False, comment='操作后版本状态')
     reason = Column(String(1000), nullable=True, comment='原因或说明')
-    create_time = Column(DateTime, nullable=False, default=datetime.now, comment='操作时间')
+    create_time = Column(SHOT_GRID_DATETIME, nullable=False, default=datetime.now, comment='操作时间')
 
     __table_args__ = (
         ForeignKeyConstraint(

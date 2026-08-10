@@ -4,8 +4,8 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 版本 | v1.1 |
-| 状态 | 数据库约束已落地；状态机、API 与权限主体设计已形成，剩余业务参数和验收项见《项目完成计划》 |
+| 版本 | v1.2 |
+| 状态 | 数据库约束及第一批项目与 Excel 导入 API 已落地；其余状态机、API 与权限主体仍按设计分批实现 |
 | 建立日期 | 2026-08-07 |
 | 最近修订 | 2026-08-10 |
 | 数据库 | PostgreSQL |
@@ -37,7 +37,7 @@
 - 已登记文件下载支持 HTTP Range 和 206/416。
 - 平台文件表分别保存 `original_name`、`stored_name` 和 `storage_key`；通用受保护文件上传会先独立提交文件记录。
 - 当前主数据库是 PostgreSQL。
-- PostgreSQL 初始基线中的审计时间使用 `timestamp(0)`，SQLAlchemy DO 使用不带时区的 `DateTime`。
+- PostgreSQL 初始基线中的审计时间使用 `timestamp(0)`；Shot Grid SQLAlchemy DO 使用 PostgreSQL 方言下编译为 `TIMESTAMP(0) WITHOUT TIME ZONE` 的统一类型。
 - 常规业务异常默认由统一响应工具以 HTTP 200 返回；Shot Grid 的真实 HTTP 409 等语义属于本模块需要显式实现的扩展契约。
 - 当前基座没有 NAS 根目录配置、项目目录初始化、版本文件发布到 UNC 路径或跨数据库与文件系统补偿能力；这些属于 Shot Grid 新增的兼容扩展，不得描述为平台已有能力。
 
@@ -248,7 +248,10 @@ sg_project / sg_shot / sg_asset / sg_version / sg_note
 | `user_id` | bigint | 是 | 关联 `sys_user.user_id` |
 | `project_role` | varchar(20) | 是 | 项目角色 |
 | `producer_code` | varchar(12) | 条件必填 | 制作人文件名缩写，例如 `YJF` |
+| `member_status` | varchar(20) | 是 | `active` 或 `removed`，默认 `active` |
 | `joined_time` | timestamp(0) | 是 | 加入时间 |
+| `removed_by` | bigint | 条件必填 | 软移除操作用户；仅 `removed` 时存在 |
+| `removed_time` | timestamp(0) | 条件必填 | 软移除时间；仅 `removed` 时存在 |
 | `create_by` | varchar(64) | 是 | 创建账号 |
 | `create_time` | timestamp(0) | 是 | 创建时间 |
 
@@ -272,7 +275,11 @@ MVP 项目角色：
 - 系统可以根据成员姓名提供首字母建议，但必须由项目总监或管理员确认并保存；成员改名不能改变历史版本文件名。
 - 平台管理员不是项目角色；是否绕过成员限制由平台权限决定。
 - 一个项目始终至少保留一名 `director`。
-- 不允许删除最后一名项目总监。
+- 不允许移除最后一名活动项目总监。
+- 普通成员接口只做软移除：将 `member_status` 改为 `removed` 并记录 `removed_by`、`removed_time`；不得物理删除成员关系或破坏历史任务外键。
+- 项目范围、成员列表、总监计数以及 Excel 制作人匹配只认 `member_status = 'active'` 的成员。
+- 重新添加已移除用户时复用原 `(project_id, user_id)` 关系，清空移除字段并恢复为 `active`；活动成员重复添加仍返回冲突。
+- 旧版数据库结构无法表达软移除状态；存在 `removed` 成员时，成员生命周期迁移必须拒绝降级，禁止静默恢复访问。
 - MVP 不创建 `client` 项目角色。
 
 ### 6.3 `sg_episode`
@@ -463,7 +470,7 @@ MVP 项目角色：
 | `sort_order` | integer | 是 | 资产内稳定顺序，导入时按明细行生成 |
 | `source_import_batch_id` | bigint | 否 | 来源资产导入批次；手工创建为空 |
 | `source_row_no` | integer | 否 | 来源 Sheet 明细行号 |
-| `import_row_key` | char(64) | 否 | 文件摘要、Sheet 和行号生成的稳定幂等键 |
+| `import_row_key` | char(64) | 否 | 文件摘要、Sheet 和行号生成的来源行技术键，仅对相同字节工作簿稳定 |
 | `lifecycle_status` | varchar(20) | 是 | `active` 或 `archived` |
 | 通用审计字段 |  | 是 | 见 5.2 |
 
@@ -473,7 +480,8 @@ MVP 项目角色：
 - 空字符串或纯空白规范化为 `NULL`；数据库使用 `CHECK` 保证名称为空时规范键也为空，名称非空时规范键必填。
 - `production_item` 有值时，`production_item_key` 必填；同一资产内活动制作分项名称大小写不敏感唯一。
 - PostgreSQL 使用 `WHERE production_item_key IS NOT NULL AND lifecycle_status='active' AND del_flag='0'` 的部分唯一索引；未命名分项不参加名称唯一约束。
-- 导入创建的分项必须保存 `import_row_key`，并在项目内建立非空部分唯一索引；缺少制作分项不能成为重复导入绕过幂等保护的手段。
+- 导入创建的分项必须保存 `import_row_key`，并在项目内建立非空部分唯一索引，用于阻止同一字节工作簿的同一来源行重复落库。
+- `import_row_key` 由原文件 SHA-256、Sheet 和物理行号生成，只保证相同字节工作簿重试时稳定；工作簿重新保存后摘要会变化，尤其未命名分项仍可能被视为新来源行。当前 MVP 必须把这一点作为导入治理边界，长期跨文件幂等需在模板增加稳定 `rowUid` 或提供人工去重流程。
 - 制作分项已有正式版本后不得普通修改；未产生版本时允许补充或纠正名称。
 - 每个制作分项最多一个 `asset_image` 任务，任务只有一个 `assignee_user_id` 主制作人。
 - 资产归档前必须先检查所有制作分项及其任务、版本和审核历史。
@@ -1078,6 +1086,8 @@ pending → publishing → published → committing → committed
 | `preview_token_hash` | char(64) | 否 | 预览 Token 哈希，不保存明文 Token |
 | `preview_expires_time` | timestamp(0) | 否 | 预览数据到期时间 |
 | `idempotency_key` | varchar(100) | 否 | 正式提交幂等键 |
+| `selection_hash` | char(64) | 否 | 正式提交选中行及来源文件的稳定摘要 |
+| `result_summary` | jsonb | 否 | 首次成功提交的结果快照，用于 Redis 过期后幂等重放 |
 | `last_error_key` | varchar(100) | 否 | 最近失败错误键 |
 | `last_error_message` | varchar(500) | 否 | 已净化的失败摘要 |
 | `previewed_by` | bigint | 是 | 预检查用户 |
@@ -1099,6 +1109,8 @@ previewed → expired
 - `CHECK(batch_status IN ('previewed', 'committing', 'committed', 'failed', 'expired'))`；
 - 同一批次只能由预检查用户或有全项目权限的管理员提交；
 - `UNIQUE(project_id, import_type, committed_by, idempotency_key)` 对非空幂等键生效；
+- `previewed/expired` 不保存选择摘要或结果，`committing/failed` 保存选择摘要但不保存成功结果，`committed` 必须同时保存二者；
+- 同一幂等键只有在 `selection_hash` 相同时才返回首次 `result_summary`；同键不同选择返回冲突；
 - 明文导入 Token 和完整规范化行数据不写入普通日志；
 - 若业务要求长期留存原始 Excel，应另存为平台受保护文件并建立业务引用，本表不能保存不受控临时路径。
 
@@ -1160,7 +1172,7 @@ WHERE project_status <> 'archived' AND del_flag = '0';
 -- 项目内制作人缩写大小写不敏感唯一
 CREATE UNIQUE INDEX uk_sg_project_member_producer_code
 ON sg_project_member (project_id, lower(producer_code))
-WHERE producer_code IS NOT NULL;
+WHERE producer_code IS NOT NULL AND member_status = 'active';
 
 -- 同一根目录下项目路径唯一
 CREATE UNIQUE INDEX uk_sg_project_storage_path
@@ -2048,7 +2060,7 @@ Permission: shotgrid:member:add
 
 重复添加同一用户返回冲突，不静默覆盖其项目角色。
 
-### 11.3 修改成员角色
+### 11.3 修改成员角色或制作人缩写
 
 ```http
 PUT /shot-grid/projects/{projectId}/members/{userId}
@@ -2059,9 +2071,12 @@ Permission: shotgrid:member:edit
 
 ```json
 {
-  "projectRole": "director"
+  "projectRole": "creator",
+  "producerCode": "YJF"
 }
 ```
+
+两个字段至少提供一个；`projectRole` 显式 `null` 非法，`producerCode` 可在成员没有活动任务时显式 `null` 清空。仍负责活动任务的成员不得清空制作人缩写。
 
 ### 11.4 移除成员
 
@@ -2074,6 +2089,7 @@ Permission: shotgrid:member:remove
 
 - 不能移除最后一名项目总监。
 - 用户仍负责活动任务时返回冲突，先完成任务转交。
+- 成功后仅将成员关系软移除并保留历史任务引用；重新加入同一用户会复用并恢复原成员关系。
 - 成员移除后立即失去项目查询和业务动作权限。
 - 文件访问授权同步策略在 17.1 决策关闭后执行。
 
@@ -2363,7 +2379,10 @@ Permission: shotgrid:shot:import
 输入与工作簿边界：
 
 - MVP 正式模板和保证支持的格式为 `.xlsx`；当前契约以 `docs/镜头-样表.xlsx` 为准，不承诺 `.xls` 或 `.csv`；
-- 文件大小和行数上限由配置定义；
+- 镜头模板版本固定为 `shot-v1`；资产模板版本固定为 `asset-v1`。样表没有可靠业务版本属性，不能把 WPS 元数据当作模板版本；
+- 单文件默认上限为 10 MiB、ZIP 条目 256、解压总量 64 MiB、单条目压缩比 200；单工作簿业务数据行默认上限为 10000 行，预览 Token 默认有效 1800 秒；
+- `openpyxl` 前必须流式扫描全部 OOXML Sheet（含隐藏 Sheet）。默认上限为：物理行 12000、单元格/共享字符串条目 200000、XML 元素 1000000、单 Sheet 列号 128、合并区域 20000、合并展开单元格 200000、单格文本 10000 字符、共享字符串引用展开后的文本总量 8000000 字符；Redis Token 载荷和 HTTP 预览 JSON 的 UTF-8 大小均不得超过 16 MiB；这些阈值可由部署配置收紧，但不得由请求放宽；
+- ZIP 条目默认最多 256 个、解压后总大小默认最多 64 MiB、单条目压缩比默认最多 200；必须拒绝目录穿越、外部链接、业务单元格公式和压缩炸弹；
 - 上传文件只用于临时解析，不立即成为业务附件。
 - 每个可见 Sheet 表示一集，Sheet 名必须匹配 `^EP(\d{3,})$`，例如 `EP001`、`EP002`；解析后的集号必须大于 0。
 - 导入器遍历全部可见业务 Sheet；规范化后集号重复、Sheet 名不合法或业务 Sheet 缺少主表头时，预检查失败。隐藏辅助 Sheet 可以忽略，但必须返回工作簿级警告。
@@ -2417,6 +2436,7 @@ Permission: shotgrid:shot:import
     },
     "rows": [
       {
+        "rowKey": "4b8f4fa2b6b5c93c2a6f806e8b3f15e8399cd520ee7b5d2dd9dfad3cd6f0a7a1",
         "sheetName": "EP001",
         "rowNumber": 2,
         "normalized": {
@@ -2461,7 +2481,7 @@ Permission: shotgrid:shot:import
 - 重复集和场次可以映射同一规范实体，但名称字段冲突必须报错。
 - 同一集内重复镜头号必须报错；切换场次不能重新使用该集已经出现的镜头号。
 - 总集数按有效业务 Sheet 派生的不同 `episodeNo` 统计，总场次数按不同 `(episodeNo, sceneNo)` 统计，总镜头数按不同 `(episodeNo, shotNo)` 统计；不能使用 Excel 原始行数替代。
-- Token 存入 Redis，具有短 TTL，并绑定用户、项目和原文件摘要。
+- Token 明文及完整规范化行数据只存入 Redis，具有短 TTL，并绑定用户、项目、导入类型、批次、模板版本、原文件摘要和可提交行集合；数据库只保存 Token 哈希。
 - 预检查创建 `sg_import_batch(status=previewed)`，数据库只保存来源摘要和统计；逐行规范化数据与错误明细按短 TTL 存入 Redis。
 
 ### 14.2 正式提交
@@ -2477,7 +2497,10 @@ Header: X-Idempotency-Key
 ```json
 {
   "importToken": "b1f84d62-...",
-  "rowNumbers": [2, 3, 4, 5]
+  "selectedRows": [
+    {"sheetName": "EP001", "rowNumber": 2},
+    {"sheetName": "EP002", "rowNumber": 2}
+  ]
 }
 ```
 
@@ -2485,11 +2508,13 @@ Header: X-Idempotency-Key
 
 - 重新验证 Token 的用户、项目、TTL 和文件摘要。
 - 只允许提交 `canImport=true` 的行。
+- Sheet 内物理行号不是工作簿全局标识；服务端以 `sheetName + rowNumber` 定位选择，并据此计算 `selection_hash`。
 - 提交前重新检查数据库唯一性，不能只相信预览结果。
 - MVP 采用全选行事务：任一选中行失败，全部回滚。
 - 锁定并更新导入批次、创建集、场次、镜头、已匹配镜头资产关系和待匹配资产需求处于同一业务事务；提供制作人时同时创建唯一镜头任务，并在事务末把批次改为 `committed`。
 - 同事务为新集和新镜头创建幂等目录操作 Outbox；NAS I/O 在事务提交后由 Worker 执行。
 - 同一 Token 成功提交后不能再次消费。
+- 同一提交用户、项目、导入类型和幂等键重复请求，在选择摘要一致时从 PostgreSQL `result_summary` 返回首次结果；即使 Redis 已过期或服务已重启也不得重复创建数据。
 - 业务事务失败时全部领域数据回滚，再由独立短事务将批次标记为 `failed`；该失败记录不构成半成功导入。
 
 ### 14.3 资产预检查
@@ -2534,6 +2559,7 @@ Permission: shotgrid:asset:import
 - 预检查返回每种类型的有效、警告、错误数量，以及预计可解决的镜头资产需求数量；
 - “状态”、缩略图、最新版本和完成度等只读列不参与写入并返回忽略警告；制作人按制作分项行解析；
 - 制作人匹配、Token、TTL、来源摘要和重新校验规则与镜头导入一致。
+- 当前实现只按原文件摘要、Sheet 和物理行生成技术行键，尚不能识别“工作簿重新保存或移动行后的同一未命名分项”；引入稳定 `rowUid` 前，这类跨文件疑似重复提示是明确的后续缺口。
 
 ### 14.4 资产正式提交与自动匹配
 
@@ -2543,7 +2569,9 @@ Permission: shotgrid:asset:import
 Header: X-Idempotency-Key
 ```
 
-请求继续使用 `importToken` 和选中 `rowNumbers`。锁定批次后的一个业务事务包含：
+请求继续使用 `importToken` 和 `selectedRows[{sheetName,rowNumber}]`。合并单元格解析后每个预览行都是自包含记录，允许只选择同一父资产下的部分可导入分项；未选择行不落库。锁定批次后的一个业务事务包含：
+
+`X-Idempotency-Key`、Token 和 `selection_hash` 保护同一预览与提交请求，不把语义相近但文件摘要已经变化的新工作簿视为同一请求；未命名分项的跨文件逻辑去重仍受上一节所述边界限制。
 
 - `sg_import_batch` 从 `previewed` 进入 `committing` 并最终成为 `committed`；
 - 按去重键创建资产、制作分项和对应幂等目录 Outbox；
@@ -2991,13 +3019,18 @@ NAS I/O 不得在数据库事务内执行。`sg_storage_operation` 和 `sg_versi
 
 | errorKey | code | 场景 |
 | --- | --- | --- |
+| `SG_CURRENT_USER_INVALID` | 401 | 当前登录用户上下文缺少有效用户标识 |
+| `SG_PROJECT_ID_INVALID` | 422 | 路径中的项目 ID 非法 |
 | `SG_PROJECT_NOT_FOUND` | 404 | 项目不存在或不可见 |
 | `SG_PROJECT_CODE_CONFLICT` | 409 | 项目编码重复 |
+| `SG_PROJECT_CREATE_CONFLICT` | 409 | 并发创建项目发生不可重放冲突 |
 | `SG_PROJECT_NOT_READY` | 409 | 项目 NAS 存储尚未就绪，禁止业务写入 |
 | `SG_PROJECT_NOT_COMPLETABLE` | 409 | 仍有未完成镜头或资产制作分项，不能完成项目 |
 | `SG_PROJECT_ACCESS_DENIED` | 403 | 非项目成员 |
 | `SG_LAST_DIRECTOR_REQUIRED` | 409 | 尝试移除最后一名总监 |
 | `SG_MEMBER_ALREADY_EXISTS` | 409 | 成员重复添加 |
+| `SG_MEMBER_NOT_FOUND` | 404 | 项目成员不存在 |
+| `SG_MEMBER_USER_INVALID` | 422 | 待添加用户不存在、已停用或不满足成员条件 |
 | `SG_MEMBER_HAS_ACTIVE_TASKS` | 409 | 成员仍有活动任务 |
 | `SG_PRODUCER_CODE_REQUIRED` | 422 | 被分配制作任务的成员缺少制作人缩写 |
 | `SG_PRODUCER_CODE_CONFLICT` | 409 | 同一项目制作人缩写重复 |
@@ -3019,12 +3052,40 @@ NAS I/O 不得在数据库事务内执行。`sg_storage_operation` 和 `sg_versi
 | `SG_TASK_ASSIGNEE_AMBIGUOUS` | 422 | 制作人字段包含多名候选，无法确定唯一主制作人 |
 | `SG_CROSS_PROJECT_REFERENCE` | 409 | 跨项目关联 |
 | `SG_OPTIMISTIC_LOCK_CONFLICT` | 409 | 乐观锁冲突 |
+| `SG_IDEMPOTENCY_KEY_INVALID` | 422 | 幂等键缺失、为空或超过长度限制 |
+| `SG_IDEMPOTENCY_CONFLICT` | 409 | 同一幂等键绑定了不同规范化命令或选中行 |
 | `SG_IMPORT_TOKEN_INVALID` | 400 | 导入 Token 不合法 |
 | `SG_IMPORT_TOKEN_EXPIRED` | 410 | 导入 Token 过期 |
+| `SG_IMPORT_TOKEN_CONFLICT` | 409 | Token 内容、哈希或持久化批次不一致 |
+| `SG_IMPORT_TOKEN_FORBIDDEN` | 403 | 当前用户无权消费该预检 Token |
 | `SG_IMPORT_HAS_ERRORS` | 422 | 选中行仍有错误 |
 | `SG_IMPORT_BATCH_NOT_FOUND` | 404 | 导入批次不存在或不可见 |
 | `SG_IMPORT_BATCH_STATE_CONFLICT` | 409 | 导入批次当前状态不可提交或重复消费 |
 | `SG_IMPORT_FILE_HASH_MISMATCH` | 409 | Token 绑定的原文件摘要不一致 |
+| `SG_IMPORT_FILE_TYPE_INVALID` | 422 | 上传文件不是允许的 `.xlsx` 类型 |
+| `SG_IMPORT_FILE_NAME_INVALID` | 422 | 上传文件名为空或不符合安全限制 |
+| `SG_IMPORT_FILE_EMPTY` | 422 | 上传文件为空 |
+| `SG_IMPORT_FILE_TOO_LARGE` | 413 | 上传文件超过配置的大小上限 |
+| `SG_IMPORT_FILE_INVALID` | 422 | 文件不是可解析的安全 XLSX 工作簿 |
+| `SG_IMPORT_ARCHIVE_UNSAFE` | 422 | XLSX ZIP 条目、路径、压缩比或解压总量不安全 |
+| `SG_IMPORT_WORKBOOK_TOO_COMPLEX` | 413 | OOXML 行、单元格、列、XML 元素、合并区域或总文本超过资源上限 |
+| `SG_IMPORT_CELL_TEXT_TOO_LONG` | 422 | 单个 OOXML 单元格文本超过配置上限 |
+| `SG_IMPORT_PREVIEW_TOO_LARGE` | 413 | Redis Token 载荷或 HTTP 预览 JSON 超过配置上限 |
+| `SG_IMPORT_EXTERNAL_LINK_NOT_ALLOWED` | 422 | 工作簿包含外部链接 |
+| `SG_IMPORT_WORKBOOK_EMPTY` | 422 | 工作簿没有可导入的可见业务 Sheet |
+| `SG_IMPORT_SHEET_NAME_INVALID` | 422 | 镜头业务 Sheet 名不能解析为 `EPnnn` |
+| `SG_IMPORT_EPISODE_DUPLICATE` | 422 | 多个 Sheet 规范化为同一集号 |
+| `SG_IMPORT_TEMPLATE_INVALID` | 422 | 资产模板结构或合并区域不符合冻结规则 |
+| `SG_IMPORT_TEMPLATE_VERSION_MISMATCH` | 409 | Token 或批次绑定的模板版本与当前实现不一致 |
+| `SG_IMPORT_HEADER_REQUIRED` | 422 | 缺少必需表头 |
+| `SG_IMPORT_HEADER_INVALID` | 422 | 出现不允许的表头或表头结构 |
+| `SG_IMPORT_HEADER_DUPLICATE` | 422 | 同一标准字段被多个表头重复映射 |
+| `SG_IMPORT_HEADER_MISMATCH` | 422 | 镜头 A:P 固定表头顺序不匹配 |
+| `SG_IMPORT_ROW_LIMIT_EXCEEDED` | 422 | 工作簿物理行或业务行超过配置上限 |
+| `SG_IMPORT_SELECTED_ROW_INVALID` | 422 | 提交选择不存在、重复或不可导入的来源行 |
+| `SG_IMPORT_PREVIEW_STORE_UNAVAILABLE` | 503 | Redis 预览存储当前不可用 |
+| `SG_IMPORT_DATABASE_CONFLICT` | 409 | 预检后数据库状态变化导致正式提交冲突 |
+| `SG_IMPORT_COMMIT_FAILED` | 500 | 正式提交事务失败且已回滚，响应只返回净化摘要 |
 | `SG_ASSET_REQUIREMENT_NOT_FOUND` | 404 | 待匹配资产需求不存在或不可见 |
 | `SG_ASSET_REQUIREMENT_CONFLICT` | 409 | 候选不唯一、类型不符或需求已被他人处理 |
 | `SG_TASK_ALREADY_EXISTS` | 409 | 镜头或资产制作分项已经存在正式任务 |
@@ -3041,6 +3102,25 @@ NAS I/O 不得在数据库事务内执行。`sg_storage_operation` 和 `sg_versi
 | `SG_FILE_ACCESS_DENIED` | 403 | 项目、任务或平台文件访问决策拒绝下载 |
 
 前端根据 `errorKey` 选择交互文案，`msg` 用于兜底，不通过中文字符串比较业务分支。
+
+### 19.1 预检 issue 键
+
+预检接口成功解析工作簿时返回真实 HTTP 200。下列键位于工作簿或 `rows[].errors[]/warnings[]` 中，不是顶层 HTTP `code`；错误行不能正式提交，警告行可按规则提交。
+
+| issueKey | severity | 载体 | 场景 |
+| --- | --- | --- | --- |
+| `SG_ASSET_NAME_REQUIRED` | error | 行 | 资产名称缺失 |
+| `SG_ASSET_TYPE_INVALID` | error | 行 | 资产类型不是允许的三种类型 |
+| `SG_IMPORT_DURATION_INVALID` | error | 行 | 镜头时长不能精确解析 |
+| `SG_IMPORT_FIELD_TOO_LONG` | error | 行 | 单元格规范化后超过字段上限 |
+| `SG_IMPORT_FORMULA_NOT_ALLOWED` | error | 行 | 可写业务列包含公式 |
+| `SG_IMPORT_REQUIRED_FIELD_MISSING` | error | 行 | 镜头必填字段缺失 |
+| `SG_IMPORT_SCENE_INVALID` | error | 行 | 场次文本不能规范化 |
+| `SG_IMPORT_SHOT_NO_INVALID` | error | 行 | 镜头号不能规范化 |
+| `SG_TASK_ASSIGNEE_INVALID` | error | 行 | 制作人不能唯一匹配为有效活动成员 |
+| `SG_ASSET_PRODUCTION_ITEM_MISSING` | warning | 行 | 资产制作分项缺失，允许后续补充 |
+| `SG_IMPORT_HIDDEN_SHEETS_IGNORED` | warning | 工作簿 | 隐藏辅助 Sheet 已忽略 |
+| `SG_IMPORT_READONLY_COLUMNS_IGNORED` | warning | 工作簿 | 状态等只读列已忽略，不参与写入 |
 
 ## 20. 第一批验收用例
 
@@ -3099,7 +3179,9 @@ NAS I/O 不得在数据库事务内执行。`sg_storage_operation` 和 `sg_versi
 - 镜头导入引用尚不存在的资产时只能生成待匹配需求，不能生成正式资产或资产任务。
 - 资产导入只能自动匹配项目内同类型、同规范化名称的唯一候选，冲突必须进入人工处理。
 - 导入批次任一选中行失败时，不能留下半成功集、场次、镜头、资产、任务、关系或目录操作。
+- 隐藏 Sheet、伪造超大行列坐标、超量合并区域、共享字符串重复引用和超大预览 JSON 必须在 `openpyxl` 建立对象、Redis 写入或数据库提交之前被对应资源门禁拒绝。
 - 重复幂等键不能重复创建项目、导入镜头、导入资产、待匹配需求或镜头资产关系。
+- 原资产工作簿重新保存、移动行或更改 Sheet 后再次导入时，未命名制作分项不能被静默复制；该用例在稳定 `rowUid` 或人工去重治理落地前标记为未关闭门禁。
 
 ## 21. 评审后仍需关闭的部署与产品参数
 
@@ -3111,7 +3193,8 @@ NAS I/O 不得在数据库事务内执行。`sg_storage_operation` 和 `sg_versi
 4. 确认公司是否存在统一 UNC 桌面协议处理器；未确认前只提供查看和复制路径。
 5. 冻结 NAS/AD/Windows 共享 ACL 部署方案，明确网页权限之外的直接 SMB 访问边界。
 6. 决定已完成任务是否需要“重新打开”；MVP 当前禁止，未来动作必须有原因和审计。
-7. 冻结资产 Excel 最终样表，以及两类模板的版本号、最大行数、文件大小、资产名称规范化和原文件保留期限；镜头样表结构已按 `docs/镜头-样表.xlsx` 冻结。
-8. 将本契约转化为 SQLAlchemy DO、VO、PostgreSQL Alembic revision、字典/权限菜单种子和 `sql/ruoyi-fastapi-pg.sql`。
+7. 两类样表、模板版本、默认最大行数、文件大小、预览 TTL 和资产名称规范化已冻结；上传原文件仅临时解析、不长期留存，确需留存时必须另走受保护文件引用。
+8. 决定资产模板是否增加跨重新保存仍保留的稳定 `sourceRowId/rowUid`；未引入前需冻结人工去重治理流程。
+9. 22 张基础表、迁移、种子及第一批项目与导入 API 已转化为代码；其余普通 CRUD、NAS Worker、任务动作、版本审核和前端能力继续按本契约分批实现。
 
-上述 1—7 是评审或部署参数，不得由页面开发临时猜测。第 8 项完成并通过 PostgreSQL 迁移验证前，本契约仍是设计交付，不是已实现能力。
+上述 1—8 是评审、部署或数据治理参数，不得由页面开发临时猜测。第 9 项只说明当前第一批实现边界，未落地的契约章节仍是设计，不是已实现能力。

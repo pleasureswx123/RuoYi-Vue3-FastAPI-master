@@ -17,17 +17,60 @@ declare
     test_manual_review_list_id bigint;
     test_file_id varchar(36) := '00000000-0000-0000-0000-000000000001';
 begin
+    if exists (
+        select 1
+        from pg_attribute attribute
+        join pg_class relation on relation.oid = attribute.attrelid
+        join pg_namespace namespace on namespace.oid = relation.relnamespace
+        where namespace.nspname = 'public'
+          and left(relation.relname, 3) = 'sg_'
+          and attribute.attnum > 0
+          and not attribute.attisdropped
+          and attribute.atttypid = 'timestamp without time zone'::regtype
+          and format_type(attribute.atttypid, attribute.atttypmod) <> 'timestamp(0) without time zone'
+    ) then
+        raise exception 'Shot Grid 时间字段未统一为 timestamp(0) without time zone';
+    end if;
+
     insert into sg_project (
         project_code, project_name, create_time, update_time
     ) values (
-        'SGTEST', 'Shot Grid约束测试', current_timestamp, current_timestamp
+        'SGTEST', 'Shot Grid约束测试',
+        timestamp '2026-08-10 12:34:56.654321', timestamp '2026-08-10 12:34:56.654321'
     ) returning project_id into test_project_id;
+
+    if exists (
+        select 1
+        from sg_project
+        where project_id = test_project_id
+          and (length(create_by) <> 0 or length(update_by) <> 0)
+    ) then
+        raise exception 'Shot Grid 审计人默认值不是空字符串';
+    end if;
+
+    if exists (
+        select 1
+        from sg_project
+        where project_id = test_project_id
+          and create_time <> date_trunc('second', create_time)
+    ) then
+        raise exception 'Shot Grid 时间字段仍保留秒以下精度';
+    end if;
 
     insert into sg_project_member (
         project_id, user_id, project_role, producer_code, joined_time, create_time
     ) values (
         test_project_id, 1, 'director', 'ADMIN', current_timestamp, current_timestamp
     );
+
+    begin
+        update sg_project_member
+        set member_status = 'removed'
+        where project_id = test_project_id and user_id = 1;
+        raise exception 'ck_sg_project_member_removal 未拒绝缺少移除审计的状态变更';
+    exception
+        when check_violation then null;
+    end;
 
     begin
         insert into sg_task (
@@ -47,6 +90,17 @@ begin
     ) returning episode_id into test_episode_id;
 
     begin
+        insert into sg_episode (
+            project_id, episode_no, storage_dir_name, lifecycle_status, create_time, update_time
+        ) values (
+            test_project_id, 1, 'EP001-ARCHIVED', 'archived', current_timestamp, current_timestamp
+        );
+        raise exception 'uk_sg_episode_no_active 未阻止归档集复用集号';
+    exception
+        when unique_violation then null;
+    end;
+
+    begin
         insert into sg_scene (
             project_id, episode_id, scene_no, scene_name, create_time, update_time
         ) values (
@@ -62,6 +116,28 @@ begin
     ) values (
         test_project_id, test_episode_id, 1, '第一场', current_timestamp, current_timestamp
     ) returning scene_id into test_scene_id;
+
+    begin
+        insert into sg_scene (
+            project_id, episode_id, scene_no, scene_name, lifecycle_status, create_time, update_time
+        ) values (
+            test_project_id, test_episode_id, 1, '归档重复场', 'archived', current_timestamp, current_timestamp
+        );
+        raise exception 'uk_sg_scene_no_active 未阻止归档场次复用场次号';
+    exception
+        when unique_violation then null;
+    end;
+
+    begin
+        insert into sg_scene (
+            project_id, episode_id, scene_no, scene_name, create_time, update_time
+        ) values (
+            test_project_id, test_episode_id, 2, '序', current_timestamp, current_timestamp
+        );
+        raise exception 'ck_sg_scene_prologue_name 未拒绝普通场次使用序名称';
+    exception
+        when check_violation then null;
+    end;
 
     insert into sg_shot (
         project_id, episode_id, scene_id, shot_no, storage_dir_name,

@@ -3,8 +3,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from common.context import RequestContext
 from config.get_db import get_db
-from exceptions.exception import ServiceException
 from module_shot_grid.entity.vo.access_vo import ShotGridProjectAccessModel
+from module_shot_grid.exceptions import shot_grid_error
 from module_shot_grid.service.project_access_service import ShotGridProjectAccessService
 
 
@@ -22,9 +22,9 @@ class CheckShotGridProjectAccess:
         try:
             project_id = int(project_id_value)
         except (TypeError, ValueError) as exc:
-            raise ServiceException(message='项目ID不正确') from exc
+            raise shot_grid_error(422, 'SG_PROJECT_ID_INVALID', '项目ID不正确') from exc
         if project_id <= 0:
-            raise ServiceException(message='项目ID不正确')
+            raise shot_grid_error(422, 'SG_PROJECT_ID_INVALID', '项目ID不正确')
         current_user = RequestContext.get_current_user()
         return await ShotGridProjectAccessService.resolve_access(db, current_user, project_id)
 

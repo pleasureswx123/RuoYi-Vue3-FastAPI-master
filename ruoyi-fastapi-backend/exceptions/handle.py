@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from fastapi import FastAPI, Request, Response
 from fastapi.exceptions import HTTPException
 from pydantic_validation_decorator import FieldValidationError
@@ -11,6 +13,7 @@ from exceptions.exception import (
     ServiceException,
     ServiceWarning,
 )
+from module_shot_grid.exceptions import ShotGridDomainException
 from utils.log_util import logger
 from utils.response_util import JSONResponse, ResponseUtil, jsonable_encoder
 
@@ -46,6 +49,25 @@ def handle_exception(app: FastAPI) -> None:
     @app.exception_handler(PermissionException)
     async def permission_exception_handler(request: Request, exc: PermissionException) -> Response:
         return ResponseUtil.forbidden(data=exc.data, msg=exc.message)
+
+    # Shot Grid 领域异常：同时保持真实 HTTP 状态与稳定 errorKey。
+    @app.exception_handler(ShotGridDomainException)
+    async def shot_grid_domain_exception_handler(request: Request, exc: ShotGridDomainException) -> Response:
+        error_data = {'errorKey': exc.error_key}
+        if exc.details is not None:
+            error_data['details'] = exc.details
+        return JSONResponse(
+            status_code=exc.http_status,
+            content=jsonable_encoder(
+                {
+                    'code': exc.http_status,
+                    'msg': exc.message,
+                    'success': False,
+                    'time': datetime.now(),
+                    'data': error_data,
+                }
+            ),
+        )
 
     # 自定义服务异常
     @app.exception_handler(ServiceException)

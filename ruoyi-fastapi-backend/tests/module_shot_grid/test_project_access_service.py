@@ -3,10 +3,13 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from exceptions.exception import PermissionException
 from module_admin.entity.vo.user_vo import CurrentUserModel, UserInfoModel
 from module_shot_grid.entity.vo.access_vo import ShotGridProjectAccessModel
+from module_shot_grid.exceptions import ShotGridDomainException
 from module_shot_grid.service.project_access_service import ShotGridProjectAccessService
+
+FORBIDDEN_STATUS = 403
+NOT_FOUND_STATUS = 404
 
 
 def _current_user(user_id: int = 2, permissions: list[str] | None = None) -> CurrentUserModel:
@@ -19,6 +22,10 @@ def _current_user(user_id: int = 2, permissions: list[str] | None = None) -> Cur
 
 @pytest.mark.asyncio
 async def test_project_member_receives_project_role(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        'module_shot_grid.service.project_access_service.ShotGridProjectDao.get_project_by_id',
+        AsyncMock(return_value=SimpleNamespace(project_id=10)),
+    )
     get_member = AsyncMock(return_value=SimpleNamespace(project_role='creator'))
     monkeypatch.setattr(
         'module_shot_grid.service.project_access_service.ShotGridProjectMemberDao.get_member',
@@ -34,18 +41,28 @@ async def test_project_member_receives_project_role(monkeypatch: pytest.MonkeyPa
 @pytest.mark.asyncio
 async def test_non_member_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
+        'module_shot_grid.service.project_access_service.ShotGridProjectDao.get_project_by_id',
+        AsyncMock(return_value=SimpleNamespace(project_id=10)),
+    )
+    monkeypatch.setattr(
         'module_shot_grid.service.project_access_service.ShotGridProjectMemberDao.get_member',
         AsyncMock(return_value=None),
     )
 
-    with pytest.raises(PermissionException, match='') as exc_info:
+    with pytest.raises(ShotGridDomainException) as exc_info:
         await ShotGridProjectAccessService.resolve_access(AsyncMock(), _current_user(), project_id=10)
 
     assert exc_info.value.message == '无权访问该项目'
+    assert exc_info.value.http_status == FORBIDDEN_STATUS
+    assert exc_info.value.error_key == 'SG_PROJECT_ACCESS_DENIED'
 
 
 @pytest.mark.asyncio
 async def test_all_project_scope_does_not_replace_action_permission(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        'module_shot_grid.service.project_access_service.ShotGridProjectDao.get_project_by_id',
+        AsyncMock(return_value=SimpleNamespace(project_id=10)),
+    )
     get_member = AsyncMock()
     monkeypatch.setattr(
         'module_shot_grid.service.project_access_service.ShotGridProjectMemberDao.get_member',
@@ -65,10 +82,25 @@ async def test_all_project_scope_does_not_replace_action_permission(monkeypatch:
 def test_project_role_dependency_rejects_creator_write_action() -> None:
     creator_access = ShotGridProjectAccessModel(projectId=10, userId=2, projectRole='creator')
 
-    with pytest.raises(PermissionException) as exc_info:
+    with pytest.raises(ShotGridDomainException) as exc_info:
         ShotGridProjectAccessService.require_roles(creator_access, {'director'})
 
     assert exc_info.value.message == '当前项目角色无权执行该操作'
+    assert exc_info.value.error_key == 'SG_PROJECT_ACCESS_DENIED'
+
+
+@pytest.mark.asyncio
+async def test_missing_project_returns_stable_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        'module_shot_grid.service.project_access_service.ShotGridProjectDao.get_project_by_id',
+        AsyncMock(return_value=None),
+    )
+
+    with pytest.raises(ShotGridDomainException) as exc_info:
+        await ShotGridProjectAccessService.resolve_access(AsyncMock(), _current_user(), project_id=404)
+
+    assert exc_info.value.http_status == NOT_FOUND_STATUS
+    assert exc_info.value.error_key == 'SG_PROJECT_NOT_FOUND'
 
 
 def test_project_role_dependency_allows_director_and_all_scope() -> None:

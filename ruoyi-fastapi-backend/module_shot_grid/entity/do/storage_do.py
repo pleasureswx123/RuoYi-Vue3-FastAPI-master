@@ -4,7 +4,6 @@ from sqlalchemy import (
     BigInteger,
     CheckConstraint,
     Column,
-    DateTime,
     ForeignKey,
     Index,
     Integer,
@@ -15,7 +14,7 @@ from sqlalchemy import (
 )
 
 from config.database import Base
-from module_shot_grid.entity.do.base_do import ShotGridMutableAuditMixin
+from module_shot_grid.entity.do.base_do import SHOT_GRID_DATETIME, ShotGridMutableAuditMixin
 
 
 class ShotGridStorageRoot(ShotGridMutableAuditMixin, Base):
@@ -34,7 +33,7 @@ class ShotGridStorageRoot(ShotGridMutableAuditMixin, Base):
     credential_ref = Column(String(200), nullable=True, comment='外部凭据配置引用')
     root_status = Column(String(20), nullable=False, server_default='enabled', comment='存储根状态')
     last_probe_status = Column(String(20), nullable=False, server_default='unknown', comment='最近探测状态')
-    last_probe_time = Column(DateTime, nullable=True, comment='最近探测时间')
+    last_probe_time = Column(SHOT_GRID_DATETIME, nullable=True, comment='最近探测时间')
     last_error_key = Column(String(100), nullable=True, comment='最近安全错误键')
     last_error_message = Column(String(500), nullable=True, comment='已净化错误摘要')
 
@@ -99,15 +98,15 @@ class ShotGridProjectStorage(Base):
     project_path_snapshot = Column(String(2000), nullable=False, comment='完整UNC项目路径快照')
     project_path_key = Column(String(2000), nullable=False, comment='大小写不敏感规范化项目路径键')
     storage_status = Column(String(20), nullable=False, server_default='initializing', comment='项目存储状态')
-    initialized_time = Column(DateTime, nullable=True, comment='初始目录就绪时间')
+    initialized_time = Column(SHOT_GRID_DATETIME, nullable=True, comment='初始目录就绪时间')
     last_error_key = Column(String(100), nullable=True, comment='最近错误键')
     last_error_message = Column(String(500), nullable=True, comment='已净化错误摘要')
     lock_version = Column(Integer, nullable=False, server_default='0', comment='乐观锁版本')
     create_by = Column(String(64), nullable=False, server_default=text("''"), comment='创建者')
-    create_time = Column(DateTime, nullable=False, default=datetime.now, comment='创建时间')
+    create_time = Column(SHOT_GRID_DATETIME, nullable=False, default=datetime.now, comment='创建时间')
     update_by = Column(String(64), nullable=False, server_default=text("''"), comment='更新者')
     update_time = Column(
-        DateTime,
+        SHOT_GRID_DATETIME,
         nullable=False,
         default=datetime.now,
         onupdate=datetime.now,
@@ -152,17 +151,17 @@ class ShotGridStorageOperation(Base):
     operation_status = Column(String(30), nullable=False, server_default='pending', comment='执行状态')
     idempotency_key = Column(String(100), nullable=False, comment='服务端稳定幂等键')
     attempt_count = Column(Integer, nullable=False, server_default='0', comment='已执行次数')
-    next_retry_time = Column(DateTime, nullable=True, comment='下次允许重试时间')
+    next_retry_time = Column(SHOT_GRID_DATETIME, nullable=True, comment='下次允许重试时间')
     lease_owner = Column(String(100), nullable=True, comment='Worker租约持有者')
-    lease_until = Column(DateTime, nullable=True, comment='Worker租约到期时间')
-    started_time = Column(DateTime, nullable=True, comment='开始时间')
-    completed_time = Column(DateTime, nullable=True, comment='成功或最终失败时间')
+    lease_until = Column(SHOT_GRID_DATETIME, nullable=True, comment='Worker租约到期时间')
+    started_time = Column(SHOT_GRID_DATETIME, nullable=True, comment='开始时间')
+    completed_time = Column(SHOT_GRID_DATETIME, nullable=True, comment='成功或最终失败时间')
     last_error_key = Column(String(100), nullable=True, comment='最近错误键')
     last_error_message = Column(String(500), nullable=True, comment='已净化错误摘要')
     create_by = Column(String(64), nullable=False, server_default=text("''"), comment='创建者')
-    create_time = Column(DateTime, nullable=False, default=datetime.now, comment='创建时间')
+    create_time = Column(SHOT_GRID_DATETIME, nullable=False, default=datetime.now, comment='创建时间')
     update_time = Column(
-        DateTime,
+        SHOT_GRID_DATETIME,
         nullable=False,
         default=datetime.now,
         onupdate=datetime.now,

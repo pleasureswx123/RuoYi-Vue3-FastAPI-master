@@ -1,4 +1,4 @@
-from sqlalchemy import CheckConstraint, ForeignKeyConstraint, PrimaryKeyConstraint
+from sqlalchemy import CheckConstraint, DateTime, ForeignKeyConstraint, PrimaryKeyConstraint
 from sqlalchemy.dialects import postgresql
 
 from config.database import Base
@@ -93,3 +93,57 @@ def test_json_columns_compile_to_jsonb_on_postgresql() -> None:
 
     assert str(Base.metadata.tables['sg_version'].c.ai_params.type.compile(dialect=dialect)) == 'JSONB'
     assert str(Base.metadata.tables['sg_note'].c.annotations.type.compile(dialect=dialect)) == 'JSONB'
+    assert str(Base.metadata.tables['sg_import_batch'].c.result_summary.type.compile(dialect=dialect)) == 'JSONB'
+
+
+def test_datetime_columns_compile_to_second_precision_on_postgresql() -> None:
+    dialect = postgresql.dialect()
+    datetime_columns = [
+        column
+        for table_name in SHOT_GRID_TABLE_NAMES
+        for column in Base.metadata.tables[table_name].columns
+        if isinstance(column.type, DateTime)
+    ]
+
+    assert datetime_columns
+    assert all(
+        str(column.type.compile(dialect=dialect)) == 'TIMESTAMP(0) WITHOUT TIME ZONE' for column in datetime_columns
+    )
+
+
+def test_import_batch_persists_idempotent_result_and_guards_asset_item_provenance() -> None:
+    import_batch = Base.metadata.tables['sg_import_batch']
+    batch_checks = {
+        constraint.name: str(constraint.sqltext)
+        for constraint in import_batch.constraints
+        if isinstance(constraint, CheckConstraint)
+    }
+    asset_item = Base.metadata.tables['sg_asset_item']
+    asset_item_checks = {
+        constraint.name: str(constraint.sqltext)
+        for constraint in asset_item.constraints
+        if isinstance(constraint, CheckConstraint)
+    }
+
+    assert {'selection_hash', 'result_summary'} <= set(import_batch.c.keys())
+    assert "batch_status = 'committed'" in batch_checks['ck_sg_import_batch_result_lifecycle']
+    assert 'source_import_batch_id is not null' in asset_item_checks['ck_sg_asset_item_import_source']
+
+
+def test_project_member_uses_auditable_soft_removal() -> None:
+    project_member = Base.metadata.tables['sg_project_member']
+    checks = {
+        constraint.name: str(constraint.sqltext)
+        for constraint in project_member.constraints
+        if isinstance(constraint, CheckConstraint)
+    }
+    producer_index = next(
+        index for index in project_member.indexes if index.name == 'uk_sg_project_member_producer_code'
+    )
+
+    assert {'member_status', 'removed_by', 'removed_time'} <= set(project_member.c.keys())
+    assert checks['ck_sg_project_member_status'] == "member_status in ('active', 'removed')"
+    assert 'removed_by is not null' in checks['ck_sg_project_member_removal']
+    assert str(producer_index.dialect_options['postgresql']['where']) == (
+        "producer_code IS NOT NULL AND member_status = 'active'"
+    )

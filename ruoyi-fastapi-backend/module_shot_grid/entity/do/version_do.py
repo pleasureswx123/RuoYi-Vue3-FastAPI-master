@@ -5,7 +5,6 @@ from sqlalchemy import (
     BigInteger,
     CheckConstraint,
     Column,
-    DateTime,
     ForeignKey,
     ForeignKeyConstraint,
     Index,
@@ -17,7 +16,7 @@ from sqlalchemy import (
 )
 
 from config.database import Base
-from module_shot_grid.entity.do.base_do import SHOT_GRID_JSON, ShotGridCreateAuditMixin
+from module_shot_grid.entity.do.base_do import SHOT_GRID_DATETIME, SHOT_GRID_JSON, ShotGridCreateAuditMixin
 
 
 class ShotGridVersionSubmission(Base):
@@ -55,12 +54,12 @@ class ShotGridVersionSubmission(Base):
     idempotency_key = Column(String(100), nullable=False, comment='客户端幂等键')
     attempt_count = Column(Integer, nullable=False, server_default='0', comment='NAS发布尝试次数')
     lease_owner = Column(String(100), nullable=True, comment='Worker租约持有者')
-    lease_until = Column(DateTime, nullable=True, comment='Worker租约到期时间')
+    lease_until = Column(SHOT_GRID_DATETIME, nullable=True, comment='Worker租约到期时间')
     last_error_key = Column(String(100), nullable=True, comment='最近错误键')
     last_error_message = Column(String(500), nullable=True, comment='已净化错误摘要')
-    create_time = Column(DateTime, nullable=False, default=datetime.now, comment='创建时间')
+    create_time = Column(SHOT_GRID_DATETIME, nullable=False, default=datetime.now, comment='创建时间')
     update_time = Column(
-        DateTime,
+        SHOT_GRID_DATETIME,
         nullable=False,
         default=datetime.now,
         onupdate=datetime.now,
@@ -133,7 +132,7 @@ class ShotGridVersion(Base):
         nullable=False,
         comment='提交用户ID',
     )
-    submitted_time = Column(DateTime, nullable=False, default=datetime.now, comment='提交时间')
+    submitted_time = Column(SHOT_GRID_DATETIME, nullable=False, default=datetime.now, comment='提交时间')
     generated_at_ms = Column(BigInteger, nullable=False, comment='业务文件名服务端时间戳')
     lock_version = Column(Integer, nullable=False, server_default='0', comment='审核乐观锁版本')
 
@@ -196,7 +195,7 @@ class ShotGridVersionFile(ShotGridCreateAuditMixin, Base):
     nas_relative_path = Column(String(1200), nullable=True, comment='NAS相对项目根目录路径')
     nas_sha256 = Column(CHAR(64), nullable=True, comment='NAS文件SHA-256摘要')
     nas_file_size = Column(BigInteger, nullable=True, comment='NAS文件大小')
-    published_time = Column(DateTime, nullable=True, comment='NAS发布时间')
+    published_time = Column(SHOT_GRID_DATETIME, nullable=True, comment='NAS发布时间')
     is_primary = Column(CHAR(1), nullable=False, server_default='0', comment='是否主文件')
     sort_order = Column(Integer, nullable=False, server_default='0', comment='展示顺序')
 

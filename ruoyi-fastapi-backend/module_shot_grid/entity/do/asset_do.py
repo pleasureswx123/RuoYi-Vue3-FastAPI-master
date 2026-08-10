@@ -5,7 +5,6 @@ from sqlalchemy import (
     BigInteger,
     CheckConstraint,
     Column,
-    DateTime,
     ForeignKey,
     ForeignKeyConstraint,
     Index,
@@ -17,7 +16,11 @@ from sqlalchemy import (
 )
 
 from config.database import Base
-from module_shot_grid.entity.do.base_do import ShotGridCreateAuditMixin, ShotGridMutableAuditMixin
+from module_shot_grid.entity.do.base_do import (
+    SHOT_GRID_DATETIME,
+    ShotGridCreateAuditMixin,
+    ShotGridMutableAuditMixin,
+)
 
 
 class ShotGridAsset(ShotGridMutableAuditMixin, Base):
@@ -125,6 +128,11 @@ class ShotGridAssetItem(ShotGridMutableAuditMixin, Base):
         ),
         CheckConstraint('sort_order >= 0', name='ck_sg_asset_item_sort_order'),
         CheckConstraint('source_row_no is null or source_row_no > 0', name='ck_sg_asset_item_source_row'),
+        CheckConstraint(
+            '(source_import_batch_id is null and source_row_no is null and import_row_key is null) or '
+            '(source_import_batch_id is not null and source_row_no is not null and import_row_key is not null)',
+            name='ck_sg_asset_item_import_source',
+        ),
         CheckConstraint("lifecycle_status in ('active', 'archived')", name='ck_sg_asset_item_lifecycle'),
         CheckConstraint('lock_version >= 0', name='ck_sg_asset_item_lock_version'),
         CheckConstraint("del_flag in ('0', '2')", name='ck_sg_asset_item_del_flag'),
@@ -205,12 +213,12 @@ class ShotGridShotAssetRequirement(Base):
         nullable=True,
         comment='人工解决用户ID',
     )
-    resolved_time = Column(DateTime, nullable=True, comment='解决时间')
+    resolved_time = Column(SHOT_GRID_DATETIME, nullable=True, comment='解决时间')
     resolution_reason = Column(String(500), nullable=True, comment='解决或忽略原因')
     create_by = Column(String(64), nullable=False, server_default=text("''"), comment='创建者')
-    create_time = Column(DateTime, nullable=False, default=datetime.now, comment='创建时间')
+    create_time = Column(SHOT_GRID_DATETIME, nullable=False, default=datetime.now, comment='创建时间')
     update_by = Column(String(64), nullable=True, comment='更新者')
-    update_time = Column(DateTime, nullable=True, comment='更新时间')
+    update_time = Column(SHOT_GRID_DATETIME, nullable=True, comment='更新时间')
 
     __table_args__ = (
         ForeignKeyConstraint(

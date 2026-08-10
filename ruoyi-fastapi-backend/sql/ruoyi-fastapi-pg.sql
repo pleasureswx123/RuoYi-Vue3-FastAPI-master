@@ -1768,6 +1768,8 @@ CREATE TABLE sg_import_batch (
 	preview_token_hash CHAR(64),
 	preview_expires_time TIMESTAMP(0) WITHOUT TIME ZONE,
 	idempotency_key VARCHAR(100),
+	selection_hash CHAR(64),
+	result_summary JSONB,
 	last_error_key VARCHAR(100),
 	last_error_message VARCHAR(500),
 	previewed_by BIGINT NOT NULL,
@@ -1785,6 +1787,9 @@ CREATE TABLE sg_import_batch (
 	CONSTRAINT ck_sg_import_batch_counts_bounds CHECK (valid_rows <= total_rows and warning_rows <= total_rows and error_rows <= total_rows and committed_rows <= valid_rows),
 	CONSTRAINT ck_sg_import_batch_commit_identity CHECK ((batch_status in ('committing', 'committed', 'failed') and committed_by is not null and idempotency_key is not null and btrim(idempotency_key) <> '') or (batch_status in ('previewed', 'expired') and committed_by is null and idempotency_key is null)),
 	CONSTRAINT ck_sg_import_batch_committed_time CHECK ((batch_status = 'committed' and committed_time is not null) or (batch_status <> 'committed' and committed_time is null)),
+	CONSTRAINT ck_sg_import_batch_selection_hash CHECK (selection_hash is null or selection_hash ~ '^[0-9a-f]{64}$'),
+	CONSTRAINT ck_sg_import_batch_result_summary CHECK (result_summary is null or jsonb_typeof(result_summary) = 'object'),
+	CONSTRAINT ck_sg_import_batch_result_lifecycle CHECK ((batch_status in ('previewed', 'expired') and selection_hash is null and result_summary is null) or (batch_status in ('committing', 'failed') and selection_hash is not null and result_summary is null) or (batch_status = 'committed' and selection_hash is not null and result_summary is not null)),
 	FOREIGN KEY(project_id) REFERENCES sg_project (project_id) ON DELETE RESTRICT,
 	FOREIGN KEY(previewed_by) REFERENCES sys_user (user_id) ON DELETE RESTRICT,
 	FOREIGN KEY(committed_by) REFERENCES sys_user (user_id) ON DELETE RESTRICT
@@ -1807,6 +1812,8 @@ COMMENT ON COLUMN sg_import_batch.committed_rows IS '已提交行数';
 COMMENT ON COLUMN sg_import_batch.preview_token_hash IS '预览Token哈希';
 COMMENT ON COLUMN sg_import_batch.preview_expires_time IS '预览数据到期时间';
 COMMENT ON COLUMN sg_import_batch.idempotency_key IS '正式提交幂等键';
+COMMENT ON COLUMN sg_import_batch.selection_hash IS '正式提交选中行摘要';
+COMMENT ON COLUMN sg_import_batch.result_summary IS '正式提交结果快照';
 COMMENT ON COLUMN sg_import_batch.last_error_key IS '最近失败错误键';
 COMMENT ON COLUMN sg_import_batch.last_error_message IS '已净化失败摘要';
 COMMENT ON COLUMN sg_import_batch.previewed_by IS '预检查用户ID';
@@ -1821,23 +1828,32 @@ CREATE TABLE sg_project_member (
 	user_id BIGINT NOT NULL,
 	project_role VARCHAR(20) NOT NULL,
 	producer_code VARCHAR(12),
+	member_status VARCHAR(20) DEFAULT 'active' NOT NULL,
 	joined_time TIMESTAMP(0) WITHOUT TIME ZONE NOT NULL,
+	removed_by BIGINT,
+	removed_time TIMESTAMP(0) WITHOUT TIME ZONE,
 	create_by VARCHAR(64) DEFAULT '' NOT NULL,
 	create_time TIMESTAMP(0) WITHOUT TIME ZONE NOT NULL,
 	PRIMARY KEY (project_id, user_id),
 	CONSTRAINT ck_sg_project_member_role CHECK (project_role in ('director', 'creator')),
 	CONSTRAINT ck_sg_project_member_producer_code CHECK (producer_code is null or producer_code ~ '^[A-Z0-9]{2,12}$'),
+	CONSTRAINT ck_sg_project_member_status CHECK (member_status in ('active', 'removed')),
+	CONSTRAINT ck_sg_project_member_removal CHECK ((member_status = 'active' and removed_by is null and removed_time is null) or (member_status = 'removed' and removed_by is not null and removed_time is not null)),
 	FOREIGN KEY(project_id) REFERENCES sg_project (project_id) ON DELETE RESTRICT,
-	FOREIGN KEY(user_id) REFERENCES sys_user (user_id) ON DELETE RESTRICT
+	FOREIGN KEY(user_id) REFERENCES sys_user (user_id) ON DELETE RESTRICT,
+	CONSTRAINT fk_sg_project_member_removed_by FOREIGN KEY(removed_by) REFERENCES sys_user (user_id) ON DELETE RESTRICT
 );
 CREATE INDEX idx_sg_project_member_user_project ON sg_project_member (user_id, project_id);
-CREATE UNIQUE INDEX uk_sg_project_member_producer_code ON sg_project_member (project_id, lower(producer_code)) WHERE producer_code IS NOT NULL;
+CREATE UNIQUE INDEX uk_sg_project_member_producer_code ON sg_project_member (project_id, lower(producer_code)) WHERE producer_code IS NOT NULL AND member_status = 'active';
 COMMENT ON TABLE sg_project_member IS 'Shot Grid项目成员表';
 COMMENT ON COLUMN sg_project_member.project_id IS '项目ID';
 COMMENT ON COLUMN sg_project_member.user_id IS '用户ID';
 COMMENT ON COLUMN sg_project_member.project_role IS '项目角色';
 COMMENT ON COLUMN sg_project_member.producer_code IS '制作人文件名缩写';
+COMMENT ON COLUMN sg_project_member.member_status IS '成员状态';
 COMMENT ON COLUMN sg_project_member.joined_time IS '加入时间';
+COMMENT ON COLUMN sg_project_member.removed_by IS '移除操作用户ID';
+COMMENT ON COLUMN sg_project_member.removed_time IS '移除时间';
 COMMENT ON COLUMN sg_project_member.create_by IS '创建者';
 COMMENT ON COLUMN sg_project_member.create_time IS '创建时间';
 
@@ -1975,6 +1991,7 @@ CREATE TABLE sg_asset_item (
 	CONSTRAINT ck_sg_asset_item_name_key CHECK (((production_item is null and production_item_key is null) or (production_item is not null and btrim(production_item) <> '' and production_item_key is not null and btrim(production_item_key) <> ''))),
 	CONSTRAINT ck_sg_asset_item_sort_order CHECK (sort_order >= 0),
 	CONSTRAINT ck_sg_asset_item_source_row CHECK (source_row_no is null or source_row_no > 0),
+	CONSTRAINT ck_sg_asset_item_import_source CHECK ((source_import_batch_id is null and source_row_no is null and import_row_key is null) or (source_import_batch_id is not null and source_row_no is not null and import_row_key is not null)),
 	CONSTRAINT ck_sg_asset_item_lifecycle CHECK (lifecycle_status in ('active', 'archived')),
 	CONSTRAINT ck_sg_asset_item_lock_version CHECK (lock_version >= 0),
 	CONSTRAINT ck_sg_asset_item_del_flag CHECK (del_flag in ('0', '2'))
@@ -2766,7 +2783,7 @@ create table if not exists alembic_version (
     constraint alembic_version_pkc primary key (version_num)
 );
 delete from alembic_version;
-insert into alembic_version(version_num) values ('20260810_01');
+insert into alembic_version(version_num) values ('20260810_04');
 
 
 CREATE OR REPLACE FUNCTION "find_in_set"(int8, varchar)

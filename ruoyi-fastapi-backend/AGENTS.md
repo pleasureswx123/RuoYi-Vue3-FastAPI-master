@@ -107,19 +107,19 @@ ruoyi app run --env=dev
 受保护接口通常需要：
 
 ```python
-dependencies=[PreAuthDependency()]
+dependencies = [PreAuthDependency()]
 ```
 
 接口级权限使用：
 
 ```python
-dependencies=[UserInterfaceAuthDependency('system:xxx:list')]
+dependencies = [UserInterfaceAuthDependency('system:xxx:list')]
 ```
 
 或：
 
 ```python
-dependencies=[RoleInterfaceAuthDependency('admin')]
+dependencies = [RoleInterfaceAuthDependency('admin')]
 ```
 
 涉及组织、用户、角色、文件或部门数据时，还应注入 `DataScopeDependency`。
@@ -224,11 +224,13 @@ PostgreSQL 迁移是当前项目的必需交付物。只有插件清单继续声
 
 ### 7.4 Shot Grid 当前数据库边界
 
-- Shot Grid 第一版领域基础位于 `module_shot_grid/`，包含 22 张 `sg_` 表 DO、项目访问依赖和 `/shot-grid/navigation` 骨架。
+- Shot Grid 领域模块位于 `module_shot_grid/`，包含 22 张 `sg_` 表 DO、项目访问依赖、范围导航、项目创建/存储状态/成员/范围查询，以及镜头和资产 Excel 预检与正式提交接口。
 - 首个增量迁移为 `20260810_01`，并已同步 `sql/ruoyi-fastapi-pg.sql`、菜单、权限和字典种子。
+- 当前 head `20260810_04` 是无版本历史库的采用/向前修复迁移：统一秒级时间精度和空字符串审计默认值，补强序场次、资产制作分项、主文件及集/场次编号约束；不得改写历史 01/02/03 代替修复。无 `alembic_version` 的历史库只能在备份和克隆核验后 stamp 01，再执行 upgrade head。04 必须在任何 ALTER 前预检冲突并整体失败，不能猜测修复业务数据；downgrade 不恢复从未被正式 revision 声明的旧弱漂移，秒以下精度只能从升级前备份恢复。
 - Shot Grid 只承诺 PostgreSQL；非 PostgreSQL 环境不得把 `sg_` 模型加入平台元数据，Shot Grid revision 的升级和降级必须保持 no-op。
 - 已有平台 PostgreSQL 库通过 Alembic 执行增量迁移；新库通过同步后的 PostgreSQL 初始化 SQL 建立全量结构并写入 Alembic head。当前仍不存在完整平台 Alembic baseline，不得声称首个 Shot Grid revision 能从真正空库独立建立 RuoYi 平台。
-- 当前骨架尚未实现项目 CRUD、Excel 导入、NAS I/O、任务动作、版本发布和审核闭环；后续必须在 Service 事务与资源归属校验下逐项实现。
+- 项目创建、成员变更和 Excel 正式提交必须由 Service 在同一数据库事务写领域数据、Outbox 与 `SysOperLog`；不得使用会异步入 Redis 的平台 `@Log` 冒充同事务审计。NAS I/O、项目编辑/归档、手工 CRUD、任务动作、版本发布和审核闭环仍待后续实现。
+- Excel 正式提交使用 `selectedRows[{sheetName,rowNumber}]`，不能只用跨 Sheet 不唯一的物理行号；预览明文 Token 和行明细只短期存 Redis，PostgreSQL `sg_import_batch.selection_hash/result_summary` 负责跨 Redis 生命周期的幂等重放。
 
 ## 8. Redis、缓存和日志
 

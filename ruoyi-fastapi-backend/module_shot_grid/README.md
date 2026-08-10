@@ -2,15 +2,42 @@
 
 ## 当前边界
 
-本模块是 Shot Grid 业务后端的 PostgreSQL 领域基础。首批交付包含：
+本模块是 Shot Grid 业务后端的 PostgreSQL 领域模块。当前已交付：
 
 - 22 张 `sg_` 领域表对应的 SQLAlchemy DO；
 - 项目成员范围与项目角色权限依赖；
 - 受平台角色菜单授权约束的 `GET /shot-grid/navigation`；
-- PostgreSQL Alembic 首迁移、初始化 SQL、菜单、权限按钮和字典种子；
-- 元数据、导航和项目权限的针对性测试。
+- 项目范围列表、详情、真实概览聚合、创建项目事务、存储初始化状态与项目成员管理；
+- 镜头和资产 `.xlsx` 的安全预检、Redis 短期 Token、选中行全事务提交和 PostgreSQL 耐久幂等结果；
+- PostgreSQL Alembic 迁移链、初始化 SQL、菜单、权限按钮和字典种子；
+- 元数据、导航、项目权限、项目事务和两类真实样表解析的针对性测试。
 
-当前批次不包含项目 CRUD、NAS 实际目录操作、Excel 导入、任务状态动作、版本发布和审核闭环。上述能力必须在后续批次通过 Service 事务和业务测试实现，不能直接使用通用 CRUD 绕过状态机。
+当前批次不包含 NAS Worker 实际目录操作、项目编辑/归档、手工镜头与资产 CRUD、任务状态动作、版本发布和审核闭环。Excel 模板下载端点也未在本批次生成；预检按仓库内已冻结样表执行。上述能力必须在后续批次通过 Service 事务和业务测试实现，不能直接使用通用 CRUD 绕过状态机。
+
+## Excel 导入配置
+
+部署时可通过以下环境变量调整安全边界：
+
+| 环境变量 | 默认值 | 说明 |
+| --- | ---: | --- |
+| `SHOT_GRID_IMPORT_MAX_FILE_SIZE_BYTES` | `10485760` | 单个 `.xlsx` 最大字节数 |
+| `SHOT_GRID_IMPORT_MAX_ARCHIVE_ENTRIES` | `256` | ZIP 条目上限 |
+| `SHOT_GRID_IMPORT_MAX_UNCOMPRESSED_BYTES` | `67108864` | 解压后总字节上限 |
+| `SHOT_GRID_IMPORT_MAX_COMPRESSION_RATIO` | `200` | 单条目最大压缩比 |
+| `SHOT_GRID_IMPORT_MAX_ROWS_PER_WORKBOOK` | `10000` | 工作簿业务行上限 |
+| `SHOT_GRID_IMPORT_MAX_OOXML_ROWS_PER_WORKBOOK` | `12000` | 含隐藏 Sheet 的 OOXML 物理行上限 |
+| `SHOT_GRID_IMPORT_MAX_OOXML_CELLS_PER_WORKBOOK` | `200000` | OOXML 物理单元格及共享字符串条目上限 |
+| `SHOT_GRID_IMPORT_MAX_OOXML_XML_ELEMENTS` | `1000000` | OOXML XML 元素总量上限 |
+| `SHOT_GRID_IMPORT_MAX_OOXML_COLUMNS_PER_SHEET` | `128` | 单个 Sheet 最大列号 |
+| `SHOT_GRID_IMPORT_MAX_OOXML_MERGE_RANGES` | `20000` | 合并区域数量上限 |
+| `SHOT_GRID_IMPORT_MAX_OOXML_MERGED_CELLS` | `200000` | 合并区域展开后的单元格总量上限 |
+| `SHOT_GRID_IMPORT_MAX_CELL_TEXT_LENGTH` | `10000` | 单个单元格文本字符上限 |
+| `SHOT_GRID_IMPORT_MAX_OOXML_TEXT_CHARACTERS` | `8000000` | 共享字符串引用展开后的文本字符总量上限 |
+| `SHOT_GRID_IMPORT_MAX_PREVIEW_JSON_BYTES` | `16777216` | Redis Token 载荷及 HTTP 预览 JSON 的 UTF-8 字节上限 |
+| `SHOT_GRID_IMPORT_PREVIEW_TTL_SECONDS` | `1800` | Redis 预览有效期 |
+| `SHOT_GRID_IMPORT_REDIS_KEY_PREFIX` | `shotgrid:import:preview` | Redis Key 前缀 |
+
+安全门禁在线程中、`openpyxl` 建立工作簿对象前扫描全部 OOXML Sheet（含隐藏 Sheet），并在 Redis 写入和数据库提交前检查预览 JSON 大小。镜头模板版本为 `shot-v1`，资产模板版本为 `asset-v1`。上传原文件只用于临时解析，不持久化本地路径；若需长期保留，必须另走平台受保护文件和业务引用。
 
 ## 分层
 
@@ -30,7 +57,13 @@ controller → service → dao → entity/do
 
 ## 数据库交付路径
 
-- 已有 RuoYi PostgreSQL 基线库：执行 Alembic `upgrade head`。
+- 已有 RuoYi PostgreSQL 基线库：执行 Alembic `upgrade head`；当前 Shot Grid head 为 `20260810_04`。
 - 新数据库：执行同步后的 `sql/ruoyi-fastapi-pg.sql`，脚本会直接建立最新结构并写入当前 Alembic 版本。
+- 历史上已经落地 22 张 `sg_` 表但没有 `alembic_version` 的库，必须先备份并在克隆库核对为 01 结构，才能 `stamp 20260810_01` 后执行 `upgrade head`；不得直接对未核验的正式库 stamp。
+- `20260810_04` 是无版本历史库的采用/修复 revision，会把时间精度、审计人默认值、序场次/资产制作分项/主文件约束和集场次编号唯一性收敛为仓库从 01 起就声明的当前契约。时间精度收敛到秒会舍弃历史秒以下精度，升级前必须保留可恢复备份。
+- 04 在任何 `ALTER` 或时间精度收敛前先预检历史数据；若存在序场次命名不一致、资产制作分项名称/键不成对、非审核媒体被标为主文件，或未删除的集号/场次号（含归档行）重复，会以稳定的 `SG_SHOT_GRID_REPAIR_*` PostgreSQL 异常整体回滚。必须先治理冲突数据再重试，迁移不会猜测或静默改写业务数据。
+- 04 的 downgrade 只回退 Alembic 版本号，不把数据库重新污染为从未被正式 revision 声明的旧弱结构，也不能恢复已舍弃的秒以下精度；灾难恢复应使用升级前备份。
+- 04 只修复有业务语义的差异；`selection_hash`、`result_summary`、成员生命周期字段的物理列顺序，以及 PostgreSQL 对等价 `CHECK`/部分索引的 cast 文本差异，不通过重建表处理。
+- 从 `20260810_03` 继续降级到旧成员结构前必须不存在 `member_status='removed'` 的成员；迁移会安全失败，防止旧代码静默恢复已移除成员的项目访问。
 
 当前仓库尚无完整平台 Alembic baseline，因此不能把 Shot Grid 增量 revision 描述为能够从真正空库独立建立全部 RuoYi 平台表。

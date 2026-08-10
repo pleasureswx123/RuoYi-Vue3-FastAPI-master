@@ -5,7 +5,6 @@ from sqlalchemy import (
     BigInteger,
     CheckConstraint,
     Column,
-    DateTime,
     ForeignKey,
     Index,
     Integer,
@@ -15,6 +14,7 @@ from sqlalchemy import (
 )
 
 from config.database import Base
+from module_shot_grid.entity.do.base_do import SHOT_GRID_DATETIME, SHOT_GRID_JSON
 
 
 class ShotGridImportBatch(Base):
@@ -42,8 +42,10 @@ class ShotGridImportBatch(Base):
     error_rows = Column(Integer, nullable=False, server_default='0', comment='有错误行数')
     committed_rows = Column(Integer, nullable=False, server_default='0', comment='已提交行数')
     preview_token_hash = Column(CHAR(64), nullable=True, comment='预览Token哈希')
-    preview_expires_time = Column(DateTime, nullable=True, comment='预览数据到期时间')
+    preview_expires_time = Column(SHOT_GRID_DATETIME, nullable=True, comment='预览数据到期时间')
     idempotency_key = Column(String(100), nullable=True, comment='正式提交幂等键')
+    selection_hash = Column(CHAR(64), nullable=True, comment='正式提交选中行摘要')
+    result_summary = Column(SHOT_GRID_JSON, nullable=True, comment='正式提交结果快照')
     last_error_key = Column(String(100), nullable=True, comment='最近失败错误键')
     last_error_message = Column(String(500), nullable=True, comment='已净化失败摘要')
     previewed_by = Column(
@@ -58,15 +60,15 @@ class ShotGridImportBatch(Base):
         nullable=True,
         comment='正式提交用户ID',
     )
-    create_time = Column(DateTime, nullable=False, default=datetime.now, comment='创建时间')
+    create_time = Column(SHOT_GRID_DATETIME, nullable=False, default=datetime.now, comment='创建时间')
     update_time = Column(
-        DateTime,
+        SHOT_GRID_DATETIME,
         nullable=False,
         default=datetime.now,
         onupdate=datetime.now,
         comment='更新时间',
     )
-    committed_time = Column(DateTime, nullable=True, comment='正式提交完成时间')
+    committed_time = Column(SHOT_GRID_DATETIME, nullable=True, comment='正式提交完成时间')
 
     __table_args__ = (
         UniqueConstraint('batch_id', 'project_id', name='uk_sg_import_batch_id_project'),
@@ -96,6 +98,20 @@ class ShotGridImportBatch(Base):
             "(batch_status = 'committed' and committed_time is not null) or "
             "(batch_status <> 'committed' and committed_time is null)",
             name='ck_sg_import_batch_committed_time',
+        ),
+        CheckConstraint(
+            "selection_hash is null or selection_hash ~ '^[0-9a-f]{64}$'",
+            name='ck_sg_import_batch_selection_hash',
+        ),
+        CheckConstraint(
+            "result_summary is null or jsonb_typeof(result_summary) = 'object'",
+            name='ck_sg_import_batch_result_summary',
+        ),
+        CheckConstraint(
+            "(batch_status in ('previewed', 'expired') and selection_hash is null and result_summary is null) or "
+            "(batch_status in ('committing', 'failed') and selection_hash is not null and result_summary is null) or "
+            "(batch_status = 'committed' and selection_hash is not null and result_summary is not null)",
+            name='ck_sg_import_batch_result_lifecycle',
         ),
         Index(
             'uk_sg_import_batch_idempotency',

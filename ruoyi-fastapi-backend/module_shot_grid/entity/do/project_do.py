@@ -5,7 +5,6 @@ from sqlalchemy import (
     CheckConstraint,
     Column,
     Date,
-    DateTime,
     ForeignKey,
     ForeignKeyConstraint,
     Index,
@@ -18,7 +17,7 @@ from sqlalchemy import (
 )
 
 from config.database import Base
-from module_shot_grid.entity.do.base_do import ShotGridMutableAuditMixin
+from module_shot_grid.entity.do.base_do import SHOT_GRID_DATETIME, ShotGridMutableAuditMixin
 
 
 class ShotGridProject(ShotGridMutableAuditMixin, Base):
@@ -95,9 +94,17 @@ class ShotGridProjectMember(Base):
     )
     project_role = Column(String(20), nullable=False, comment='项目角色')
     producer_code = Column(String(12), nullable=True, comment='制作人文件名缩写')
-    joined_time = Column(DateTime, nullable=False, default=datetime.now, comment='加入时间')
+    member_status = Column(String(20), nullable=False, server_default='active', comment='成员状态')
+    joined_time = Column(SHOT_GRID_DATETIME, nullable=False, default=datetime.now, comment='加入时间')
+    removed_by = Column(
+        BigInteger,
+        ForeignKey('sys_user.user_id', name='fk_sg_project_member_removed_by', ondelete='RESTRICT'),
+        nullable=True,
+        comment='移除操作用户ID',
+    )
+    removed_time = Column(SHOT_GRID_DATETIME, nullable=True, comment='移除时间')
     create_by = Column(String(64), nullable=False, server_default=text("''"), comment='创建者')
-    create_time = Column(DateTime, nullable=False, default=datetime.now, comment='创建时间')
+    create_time = Column(SHOT_GRID_DATETIME, nullable=False, default=datetime.now, comment='创建时间')
 
     __table_args__ = (
         CheckConstraint("project_role in ('director', 'creator')", name='ck_sg_project_member_role'),
@@ -105,12 +112,21 @@ class ShotGridProjectMember(Base):
             "producer_code is null or producer_code ~ '^[A-Z0-9]{2,12}$'",
             name='ck_sg_project_member_producer_code',
         ),
+        CheckConstraint(
+            "member_status in ('active', 'removed')",
+            name='ck_sg_project_member_status',
+        ),
+        CheckConstraint(
+            "(member_status = 'active' and removed_by is null and removed_time is null) or "
+            "(member_status = 'removed' and removed_by is not null and removed_time is not null)",
+            name='ck_sg_project_member_removal',
+        ),
         Index(
             'uk_sg_project_member_producer_code',
             project_id,
             func.lower(producer_code),
             unique=True,
-            postgresql_where=text('producer_code IS NOT NULL'),
+            postgresql_where=text("producer_code IS NOT NULL AND member_status = 'active'"),
         ),
         Index('idx_sg_project_member_user_project', 'user_id', 'project_id'),
         {'comment': 'Shot Grid项目成员表'},

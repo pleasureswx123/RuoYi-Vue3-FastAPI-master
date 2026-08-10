@@ -1,10 +1,12 @@
 from datetime import datetime
 
 from sqlalchemy import CHAR, JSON, Column, DateTime, Integer, String, text
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP
 
 # 默认使用通用 JSON，PostgreSQL 主路径使用 JSONB，避免公共模型绑定单一方言。
 SHOT_GRID_JSON = JSON().with_variant(JSONB(), 'postgresql')
+# PostgreSQL 正式迁移和初始化基线统一使用秒级时间精度。
+SHOT_GRID_DATETIME = DateTime().with_variant(TIMESTAMP(precision=0, timezone=False), 'postgresql')
 
 
 class ShotGridMutableAuditMixin:
@@ -13,10 +15,10 @@ class ShotGridMutableAuditMixin:
     """
 
     create_by = Column(String(64), nullable=False, server_default=text("''"), comment='创建者')
-    create_time = Column(DateTime, nullable=False, default=datetime.now, comment='创建时间')
+    create_time = Column(SHOT_GRID_DATETIME, nullable=False, default=datetime.now, comment='创建时间')
     update_by = Column(String(64), nullable=False, server_default=text("''"), comment='更新者')
     update_time = Column(
-        DateTime,
+        SHOT_GRID_DATETIME,
         nullable=False,
         default=datetime.now,
         onupdate=datetime.now,
@@ -33,4 +35,4 @@ class ShotGridCreateAuditMixin:
     """
 
     create_by = Column(String(64), nullable=False, server_default=text("''"), comment='创建者')
-    create_time = Column(DateTime, nullable=False, default=datetime.now, comment='创建时间')
+    create_time = Column(SHOT_GRID_DATETIME, nullable=False, default=datetime.now, comment='创建时间')

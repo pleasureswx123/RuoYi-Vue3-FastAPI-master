@@ -1,9 +1,10 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from exceptions.exception import PermissionException
 from module_admin.entity.vo.user_vo import CurrentUserModel
+from module_shot_grid.dao.project_dao import ShotGridProjectDao
 from module_shot_grid.dao.project_member_dao import ShotGridProjectMemberDao
 from module_shot_grid.entity.vo.access_vo import ShotGridProjectAccessModel
+from module_shot_grid.exceptions import shot_grid_error
 
 
 class ShotGridProjectAccessService:
@@ -24,7 +25,10 @@ class ShotGridProjectAccessService:
         """
         user = current_user.user
         if user is None or user.user_id is None:
-            raise PermissionException(data='', message='无法识别当前用户')
+            raise shot_grid_error(403, 'SG_PROJECT_ACCESS_DENIED', '无法识别当前用户')
+
+        if await ShotGridProjectDao.get_project_by_id(db, project_id) is None:
+            raise shot_grid_error(404, 'SG_PROJECT_NOT_FOUND', '项目不存在或不可见')
 
         has_all_scope = bool(
             user.admin or '*:*:*' in current_user.permissions or 'shotgrid:project:all' in current_user.permissions
@@ -38,7 +42,7 @@ class ShotGridProjectAccessService:
 
         member = await ShotGridProjectMemberDao.get_member(db, project_id, user.user_id)
         if member is None:
-            raise PermissionException(data='', message='无权访问该项目')
+            raise shot_grid_error(403, 'SG_PROJECT_ACCESS_DENIED', '无权访问该项目')
         return ShotGridProjectAccessModel(
             projectId=project_id,
             userId=user.user_id,
@@ -55,4 +59,4 @@ class ShotGridProjectAccessService:
         """校验项目内角色；拥有跨项目范围的管理员按平台动作权限放行。"""
         if access.has_all_scope or access.project_role in allowed_roles:
             return access
-        raise PermissionException(data='', message='当前项目角色无权执行该操作')
+        raise shot_grid_error(403, 'SG_PROJECT_ACCESS_DENIED', '当前项目角色无权执行该操作')

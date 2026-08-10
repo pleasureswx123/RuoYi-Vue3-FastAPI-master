@@ -4,6 +4,7 @@ from unittest.mock import ANY, AsyncMock
 import pytest
 
 from module_shot_grid.dependencies.project_access import CheckShotGridProjectAccess
+from module_shot_grid.exceptions import ShotGridDomainException
 
 
 @pytest.mark.asyncio
@@ -29,3 +30,16 @@ async def test_project_access_dependency_accepts_contract_and_python_path_parame
 
     assert result is expected
     resolve_access.assert_awaited_once_with(db, ANY, 17)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('path_value', [None, 'abc', '0', '-1'])
+async def test_project_access_dependency_rejects_invalid_project_id_with_stable_error(
+    path_value: str | None,
+) -> None:
+    request = SimpleNamespace(path_params={'projectId': path_value})
+
+    with pytest.raises(ShotGridDomainException) as exc_info:
+        await CheckShotGridProjectAccess()(request, AsyncMock())
+
+    assert exc_info.value.error_key == 'SG_PROJECT_ID_INVALID'

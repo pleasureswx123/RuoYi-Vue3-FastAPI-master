@@ -15,7 +15,9 @@ class ShotGridPageQueryModel(ShotGridApiModel):
 
     page_num: int = Field(default=1, ge=1, description='当前页码')
     page_size: int = Field(default=20, ge=1, le=100, description='每页记录数')
-    sort_direction: Literal['asc', 'desc'] = Field(default='desc', description='排序方向')
+    order_by_column: str | None = Field(default=None, description='排序字段，由资源查询模型限制白名单')
+    is_asc: Literal['ascending', 'descending'] = Field(default='descending', description='排序方向')
+    keyword: str | None = Field(default=None, max_length=200, description='关键字')
 
 
 class ShotGridLockVersionModel(ShotGridApiModel):
