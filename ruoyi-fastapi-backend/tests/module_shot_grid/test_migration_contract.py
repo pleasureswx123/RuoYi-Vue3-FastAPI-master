@@ -11,6 +11,7 @@ from module_shot_grid.schema import (
     SHOT_GRID_PERMISSION_CODES,
     SHOT_GRID_REPAIR_SCHEMA_REVISION,
     SHOT_GRID_SCHEMA_REVISION,
+    SHOT_GRID_STORAGE_WORKER_SCHEMA_REVISION,
     SHOT_GRID_TABLE_NAMES,
 )
 
@@ -22,6 +23,7 @@ EXPECTED_DICT_TYPES = {
     'sg_project_phase',
     'sg_task_priority',
 }
+STORAGE_DOWNGRADE_STATEMENT_COUNT = 4
 
 
 def _migration_namespace(revision: str) -> dict[str, object]:
@@ -126,6 +128,59 @@ def test_schema_repair_upgrade_converges_and_downgrade_keeps_canonical_schema() 
     assert recorder.statements == []
 
 
+def test_storage_worker_migration_extends_repair_revision_and_guards_before_ddl() -> None:
+    class SqlRecorder:
+        def __init__(self) -> None:
+            self.statements: list[str] = []
+
+        def execute(self, statement: object) -> None:
+            self.statements.append(str(statement))
+
+    migration = _migration_namespace(SHOT_GRID_STORAGE_WORKER_SCHEMA_REVISION)
+    recorder = SqlRecorder()
+    action_globals = migration['upgrade'].__globals__
+    action_globals['op'] = recorder
+    action_globals['_is_postgresql'] = lambda: True
+
+    assert migration['revision'] == SHOT_GRID_STORAGE_WORKER_SCHEMA_REVISION
+    assert migration['down_revision'] == SHOT_GRID_REPAIR_SCHEMA_REVISION
+
+    migration['upgrade']()
+
+    guard_sql = recorder.statements[0]
+    upgrade_sql = '\n'.join(recorder.statements)
+    assert guard_sql.lstrip().startswith('DO $shot_grid_storage_operation_guard$')
+    assert 'ALTER TABLE' not in guard_sql
+    assert 'SG_STORAGE_OPERATION_EXECUTION_STATE_CONFLICT' in guard_sql
+    assert "operation_status = 'processing'" in guard_sql
+    assert "operation_status = 'retry_wait'" in guard_sql
+    assert 'next_retry_time is not null' in guard_sql
+    assert 'completed_time is not null' in guard_sql
+    assert 'ck_sg_storage_operation_execution_state' in upgrade_sql
+    assert 'ON sg_storage_operation (project_id, aggregate_type, aggregate_id, operation_id DESC)' in upgrade_sql
+    assert 'ON sg_storage_operation (project_id, create_time DESC, operation_id DESC)' in upgrade_sql
+
+    recorder.statements.clear()
+    migration['downgrade']()
+
+    assert recorder.statements[:3] == [
+        'DROP INDEX idx_sg_storage_operation_project_created',
+        'DROP INDEX idx_sg_storage_operation_project_aggregate_latest',
+        'ALTER TABLE sg_storage_operation DROP CONSTRAINT ck_sg_storage_operation_execution_state',
+    ]
+    assert len(recorder.statements) == STORAGE_DOWNGRADE_STATEMENT_COUNT
+    assert 'COMMENT ON COLUMN sg_storage_operation.target_relative_path' in recorder.statements[3]
+
+
+def test_storage_worker_migration_is_an_explicit_non_postgresql_noop() -> None:
+    migration = _migration_namespace(SHOT_GRID_STORAGE_WORKER_SCHEMA_REVISION)
+
+    for action_name in ('upgrade', 'downgrade'):
+        action = migration[action_name]
+        action.__globals__['_is_postgresql'] = lambda: False
+        action()
+
+
 def test_postgresql_baseline_is_stamped_at_the_current_head() -> None:
     baseline = (BACKEND_ROOT / 'sql' / 'ruoyi-fastapi-pg.sql').read_text(encoding='utf-8')
 
@@ -136,6 +191,15 @@ def test_postgresql_baseline_is_stamped_at_the_current_head() -> None:
     assert "member_status VARCHAR(20) DEFAULT 'active' NOT NULL" in baseline
     assert 'ck_sg_project_member_removal' in baseline
     assert 'ck_sg_version_file_primary_role' in baseline
+    assert 'ck_sg_storage_operation_execution_state' in baseline
+    assert (
+        'CREATE INDEX idx_sg_storage_operation_project_aggregate_latest '
+        'ON sg_storage_operation (project_id, aggregate_type, aggregate_id, operation_id DESC)' in baseline
+    )
+    assert (
+        'CREATE INDEX idx_sg_storage_operation_project_created '
+        'ON sg_storage_operation (project_id, create_time DESC, operation_id DESC)' in baseline
+    )
     assert (
         "CREATE UNIQUE INDEX uk_sg_episode_no_active ON sg_episode (project_id, episode_no) WHERE del_flag = '0'"
         in baseline

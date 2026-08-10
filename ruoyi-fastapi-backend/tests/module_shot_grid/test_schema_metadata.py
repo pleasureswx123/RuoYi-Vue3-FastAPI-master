@@ -50,6 +50,8 @@ def test_database_guards_the_main_concurrency_invariants() -> None:
         'uk_sg_task_asset_item',
         'uk_sg_version_task_final',
         'uk_sg_review_list_auto_version',
+        'idx_sg_storage_operation_project_aggregate_latest',
+        'idx_sg_storage_operation_project_created',
     }
     actual_indexes = {
         index.name for table_name in SHOT_GRID_TABLE_NAMES for index in Base.metadata.tables[table_name].indexes
@@ -147,3 +149,34 @@ def test_project_member_uses_auditable_soft_removal() -> None:
     assert str(producer_index.dialect_options['postgresql']['where']) == (
         "producer_code IS NOT NULL AND member_status = 'active'"
     )
+
+
+def test_storage_operation_guards_worker_execution_state_and_project_queries() -> None:
+    storage_operation = Base.metadata.tables['sg_storage_operation']
+    checks = {
+        constraint.name: str(constraint.sqltext)
+        for constraint in storage_operation.constraints
+        if isinstance(constraint, CheckConstraint)
+    }
+    indexes = {index.name: index for index in storage_operation.indexes}
+
+    execution_state = checks['ck_sg_storage_operation_execution_state']
+    assert "operation_status = 'pending'" in execution_state
+    assert "operation_status = 'processing'" in execution_state
+    assert "operation_status = 'retry_wait'" in execution_state
+    assert 'next_retry_time is not null' in execution_state
+    assert 'lease_owner is not null' in execution_state
+    assert 'completed_time is not null' in execution_state
+    assert [
+        str(expression) for expression in indexes['idx_sg_storage_operation_project_aggregate_latest'].expressions
+    ] == [
+        'sg_storage_operation.project_id',
+        'sg_storage_operation.aggregate_type',
+        'sg_storage_operation.aggregate_id',
+        'sg_storage_operation.operation_id DESC',
+    ]
+    assert [str(expression) for expression in indexes['idx_sg_storage_operation_project_created'].expressions] == [
+        'sg_storage_operation.project_id',
+        'sg_storage_operation.create_time DESC',
+        'sg_storage_operation.operation_id DESC',
+    ]

@@ -1,4 +1,4 @@
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 SHOT_TEMPLATE_VERSION = 'shot-v1'
@@ -29,3 +29,35 @@ class ShotGridImportConfig(BaseSettings):
 
 
 SHOT_GRID_IMPORT_CONFIG = ShotGridImportConfig()
+
+
+class ShotGridStorageWorkerConfig(BaseSettings):
+    """Shot Grid NAS 目录 Outbox Worker 安全与重试边界。"""
+
+    model_config = SettingsConfigDict(env_prefix='SHOT_GRID_STORAGE_WORKER_', extra='ignore')
+
+    enabled: bool = Field(default=False, description='是否显式启用真实 NAS 目录 Worker')
+    poll_interval_seconds: float = Field(default=2, gt=0, le=60)
+    batch_size: int = Field(default=20, gt=0, le=100)
+    lease_seconds: int = Field(default=120, ge=30, le=3600)
+    heartbeat_seconds: int = Field(default=30, ge=5, le=600)
+    operation_timeout_seconds: int = Field(default=60, ge=5, le=1800)
+    max_attempts: int = Field(default=5, ge=1, le=20)
+    retry_delays_seconds: tuple[int, ...] = Field(default=(5, 15, 60, 300), min_length=1, max_length=19)
+
+    @model_validator(mode='after')
+    def validate_worker_boundaries(self) -> 'ShotGridStorageWorkerConfig':
+        if self.heartbeat_seconds >= self.lease_seconds:
+            raise ValueError('NAS Worker 心跳间隔必须小于租约时间')
+        if self.operation_timeout_seconds >= self.lease_seconds:
+            raise ValueError('NAS Worker 单次 I/O 软超时必须小于租约时间')
+        if len(self.retry_delays_seconds) < max(self.max_attempts - 1, 1):
+            raise ValueError('NAS Worker 退避序列不足以覆盖自动重试次数')
+        if any(delay <= 0 for delay in self.retry_delays_seconds):
+            raise ValueError('NAS Worker 退避秒数必须为正整数')
+        if tuple(sorted(self.retry_delays_seconds)) != self.retry_delays_seconds:
+            raise ValueError('NAS Worker 退避秒数必须按非递减顺序配置')
+        return self
+
+
+SHOT_GRID_STORAGE_WORKER_CONFIG = ShotGridStorageWorkerConfig()

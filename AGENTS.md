@@ -169,6 +169,9 @@ Controller → Service → DAO → DO
   - 新 Worker 接管；
   - 调度任务重复执行风险。
 - 普通 Worker 发起任务变更后，要保留现有 Redis 同步通知机制。
+- Shot Grid NAS 目录 Outbox 使用内部任务 `_shot_grid_storage_outbox`，只允许在 PostgreSQL、显式开启 `SHOT_GRID_STORAGE_WORKER_ENABLED` 且当前进程仍持有 Application Leader 时注册和执行；该任务不是可由后台编辑的 `sys_job`。
+- Shot Grid 目录 Worker 的正确性不能只依赖 Leader 单实例：数据库领取必须继续使用有期限租约、`FOR UPDATE SKIP LOCKED` 及 owner + attempt fencing。领取、NAS I/O、结果回写必须分成短事务、事务外 I/O、短事务，禁止在数据库事务中等待 SMB。
+- 当前目录 Worker 单轮按批量上限串行消费，尚未提供批内并发配置；目录 I/O 使用软超时标记并继续心跳续租，不会也不能把 `asyncio.to_thread` 中仍运行的 SMB 调用硬杀。
 
 ## 8. 文件管理规则
 
@@ -331,7 +334,7 @@ git status --short
 
 1. 当前主分支是 `main`，但 GitHub Actions 只监听 `master`。
 2. 后端 `.env.*` 被 Git 跟踪，其中包含示例密码和私钥材料。
-3. Alembic 当前已有 Shot Grid `20260810_01 → 04` 增量迁移链，仍缺少能够从真正空库独立建立全部 RuoYi 平台表的完整 baseline；新库使用同步后的 PostgreSQL 初始化 SQL 并写入 head，已有平台库执行增量迁移。无版本标记的历史库必须先备份并在克隆库核验结构，不能未经确认直接 `stamp`。
+3. Alembic 当前已有 Shot Grid `20260810_01 → 05` 增量迁移链，`05` 增加目录操作执行状态一致性约束及项目维度查询索引；全平台仍缺少能够从真正空库独立建立全部 RuoYi 平台表的完整 baseline。新库使用同步后的 PostgreSQL 初始化 SQL 并写入 head，已有平台库执行增量迁移。无版本标记的历史库必须先备份并在克隆库核验结构，不能未经确认直接 `stamp`。
 4. 前端没有提交依赖锁文件，Docker 使用 `npm install`。
 5. 完整部署 Compose 没有数据库和 Redis 数据持久化卷。
 6. 后端 CORS 当前允许任意 Origin，生产环境需要收紧。

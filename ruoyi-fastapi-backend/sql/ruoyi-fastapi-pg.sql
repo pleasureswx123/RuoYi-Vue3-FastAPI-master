@@ -1940,16 +1940,19 @@ CREATE TABLE sg_storage_operation (
 	CONSTRAINT ck_sg_storage_operation_idempotency CHECK (btrim(idempotency_key) <> ''),
 	CONSTRAINT ck_sg_storage_operation_attempt_count CHECK (attempt_count >= 0),
 	CONSTRAINT ck_sg_storage_operation_lease CHECK ((lease_owner is null and lease_until is null) or (lease_owner is not null and btrim(lease_owner) <> '' and lease_until is not null)),
+	CONSTRAINT ck_sg_storage_operation_execution_state CHECK ((operation_status = 'pending' and next_retry_time is null and lease_owner is null and lease_until is null and completed_time is null) or (operation_status = 'processing' and next_retry_time is null and lease_owner is not null and btrim(lease_owner) <> '' and lease_until is not null and completed_time is null) or (operation_status = 'retry_wait' and next_retry_time is not null and lease_owner is null and lease_until is null and completed_time is null) or (operation_status in ('succeeded', 'failed', 'compensation_pending', 'compensated', 'compensation_failed') and next_retry_time is null and lease_owner is null and lease_until is null and completed_time is not null)),
 	FOREIGN KEY(project_id) REFERENCES sg_project (project_id) ON DELETE RESTRICT
 );
 CREATE INDEX idx_sg_storage_operation_status_retry_lease ON sg_storage_operation (operation_status, next_retry_time, lease_until);
+CREATE INDEX idx_sg_storage_operation_project_aggregate_latest ON sg_storage_operation (project_id, aggregate_type, aggregate_id, operation_id DESC);
+CREATE INDEX idx_sg_storage_operation_project_created ON sg_storage_operation (project_id, create_time DESC, operation_id DESC);
 COMMENT ON TABLE sg_storage_operation IS 'Shot Grid NAS目录操作Outbox表';
 COMMENT ON COLUMN sg_storage_operation.operation_id IS '目录操作ID';
 COMMENT ON COLUMN sg_storage_operation.project_id IS '项目ID';
 COMMENT ON COLUMN sg_storage_operation.operation_type IS '操作类型';
 COMMENT ON COLUMN sg_storage_operation.aggregate_type IS '目标聚合类型';
 COMMENT ON COLUMN sg_storage_operation.aggregate_id IS '目标业务对象ID';
-COMMENT ON COLUMN sg_storage_operation.target_relative_path IS '项目根目录内目标相对路径';
+COMMENT ON COLUMN sg_storage_operation.target_relative_path IS '按操作类型相对存储根或项目根的目标路径';
 COMMENT ON COLUMN sg_storage_operation.operation_status IS '执行状态';
 COMMENT ON COLUMN sg_storage_operation.idempotency_key IS '服务端稳定幂等键';
 COMMENT ON COLUMN sg_storage_operation.attempt_count IS '已执行次数';
@@ -2783,7 +2786,7 @@ create table if not exists alembic_version (
     constraint alembic_version_pkc primary key (version_num)
 );
 delete from alembic_version;
-insert into alembic_version(version_num) values ('20260810_04');
+insert into alembic_version(version_num) values ('20260810_05');
 
 
 CREATE OR REPLACE FUNCTION "find_in_set"(int8, varchar)

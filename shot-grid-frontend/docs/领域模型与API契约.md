@@ -4,8 +4,8 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 版本 | v1.2 |
-| 状态 | 数据库约束及第一批项目与 Excel 导入 API 已落地；其余状态机、API 与权限主体仍按设计分批实现 |
+| 版本 | v1.3 |
+| 状态 | 数据库约束、第一批项目与 Excel 导入 API、NAS 目录 Outbox Worker 及目录诊断/人工重试已落地；Worker 默认关闭，版本发布与其余业务主体仍按设计分批实现 |
 | 建立日期 | 2026-08-07 |
 | 最近修订 | 2026-08-10 |
 | 数据库 | PostgreSQL |
@@ -39,7 +39,7 @@
 - 当前主数据库是 PostgreSQL。
 - PostgreSQL 初始基线中的审计时间使用 `timestamp(0)`；Shot Grid SQLAlchemy DO 使用 PostgreSQL 方言下编译为 `TIMESTAMP(0) WITHOUT TIME ZONE` 的统一类型。
 - 常规业务异常默认由统一响应工具以 HTTP 200 返回；Shot Grid 的真实 HTTP 409 等语义属于本模块需要显式实现的扩展契约。
-- 当前基座没有 NAS 根目录配置、项目目录初始化、版本文件发布到 UNC 路径或跨数据库与文件系统补偿能力；这些属于 Shot Grid 新增的兼容扩展，不得描述为平台已有能力。
+- RuoYi 平台基座本身没有通用 NAS 根目录配置、项目目录初始化、版本文件发布到 UNC 路径或跨数据库与文件系统补偿能力。Shot Grid 已新增项目目录 Outbox Worker、目录诊断和人工重试，但版本文件发布及物理补偿仍未实现；不得把 Shot Grid 领域扩展描述为平台通用能力。
 
 ## 3. 领域边界
 
@@ -195,6 +195,8 @@ sg_project / sg_shot / sg_asset / sg_version / sg_note
 4. PostgreSQL 下的约束、索引、升级和回滚验证。
 
 只新增 DO、只修改初始化 SQL 或只写设计文档，都不算数据库交付完成。JSONB、部分唯一索引等 PostgreSQL 专用实现必须明确限制在 PostgreSQL 路径，不得无意影响仓库保留的 MySQL 兼容模块。
+
+当前 Shot Grid Alembic head 为 `20260810_05`。05 在执行任何 DDL 前检查 `sg_storage_operation` 的状态、`next_retry_time`、租约和 `completed_time` 是否满足执行状态组合；存在冲突时以 `SG_STORAGE_OPERATION_EXECUTION_STATE_CONFLICT` 整体失败，不自动修改历史状态。通过后增加 `ck_sg_storage_operation_execution_state`、`idx_sg_storage_operation_project_aggregate_latest` 和 `idx_sg_storage_operation_project_created`；降级会恢复 04 版 `target_relative_path` 列注释，并精确移除这三个对象，不删除或回写目录操作数据。该增量链仍不是完整 RuoYi 空库 Alembic baseline。
 
 ## 6. 数据表契约
 
@@ -978,7 +980,7 @@ ASSET\{asset.asset_type}\{asset.storage_dir_name}\{business_file_name}
 | `operation_type` | varchar(30) | 是 | 操作类型 |
 | `aggregate_type` | varchar(20) | 是 | `project`、`episode`、`shot`、`asset` |
 | `aggregate_id` | bigint | 是 | 目标业务对象 |
-| `target_relative_path` | varchar(1200) | 是 | 项目根目录内的目标相对路径 |
+| `target_relative_path` | varchar(1200) | 是 | 目标相对路径；项目初始化/项目级对账相对存储根目录，其他操作相对项目根目录 |
 | `operation_status` | varchar(30) | 是 | 执行状态 |
 | `idempotency_key` | varchar(100) | 是 | 服务端生成的稳定幂等键 |
 | `attempt_count` | integer | 是 | 已执行次数 |
@@ -1002,22 +1004,34 @@ ensure_asset_directory
 reconcile_directory
 ```
 
-操作状态：
+当前 Worker 执行状态：
 
 ```text
 pending → processing → succeeded
-                    └→ retry_wait → processing
+                    ├→ retry_wait → processing
                     └→ failed
-failed → compensation_pending → compensated | compensation_failed
+
+processing 租约过期 → 由新 owner 重新领取 processing
+failed ──人工重试──→ 新建 reconcile_directory(pending)
 ```
+
+`compensation_pending`、`compensated`、`compensation_failed` 是数据库为后续受控补偿保留的终态，当前 Worker 不产生这些状态，也不自动删除物理目录。
 
 规则：
 
 - `idempotency_key` 唯一；重复消费返回原操作，不重复创建目录。
-- Worker 使用有期限租约；进程退出后可由其他 Worker 接管。
-- 每次执行都要重新规范化路径并确认最终解析路径位于项目根目录内。
+- Worker 只在 PostgreSQL、显式配置 `SHOT_GRID_STORAGE_WORKER_ENABLED=true` 且当前进程仍持有 Application Leader 时，由内部任务 `_shot_grid_storage_outbox` 消费；所有环境样例默认关闭。
+- Worker 使用 PostgreSQL `FOR UPDATE SKIP LOCKED` 和有期限租约；每次领取生成唯一 owner，续租与终态回写同时校验 owner 和 attempt。进程退出或租约过期后可由其他 Worker 接管，旧持有者不能覆盖新结果。
+- 领取并提交、事务外 NAS I/O、结果回写是三个边界；数据库事务内不得执行或等待 SMB I/O。
+- 长 I/O 按配置心跳续租。`operation_timeout_seconds` 是软超时诊断阈值，不取消 `asyncio.to_thread` 中仍运行的文件系统调用；租约丢失时也先等待物理 I/O 退出，避免旧线程脱离受管任务。若租约已经被接管，旧、新 Worker 的物理 I/O 仍可能短暂重叠；当前执行器只允许幂等目录创建和随机 `O_EXCL` 写探针，owner + attempt fencing 只保证旧持有者不能覆盖数据库终态。
+- 正常关机或 Application Leader 失锁时必须先停止新领取、取消 Scheduler Job，再显式 drain 已登记的 NAS Job；当前操作完成 I/O 与租约收尾前，不得提前关闭全局数据库引擎或在同一进程重新竞争 Leader。
+- 当前单轮最多按 `batch_size` 串行消费，尚未提供批内并发配置；后续如引入并发必须单独冻结 NAS 限流和同聚合互斥规则。
+- 每次执行都要重新规范化路径，并确认最终解析路径位于本操作的约束根内：项目初始化/项目级对账以 NAS 存储根为约束根，动态目录以项目根为约束根。
 - `ensure_*` 对已存在且类型正确的目录视为幂等成功；路径被文件占用或越界必须失败。
-- 补偿只处理本操作明确记录为新建且仍为空的目录；预先存在目录永不自动删除。
+- 项目初始化与项目级 `reconcile_directory` 的 `target_relative_path` 必须等于 `sg_project_storage.project_relative_path`，从 `sg_storage_root` 拼接；集、镜头和资产级 `ensure_*`/`reconcile_directory` 从项目根目录拼接目标。
+- 初始化项目会幂等确认项目根、`ASSET`、`ASSET\Character`、`ASSET\Environment`、`ASSET\Prop` 和 `VIDEO`，并在项目根执行随机文件写探针；不会创建场次目录或资产制作分项目录。
+- 每一级已存在路径都拒绝符号链接和 Windows reparse point，最终解析路径必须仍在配置根目录内；路径被普通文件占用时最终失败。
+- 补偿仍是后续能力。未来只能处理有持久证据证明为本操作新建且仍为空的目录；预先存在目录永不自动删除。
 
 ### 6.18 `sg_version_submission`
 
@@ -1229,6 +1243,8 @@ ON sg_shot_asset_requirement (shot_id, asset_type, normalized_name);
 - `sg_note(version_id, note_status, create_time DESC)`；
 - `sg_review_list(project_id, review_status, create_time DESC)`；
 - `sg_storage_operation(operation_status, next_retry_time, lease_until)`；
+- `sg_storage_operation(project_id, aggregate_type, aggregate_id, operation_id DESC)`，用于按业务对象取得最新目录操作；
+- `sg_storage_operation(project_id, create_time DESC, operation_id DESC)`，用于项目目录诊断分页；
 - `sg_version_submission(submission_status, lease_until, update_time)`。
 - `sg_import_batch(project_id, import_type, batch_status, create_time DESC)`；
 - `sg_shot_asset_requirement(project_id, resolution_status, asset_type, normalized_name)`。
@@ -1330,7 +1346,7 @@ initializing
   └─初始化失败──────────→ failed
 
 failed
-  └─项目总监或管理员重试──→ initializing
+  └─项目总监或管理员重试，新建项目级 reconcile_directory──→ initializing
 
 ready
   └─受控迁移（后续能力）──→ migrating ──→ ready | failed
@@ -1339,7 +1355,9 @@ ready
 - 项目数据库记录可以在 `initializing` 时存在，但不能被描述为可正常使用。
 - `ready` 前禁止创建集、场次、镜头、资产和版本提交。
 - 初始化失败不自动删除项目；用户可查看净化错误、执行幂等重试，或在没有业务数据时由管理员受控撤销。
-- 集、镜头和资产响应中的 `directoryStatus` 是最新目录操作的只读映射：`pending/processing/retry_wait → pending`，`succeeded → ready`，`failed/compensation_* → failed`。不存在操作时视为契约错误，不能默认返回 `ready`。
+- 项目级初始化或对账成功才把 `sg_project_storage` 改为 `ready`，最终失败才改为 `failed`。动态集、镜头或资产目录失败只记录安全错误，不把已经就绪的项目根存储降级为初始化失败。
+- 集、镜头和资产响应中的 `directoryStatus` 是最新目录操作的只读映射：`pending/processing/retry_wait → pending`，`succeeded → ready`，`failed → failed`。补偿状态当前未由 Worker 产生；不存在操作时视为契约错误，不能默认返回 `ready`。
+- 人工重试不覆盖失败操作，也不创建第二条 `initialize_project`。项目及动态目录均创建新的 `reconcile_directory`，旧操作继续作为不可变执行历史。
 
 ### 7.6 项目生命周期与当前阶段
 
@@ -1987,17 +2005,28 @@ overallProgress =
 GET  /shot-grid/projects/{projectId}/storage
 POST /shot-grid/projects/{projectId}/storage/retry
 GET  /shot-grid/projects/{projectId}/storage/operations
+GET  /shot-grid/projects/{projectId}/storage/operations/{operationId}
 POST /shot-grid/storage-operations/{operationId}/retry
 Permissions:
   shotgrid:storage:path
   shotgrid:storage:retry
 ```
 
-- 状态接口对有权限的项目成员返回 `storageStatus`、完整项目路径快照和最近净化错误；不返回凭据、根路径键、租约或内部临时路径。
-- 制作人员只能查看和复制 `ready` 项目路径，不能执行重试。
-- 重试仅允许 `failed` 状态，携带 `lockVersion` 和 `X-Idempotency-Key`，创建或复用初始化操作。
-- 动态目录操作重试只允许项目总监或管理员，必须再次校验操作目标仍属于项目且路径快照未变化。
-- 操作列表默认只对项目总监和管理员开放，并分页返回安全诊断。
+- 状态接口对项目成员或 `shotgrid:project:all` 返回 `storageStatus`、最近净化错误、`lockVersion` 和更新时间；不返回凭据、根路径键、租约或内部临时路径。项目总监/管理员可在任一存储状态查看完整项目路径快照；制作人员只有在 `ready` 时获得该路径，初始化中或失败时返回 `projectPathSnapshot=null`。
+- 制作人员不能执行目录重试。项目详情的 `allowedActions` 只有在存储状态确为 `failed`、项目未归档且当前用户同时满足项目角色与平台 `shotgrid:storage:retry` 权限时才包含 `storage.retry`。
+- 项目重试只允许 `failed` 状态，请求必须携带 `X-Idempotency-Key`，正文固定为：
+
+```json
+{
+  "lockVersion": 3,
+  "reason": "NAS 权限已修复，重新确认项目目录"
+}
+```
+
+- 项目重试在同一短事务锁定项目及存储绑定，校验项目未归档、乐观锁、没有活动项目目录操作后，新建项目级 `reconcile_directory(pending)`，把存储改回 `initializing`、清除旧错误并写操作日志。旧 `initialize_project`/失败操作不覆盖、不删除。
+- 动态目录重试正文只包含非空 `reason`，同时要求 `X-Idempotency-Key`。它只接受最终 `failed` 且 `aggregateType` 为 `episode|shot|asset` 的来源操作；后端重新校验项目未归档、项目根存储仍 `ready`、业务对象仍存在、当前目录快照等于来源目标且不存在活动同聚合操作，再新建同聚合的 `reconcile_directory(pending)`。
+- 两个重试接口均返回真实 HTTP 202，`data` 包含 `operationId`、`projectId`、`operationStatus`、`replayed` 和可查询详情的 `statusUrl`。同一用户、作用域、`X-Idempotency-Key` 和规范化命令重放首次受理结果；同键不同正文返回 `SG_IDEMPOTENCY_CONFLICT`。
+- 操作分页和详情只对项目总监或具有全项目范围且拥有接口权限的管理员开放。分页支持 `operationType`、`operationStatus`、`keyword`、`pageNum`、`pageSize`、`orderByColumn` 和 `isAsc`；`keyword` 只匹配相对路径快照、稳定错误键和净化错误摘要。排序字段白名单为 `operationId|createTime|updateTime|nextRetryTime`，默认 `orderByColumn=createTime`、`isAsc=descending`，相同创建时间再按 `operationId` 倒序。响应只返回操作类型、聚合目标、相对路径快照、状态、尝试次数、重试/开始/完成时间及净化错误，不返回 `leaseOwner`、`leaseUntil`、内部幂等键、凭据引用或服务器绝对路径。
 
 ### 10.8 启动与完成项目
 
@@ -3009,7 +3038,9 @@ failed
 | 创建人工审核单 | 审核单、有序版本关系 |
 | 修改业务附件 | 领域文件关系、平台业务引用 |
 
-NAS I/O 不得在数据库事务内执行。`sg_storage_operation` 和 `sg_version_submission` 负责跨资源编排：目录操作由事务内 Outbox 驱动；版本文件先临时写入、校验并原子改名，再执行正式版本短事务。数据库事务失败时保留可校验的 NAS 文件并重试提交，不能重新分配版本号或盲目覆盖文件。
+NAS I/O 不得在数据库事务内执行。`sg_storage_operation` 和 `sg_version_submission` 负责跨资源编排：目录 Worker 已按“领取短事务 → 事务外路径校验/幂等建目录/写探针 → 结果短事务”实现；版本文件仍按后续契约先临时写入、校验并原子改名，再执行正式版本短事务。数据库事务失败时保留可校验的 NAS 文件并重试提交，不能重新分配版本号或盲目覆盖文件。
+
+目录 Worker 的软超时不会终止正在运行的 `asyncio.to_thread` 文件系统调用，只记录诊断并继续续租直至 I/O 退出；不得把该阈值描述为 SMB 硬超时。租约接管期间也不能宣称物理 I/O 绝不重叠，数据库 fencing 保证的是旧结果不能覆盖新终态。当前调度批内串行消费，不能描述为已经启用批内并发。
 
 平台物理文件上传通常先于业务事务完成。若后续业务事务或 NAS 发布最终失败，已上传但未引用的文件由临时保留、对账和回收流程处理，不能在异常处理中盲目永久删除。
 
@@ -3041,6 +3072,7 @@ NAS I/O 不得在数据库事务内执行。`sg_storage_operation` 和 `sg_versi
 | `SG_STORAGE_PATH_INVALID` | 422 | 路径片段非法、越界或使用保留名称 |
 | `SG_STORAGE_PATH_CONFLICT` | 409 | 规范化 NAS 路径已被占用 |
 | `SG_STORAGE_INITIALIZATION_FAILED` | 503 | 项目目录初始化失败 |
+| `SG_STORAGE_OPERATION_NOT_FOUND` | 404 | 目录操作不存在、不属于目标项目或当前用户不可见 |
 | `SG_STORAGE_OPERATION_NOT_RETRYABLE` | 409 | 当前目录操作状态不可重试 |
 | `SG_SCENE_NO_CONFLICT` | 409 | 集内场次号重复 |
 | `SG_SCENE_HAS_ACTIVE_SHOTS` | 409 | 场次仍有镜头 |
@@ -3124,6 +3156,8 @@ NAS I/O 不得在数据库事务内执行。`sg_storage_operation` 和 `sg_versi
 
 ## 20. 第一批验收用例
 
+目录 Worker 本批提供了 DAO、路径适配器、租约/心跳/重试服务、内部 Scheduler 任务、管理 API、迁移和针对性测试入口。自动化文件系统用例只能在显式 `allow_local_root=True` 时使用临时本地目录；生产默认仍只接受 UNC。以下“Worker 真实创建项目目录”仍要求在隔离 NAS 根目录上使用正式 Windows Worker 服务账号验证，并核对 NAS/AD/共享 ACL。未执行这项真实 UNC E2E 前，源码存在、Mock、临时目录测试、迁移成功或 Scheduler 注册成功都不是生产验收证据。
+
 ### 20.1 正向闭环
 
 ```text
@@ -3159,6 +3193,10 @@ NAS I/O 不得在数据库事务内执行。`sg_storage_operation` 和 `sg_versi
 - 禁用、不可达或不可写的 NAS 根目录不能创建可用项目。
 - 项目目录初始化失败时项目不能进入正常业务页面，重试不得重复创建项目或目录。
 - 路径片段包含越界、Windows 保留名或非法字符时必须被拒绝。
+- 路径链中存在符号链接或 Windows reparse point 时必须被拒绝，即使最终解析结果仍在根目录内。
+- 项目初始化最终失败才允许把项目存储改为 `failed`；集、镜头或资产目录失败不能把已就绪的项目根存储降级为失败。
+- 人工重试必须保留原失败操作并新建 `reconcile_directory`；同一幂等命令重放不能创建第二条操作，同键不同原因或 `lockVersion` 必须返回冲突。
+- Worker 默认关闭，非 PostgreSQL、非 Leader 或开关未启用时不得消费目录操作；Leader 失锁后不能继续领取新操作。
 - 同一项目内集号不能重复。
 - 同一集内场次号不能重复。
 - 同一集内镜头号不能重复，切换场次后也不能复用。
@@ -3195,6 +3233,6 @@ NAS I/O 不得在数据库事务内执行。`sg_storage_operation` 和 `sg_versi
 6. 决定已完成任务是否需要“重新打开”；MVP 当前禁止，未来动作必须有原因和审计。
 7. 两类样表、模板版本、默认最大行数、文件大小、预览 TTL 和资产名称规范化已冻结；上传原文件仅临时解析、不长期留存，确需留存时必须另走受保护文件引用。
 8. 决定资产模板是否增加跨重新保存仍保留的稳定 `sourceRowId/rowUid`；未引入前需冻结人工去重治理流程。
-9. 22 张基础表、迁移、种子及第一批项目与导入 API 已转化为代码；其余普通 CRUD、NAS Worker、任务动作、版本审核和前端能力继续按本契约分批实现。
+9. 22 张基础表、`20260810_01 → 05` 迁移链、种子、第一批项目与导入 API，以及默认关闭的 NAS 目录 Outbox Worker、目录诊断和人工重试已转化为代码；真实 UNC/NAS 部署验收、其余普通 CRUD、任务动作、版本文件发布、审核和前端能力继续按本契约分批实现。
 
 上述 1—8 是评审、部署或数据治理参数，不得由页面开发临时猜测。第 9 项只说明当前第一批实现边界，未落地的契约章节仍是设计，不是已实现能力。

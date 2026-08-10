@@ -1,1 +1,1 @@
-from . import file_task, scheduler_test  # noqa: F401
+from . import file_task, scheduler_test, shot_grid_storage_task  # noqa: F401

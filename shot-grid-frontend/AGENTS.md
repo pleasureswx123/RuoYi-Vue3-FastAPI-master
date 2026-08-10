@@ -8,7 +8,7 @@
 - 基础后端：`../ruoyi-fastapi-backend/`。
 - 后台管理端参考实现：`../ruoyi-fastapi-frontend/`。
 - 当前主数据库：PostgreSQL。
-- 当前目录已有需求、计划和契约文档，但尚未创建可运行的前端工程。后端已建立 PostgreSQL 领域表、迁移链、导航、项目创建/存储状态/成员/范围查询，以及镜头和资产 Excel 预检与正式提交；NAS Worker、项目其余 CRUD、版本发布和审核闭环尚未实现。不得把后端增量、需求设计、静态页面或 Mock 数据描述成已完成业务闭环。
+- 当前目录已有需求、计划和契约文档，但尚未创建可运行的前端工程。后端已建立 PostgreSQL 领域表、`20260810_01 → 05` 迁移链、导航、项目创建/存储状态/成员/范围查询、镜头和资产 Excel 预检与正式提交，以及默认关闭的 NAS 目录 Outbox Worker、目录操作诊断和人工重试；项目其余 CRUD、版本文件发布和审核闭环尚未实现。不得把后端增量、临时本地目录测试、需求设计、静态页面或 Mock 数据描述成已完成业务闭环，也不得把尚未执行的真实 UNC E2E 描述成 NAS 生产验收通过。
 
 需求文档定义产品意图，本文件补充工程边界和必须保持的数据不变量。若需求文档与已确认的后端契约不一致，应先记录差异，再修改实现；不得在页面组件中用临时兼容掩盖数据模型冲突。
 
@@ -160,6 +160,9 @@ ruoyi-fastapi-frontend
 - 缩略图、转码、代理文件和媒体元数据属于后端或异步处理能力；前端不得用占位地址假装处理成功。
 - 浏览器通常不能可靠直接打开 UNC/NAS 路径。MVP 应提供查看和复制路径；只有存在已确认的桌面协议处理器时才能提供“打开 NAS”。
 - NAS 根目录只能来自管理员白名单。项目创建必须同时写入项目存储绑定和目录 Outbox；项目存储为 `ready` 前不得进入正式业务写入。
+- NAS 目录 Worker 默认关闭，只在 PostgreSQL、显式开启配置且当前进程仍是 Application Leader 时消费 Outbox。领取、NAS I/O 和结果回写必须保持“短事务、事务外 I/O、短事务”，并以数据库租约、心跳和 owner + attempt fencing 防止旧持有者覆盖新终态。租约接管窗口不承诺物理 I/O 完全不重叠，当前执行器仅允许幂等目录创建和随机 `O_EXCL` 写探针。
+- 项目初始化和项目级对账的目标路径相对 NAS 存储根目录；集、镜头、资产目录目标相对项目根目录。人工重试新建 `reconcile_directory` 并保留旧失败操作，不得覆盖原操作或复用第二条 `initialize_project`。
+- 当前 Worker 单轮串行消费；软超时只用于诊断并继续心跳，不能宣称支持批内并发或能硬杀仍在执行的 SMB 线程。生产启用前必须使用正式 Windows Worker 账号、NAS/AD/共享 ACL 和隔离 UNC 根目录完成真实验证。
 - 平台权限不能约束用户绕过网页直接访问 SMB 共享；部署必须单独配置 NAS/AD/Windows 共享 ACL，并明确平台外直接访问边界。
 - 页面卸载后必须释放 `URL.createObjectURL` 创建的临时资源，禁止把大文件或 Base64 媒体长期存入 Pinia、LocalStorage 或 SessionStorage。
 
@@ -214,6 +217,7 @@ ruoyi-fastapi-frontend
 - 时间字段与后端基座保持一致：SQLAlchemy 使用 `DateTime`，PostgreSQL 使用 `timestamp(0) without time zone`。
 - `del_flag = '2'` 只表示逻辑删除；业务归档使用明确状态字段，归档后保持 `del_flag = '0'`。
 - 结构升级同时提交 SQLAlchemy DO、PostgreSQL Alembic 迁移和 `ruoyi-fastapi-backend/sql/ruoyi-fastapi-pg.sql`，不依赖 `create_all()` 修改已有表。
+- 当前 Shot Grid head 为 `20260810_05`；05 在 DDL 前拒绝状态、重试时间、租约和完成时间组合不一致的历史目录操作，并增加项目维度的目录操作查询索引。该 revision 不把全平台 Alembic 链变成可从真正空库独立建库的 baseline。
 
 业务 API 统一使用 `/shot-grid` 前缀，权限码统一使用 `shotgrid:<resource>:<action>` 形式。若后端已有不同的正式契约，以已提交接口为准，并同步修订本文件和需求说明。
 

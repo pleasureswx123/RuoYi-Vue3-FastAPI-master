@@ -111,7 +111,7 @@ async def get_shot_grid_project_storage_status(
     query_db: Annotated[AsyncSession, DBSessionDependency()],
     access: Annotated[ShotGridProjectAccessModel, ProjectAccessDependency()],
 ) -> Response:
-    result = await ShotGridProjectService.get_project_storage_status(query_db, project_id)
+    result = await ShotGridProjectService.get_project_storage_status(query_db, project_id, access)
     return ResponseUtil.success(data=result)
 
 

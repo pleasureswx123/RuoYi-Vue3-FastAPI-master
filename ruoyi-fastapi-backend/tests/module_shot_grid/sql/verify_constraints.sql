@@ -57,6 +57,75 @@ begin
         raise exception 'Shot Grid 时间字段仍保留秒以下精度';
     end if;
 
+    insert into sg_storage_operation (
+        project_id, operation_type, aggregate_type, aggregate_id,
+        target_relative_path, idempotency_key, create_time, update_time
+    ) values (
+        test_project_id, 'initialize_project', 'project', test_project_id,
+        '.', 'constraint-test-storage-valid', current_timestamp, current_timestamp
+    );
+
+    begin
+        insert into sg_storage_operation (
+            project_id, operation_type, aggregate_type, aggregate_id,
+            target_relative_path, operation_status, idempotency_key,
+            lease_owner, lease_until, create_time, update_time
+        ) values (
+            test_project_id, 'initialize_project', 'project', test_project_id,
+            '.', 'pending', 'constraint-test-storage-pending-lease',
+            'constraint-worker', current_timestamp + interval '5 minutes',
+            current_timestamp, current_timestamp
+        );
+        raise exception 'ck_sg_storage_operation_execution_state 未拒绝 pending 持有租约';
+    exception
+        when check_violation then null;
+    end;
+
+    begin
+        insert into sg_storage_operation (
+            project_id, operation_type, aggregate_type, aggregate_id,
+            target_relative_path, operation_status, idempotency_key,
+            create_time, update_time
+        ) values (
+            test_project_id, 'initialize_project', 'project', test_project_id,
+            '.', 'processing', 'constraint-test-storage-processing-no-lease',
+            current_timestamp, current_timestamp
+        );
+        raise exception 'ck_sg_storage_operation_execution_state 未拒绝 processing 缺少租约';
+    exception
+        when check_violation then null;
+    end;
+
+    begin
+        insert into sg_storage_operation (
+            project_id, operation_type, aggregate_type, aggregate_id,
+            target_relative_path, operation_status, idempotency_key,
+            create_time, update_time
+        ) values (
+            test_project_id, 'initialize_project', 'project', test_project_id,
+            '.', 'retry_wait', 'constraint-test-storage-retry-no-time',
+            current_timestamp, current_timestamp
+        );
+        raise exception 'ck_sg_storage_operation_execution_state 未拒绝 retry_wait 缺少重试时间';
+    exception
+        when check_violation then null;
+    end;
+
+    begin
+        insert into sg_storage_operation (
+            project_id, operation_type, aggregate_type, aggregate_id,
+            target_relative_path, operation_status, idempotency_key,
+            create_time, update_time
+        ) values (
+            test_project_id, 'initialize_project', 'project', test_project_id,
+            '.', 'succeeded', 'constraint-test-storage-succeeded-no-time',
+            current_timestamp, current_timestamp
+        );
+        raise exception 'ck_sg_storage_operation_execution_state 未拒绝终态缺少完成时间';
+    exception
+        when check_violation then null;
+    end;
+
     insert into sg_project_member (
         project_id, user_id, project_role, producer_code, joined_time, create_time
     ) values (

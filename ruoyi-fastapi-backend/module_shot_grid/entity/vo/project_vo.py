@@ -117,7 +117,7 @@ class ShotGridProjectStorageStatusModel(ShotGridApiModel):
 
     project_id: int = Field(description='项目ID')
     storage_status: Literal['initializing', 'ready', 'failed', 'migrating'] = Field(description='存储状态')
-    project_path_snapshot: str = Field(description='完整 UNC 项目路径快照')
+    project_path_snapshot: str | None = Field(default=None, description='按项目角色安全返回的完整 UNC 项目路径快照')
     initialized_time: datetime | None = Field(default=None, description='初始目录就绪时间')
     last_error_key: str | None = Field(default=None, description='最近稳定错误键')
     last_error_message: str | None = Field(default=None, description='最近净化错误摘要')

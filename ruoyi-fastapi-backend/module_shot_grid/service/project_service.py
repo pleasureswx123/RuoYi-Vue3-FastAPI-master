@@ -87,7 +87,13 @@ class ShotGridProjectService:
         values = dict(row)
         overview = ShotGridProjectOverviewService.build_model(values)
         values.update(overview.model_dump())
-        values['allowed_actions'] = cls._allowed_actions(current_user, access, values.get('my_project_role'))
+        values['allowed_actions'] = cls._allowed_actions(
+            current_user,
+            access,
+            values.get('my_project_role'),
+            project_status=values['project_status'],
+            storage_status=values['storage_status'],
+        )
         return ShotGridProjectDetailModel.model_validate(values)
 
     @classmethod
@@ -95,11 +101,15 @@ class ShotGridProjectService:
         cls,
         db: AsyncSession,
         project_id: int,
+        access: ShotGridProjectAccessModel,
     ) -> ShotGridProjectStorageStatusModel:
         row = await ShotGridProjectStorageDao.get_project_storage_status(db, project_id)
         if row is None:
             raise shot_grid_error(404, 'SG_PROJECT_NOT_FOUND', '项目存储绑定不存在或不可见')
-        return ShotGridProjectStorageStatusModel.model_validate(row)
+        values = dict(row)
+        if values['storage_status'] != 'ready' and not (access.has_all_scope or access.project_role == 'director'):
+            values['project_path_snapshot'] = None
+        return ShotGridProjectStorageStatusModel.model_validate(values)
 
     @classmethod
     async def create_project(  # noqa: PLR0912, PLR0915
@@ -290,11 +300,18 @@ class ShotGridProjectService:
         current_user: CurrentUserModel,
         access: ShotGridProjectAccessModel,
         current_role: str | None,
+        *,
+        project_status: str,
+        storage_status: str,
     ) -> list[str]:
         if not (access.has_all_scope or current_role == 'director'):
             return []
+        if project_status == 'archived':
+            return []
         actions: list[str] = []
         for action, permissions in cls.PROJECT_ACTION_PERMISSIONS.items():
+            if action == 'storage.retry' and storage_status != 'failed':
+                continue
             required = (permissions,) if isinstance(permissions, str) else permissions
             if any(cls._has_permission(current_user, permission) for permission in required):
                 actions.append(action)

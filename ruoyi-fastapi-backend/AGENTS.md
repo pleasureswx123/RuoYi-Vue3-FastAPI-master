@@ -224,12 +224,18 @@ PostgreSQL 迁移是当前项目的必需交付物。只有插件清单继续声
 
 ### 7.4 Shot Grid 当前数据库边界
 
-- Shot Grid 领域模块位于 `module_shot_grid/`，包含 22 张 `sg_` 表 DO、项目访问依赖、范围导航、项目创建/存储状态/成员/范围查询，以及镜头和资产 Excel 预检与正式提交接口。
+- Shot Grid 领域模块位于 `module_shot_grid/`，包含 22 张 `sg_` 表 DO、项目访问依赖、范围导航、项目创建/存储状态/成员/范围查询、镜头和资产 Excel 预检与正式提交，以及 NAS 目录 Outbox Worker、目录操作查询和人工重试接口。
 - 首个增量迁移为 `20260810_01`，并已同步 `sql/ruoyi-fastapi-pg.sql`、菜单、权限和字典种子。
-- 当前 head `20260810_04` 是无版本历史库的采用/向前修复迁移：统一秒级时间精度和空字符串审计默认值，补强序场次、资产制作分项、主文件及集/场次编号约束；不得改写历史 01/02/03 代替修复。无 `alembic_version` 的历史库只能在备份和克隆核验后 stamp 01，再执行 upgrade head。04 必须在任何 ALTER 前预检冲突并整体失败，不能猜测修复业务数据；downgrade 不恢复从未被正式 revision 声明的旧弱漂移，秒以下精度只能从升级前备份恢复。
+- `20260810_04` 是无版本历史库的采用/向前修复迁移：统一秒级时间精度和空字符串审计默认值，补强序场次、资产制作分项、主文件及集/场次编号约束；不得改写历史 01/02/03 代替修复。无 `alembic_version` 的历史库只能在备份和克隆核验后 stamp 01，再执行 upgrade head。04 必须在任何 ALTER 前预检冲突并整体失败，不能猜测修复业务数据；downgrade 不恢复从未被正式 revision 声明的旧弱漂移，秒以下精度只能从升级前备份恢复。
+- 当前 head `20260810_05` 在任何 DDL 前预检 `sg_storage_operation` 的状态、重试时间、租约和完成时间组合，冲突时以 `SG_STORAGE_OPERATION_EXECUTION_STATE_CONFLICT` 整体失败；通过后增加执行状态一致性 `CHECK` 以及“项目+聚合+最新操作”和“项目+创建时间”两个非唯一索引。05 的 downgrade 会恢复 04 版 `target_relative_path` 列注释，并移除本 revision 新增的一个约束和两个索引，但不修改目录操作数据。
 - Shot Grid 只承诺 PostgreSQL；非 PostgreSQL 环境不得把 `sg_` 模型加入平台元数据，Shot Grid revision 的升级和降级必须保持 no-op。
 - 已有平台 PostgreSQL 库通过 Alembic 执行增量迁移；新库通过同步后的 PostgreSQL 初始化 SQL 建立全量结构并写入 Alembic head。当前仍不存在完整平台 Alembic baseline，不得声称首个 Shot Grid revision 能从真正空库独立建立 RuoYi 平台。
-- 项目创建、成员变更和 Excel 正式提交必须由 Service 在同一数据库事务写领域数据、Outbox 与 `SysOperLog`；不得使用会异步入 Redis 的平台 `@Log` 冒充同事务审计。NAS I/O、项目编辑/归档、手工 CRUD、任务动作、版本发布和审核闭环仍待后续实现。
+- 项目创建、成员变更、Excel 正式提交和目录人工重试必须由 Service 在同一数据库事务写领域数据、Outbox 与 `SysOperLog`；不得使用会异步入 Redis 的平台 `@Log` 冒充同事务审计。项目编辑/归档、手工 CRUD、任务动作、版本文件发布和审核闭环仍待后续实现。
+- 目录 Worker 默认关闭，仅在 PostgreSQL 且 `SHOT_GRID_STORAGE_WORKER_ENABLED=true` 时由 Application Leader 注册内部任务 `_shot_grid_storage_outbox`。每条操作执行前再次检查 Leader；数据库以 `FOR UPDATE SKIP LOCKED` 提供领取互斥，并以有期限租约和 owner + attempt fencing 拒绝旧持有者迟到回写。租约接管窗口不承诺旧、新 Worker 的物理 I/O 完全不重叠，因此当前执行器只能承载幂等目录创建和随机 `O_EXCL` 写探针。内部任务不得被数据库 Scheduler 同步当成普通 `sys_job` 删除或记录成高频任务日志。
+- `initialize_project` 及项目级 `reconcile_directory` 的 `target_relative_path` 相对 NAS 存储根目录，值等于项目绑定的 `project_relative_path`；集、镜头、资产级 `ensure_*` 及 `reconcile_directory` 的目标相对项目根目录。不得把这两个作用域混为一套路径拼接规则。
+- Worker 必须先提交领取短事务，再在线程中执行路径校验、幂等建目录和写探针，最后以短事务回写结果；软超时只做诊断并继续心跳续租，不能声称能够硬终止仍在运行的 SMB I/O。APScheduler 的 AsyncIOExecutor 不会等待已取消 Job，因此正常关机和 Leader 失锁必须显式 drain 已登记的 NAS Job，完成当前 I/O 与租约收尾后才能关闭数据库或重新竞争。当前单轮批次串行消费，尚未启用批内并发。
+- 项目初始化成功才把项目存储改为 `ready`；项目级最终失败改为 `failed`。动态目录失败只记录安全错误，不得把已经就绪的项目根存储降级为初始化失败。人工重试不覆盖旧操作：项目和动态目录都新建 `reconcile_directory`，要求原因、幂等键和重新校验后的路径快照，并在同事务写操作日志。
+- 自动化测试只允许通过显式 `allow_local_root=True` 使用临时本地目录；生产适配器默认只接受 UNC。源码、迁移、Mock/临时目录测试和服务启动均不能替代真实 Windows Worker 账号、NAS/AD/共享 ACL 及隔离 UNC 根目录 E2E。
 - Excel 正式提交使用 `selectedRows[{sheetName,rowNumber}]`，不能只用跨 Sheet 不唯一的物理行号；预览明文 Token 和行明细只短期存 Redis，PostgreSQL `sg_import_batch.selection_hash/result_summary` 负责跨 Redis 生命周期的幂等重放。
 
 ## 8. Redis、缓存和日志

@@ -147,7 +147,7 @@ class ShotGridStorageOperation(Base):
     operation_type = Column(String(30), nullable=False, comment='操作类型')
     aggregate_type = Column(String(20), nullable=False, comment='目标聚合类型')
     aggregate_id = Column(BigInteger, nullable=False, comment='目标业务对象ID')
-    target_relative_path = Column(String(1200), nullable=False, comment='项目根目录内目标相对路径')
+    target_relative_path = Column(String(1200), nullable=False, comment='按操作类型相对存储根或项目根的目标路径')
     operation_status = Column(String(30), nullable=False, server_default='pending', comment='执行状态')
     idempotency_key = Column(String(100), nullable=False, comment='服务端稳定幂等键')
     attempt_count = Column(Integer, nullable=False, server_default='0', comment='已执行次数')
@@ -201,11 +201,37 @@ class ShotGridStorageOperation(Base):
             "(lease_owner is not null and btrim(lease_owner) <> '' and lease_until is not null)",
             name='ck_sg_storage_operation_lease',
         ),
+        CheckConstraint(
+            "(operation_status = 'pending' and next_retry_time is null "
+            'and lease_owner is null and lease_until is null and completed_time is null) or '
+            "(operation_status = 'processing' and next_retry_time is null "
+            "and lease_owner is not null and btrim(lease_owner) <> '' "
+            'and lease_until is not null and completed_time is null) or '
+            "(operation_status = 'retry_wait' and next_retry_time is not null "
+            'and lease_owner is null and lease_until is null and completed_time is null) or '
+            "(operation_status in ('succeeded', 'failed', 'compensation_pending', "
+            "'compensated', 'compensation_failed') and next_retry_time is null "
+            'and lease_owner is null and lease_until is null and completed_time is not null)',
+            name='ck_sg_storage_operation_execution_state',
+        ),
         Index(
             'idx_sg_storage_operation_status_retry_lease',
             'operation_status',
             'next_retry_time',
             'lease_until',
+        ),
+        Index(
+            'idx_sg_storage_operation_project_aggregate_latest',
+            'project_id',
+            'aggregate_type',
+            'aggregate_id',
+            operation_id.desc(),
+        ),
+        Index(
+            'idx_sg_storage_operation_project_created',
+            'project_id',
+            create_time.desc(),
+            operation_id.desc(),
         ),
         {'comment': 'Shot Grid NAS目录操作Outbox表'},
     )
