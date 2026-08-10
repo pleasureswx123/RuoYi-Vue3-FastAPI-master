@@ -1,8 +1,6 @@
 <script setup>
 import { reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { login, getInfo } from '@/api/shot-grid/auth'
-import { setToken } from '@/utils/auth'
 import { useUserStore } from '@/store/modules/user'
 
 const route = useRoute()
@@ -16,11 +14,7 @@ async function submit() {
   submitting.value = true
   error.value = ''
   try {
-    const result = await login(form)
-    setToken(result.token || result.access_token)
-    const info = await getInfo()
-    userStore.user = info.user || info.data?.user || info
-    userStore.restored = true
+    await userStore.signIn(form)
     const target = typeof route.query.redirect === 'string' && route.query.redirect.startsWith('/') ? route.query.redirect : '/workbench'
     await router.replace(target)
   } catch (reason) {
