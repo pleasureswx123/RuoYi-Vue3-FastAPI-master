@@ -1,0 +1,31 @@
+{
+  "name": "shot-grid-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build:prod": "vite build --mode production",
+    "lint": "node scripts/lint.mjs",
+    "test": "node --test tests/**/*.test.js",
+    "test:unit": "node --test tests/unit/*.test.js",
+    "test:component": "node --test tests/components/*.test.js"
+  },
+  "dependencies": {
+    "@element-plus/icons-vue": "2.3.2",
+    "axios": "1.19.0",
+    "element-plus": "2.14.3",
+    "js-cookie": "3.0.8",
+    "pinia": "3.0.4",
+    "vue": "3.5.26",
+    "vue-router": "4.6.4"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "5.2.4",
+    "sass-embedded": "1.97.2",
+    "vite": "6.4.3"
+  }
+}
