@@ -52,7 +52,57 @@ class ShotGridVersionSubmissionConfig(BaseSettings):
 
     max_video_size_bytes: int = Field(default=2 * 1024 * 1024 * 1024, gt=0)
     max_image_size_bytes: int = Field(default=50 * 1024 * 1024, gt=0)
+    video_extensions: tuple[str, ...] = ('.mp4', '.mov')
+    video_mime_types: tuple[str, ...] = ('video/mp4', 'video/quicktime')
+    video_extension_mimes: dict[str, tuple[str, ...]] = {
+        '.mp4': ('video/mp4',),
+        '.mov': ('video/quicktime',),
+    }
+    video_codecs: tuple[str, ...] = ('H.264/AVC',)
+    max_video_width: int = Field(default=3840, gt=0)
+    max_video_height: int = Field(default=2160, gt=0)
+    max_video_duration_seconds: int = Field(default=600, gt=0)
+    image_extensions: tuple[str, ...] = ('.jpg', '.jpeg', '.png')
+    image_mime_types: tuple[str, ...] = ('image/jpeg', 'image/png')
+    image_extension_mimes: dict[str, tuple[str, ...]] = {
+        '.jpg': ('image/jpeg',),
+        '.jpeg': ('image/jpeg',),
+        '.png': ('image/png',),
+    }
+    image_encodings: tuple[str, ...] = ('JPEG', 'PNG')
+    max_image_width: int = Field(default=8192, gt=0)
+    max_image_height: int = Field(default=8192, gt=0)
+    generate_proxy_files: bool = False
     lease_seconds: int = Field(default=300, ge=10, le=3600)
+
+    def upload_policy(self, task_kind: str) -> dict:
+        """返回 Service 与公开接口共同使用的媒体策略，Controller 不复制限制。"""
+        if task_kind == 'shot_video':
+            return {
+                'media_type': 'video',
+                'extensions': self.video_extensions,
+                'mime_types': self.video_mime_types,
+                'extension_mimes': self.video_extension_mimes,
+                'max_size_bytes': self.max_video_size_bytes,
+                'codecs': self.video_codecs,
+                'max_width': self.max_video_width,
+                'max_height': self.max_video_height,
+                'max_duration_seconds': self.max_video_duration_seconds,
+                'generate_proxy': self.generate_proxy_files,
+            }
+        if task_kind == 'asset_image':
+            return {
+                'media_type': 'image',
+                'extensions': self.image_extensions,
+                'mime_types': self.image_mime_types,
+                'extension_mimes': self.image_extension_mimes,
+                'max_size_bytes': self.max_image_size_bytes,
+                'encodings': self.image_encodings,
+                'max_width': self.max_image_width,
+                'max_height': self.max_image_height,
+                'generate_proxy': self.generate_proxy_files,
+            }
+        raise ValueError(f'不支持的 Shot Grid 任务类型: {task_kind}')
 
 
 SHOT_GRID_VERSION_CONFIG = ShotGridVersionSubmissionConfig()

@@ -1,5 +1,7 @@
 # Shot Grid 后端对齐结论
 
+- D-05 媒体边界集中在 `ShotGridVersionSubmissionConfig`：镜头为 MP4/MOV、H.264/AVC、2 GiB、3840×2160、600 秒，资产为 JPEG/PNG、50 MiB、8192×8192，MVP 不生成代理。Service 必须校验扩展名、声明 MIME、文件签名及任务媒体类型；编码、尺寸、时长与播放兼容性由受控样本集成测试门禁验证。
+
 - 版本发布使用平台私有 `sys_file_info` 和 `sys_file_reference`，不另建上传协议；初始化在
   `sg_version_submission` 冻结任务内版本号、服务端毫秒时间戳、业务文件名和幂等键。
 - NAS 发布与正式短事务分离。正式事务失败只能重试原 submission，不重新分配冻结字段；NAS

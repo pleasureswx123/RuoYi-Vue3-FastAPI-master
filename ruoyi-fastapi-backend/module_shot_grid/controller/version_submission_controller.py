@@ -25,6 +25,20 @@ version_submission_controller = APIRouterPro(
 )
 
 
+@version_submission_controller.get(
+    '/media-policy',
+    summary='查询版本媒体限制',
+    dependencies=[UserInterfaceAuthDependency('shotgrid:version:query')],
+)
+async def media_policy(request: Request) -> Response:
+    return ResponseUtil.success(
+        data={
+            'shotVideo': ShotGridVersionSubmissionService.media_policy('shot_video'),
+            'assetImage': ShotGridVersionSubmissionService.media_policy('asset_image'),
+        }
+    )
+
+
 @version_submission_controller.post(
     '', summary='初始化版本提交', dependencies=[UserInterfaceAuthDependency('shotgrid:version:submit')]
 )

@@ -1,5 +1,6 @@
 import hashlib
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -76,3 +77,56 @@ def test_retry_policy_excludes_non_recoverable_nas_conflicts() -> None:
     assert 'SG_VERSION_WORKER_CRASHED' in ShotGridVersionSubmissionService.RETRYABLE_ERROR_KEYS
     assert 'SG_VERSION_NAS_DIGEST_CONFLICT' not in ShotGridVersionSubmissionService.RETRYABLE_ERROR_KEYS
     assert 'SG_VERSION_NAS_TARGET_EXISTS' not in ShotGridVersionSubmissionService.RETRYABLE_ERROR_KEYS
+
+
+def _file_info(name: str, mime: str, size: int, storage_key: str) -> SimpleNamespace:
+    return SimpleNamespace(
+        status='active',
+        del_flag='0',
+        access_type='private',
+        upload_user_id=7,
+        original_name=name,
+        content_type=mime,
+        file_size=size,
+        storage_key=storage_key,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('name', 'mime', 'task_kind', 'error_key'),
+    [
+        ('picture.png', 'image/png', 'shot_video', 'SG_VERSION_TASK_MEDIA_MISMATCH'),
+        ('movie.mp4', 'video/mp4', 'asset_image', 'SG_VERSION_TASK_MEDIA_MISMATCH'),
+        ('payload.exe', 'application/octet-stream', 'asset_image', 'SG_VERSION_EXTENSION_INVALID'),
+    ],
+)
+async def test_task_and_media_type_mismatch_has_stable_error(
+    name: str, mime: str, task_kind: str, error_key: str
+) -> None:
+    with pytest.raises(ShotGridDomainException) as error:
+        await ShotGridVersionSubmissionService._validate_file(_file_info(name, mime, 10, name), task_kind, 7)
+    assert error.value.error_key == error_key
+
+
+@pytest.mark.asyncio
+async def test_oversized_file_is_rejected_before_disk_access() -> None:
+    with pytest.raises(ShotGridDomainException) as error:
+        await ShotGridVersionSubmissionService._validate_file(
+            _file_info('huge.png', 'image/png', 50 * 1024 * 1024 + 1, 'huge.png'), 'asset_image', 7
+        )
+    assert error.value.error_key == 'SG_VERSION_FILE_TOO_LARGE'
+
+
+@pytest.mark.asyncio
+async def test_forged_extension_is_rejected_by_signature(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = tmp_path / 'fake.png'
+    fake.write_bytes(b'not a png payload')
+    monkeypatch.setattr(
+        'module_shot_grid.service.version_submission_service.UploadConfig.PRIVATE_UPLOAD_PATH', str(tmp_path)
+    )
+    with pytest.raises(ShotGridDomainException) as error:
+        await ShotGridVersionSubmissionService._validate_file(
+            _file_info('fake.png', 'image/png', fake.stat().st_size, fake.name), 'asset_image', 7
+        )
+    assert error.value.error_key == 'SG_VERSION_FILE_SIGNATURE_INVALID'

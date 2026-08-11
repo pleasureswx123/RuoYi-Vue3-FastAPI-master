@@ -5,6 +5,7 @@ const base = (projectId, taskId) => `/shot-grid/projects/${projectId}/tasks/${ta
 export const initializeVersionSubmission = (projectId, taskId, data) => request.post(base(projectId, taskId), data)
 export const getVersionSubmission = (projectId, taskId, submissionId) => request.get(`${base(projectId, taskId)}/${submissionId}`)
 export const retryVersionSubmission = (projectId, taskId, submissionId) => request.post(`${base(projectId, taskId)}/${submissionId}/retry`, {})
+export const getVersionMediaPolicy = (projectId, taskId) => request.get(`${base(projectId, taskId)}/media-policy`)
 export const listTaskVersions = (projectId, taskId, config = {}) => request.get(`/shot-grid/projects/${projectId}/tasks/${taskId}/versions`, config)
 export const getTaskVersion = (projectId, taskId, versionId, config = {}) => request.get(`/shot-grid/projects/${projectId}/tasks/${taskId}/versions/${versionId}`, config)
 export const getFinalTaskVersion = (projectId, taskId, config = {}) => request.get(`/shot-grid/projects/${projectId}/tasks/${taskId}/versions/final`, config)
