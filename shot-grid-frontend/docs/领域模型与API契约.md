@@ -1739,24 +1739,23 @@ ShotGridDomainException
 ### 10.0 NAS 根目录选择与路径预览
 
 ```http
-GET  /shot-grid/storage-roots/options
-POST /shot-grid/storage-roots/{storageRootId}/project-path-preview
+GET  /shot-grid/project-creation/storage-roots
+GET  /shot-grid/project-creation/users?keyword={keyword}&limit=30
+GET  /shot-grid/project-creation/path-preview?storageRootId={id}&projectType=ai_short_film&projectDirectoryName={name}
 Permissions:
-  shotgrid:storageRoot:list
   shotgrid:project:add
 ```
 
-普通项目创建人只能看到 `enabled` 且最近探测可用的根目录选项，不返回 `credentialRef`、`rootPathKey` 或错误堆栈。路径预览请求：
+普通项目创建人只能看到 `enabled` 且最近探测可用的根目录选项，不返回真实根路径、`credentialRef`、`rootPathKey` 或错误堆栈。用户候选仅包含未删除、启用且所属部门有效的用户。路径预览请求参数等价于：
 
 ```json
 {
   "projectType": "ai_short_film",
-  "projectName": "罗刹夫人",
   "projectDirectoryName": "罗刹夫人"
 }
 ```
 
-响应返回经规范化校验的目录名、完整路径预览和冲突状态；预览不创建数据库记录或目录。创建项目时必须重新校验，不能信任旧预览结果。
+响应返回根目录显示名称、经规范化校验的完整路径预览和当前可用状态；真实根路径只参与后端计算。离线或不可写根、越权 ID、目录穿越和路径冲突返回明确领域错误；预览不创建数据库记录或目录。创建项目时必须重新校验根目录、候选用户和路径占用，不能信任旧预览结果。
 
 管理员配置接口：
 

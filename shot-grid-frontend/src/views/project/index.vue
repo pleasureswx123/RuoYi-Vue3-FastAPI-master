@@ -1,11 +1,13 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { Search } from '@element-plus/icons-vue'
 import { useRouter } from 'vue-router'
 import { createProject, listProjects } from '@/api/shot-grid/projects'
+import { listProjectStorageRoots, previewProjectPath, searchProjectUsers } from '@/api/shot-grid/projectCreation'
 import EmptyState from '@/components/EmptyState.vue'
 import { useUserStore } from '@/store/modules/user'
-import { createIdempotencyKey, domainErrorMessage, normalizeUserIds, PROJECT_STATUS, STORAGE_STATUS } from '@/utils/projectDomain'
+import { createIdempotencyKey, domainErrorMessage, PROJECT_STATUS, STORAGE_STATUS } from '@/utils/projectDomain'
+import { createLatestPreview, hasDirector, uniqueUserIds } from '@/utils/projectCreation'
 
 const router = useRouter()
 const userStore = useUserStore()
@@ -21,16 +23,47 @@ let searchTimer
 let controller
 
 const query = reactive({ pageNum: 1, pageSize: 10, keyword: '', projectStatus: '' })
-const form = reactive({ projectName: '', projectCode: '', aspectRatio: '16:9', projectType: 'ai_short_film', projectDescription: '', storageRootId: null, projectDirectoryName: '', directorUserIdsText: '' })
+const form = reactive({ projectName: '', projectCode: '', aspectRatio: '16:9', projectType: 'ai_short_film', projectDescription: '', storageRootId: null, projectDirectoryName: '', directorUserIds: [] })
 const formError = ref('')
-const pathPreview = computed(() => form.storageRootId && form.projectDirectoryName ? `NAS 根目录 #${form.storageRootId} / AI短片 / ${form.projectDirectoryName.trim()}` : '选择 NAS 根目录并填写目录名称后显示')
+const storageRoots = ref([])
+const rootsLoading = ref(false)
+const rootsError = ref('')
+const userOptions = ref([])
+const usersLoading = ref(false)
+const pathPreview = ref(null)
+const previewLoading = ref(false)
+const previewError = ref('')
+const latestPreview = createLatestPreview(
+  (value) => { pathPreview.value = value; previewError.value = ''; previewLoading.value = false },
+  (error) => { pathPreview.value = null; previewError.value = domainErrorMessage(error, '路径预览失败'); previewLoading.value = false }
+)
 const rules = {
   projectName: [{ required: true, message: '请输入项目名称', trigger: 'blur' }],
   projectCode: [{ required: true, pattern: /^[A-Z0-9]{2,12}$/, message: '请输入 2—12 位大写字母或数字', trigger: 'blur' }],
-  storageRootId: [{ required: true, message: '请输入已配置的 NAS 根目录 ID', trigger: 'blur' }],
+  storageRootId: [{ required: true, message: '请选择可用 NAS 根目录', trigger: 'change' }],
   projectDirectoryName: [{ required: true, message: '请输入项目目录名称', trigger: 'blur' }],
-  directorUserIdsText: [{ validator: (_rule, value, callback) => normalizeUserIds(value).length ? callback() : callback(new Error('至少填写一名项目总监用户 ID')), trigger: 'blur' }]
+  directorUserIds: [{ validator: (_rule, value, callback) => hasDirector(value) ? callback() : callback(new Error('至少选择一名项目总监')), trigger: 'change' }]
 }
+
+async function loadStorageRoots() {
+  rootsLoading.value = true; rootsError.value = ''
+  try { storageRoots.value = await listProjectStorageRoots() || []; if (!storageRoots.value.length) rootsError.value = '当前没有可用且可写的 NAS 根目录' }
+  catch (error) { rootsError.value = domainErrorMessage(error, 'NAS 根目录加载失败') }
+  finally { rootsLoading.value = false }
+}
+async function loadUsers(keyword = '') {
+  usersLoading.value = true
+  try { userOptions.value = await searchProjectUsers(keyword) || [] }
+  catch (error) { formError.value = domainErrorMessage(error, '用户候选加载失败，请确认项目创建权限') }
+  finally { usersLoading.value = false }
+}
+function refreshPathPreview() {
+  pathPreview.value = null; previewError.value = ''
+  if (!form.storageRootId || !form.projectDirectoryName.trim()) { latestPreview.cancel(); previewLoading.value = false; return }
+  previewLoading.value = true
+  latestPreview.run((signal) => previewProjectPath({ storageRootId: form.storageRootId, projectType: form.projectType, projectDirectoryName: form.projectDirectoryName.trim() }, { signal }))
+}
+watch(() => [form.storageRootId, form.projectType, form.projectDirectoryName], refreshPathPreview)
 
 async function loadProjects() {
   controller?.abort()
@@ -52,8 +85,8 @@ async function loadProjects() {
 }
 
 function search() { clearTimeout(searchTimer); searchTimer = setTimeout(() => { query.pageNum = 1; loadProjects() }, 300) }
-function resetForm() { Object.assign(form, { projectName: '', projectCode: '', aspectRatio: '16:9', projectType: 'ai_short_film', projectDescription: '', storageRootId: null, projectDirectoryName: '', directorUserIdsText: '' }); formError.value = '' }
-function openCreate() { resetForm(); dialogVisible.value = true }
+function resetForm() { Object.assign(form, { projectName: '', projectCode: '', aspectRatio: '16:9', projectType: 'ai_short_film', projectDescription: '', storageRootId: null, projectDirectoryName: '', directorUserIds: [] }); formError.value = ''; pathPreview.value = null }
+function openCreate() { resetForm(); dialogVisible.value = true; loadStorageRoots(); loadUsers() }
 
 async function submitCreate() {
   if (submitting.value || !(await formRef.value.validate().catch(() => false))) return
@@ -63,7 +96,7 @@ async function submitCreate() {
     const result = await createProject({
       projectName: form.projectName.trim(), projectCode: form.projectCode.trim().toUpperCase(), aspectRatio: form.aspectRatio,
       projectType: form.projectType, projectDescription: form.projectDescription.trim() || null,
-      storageRootId: Number(form.storageRootId), projectDirectoryName: form.projectDirectoryName.trim(), directorUserIds: normalizeUserIds(form.directorUserIdsText), members: []
+      storageRootId: Number(form.storageRootId), projectDirectoryName: form.projectDirectoryName.trim(), directorUserIds: uniqueUserIds(form.directorUserIds), members: []
     }, createIdempotencyKey())
     dialogVisible.value = false
     await router.push({ name: 'ProjectOverview', params: { projectId: result.projectId } })
@@ -71,7 +104,7 @@ async function submitCreate() {
 }
 
 onMounted(loadProjects)
-onBeforeUnmount(() => { clearTimeout(searchTimer); controller?.abort() })
+onBeforeUnmount(() => { clearTimeout(searchTimer); controller?.abort(); latestPreview.cancel() })
 </script>
 
 <template>
@@ -102,11 +135,11 @@ onBeforeUnmount(() => { clearTimeout(searchTimer); controller?.abort() })
         <div class="form-grid"><el-form-item label="项目名称" prop="projectName"><el-input v-model="form.projectName" maxlength="200" /></el-form-item><el-form-item label="唯一项目代号" prop="projectCode"><el-input v-model="form.projectCode" maxlength="12" placeholder="如 SG01" @input="form.projectCode = form.projectCode.toUpperCase().replace(/[^A-Z0-9]/g, '')" /></el-form-item></div>
         <div class="form-grid"><el-form-item label="画幅" prop="aspectRatio"><el-select v-model="form.aspectRatio"><el-option v-for="item in ['16:9','21:9','2.39:1','9:16','1:1']" :key="item" :label="item" :value="item" /></el-select></el-form-item><el-form-item label="项目类型" prop="projectType"><el-select v-model="form.projectType"><el-option label="AI 短片" value="ai_short_film" /></el-select></el-form-item></div>
         <el-form-item label="项目描述" prop="projectDescription"><el-input v-model="form.projectDescription" type="textarea" :rows="3" /></el-form-item>
-        <div class="form-grid"><el-form-item label="NAS 根目录 ID" prop="storageRootId"><el-input-number v-model="form.storageRootId" :min="1" controls-position="right" /></el-form-item><el-form-item label="项目目录名称" prop="projectDirectoryName"><el-input v-model="form.projectDirectoryName" maxlength="240" /></el-form-item></div>
-        <div class="path-preview"><span>路径预览</span><code>{{ pathPreview }}</code><small>最终完整 UNC 路径由后端按已配置根目录生成并校验。</small></div>
-        <el-form-item label="项目总监用户 ID" prop="directorUserIdsText"><el-input v-model="form.directorUserIdsText" placeholder="至少一名，多个 ID 用逗号分隔" /></el-form-item>
+        <div class="form-grid"><el-form-item label="NAS 根目录" prop="storageRootId"><el-select v-model="form.storageRootId" :loading="rootsLoading" :disabled="!storageRoots.length" placeholder="请选择可用根目录"><el-option v-for="root in storageRoots" :key="root.storageRootId" :label="root.rootName" :value="root.storageRootId"><span>{{ root.rootName }}</span><small> · 当前可用</small></el-option></el-select><small v-if="rootsError" class="field-error">{{ rootsError }}</small></el-form-item><el-form-item label="项目目录名称" prop="projectDirectoryName"><el-input v-model="form.projectDirectoryName" maxlength="240" /></el-form-item></div>
+        <div class="path-preview" v-loading="previewLoading"><span>后端路径预览</span><template v-if="pathPreview"><strong>{{ pathPreview.rootName }} · 当前可用</strong><code>{{ pathPreview.finalPath }}</code></template><small v-else-if="previewError" class="field-error">{{ previewError }}</small><small v-else>选择根目录并填写目录名称后，由后端计算并校验冲突。</small></div>
+        <el-form-item label="项目总监" prop="directorUserIds"><el-select v-model="form.directorUserIds" multiple filterable remote :remote-method="loadUsers" :loading="usersLoading" placeholder="搜索并选择至少一名有效用户"><el-option v-for="user in userOptions" :key="user.userId" :label="`${user.nickName} (${user.userName})`" :value="user.userId"><span>{{ user.nickName }} ({{ user.userName }})</span><small v-if="user.deptName"> · {{ user.deptName }}</small></el-option></el-select></el-form-item>
       </el-form>
-      <template #footer><el-button @click="dialogVisible = false">取消</el-button><el-button type="primary" :loading="submitting" :disabled="submitting" @click="submitCreate">{{ submitting ? '正在创建' : '创建项目' }}</el-button></template>
+      <template #footer><el-button @click="dialogVisible = false">取消</el-button><el-button type="primary" :loading="submitting" :disabled="submitting || !pathPreview || !storageRoots.length" @click="submitCreate">{{ submitting ? '正在创建' : '创建项目' }}</el-button></template>
     </el-dialog>
   </section>
 </template>
