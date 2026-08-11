@@ -2654,6 +2654,8 @@ Permission: shotgrid:task:start
 
 ### 15.3 上传并自动提交版本
 
+媒体限制以服务端集中配置和 `GET /shot-grid/projects/{projectId}/tasks/{taskId}/version-submissions/media-policy` 返回为准：镜头视频允许 `.mp4`/`.mov`、`video/mp4`/`video/quicktime`、H.264/AVC，最大 2 GiB、3840×2160、600 秒；资产图片允许 `.jpg`/`.jpeg`/`.png`、`image/jpeg`/`image/png`、JPEG/PNG，最大 50 MiB、8192×8192。MVP 不生成代理文件。前端选择提示不是安全边界；暂存 Service 必须核验扩展名、平台记录的声明 MIME、文件签名和任务媒体类型。真实编码、分辨率、时长与播放兼容性留给受控媒体样本集成测试。
+
 用户界面中的“上传并提交版本”是一个业务动作，基于现有文件基座按两步执行：
 
 1. 调用 `POST /common/files/upload` 上传受保护文件并取得 `fileId`；
@@ -2685,7 +2687,7 @@ Header: X-Idempotency-Key
 - 当前任务不存在活动或待处理失败的版本提交；
 - `shot_video` 只接受经内容类型和扩展名双重校验的 MP4/MOV；
 - `asset_image` 只接受经内容类型和扩展名双重校验的 JPG/PNG；
-- `asset_image` 任务所属制作分项必须已经填写且安全规范化后非空，否则返回 `SG_ASSET_PRODUCTION_ITEM_REQUIRED`，不得生成缺段文件名。
+- `asset_image` 任务所属制作分项必须已经填写且安全规范化后非空，否则返回 `SG_VERSION_PRODUCTION_ITEM_REQUIRED`，不得生成缺段文件名。
 
 锁定任务行后，在一个短数据库事务中：
 
@@ -2717,8 +2719,8 @@ Worker 按第 7.4 节完成 NAS 发布后，在一个短数据库事务中：
 2. 创建主 `sg_version_file` 并写入 NAS 相对路径、摘要、大小和发布时间；
 3. 同步 `sys_file_reference`；
 4. 创建 `review_mode=auto_single`、`review_status=active` 的审核单和版本关系；
-5. 把任务改为 `pending_review`；
-6. 把提交改为 `committed` 并关联 `version_id`；
+5. 把任务由 `in_progress` 或 `revision` 改为 `pending_review`；
+6. 把提交由 `committing` 改为 `committed` 并关联 `version_id`；
 7. 提交事务。
 
 提交状态接口：
@@ -3056,7 +3058,7 @@ NAS I/O 不得在数据库事务内执行。`sg_storage_operation` 和 `sg_versi
 | `SG_ASSET_NAME_CONFLICT` | 409 | 项目内同类型资产名称或目录冲突 |
 | `SG_ASSET_PRODUCTION_ITEM_INVALID` | 422 | 已填写的制作分项安全规范化后不可用 |
 | `SG_ASSET_PRODUCTION_ITEM_CONFLICT` | 409 | 同一资产内非空制作分项名称重复 |
-| `SG_ASSET_PRODUCTION_ITEM_REQUIRED` | 422 | 提交资产图片版本时制作分项仍为空 |
+| `SG_VERSION_PRODUCTION_ITEM_REQUIRED` | 409 | 提交资产图片版本时制作分项仍为空 |
 | `SG_TASK_ASSIGNEE_AMBIGUOUS` | 422 | 制作人字段包含多名候选，无法确定唯一主制作人 |
 | `SG_CROSS_PROJECT_REFERENCE` | 409 | 跨项目关联 |
 | `SG_OPTIMISTIC_LOCK_CONFLICT` | 409 | 乐观锁冲突 |
@@ -3098,6 +3100,11 @@ NAS I/O 不得在数据库事务内执行。`sg_storage_operation` 和 `sg_versi
 | `SG_ASSET_REQUIREMENT_CONFLICT` | 409 | 候选不唯一、类型不符或需求已被他人处理 |
 | `SG_TASK_ALREADY_EXISTS` | 409 | 镜头或资产制作分项已经存在正式任务 |
 | `SG_TASK_FILE_TYPE_INVALID` | 422 | 视频或图片任务上传了不允许的文件类型 |
+| `SG_VERSION_FILE_TOO_LARGE` | 413 | 文件为空、记录大小超限或超过当前任务媒体上限 |
+| `SG_VERSION_EXTENSION_INVALID` | 422 | 文件扩展名不在允许范围内 |
+| `SG_VERSION_DECLARED_MIME_INVALID` | 422 | 平台记录的声明 MIME 不在任务允许范围内 |
+| `SG_VERSION_FILE_SIGNATURE_INVALID` | 422 | 文件签名、扩展名和声明 MIME 不一致，包含伪造扩展名 |
+| `SG_VERSION_TASK_MEDIA_MISMATCH` | 422 | 镜头任务上传图片、资产任务上传视频或任务类型不支持媒体提交 |
 | `SG_VERSION_FILE_ALREADY_BOUND` | 409 | 文件已经作为其他版本主产出物 |
 | `SG_VERSION_SUBMISSION_ACTIVE` | 409 | 任务已有正在处理或待处理失败的提交 |
 | `SG_VERSION_SUBMISSION_NOT_FOUND` | 404 | 版本提交不存在或不可见 |

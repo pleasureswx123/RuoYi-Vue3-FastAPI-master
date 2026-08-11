@@ -29,16 +29,22 @@ class ShotGridVersionSubmissionService:
         'SG_VERSION_NAS_IO_FAILED',
         'SG_VERSION_DATABASE_COMMIT_FAILED',
     }
-    MEDIA = {
-        'shot_video': {
-            '.mp4': ('video/mp4',),
-            '.mov': ('video/quicktime',),
-        },
-        'asset_image': {
-            '.jpg': ('image/jpeg',),
-            '.png': ('image/png',),
-        },
-    }
+
+    @staticmethod
+    def media_policy(task_kind: str) -> dict:
+        policy = SHOT_GRID_VERSION_CONFIG.upload_policy(task_kind)
+        return {
+            'taskKind': task_kind,
+            'mediaType': policy['media_type'],
+            'extensions': list(policy['extensions']),
+            'mimeTypes': list(policy['mime_types']),
+            'maxSizeBytes': policy['max_size_bytes'],
+            'encodings': list(policy.get('codecs') or policy.get('encodings') or ()),
+            'maxWidth': policy['max_width'],
+            'maxHeight': policy['max_height'],
+            'maxDurationSeconds': policy.get('max_duration_seconds'),
+            'generateProxy': policy['generate_proxy'],
+        }
 
     @classmethod
     async def initialize(cls, db, project_id, task_id, command, *, user_id: int, user_name: str):
@@ -165,17 +171,22 @@ class ShotGridVersionSubmissionService:
             raise shot_grid_error(404, 'SG_VERSION_FILE_NOT_FOUND', '上传文件不存在或已失效')
         if file_info.access_type != 'private' or file_info.upload_user_id != user_id:
             raise shot_grid_error(403, 'SG_VERSION_FILE_ACCESS_DENIED', '文件不是当前用户的受保护上传')
-        extension = Path(file_info.original_name).suffix.lower()
-        allowed = cls.MEDIA[task_kind]
+        try:
+            policy = SHOT_GRID_VERSION_CONFIG.upload_policy(task_kind)
+        except ValueError as exc:
+            raise shot_grid_error(422, 'SG_VERSION_TASK_MEDIA_MISMATCH', '任务类型不支持媒体提交') from exc
+        extension = Path(file_info.original_name or '').suffix.lower()
+        allowed = policy['extension_mimes']
         if extension not in allowed:
-            raise shot_grid_error(422, 'SG_VERSION_MEDIA_TYPE_INVALID', '任务不允许该文件扩展名')
-        limit = (
-            SHOT_GRID_VERSION_CONFIG.max_video_size_bytes
-            if task_kind == 'shot_video'
-            else SHOT_GRID_VERSION_CONFIG.max_image_size_bytes
-        )
+            other_kind = 'asset_image' if task_kind == 'shot_video' else 'shot_video'
+            other_extensions = SHOT_GRID_VERSION_CONFIG.upload_policy(other_kind)['extensions']
+            error_key = (
+                'SG_VERSION_TASK_MEDIA_MISMATCH' if extension in other_extensions else 'SG_VERSION_EXTENSION_INVALID'
+            )
+            raise shot_grid_error(422, error_key, '所选文件类型与任务产出媒体不匹配')
+        limit = policy['max_size_bytes']
         if file_info.file_size <= 0 or file_info.file_size > limit:
-            raise shot_grid_error(413, 'SG_VERSION_FILE_SIZE_INVALID', '文件为空或超过任务上传大小限制')
+            raise shot_grid_error(413, 'SG_VERSION_FILE_TOO_LARGE', '文件为空或超过任务上传大小限制')
         root = UploadConfig.PRIVATE_UPLOAD_PATH
         source = Path(root).resolve() / Path(file_info.storage_key)
         source = source.resolve()
@@ -184,8 +195,10 @@ class ShotGridVersionSubmissionService:
         head = await asyncio.to_thread(cls._read_head, source)
         actual_mime = cls._sniff(head, extension)
         declared = (file_info.content_type or '').split(';', 1)[0].lower()
+        if declared not in policy['mime_types']:
+            raise shot_grid_error(422, 'SG_VERSION_DECLARED_MIME_INVALID', '声明 MIME 不在任务允许范围内')
         if actual_mime not in allowed[extension] or declared not in allowed[extension]:
-            raise shot_grid_error(422, 'SG_VERSION_MEDIA_TYPE_INVALID', '文件头、实际 MIME 与扩展名不一致')
+            raise shot_grid_error(422, 'SG_VERSION_FILE_SIGNATURE_INVALID', '文件签名、声明 MIME 与扩展名不一致')
         if source.stat().st_size != file_info.file_size:
             raise shot_grid_error(409, 'SG_VERSION_UPLOAD_INTERRUPTED', '上传文件大小与平台记录不一致')
         return source, extension, actual_mime
