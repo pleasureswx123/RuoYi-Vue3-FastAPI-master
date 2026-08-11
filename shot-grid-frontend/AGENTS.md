@@ -8,7 +8,7 @@
 - 基础后端：`../ruoyi-fastapi-backend/`。
 - 后台管理端参考实现：`../ruoyi-fastapi-frontend/`。
 - 当前主数据库：PostgreSQL。
-- 当前目录已建立可独立构建的 Vue 3/Vite/Pinia/Vue Router/Axios/Element Plus 应用基座，包含自有登录页、真实验证码/登录/用户信息/退出/范围导航调用、六项本地白名单路由、业务 Layout、统一请求与传输加密、401 会话清理，以及 403/404/5xx 分流。项目页已接入真实项目范围列表、创建、详情/概览、编辑、归档、成员维护、存储状态和目录操作诊断接口；镜头页已接入真实项目/集/场次/状态/制作人筛选、服务端分页、表格/卡片/故事板三视图、详情、创建/编辑/归档、任务分配，以及镜头 Excel 模板下载、预检、跨 Sheet 行选择和幂等正式提交，不含失败回退 Mock。工作台、资产、版本审核和文件与 NAS 一级页仍主要是后续真实数据接入边界。后端已建立 PostgreSQL 领域表、`20260810_01 → 20260811_06` 迁移链、导航、项目/成员/范围查询、集/场次/镜头/资产/制作分项普通管理、两类 Excel 预检与正式提交、独立任务管理、默认关闭的版本发布 Worker、不可覆盖版本、`auto_single` 自动审核单、意见/回复/解决及 `approve/reject/defer` 审核闭环，以及默认关闭的 NAS 目录 Outbox Worker、目录操作诊断和人工重试。生产 Dockerfile 与 Nginx 模板固定 `/shot-grid-app/` 和 `/prod-api/`；项目管理子集和本批镜头管理/镜头 Excel 导入子集均已使用隔离真实 PostgreSQL、Redis、平台账号和生产 Nginx 完成浏览器旅程。资产需求人工处理、`manual_batch`、媒体派生、其余业务页面真实数据接入和真实 UNC 仍未完成；两个子集旅程都不是完整系统 E2E，不得把逻辑 `healthy` 或 `storageStatus=ready` 测试记录、临时本地目录、项目创建 HTTP 202 或 Worker 关闭的页面旅程描述成 NAS 生产验收通过。
+- 当前目录已建立可独立构建的 Vue 3/Vite/Pinia/Vue Router/Axios/Element Plus 应用基座，包含自有登录页、真实验证码/登录/用户信息/退出/范围导航调用、六项本地白名单路由、业务 Layout、统一请求与传输加密、401 会话清理，以及 403/404/5xx 分流。项目页已接入真实范围列表、创建、详情/概览、编辑、归档、成员维护、存储状态和目录诊断；镜头页已接入真实筛选/分页、三视图、详情、CRUD/分配、受保护缩略图和镜头 Excel 模板/预检/提交；资产页已接入真实筛选/分页、表格/卡片/类型看板、详情、资产与制作分项 CRUD、分配/改派、受保护缩略图和资产 Excel 预检/提交，均不回退 Mock。资产模板下载仍因规定的 `artifact_tool` 安全匿名化、渲染和复核流程不可用而保持未交付。工作台、版本审核和文件与 NAS 一级页仍主要是后续真实数据接入边界。后端已建立 PostgreSQL 领域表、`20260810_01 → 20260811_06` 迁移链、导航、项目/成员/范围查询、集/场次/镜头/资产/制作分项普通管理、两类 Excel 预检与正式提交、独立任务管理、默认关闭的版本发布 Worker、不可覆盖版本、`auto_single` 自动审核单、意见/回复/解决及 `approve/reject/defer` 审核闭环，以及默认关闭的 NAS 目录 Outbox Worker、目录操作诊断和人工重试。生产 Dockerfile 与 Nginx 模板固定 `/shot-grid-app/` 和 `/prod-api/`；项目管理、镜头管理/镜头 Excel 导入、资产管理/资产 Excel 导入三个子集均已使用隔离真实 PostgreSQL、Redis、平台账号和生产 Nginx 完成浏览器旅程。资产需求人工处理、`manual_batch`、媒体派生、其余业务页面真实数据接入和真实 UNC 仍未完成；任何子集旅程都不是完整系统 E2E，不得把逻辑 `healthy` 或 `storageStatus=ready` 测试记录、临时本地目录、项目创建 HTTP 202 或 Worker 关闭的页面旅程描述成 NAS 生产验收通过。
 
 需求文档定义产品意图，本文件补充工程边界和必须保持的数据不变量。若需求文档与已确认的后端契约不一致，应先记录差异，再修改实现；不得在页面组件中用临时兼容掩盖数据模型冲突。
 
@@ -132,6 +132,8 @@ ruoyi-fastapi-frontend
 - 未来增加资产类型必须同步数据库约束、后端校验、字典、导入映射、路径规则和测试，不能只新增字典值。
 - 一个资产可以包含多个制作分项；制作分项是独立分配、提交版本和审核的最小图片生产单元，保存在 `sg_asset_item`，不放在资产主表。
 - 资产表至少包含类型、名称、制作分项、描述、备注、状态、制作人；任务描述、状态和制作人从当前制作分项唯一任务聚合。
+- 资产或制作分项可执行动作必须读取后端 `allowedActions`，再与当前平台权限取交集；页面不得根据角色名、状态文案或是否显示按钮自行合成写权限。资产动作代码为 `asset.edit`、`assetItem.add`、`asset.archive`，制作分项动作代码为 `assetItem.edit`、`assetItem.archive`、`task.assign`。
+- 制作分项缩略图只允许使用该分项当前最新版本的 `thumbnail` 文件；最新版本无缩略图时显示安全占位，不得回退旧版本。父资产代表图固定按活动制作分项 `(sortOrder, assetItemId)` 顺序选择第一张可用的当前最新版本缩略图，禁止前端按加载先后或本地缓存另选代表图。
 - 任务必须且只能属于一个镜头或一个资产制作分项，不能同时属于两者，也不能成为无归属任务。
 - 每个镜头最多一个 `shot_video` 任务，每个资产制作分项最多一个 `asset_image` 任务；首次分配主制作人时创建，改派时更新同一任务。
 - 制作分项允许在资产导入时为空，只返回警告并允许后续补充；资产图片版本提交前必须补齐。每个制作分项只允许一名主制作人，复合制作人文本必须作为导入错误处理。
@@ -255,7 +257,7 @@ ruoyi-fastapi-frontend
 
 不得绕过统一请求层自行创建不带认证、错误处理或传输加密的 Axios 实例。上传、下载或流媒体接口需要排除应用层加密时，应与后端协议共同确认，不能在单个页面私自关闭安全策略。
 
-### 6.1 应用基座、项目管理与镜头页的已实现契约
+### 6.1 应用基座、项目管理、镜头与资产页的已实现契约
 
 - 开发环境页面根路径为 `/`，API 前缀为 `/dev-api`，Vite 代理将该前缀剥离后转发到后端；生产构建根路径固定为 `/shot-grid-app/`，API 前缀为 `/prod-api`。
 - 生产反向代理必须把 `/prod-api/...` 转发为后端真实的 `/...`，即剥离 `/prod-api`；不得把页面基路径 `/shot-grid-app/` 与后端业务前缀 `/shot-grid` 混用。
@@ -275,8 +277,14 @@ ruoyi-fastapi-frontend
 - 镜头详情使用真实详情响应展示制作字段、关联资产、唯一任务、最新版本/反馈与 `allowedActions`，并通过独立弹窗执行创建/编辑、分配/改派和归档。创建/导入按钮同时要求平台权限、项目总监能力、项目不是 `completed/archived` 且 `storageStatus=ready`；后端仍是最终门禁。
 - 缩略图 URL 只接受后端版本文件的受保护相对下载路径，必须通过统一请求层获取 Blob 并创建临时 Object URL；403/404 显示安全占位，取消、切换或卸载时中止请求并 `URL.revokeObjectURL()`。不得把鉴权下载 URL 直接当公开 `<img src>`，也不得持久化 Blob。
 - 镜头导入弹窗调用鉴权 `GET /shot-grid/imports/shots/template` 下载 `shot-v1`，上传 `.xlsx` 后调用 preview 展示工作簿/行级错误与警告，使用 `selectedRows[{sheetName,rowNumber}]` 跨 Sheet 选择，并携带组件内稳定 `X-Idempotency-Key` 调用 commit。明文 Token 和幂等键只保存在当前弹窗内存，不写 localStorage、日志或 URL；重新选择文件会开启新预检会话。
-- 项目 `completed` 或 `archived` 时，前端隐藏集、场次、镜头和镜头导入写入口，详情 `allowedActions` 也不得自行合成。当前后端终态门禁只明确覆盖项目自身、集、场次、镜头和镜头导入；不能推断资产、成员、任务、版本、审核、文件或目录操作已经完成全域治理。
-- 工作台、资产、版本审核和文件与 NAS 一级页面当前仍主要是边界占位，不得据此宣称这些业务页面已经完成。
+- 资产列表以 `GET /shot-grid/projects/{projectId}/assets` 为唯一数据源，项目、类型、聚合状态、制作人和关键字筛选及服务端分页在表格、卡片和类型看板之间共享；项目切换、筛选变化和卸载必须取消旧请求并清理旧项目的资产、选项、弹窗及导入会话。
+- 资产详情展示资产主数据、使用镜头数、目录状态、制作分项、唯一任务、最新/最终版本及后端 `allowedActions`，并通过独立弹窗执行资产创建/编辑/归档、制作分项新增/编辑/归档和任务首次分配/改派。每次弹窗实例必须携带递增 `operationGeneration`，旧请求迟到结果不得关闭或刷新新上下文。
+- 资产制作人使用分页 `GET /shot-grid/projects/{projectId}/asset-assignee-options`，只展示后端返回的活动项目成员安全摘要；候选响应不能替代写事务中的项目状态、角色、成员和制作人缩写复核。
+- 资产缩略图使用受保护版本文件 URL，经统一请求层获取 Blob；403/404 显示占位，切换/卸载时中止请求并释放 Object URL。前端严格使用后端返回的制作分项缩略图和父资产代表图，不自行回退旧版本或重新选图。
+- 资产导入弹窗使用现有 `asset-v1` preview/commit 接口展示 total 20、valid 19、warningRows 3、errorRows 1 的正式原样表结果，并使用 `selectedRows[{sheetName,rowNumber}]`、内存 Token 和稳定幂等键提交。原样表结构为 12 个父资产、20 个制作分项；错误行不可选，警告行仍可按用户选择提交。
+- 资产模板下载尚未交付。原样表必须先通过规定的 `artifact_tool` 安全匿名化、渲染和复核流程，工具链不可用时不得直接打包或透传原样表，也不得把规划中的 `GET /shot-grid/imports/assets/template` 当作可用接口。页面应明确说明该边界，不能用失败回退或本地静态文件伪装官方模板。
+- 项目 `completed` 或 `archived` 时，前端隐藏集、场次、镜头、资产、资产制作分项及两类导入的写入口，详情 `allowedActions` 也不得自行合成。当前后端终态门禁明确覆盖项目自身、集、场次、镜头、资产、资产制作分项及两类 Excel 导入；不能推断成员、任务、版本、审核、文件或目录操作已经完成其余全域治理。
+- 工作台、版本审核和文件与 NAS 一级页面当前仍主要是边界占位，不得据此宣称这些业务页面已经完成。
 
 ## 7. 推荐目录与依赖方向
 
@@ -478,7 +486,9 @@ MVP 不能只以页面数量验收，至少需要真实走通：
 
 构建成功只证明静态产物可生成，不等于上述业务链路通过。
 
-截至 2026-08-11，本批最新代码已实际执行并通过 `npm.cmd run lint`、Vitest 18 个测试文件/66 个测试、`npm.cmd run build:prod`；生产构建处理 1757 个模块。后端 Ruff check/format 覆盖 163 个 Python 文件，10 个定向测试文件 78 passed；完整 `tests/module_shot_grid` 为 465 passed、2 skipped，跳过项源于当前 Windows 账号没有创建符号链接权限。镜头管理/镜头 Excel 导入子集另在隔离 PostgreSQL、Redis DB 15、真实 FastAPI/平台账号、生产 Nginx 和 Chrome 下完成浏览器旅程：模板 11883 bytes 且摘要正确，preview 24/24、0 警告行、0 错误行，commit HTTP 200 并创建 2 集、8 场、24 镜头、24 任务、24 待匹配需求和 26 条目录操作；三视图各 24 条，EP002 筛选 12 条，详情深链/刷新、控制台零错误警告和退出保护均通过。该子集使用逻辑 `storageStatus=ready` 夹具且 Worker 关闭，26 条目录操作仍为 `pending`，所以仍未验证真实 UNC/SMB/NAS 服务账号、目录创建、写探针或共享 ACL，也不等于完整系统 E2E。
+截至 2026-08-11，本批最新代码已实际执行并通过 `npm.cmd run lint`、Vitest 23 个测试文件/91 个测试、`npm.cmd run build:prod`；生产构建处理 1774 个模块，仅保留既有 `@vueuse/core` PURE annotation 两条警告。后端 Ruff check 扩大到 `module_shot_grid config middlewares tests/module_shot_grid` 并通过，Ruff format `--check` 报告 177 files already formatted；11 个定向测试文件 90 passed，完整 `tests/module_shot_grid` 为 483 passed、2 skipped，两个跳过项均因当前环境不允许创建目录符号链接。前端静态门禁已覆盖资产制作人选项、CRUD/分配/导入路由、camelCase 载荷、后端 `allowedActions`、缩略图契约、三视图/详情、导入弹窗和项目范围 stale/ABA 异步上下文隔离。
+
+资产管理/资产 Excel 导入子集已在隔离 PostgreSQL、Redis DB 15、真实 FastAPI/平台账号、生产 Nginx 和 Chrome 下完成浏览器旅程：preview 20/19/3/1，19 个可导入行一次提交形成 11 个活动资产、19 个分项/任务和 1 个显式隔离夹具自动匹配；三视图、Environment=2、蒋浩筛选=8、详情深链/刷新、临时资产/分项 CRUD 与业务归档、任务改派、7 条成功审计、控制台 0 error/0 warning、浏览器存储敏感信息边界、退出保护及 Redis Token 清理均通过。目录 Worker 关闭且 12 条 Outbox 均为 `pending`；资产模板未交付/未测试，真实版本缩略图只验证空态，逻辑 `storageStatus=ready` 夹具不证明 UNC/NAS。验收后隔离容器、18081/19099、隔离数据库、Redis DB 15 和 TEMP 均为零残留，原 9099 服务及基础 PostgreSQL/Redis 未动。
 
 ## 15. 变更纪律
 

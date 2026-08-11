@@ -25,7 +25,12 @@ RENAMED_TASK_LOCK_VERSION = 3
 
 def _current_user() -> CurrentUserModel:
     return CurrentUserModel(
-        permissions=['shotgrid:asset:add', 'shotgrid:asset:edit', 'shotgrid:asset:archive'],
+        permissions=[
+            'shotgrid:asset:add',
+            'shotgrid:asset:edit',
+            'shotgrid:asset:archive',
+            'shotgrid:task:assign',
+        ],
         roles=[],
         user=UserInfoModel(userId=1, userName='director'),
     )
@@ -69,6 +74,7 @@ def _patch_create_dependencies(monkeypatch: pytest.MonkeyPatch) -> dict[str, Asy
 
     mocks = {
         'project': AsyncMock(return_value=SimpleNamespace(project_status='active')),
+        'access': AsyncMock(return_value=_access()),
         'storage': AsyncMock(return_value='ready'),
         'conflict': AsyncMock(return_value=False),
         'add_asset': AsyncMock(side_effect=add_asset),
@@ -81,6 +87,7 @@ def _patch_create_dependencies(monkeypatch: pytest.MonkeyPatch) -> dict[str, Asy
     }
     targets = {
         'project': 'ShotGridProjectDao.get_project_by_id',
+        'access': 'ShotGridProjectAccessService.resolve_access',
         'storage': 'ShotGridAssetCrudDao.get_project_storage_status',
         'conflict': 'ShotGridAssetCrudDao.asset_name_or_path_exists',
         'add_asset': 'ShotGridAssetCrudDao.add_asset',
@@ -457,6 +464,10 @@ async def test_asset_archive_rejects_active_items_and_rolls_back(monkeypatch: py
         AsyncMock(return_value='ready'),
     )
     monkeypatch.setattr(
+        'module_shot_grid.service.asset_crud_service.ShotGridProjectAccessService.resolve_access',
+        AsyncMock(return_value=_access()),
+    )
+    monkeypatch.setattr(
         'module_shot_grid.service.asset_crud_service.ShotGridAssetCrudDao.get_asset',
         AsyncMock(return_value=asset),
     )
@@ -483,3 +494,157 @@ async def test_asset_archive_rejects_active_items_and_rolls_back(monkeypatch: py
     assert exc_info.value.error_key == 'SG_INVALID_STATE_TRANSITION'
     db.commit.assert_not_awaited()
     db.rollback.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('project_status', ['completed', 'archived'])
+async def test_asset_writes_reject_terminal_project_before_access_or_storage_checks(
+    monkeypatch: pytest.MonkeyPatch,
+    project_status: str,
+) -> None:
+    resolve_access = AsyncMock()
+    storage_status = AsyncMock()
+    monkeypatch.setattr(
+        'module_shot_grid.service.asset_crud_service.ShotGridProjectDao.get_project_by_id',
+        AsyncMock(return_value=SimpleNamespace(project_status=project_status)),
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.asset_crud_service.ShotGridProjectAccessService.resolve_access',
+        resolve_access,
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.asset_crud_service.ShotGridAssetCrudDao.get_project_storage_status',
+        storage_status,
+    )
+
+    with pytest.raises(ShotGridDomainException) as exc_info:
+        await ShotGridAssetCrudService._lock_writable_project(
+            AsyncMock(),
+            PROJECT_ID,
+            _current_user(),
+            1,
+        )
+
+    assert exc_info.value.error_key == 'SG_INVALID_STATE_TRANSITION'
+    resolve_access.assert_not_awaited()
+    storage_status.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_asset_write_rechecks_director_after_project_lock(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        'module_shot_grid.service.asset_crud_service.ShotGridProjectDao.get_project_by_id',
+        AsyncMock(return_value=SimpleNamespace(project_status='active')),
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.asset_crud_service.ShotGridProjectAccessService.resolve_access',
+        AsyncMock(return_value=_access(role='creator')),
+    )
+
+    with pytest.raises(ShotGridDomainException) as exc_info:
+        await ShotGridAssetCrudService._lock_writable_project(
+            AsyncMock(),
+            PROJECT_ID,
+            _current_user(),
+            1,
+        )
+
+    assert exc_info.value.error_key == 'SG_PROJECT_ACCESS_DENIED'
+
+
+def test_asset_thumbnail_uses_latest_version_and_parent_uses_first_sorted_item_with_thumbnail() -> None:
+    task_refs = [
+        {'asset_id': ASSET_ID, 'asset_item_id': 31, 'sort_order': 20, 'task_id': 201},
+        {'asset_id': ASSET_ID, 'asset_item_id': 30, 'sort_order': 10, 'task_id': 200},
+    ]
+    version_rows = [
+        {
+            'task_id': 200,
+            'version_id': 20,
+            'version_status': 'pending_review',
+            'submitted_time': None,
+            'thumbnail_file_id': None,
+            'thumbnail_business_file_name': None,
+        },
+        {
+            'task_id': 200,
+            'version_id': 19,
+            'version_status': 'final',
+            'submitted_time': None,
+            'thumbnail_file_id': 'old-thumbnail',
+            'thumbnail_business_file_name': '旧缩略图.jpg',
+        },
+        {
+            'task_id': 201,
+            'version_id': 21,
+            'version_status': 'pending_review',
+            'submitted_time': None,
+            'thumbnail_file_id': 'current-thumbnail',
+            'thumbnail_business_file_name': '当前缩略图.jpg',
+        },
+    ]
+
+    thumbnails = ShotGridAssetCrudService._representative_thumbnail_map(task_refs, version_rows)
+
+    assert thumbnails[ASSET_ID].model_dump(by_alias=True) == {
+        'fileId': 'current-thumbnail',
+        'name': '当前缩略图.jpg',
+        'url': '/shot-grid/versions/21/files/current-thumbnail/download',
+    }
+
+
+def test_asset_and_item_allowed_actions_are_server_side_state_mirrors() -> None:
+    asset_actions = ShotGridAssetCrudService._asset_allowed_actions(
+        _current_user(),
+        _access(),
+        project_id=PROJECT_ID,
+        project_status='active',
+        storage_status='ready',
+        lifecycle_status='active',
+        has_active_items=False,
+        has_active_tasks=False,
+    )
+    item_actions = ShotGridAssetCrudService._item_allowed_actions(
+        _current_user(),
+        _access(),
+        project_id=PROJECT_ID,
+        project_status='active',
+        storage_status='ready',
+        asset_lifecycle_status='active',
+        item_lifecycle_status='active',
+        has_versions=False,
+        task_status=None,
+        has_uncommitted_submission=False,
+    )
+
+    assert asset_actions == ['asset.edit', 'asset.archive', 'assetItem.add']
+    assert item_actions == ['assetItem.edit', 'assetItem.archive', 'task.assign']
+
+    assert (
+        ShotGridAssetCrudService._asset_allowed_actions(
+            _current_user(),
+            _access(),
+            project_id=PROJECT_ID,
+            project_status='completed',
+            storage_status='ready',
+            lifecycle_status='active',
+            has_active_items=False,
+            has_active_tasks=False,
+        )
+        == []
+    )
+    assert (
+        ShotGridAssetCrudService._item_allowed_actions(
+            _current_user(),
+            _access(),
+            project_id=PROJECT_ID,
+            project_status='active',
+            storage_status='ready',
+            asset_lifecycle_status='active',
+            item_lifecycle_status='active',
+            has_versions=True,
+            task_status='in_progress',
+            has_uncommitted_submission=True,
+        )
+        == []
+    )

@@ -9,7 +9,7 @@
 - 受平台角色菜单授权约束的 `GET /shot-grid/navigation`；
 - 项目范围列表、详情、真实概览聚合、创建项目事务、存储初始化状态与项目成员管理；
 - 项目编辑/归档，以及集、场次、镜头、资产和资产制作分项的查询、创建、修改与业务归档；
-- 项目内镜头制作人安全选项、镜头导入模板的鉴权二进制下载，以及完成/归档项目下集、场次、镜头和镜头导入写门禁；
+- 项目内镜头/资产制作人安全选项、镜头导入模板的鉴权二进制下载，以及完成/归档项目下集、场次、镜头、资产、资产制作分项和两类 Excel 导入写门禁；
 - 项目任务分页、跨项目“我的任务”、任务详情/编辑、镜头或资产制作分项首次分配/受控改派，以及负责人开始任务；
 - 镜头和资产 `.xlsx` 的安全预检、Redis 短期 Token、选中行全事务提交和 PostgreSQL 耐久幂等结果；
 - 平台私有文件上传后的版本暂存、临时业务引用、默认关闭的 NAS 版本发布 Worker、正式版本/主文件引用/`auto_single` 审核单事务，以及版本文件专用授权下载；
@@ -19,24 +19,28 @@
 - PostgreSQL Alembic 迁移链、初始化 SQL、菜单、权限按钮和字典种子；
 - 元数据、导航、项目权限、项目事务、两类真实样表解析、任务/版本/审核、目录状态/DAO/路径适配器/Worker/路由和内部 Scheduler 任务的针对性测试入口。
 
-当前批次仍不包含资产 Excel 模板下载、资产需求人工处理、`manual_batch` 人工批量审核单、媒体缩略图生成/代理/转码/元数据和完整系统 E2E；镜头模板下载已经交付，预检按仓库内已冻结样表执行。独立业务前端已接入镜头列表三视图、详情、创建/编辑/归档、任务分配和镜头 Excel 预检/提交，并已在隔离 PostgreSQL、Redis DB 15、真实平台账号、生产 Nginx 与 Chrome 下完成镜头管理/镜头 Excel 导入子集浏览器旅程。平台私有上传当前单文件上限仍为 100 MiB，`mov` 已加入上传白名单；版本服务按真实字节校验 JPEG/PNG 与 MP4/MOV 容器签名/品牌，但尚未探测 codec、视频轨、可解码性或执行转码。已交付接口通过平台权限、项目角色、资源归属、项目/任务/版本行锁、乐观锁、业务归档、文件引用和同事务审计约束，不能使用通用代码生成 CRUD 绕过状态机。该子集旅程不是完整系统 E2E 或生产就绪证明。
+当前批次仍不包含资产 Excel 模板下载、资产需求人工处理、`manual_batch` 人工批量审核单、媒体缩略图生成/代理/转码/元数据和完整系统 E2E；镜头模板下载已经交付，两类预检按仓库内冻结样表执行。独立业务前端已接入镜头和资产的真实列表多视图、详情、CRUD、任务分配及 Excel 预检/提交；镜头和资产两个子集均已完成隔离 PostgreSQL、Redis DB 15、真实平台账号、生产 Nginx 与 Chrome 浏览器旅程。平台私有上传当前单文件上限仍为 100 MiB，`mov` 已加入上传白名单；版本服务按真实字节校验 JPEG/PNG 与 MP4/MOV 容器签名/品牌，但尚未探测 codec、视频轨、可解码性或执行转码。已交付接口通过平台权限、项目角色、资源归属、项目/任务/版本行锁、乐观锁、业务归档、文件引用和同事务审计约束，不能使用通用代码生成 CRUD 绕过状态机。任何子集旅程都不是完整系统 E2E 或生产就绪证明。
 
 资产类型、名称和完整目录身份在创建时一并冻结，普通 PUT 只修改描述、排序和备注；该 PUT 是三项非身份主数据的完整快照，省略描述或备注表示清空，省略排序表示归零。任何重命名、改类型或目录迁移都必须另建受控动作。制作分项在尚无版本时可补充或纠正主数据，已有正式版本后全部冻结，且资产图片版本提交前必须补齐制作分项。镜头号、集号和场次号也不提供普通改号。正式版本事务按 `project → task/submission → version → auto_single review list → note` 锁序执行，避免项目元数据、改派、提交和审核并发穿透。
 
 NAS 目录 Worker 和版本发布 Worker 的代码路径已经建立，但所有环境样例分别以 `SHOT_GRID_STORAGE_WORKER_ENABLED=false`、`SHOT_GRID_VERSION_WORKER_ENABLED=false` 默认关闭。本批次使用临时本地目录验证路径适配器时必须显式注入 `allow_local_root=True`；生产适配器默认只接受 Windows UNC。尚未使用真实 NAS、正式 Windows Worker 服务账号和 NAS/AD/共享 ACL 完成隔离 UNC E2E，因此不得把本批交付描述成 NAS 生产验收通过；源码、Mock、迁移、Scheduler 注册或本地临时目录测试也不能替代该门禁。
 
-## 镜头页面查询、模板与终态门禁
+## 镜头与资产页面查询、模板与终态门禁
 
 ```http
 GET /shot-grid/projects/{projectId}/shot-assignee-options
+GET /shot-grid/projects/{projectId}/asset-assignee-options
 GET /shot-grid/imports/shots/template
 ```
 
 - `shot-assignee-options` 要求登录、`shotgrid:shot:list` 和项目访问，使用 `pageNum/pageSize/keyword` 分页；只返回活动项目成员、有效未删除平台账号且已配置非空 `producerCode` 的 `userId/userName/nickName/avatar/deptId/deptName/projectRole/producerCode` 安全投影。关键字只匹配账号、昵称和制作人缩写；真正创建、编辑或改派时仍由写事务重新校验成员状态。
+- `asset-assignee-options` 要求登录、`shotgrid:asset:list` 和项目访问，分页、关键字及安全投影与镜头选项一致；真正创建/编辑资产或制作分项、导入、首次分配或改派时仍由写事务重新校验项目状态、成员状态和制作人缩写。
 - 模板下载要求 `shotgrid:shot:import`，返回 XLSX 二进制、附件文件名 `镜头导入模板-shot-v1.xlsx` 和 `X-Shot-Grid-Template-Version: shot-v1`，不套统一 JSON envelope。应用层传输加密只精确放行这一条 GET；同前缀预检和提交 JSON 仍保持原加密策略。部署文件缺失或摘要不一致时返回 HTTP 503 / `SG_IMPORT_TEMPLATE_UNAVAILABLE`。
 - 打包资源 `resources/templates/shot-v1.xlsx` 的冻结 SHA-256 为 `F6370BBB14548B645782ABF0734E930EC10470565821BA6C8FD1B6A2D9D96EE0`。匿名部署副本只改动 5 个 XML：`xl/workbook.xml` 删除 `x15ac:absPath`；`xl/sharedStrings.xml` 的 88 条共享字符串全部替换为只含表头、合法编号、制作人 A-C 和示例文本的匿名内容；`docProps/core.xml`、`docProps/app.xml` 匿名化作者/应用属性；`docProps/custom.xml` 清空自定义属性。其余 13 个 OOXML 条目（含两个 Sheet、styles、theme）与原样表字节一致；解析结果仍为 total 24、valid 24、warning 0、error 0、2 集、8 场、24 镜头。安全测试会拒绝驱动器路径、`file:` URI、UNC、个人/组织或应用元数据重新进入模板。
-- 集、场次和镜头的创建、修改、归档在锁内读取项目状态；镜头导入 preview 普通读取状态并拒绝，commit 再以 `FOR UPDATE` 锁定项目重检。`completed` 或 `archived` 均返回 HTTP 409 / `SG_INVALID_STATE_TRANSITION`。项目 `completed` 时详情只保留合法的 `project.archive`，`archived` 时无写动作，镜头 `allowedActions` 同步为空。
-- 该终态门禁只覆盖本批明确调整的项目自身、集、场次、镜头和镜头导入路径；资产、成员、任务、版本、审核、文件和目录操作等全域写接口尚未统一完成相同治理，不能从本批结论外推。
+- 集、场次、镜头、资产和资产制作分项的创建、修改、归档在锁内读取项目状态；镜头和资产导入 preview 普通读取状态并拒绝，commit 再以 `FOR UPDATE` 锁定项目重检。`completed` 或 `archived` 均返回 HTTP 409 / `SG_INVALID_STATE_TRANSITION`。项目 `completed` 时详情只保留合法的 `project.archive`，`archived` 时无写动作，镜头、资产和制作分项 `allowedActions` 同步为空。
+- 资产及制作分项 `allowedActions` 由后端结合平台权限、项目总监/全项目范围、项目状态、`storageStatus=ready`、资源生命周期、版本、任务状态和未提交版本发布记录计算：资产可返回 `asset.edit`、`assetItem.add`、`asset.archive`，制作分项可返回 `assetItem.edit`、`assetItem.archive`、`task.assign`；前端不能自行合成。资产归档只在没有活动分项/活动任务时出现；分项已有版本后不再允许普通编辑，存在活动任务时不允许归档，任务已完成或存在非 `committed` 提交时不允许分配/改派。
+- 制作分项缩略图只绑定该分项当前最新版本的首个 `thumbnail` 文件；最新版本无缩略图时返回空，不回退旧版本。父资产代表图按活动分项 `(sort_order, asset_item_id)` 升序选择第一张可用缩略图。下载 URL 仍为受保护的 `/shot-grid/versions/{versionId}/files/{fileId}/download`，不暴露绝对存储路径。
+- 该终态门禁目前覆盖项目自身、集、场次、镜头、资产、资产制作分项及两类 Excel 导入；成员、任务、版本、审核、文件和目录操作等其余写接口尚未统一完成相同治理，不能从本批结论外推。
 
 ## 任务、版本与自动审核
 
@@ -105,7 +109,9 @@ GET  /shot-grid/versions/{versionId}/files/{fileId}/download
 | `SHOT_GRID_IMPORT_PREVIEW_TTL_SECONDS` | `1800` | Redis 预览有效期 |
 | `SHOT_GRID_IMPORT_REDIS_KEY_PREFIX` | `shotgrid:import:preview` | Redis Key 前缀 |
 
-安全门禁在线程中、`openpyxl` 建立工作簿对象前扫描全部 OOXML Sheet（含隐藏 Sheet），并在 Redis 写入和数据库提交前检查预览 JSON 大小。镜头模板版本为 `shot-v1`，资产模板版本为 `asset-v1`。上传原文件只用于临时解析，不持久化本地路径；若需长期保留，必须另走平台受保护文件和业务引用。
+安全门禁在线程中、`openpyxl` 建立工作簿对象前扫描全部 OOXML Sheet（含隐藏 Sheet），并在 Redis 写入和数据库提交前检查预览 JSON 大小。镜头模板版本为 `shot-v1`，资产模板版本为 `asset-v1`。资产原样表解析统计固定为 total 20、valid 19、warningRows 3、errorRows 1；原始结构为 12 个逻辑资产、20 个制作分项，其中 Environment 2/4、Prop 4/4、Character 6/12。第 6—8 行因缺少制作分项产生警告，第 16 行因复合制作人产生错误。上传原文件只用于临时解析，不持久化本地路径；若需长期保留，必须另走平台受保护文件和业务引用。
+
+资产模板下载仍未交付：仓库原样表不能直接作为部署资源，必须先通过规定的 `artifact_tool` 安全匿名化、渲染和复核流程。该工具链当前不可用时保持失败关闭，不提供 `GET /shot-grid/imports/assets/template`，也不得把原样表直接复制到后端资源目录；资产 preview/commit 不受此下载缺口影响。
 
 ## NAS 目录 Worker 配置
 
@@ -180,14 +186,23 @@ POST /shot-grid/storage-operations/{operationId}/retry
 
 ## 2026-08-11 本批验证
 
-- Ruff check/format 覆盖 163 个 Python 文件并通过。
-- 模板、项目选项、终态写门禁及镜头导入等 10 个定向测试文件为 78 passed。
-- 完整 `tests/module_shot_grid` 为 465 passed、2 skipped；两个跳过项源于当前 Windows 账号没有创建符号链接权限。
+- `python -m ruff check module_shot_grid config middlewares tests/module_shot_grid` 通过，`python -m ruff format module_shot_grid config middlewares tests/module_shot_grid --check` 报告 177 files already formatted。
+- 包含资产契约、制作人选项、终态 CRUD/导入门禁和既有镜头链的 11 个定向测试文件为 90 passed。
+- 完整 `tests/module_shot_grid` 为 483 passed、2 skipped；两个跳过项均因当前环境不允许创建目录符号链接。
 - 镜头管理/镜头 Excel 导入子集已在隔离 PostgreSQL、Redis DB 15、真实 FastAPI/平台账号、生产 Nginx 和 Chrome 下执行：模板为 11883 bytes 且 SHA-256 命中冻结值；preview UI 显示 24/24、warningRows 0、errorRows 0、2 集/8 场/24 镜头，EP001/EP002 各 12 行并选中全部 24 行；commit HTTP 200，首次结果 `idempotentReplay=false`，创建 2 集、8 场、24 镜头、24 任务、24 待匹配需求和 26 条目录操作，复用集/场均为 0、资产关系为 0。
 - 数据库核验为 2 集、8 场、24 镜头、24 任务（三名制作人各 8）、24 待匹配需求、0 镜头资产关系、1 个 `committed` 导入批次、镜头时长合计 79000 ms；2 条集目录操作与 24 条镜头目录操作均为 `pending`。同事务审计为 1 条且 `status=0`，`method` 字符串长度 79，未超过字段上限；Redis 预检键提交后为 0。
 - 浏览器三视图均显示 24 条，EP002 筛选为 12 条，场次包含 `000/001/002/003`；详情深链及刷新显示 `EP002/000/S001` 和“晓亮/XL”任务；控制台 0 error/0 warning，退出后访问详情深链回带 redirect 的登录页。
 - 该结果只关闭镜头管理与镜头 Excel 导入子集浏览器门禁。旅程使用逻辑 `storageStatus=ready` 夹具且 Worker 关闭，不能证明真实 UNC/NAS；不会创建物理目录、执行写探针或验证 NAS/AD/Windows 共享 ACL，也不能替代完整系统 E2E。
 - 验收后已关闭浏览器和后端 PID 12996，删除临时 Nginx 容器/镜像、隔离数据库、Redis DB 15 数据及临时文件；18080/19098 端口空闲，原 9099 服务、PostgreSQL 服务及其他数据库和 Redis 其他 DB 未改动。
+
+### 资产管理与资产 Excel 导入子集
+
+- 验证环境为隔离 PostgreSQL、Redis DB 15、真实 FastAPI/平台账号、生产 Nginx 和 Chrome。正式原样表 preview 显示 total 20、valid 19、warningRows 3、errorRows 1；错误行不可选，选中全部 19 个可导入行后一次 commit 成功，生成 11 个活动资产、19 个制作分项、19 个任务和 1 个自动匹配。该自动匹配来自显式隔离资产需求夹具，不是镜头样表自然产生的匹配。
+- 数据库活动资产类型为 Character 5、Environment 2、Prop 4。表格、卡片和类型看板同源展示，Environment 筛选为 2 条，“蒋浩”制作人筛选为 8 条；详情深链 `/projects/880001/assets/2` 及 reload 均成功。
+- 临时 `assetId=12`、`assetItemId=20` 完成创建、父资产编辑、制作分项编辑、分项归档和父资产归档；两者最终均为 `archived/lockVersion=2`，临时分项 `taskCount=0`，活动集合仍为 11 个资产/19 个分项/19 个任务。`taskId=3` 从用户 880103、`lockVersion=0` 改派到用户 880102、`lockVersion=1`；最终任务分布为蒋浩 8、嘉璋 3、占峰 8。
+- `sys_oper_log` 共 7 条且全部成功，分别覆盖导入、资产创建/编辑、制作分项编辑/归档、父资产归档和任务改派。12 条 `ensure_asset_directory` Outbox 全部为 `pending`，符合目录 Worker 关闭的预期。浏览器控制台为 0 error/0 warning；localStorage 为空，sessionStorage 仅含前端传输配置与 repeat-submit 元数据，不含认证、导入 Token 或幂等密钥；退出后访问详情深链重定向到 `/login?redirect=/projects/880001/assets/2`，Redis `access_token:*` 为 0。
+- 本旅程只验证真实缩略图空态，没有构造或读取真实版本缩略图文件。资产模板下载因规定的 `artifact_tool` 安全流程不可用而保持未交付、UI 静态禁用且未测试。项目使用逻辑 `storageStatus=ready` 夹具，Worker 关闭，未执行真实 UNC/NAS I/O；该结论只能称为“隔离资产管理/资产导入子集 E2E PASS”，不能外推为完整系统 E2E、真实 NAS 或生产就绪。
+- 验收后已关闭 Playwright，停止后端 PID 29056/32996，删除唯一临时 Nginx 容器且未新建镜像；18081/19099 端口空闲，隔离 PostgreSQL 库存在数/连接数为 0/0，Redis DB 15 `DBSIZE=0` 且 owner 键为 0，54 项 TEMP 精确删除。原 9099 PID 4820 仍监听，基础 PostgreSQL/Redis 均保持 healthy。
 
 ## 分层
 

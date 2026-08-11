@@ -10,6 +10,7 @@ from common.enums import BusinessType
 from module_shot_grid.dao.asset_import_dao import AssetImportDao
 from module_shot_grid.dao.import_batch_dao import ShotGridImportBatchDao
 from module_shot_grid.dao.project_audit_dao import ShotGridProjectAuditDao
+from module_shot_grid.entity.vo.access_vo import ShotGridProjectAccessModel
 from module_shot_grid.entity.vo.asset_import_vo import (
     AssetImportCommitRequestModel,
     AssetImportCommitResultModel,
@@ -23,6 +24,8 @@ from module_shot_grid.service.import_preview_store import ImportPreviewStore
 
 BATCH_ID = 11
 ASSIGNEE_USER_ID = 7
+CONFLICT_STATUS = 409
+UNPROCESSABLE_ENTITY_STATUS = 422
 
 
 def _row(
@@ -108,6 +111,15 @@ def test_selection_hash_is_order_independent_but_sheet_sensitive() -> None:
 
     assert AssetImportService._selection_hash(first) == AssetImportService._selection_hash(reversed_request)
     assert AssetImportService._selection_hash(first) != AssetImportService._selection_hash(changed_sheet)
+
+
+@pytest.mark.parametrize('value', [None, '', '   ', 'x' * 101, 'line\nbreak'])
+def test_invalid_idempotency_key_uses_stable_domain_error(value: str | None) -> None:
+    with pytest.raises(ShotGridDomainException) as exc_info:
+        AssetImportService._normalize_idempotency_key(value)
+
+    assert exc_info.value.error_key == 'SG_IDEMPOTENCY_KEY_INVALID'
+    assert exc_info.value.http_status == UNPROCESSABLE_ENTITY_STATUS
 
 
 def test_partial_parent_selection_is_self_contained() -> None:
@@ -306,6 +318,7 @@ async def test_commit_transaction_audits_before_database_commit(monkeypatch: pyt
         actor_name='director',
         dept_name='策划部',
         selection_hash='a' * 64,
+        current_user=_current_user(),  # type: ignore[arg-type]
     )
 
     assert committed == result
@@ -318,6 +331,65 @@ async def test_commit_transaction_audits_before_database_commit(monkeypatch: pyt
         'selectedRows': [{'sheetName': 'Sheet1', 'rowNumber': 2}],
     }
     assert 'importToken' not in audit_parameters['oper_param']
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('project_status', ['completed', 'archived'])
+async def test_completed_or_archived_project_rejects_asset_preview_and_commit(
+    monkeypatch: pytest.MonkeyPatch,
+    project_status: str,
+) -> None:
+    monkeypatch.setattr(
+        AssetImportDao,
+        'get_project_storage',
+        AsyncMock(
+            return_value=(
+                SimpleNamespace(project_status=project_status),
+                SimpleNamespace(storage_status='ready'),
+            )
+        ),
+    )
+
+    with pytest.raises(ShotGridDomainException) as exc_info:
+        await AssetImportService._require_ready_storage(AsyncMock(), 2)
+
+    assert exc_info.value.error_key == 'SG_INVALID_STATE_TRANSITION'
+    assert exc_info.value.http_status == CONFLICT_STATUS
+
+
+@pytest.mark.asyncio
+async def test_asset_commit_rechecks_director_role_after_project_lock(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        AssetImportDao,
+        'get_project_storage',
+        AsyncMock(
+            return_value=(
+                SimpleNamespace(project_status='active'),
+                SimpleNamespace(storage_status='ready'),
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.asset_import_service.ShotGridProjectAccessService.resolve_access',
+        AsyncMock(
+            return_value=ShotGridProjectAccessModel(
+                projectId=2,
+                userId=3,
+                projectRole='creator',
+                hasAllScope=False,
+            )
+        ),
+    )
+
+    with pytest.raises(ShotGridDomainException) as exc_info:
+        await AssetImportService._require_ready_storage(
+            AsyncMock(),
+            2,
+            for_update=True,
+            current_user=_current_user(),  # type: ignore[arg-type]
+        )
+
+    assert exc_info.value.error_key == 'SG_PROJECT_ACCESS_DENIED'
 
 
 def test_locked_batch_revalidates_type_template_and_database_expiry() -> None:

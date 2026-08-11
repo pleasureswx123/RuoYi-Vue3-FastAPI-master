@@ -34,6 +34,14 @@ class _MappingResult:
         return self.rows[0] if self.rows else None
 
 
+class _ScalarsResult:
+    def __init__(self, rows: list[int]) -> None:
+        self.rows = rows
+
+    def scalars(self) -> list[int]:
+        return self.rows
+
+
 class _SequenceDb:
     def __init__(self, results: list[Any]) -> None:
         self.results = list(results)
@@ -122,3 +130,55 @@ async def test_assignable_asset_member_requires_active_relation_and_enabled_user
     assert "sg_project_member.member_status = 'active'" in compiled
     assert "sys_user.status = '0'" in compiled
     assert "sys_user.del_flag = '0'" in compiled
+
+
+@pytest.mark.asyncio
+async def test_asset_thumbnail_projection_is_project_scoped_and_uses_latest_version_rows() -> None:
+    refs_db = _SequenceDb([_MappingResult([])])
+    versions_db = _SequenceDb([_MappingResult([])])
+
+    await ShotGridAssetCrudDao.get_active_asset_task_refs(  # type: ignore[arg-type]
+        refs_db,
+        10,
+        [20, 21],
+    )
+    await ShotGridAssetCrudDao.get_versions_for_tasks(versions_db, [200, 201])  # type: ignore[arg-type]
+
+    refs_sql = _sql(refs_db.statements[0])
+    versions_sql = _sql(versions_db.statements[0])
+    assert 'sg_asset_item.project_id = 10' in refs_sql
+    assert 'sg_asset_item.asset_id IN (20, 21)' in refs_sql
+    assert "sg_asset_item.lifecycle_status = 'active'" in refs_sql
+    assert 'ORDER BY sg_asset_item.asset_id, sg_asset_item.sort_order, sg_asset_item.asset_item_id' in refs_sql
+    assert 'sg_version.task_id IN (200, 201)' in versions_sql
+    assert "sg_version_file.file_role = 'thumbnail'" in versions_sql
+    assert 'ORDER BY sg_version.task_id, sg_version.version_no DESC' in versions_sql
+
+
+@pytest.mark.asyncio
+async def test_item_query_projects_uncommitted_submission_state_for_allowed_actions() -> None:
+    db = _SequenceDb([_MappingResult([])])
+
+    await ShotGridAssetCrudDao.get_asset_items(db, 10, 20)  # type: ignore[arg-type]
+
+    compiled = _sql(db.statements[0])
+    assert 'sg_version_submission.task_id = sg_task.task_id' in compiled
+    assert "sg_version_submission.submission_status != 'committed'" in compiled
+    assert 'has_uncommitted_submission' in compiled
+
+
+@pytest.mark.asyncio
+async def test_active_task_asset_projection_matches_archive_guard() -> None:
+    db = _SequenceDb([_ScalarsResult([20])])
+
+    result = await ShotGridAssetCrudDao.get_assets_with_active_tasks(  # type: ignore[arg-type]
+        db,
+        10,
+        [20, 21],
+    )
+
+    compiled = _sql(db.statements[0])
+    assert result == {20}
+    assert 'sg_task.project_id = 10' in compiled
+    assert 'sg_asset_item.asset_id IN (20, 21)' in compiled
+    assert "sg_task.task_status IN ('not_started', 'in_progress', 'pending_review', 'revision')" in compiled

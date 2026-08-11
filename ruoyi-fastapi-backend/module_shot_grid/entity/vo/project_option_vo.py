@@ -83,3 +83,11 @@ class ShotGridShotAssigneeOptionModel(ShotGridApiModel):
     dept_name: str | None = None
     project_role: Literal['director', 'creator']
     producer_code: str
+
+
+class ShotGridAssetAssigneeOptionQueryModel(ShotGridShotAssigneeOptionQueryModel):
+    """资产制作分项主制作人选项分页查询。"""
+
+
+class ShotGridAssetAssigneeOptionModel(ShotGridShotAssigneeOptionModel):
+    """项目内可承担资产图片任务的活动制作人安全投影。"""

@@ -8,7 +8,11 @@ from module_shot_grid.entity.do.asset_do import ShotGridAsset, ShotGridAssetItem
 from module_shot_grid.entity.do.project_do import ShotGridProjectMember
 from module_shot_grid.entity.do.storage_do import ShotGridProjectStorage, ShotGridStorageOperation
 from module_shot_grid.entity.do.task_do import ShotGridTask
-from module_shot_grid.entity.do.version_do import ShotGridVersion
+from module_shot_grid.entity.do.version_do import (
+    ShotGridVersion,
+    ShotGridVersionFile,
+    ShotGridVersionSubmission,
+)
 from module_shot_grid.entity.vo.asset_crud_vo import ShotGridAssetListQueryModel
 
 ACTIVE_TASK_STATUSES = ('not_started', 'in_progress', 'pending_review', 'revision')
@@ -246,6 +250,12 @@ class ShotGridAssetCrudDao:
                     ShotGridTask.due_date,
                     ShotGridTask.requirements,
                     ShotGridTask.lock_version.label('task_lock_version'),
+                    exists(
+                        select(1).where(
+                            ShotGridVersionSubmission.task_id == ShotGridTask.task_id,
+                            ShotGridVersionSubmission.submission_status != 'committed',
+                        )
+                    ).label('has_uncommitted_submission'),
                 )
                 .outerjoin(
                     ShotGridTask,
@@ -275,6 +285,26 @@ class ShotGridAssetCrudDao:
     async def get_versions_for_tasks(cls, db: AsyncSession, task_ids: list[int]) -> list[dict[str, Any]]:
         if not task_ids:
             return []
+        thumbnail_file_id = (
+            select(ShotGridVersionFile.file_id)
+            .where(
+                ShotGridVersionFile.version_id == ShotGridVersion.version_id,
+                ShotGridVersionFile.file_role == 'thumbnail',
+            )
+            .order_by(ShotGridVersionFile.sort_order, ShotGridVersionFile.file_id)
+            .limit(1)
+            .scalar_subquery()
+        )
+        thumbnail_business_file_name = (
+            select(ShotGridVersionFile.business_file_name)
+            .where(
+                ShotGridVersionFile.version_id == ShotGridVersion.version_id,
+                ShotGridVersionFile.file_role == 'thumbnail',
+            )
+            .order_by(ShotGridVersionFile.sort_order, ShotGridVersionFile.file_id)
+            .limit(1)
+            .scalar_subquery()
+        )
         rows = (
             await db.execute(
                 select(
@@ -283,9 +313,49 @@ class ShotGridAssetCrudDao:
                     ShotGridVersion.version_no,
                     ShotGridVersion.version_status,
                     ShotGridVersion.submitted_time,
+                    thumbnail_file_id.label('thumbnail_file_id'),
+                    thumbnail_business_file_name.label('thumbnail_business_file_name'),
                 )
                 .where(ShotGridVersion.task_id.in_(task_ids))
                 .order_by(ShotGridVersion.task_id, ShotGridVersion.version_no.desc())
+            )
+        ).mappings()
+        return [dict(row) for row in rows]
+
+    @classmethod
+    async def get_active_asset_task_refs(
+        cls,
+        db: AsyncSession,
+        project_id: int,
+        asset_ids: list[int],
+    ) -> list[dict[str, int]]:
+        """批量返回资产活动制作分项与其唯一任务，用于代表缩略图聚合。"""
+
+        if not asset_ids:
+            return []
+        rows = (
+            await db.execute(
+                select(
+                    ShotGridAssetItem.asset_id,
+                    ShotGridAssetItem.asset_item_id,
+                    ShotGridAssetItem.sort_order,
+                    ShotGridTask.task_id,
+                )
+                .join(
+                    ShotGridTask,
+                    (ShotGridTask.asset_item_id == ShotGridAssetItem.asset_item_id) & (ShotGridTask.del_flag == '0'),
+                )
+                .where(
+                    ShotGridAssetItem.project_id == project_id,
+                    ShotGridAssetItem.asset_id.in_(asset_ids),
+                    ShotGridAssetItem.lifecycle_status == 'active',
+                    ShotGridAssetItem.del_flag == '0',
+                )
+                .order_by(
+                    ShotGridAssetItem.asset_id,
+                    ShotGridAssetItem.sort_order,
+                    ShotGridAssetItem.asset_item_id,
+                )
             )
         ).mappings()
         return [dict(row) for row in rows]
@@ -351,6 +421,32 @@ class ShotGridAssetCrudDao:
         for asset_id, user_id in rows:
             result.setdefault(int(asset_id), []).append(int(user_id))
         return result
+
+    @classmethod
+    async def get_assets_with_active_tasks(
+        cls,
+        db: AsyncSession,
+        project_id: int,
+        asset_ids: list[int],
+    ) -> set[int]:
+        """批量返回仍有活动任务的资产，语义与归档事务门禁一致。"""
+
+        if not asset_ids:
+            return set()
+        rows = (
+            await db.execute(
+                select(ShotGridAssetItem.asset_id)
+                .join(ShotGridTask, ShotGridTask.asset_item_id == ShotGridAssetItem.asset_item_id)
+                .where(
+                    ShotGridTask.project_id == project_id,
+                    ShotGridAssetItem.asset_id.in_(asset_ids),
+                    ShotGridTask.task_status.in_(ACTIVE_TASK_STATUSES),
+                    ShotGridTask.del_flag == '0',
+                )
+                .distinct()
+            )
+        ).scalars()
+        return {int(asset_id) for asset_id in rows}
 
     @classmethod
     async def get_usage_shot_count(cls, db: AsyncSession, project_id: int, asset_id: int) -> int:

@@ -61,6 +61,12 @@ const routes = [
         meta: { title: '资产库管理', routeKey: 'assets' }
       },
       {
+        path: 'projects/:projectId/assets/:assetId',
+        name: 'asset-detail',
+        component: () => import('@/views/asset/AssetDetailView.vue'),
+        meta: { title: '资产详情', routeKey: 'assets' }
+      },
+      {
         path: 'reviews',
         name: 'reviews',
         component: () => import('@/views/review/ReviewListView.vue'),

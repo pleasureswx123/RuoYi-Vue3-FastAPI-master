@@ -21,6 +21,8 @@ from module_shot_grid.exceptions import shot_grid_error
 from module_shot_grid.service.asset_import_service import AssetImportService
 from utils.response_util import ResponseUtil
 
+SQL_BIGINT_MAX = 9_223_372_036_854_775_807
+
 asset_import_controller = APIRouterPro(
     prefix='/shot-grid/projects',
     order_num=44,
@@ -37,7 +39,7 @@ asset_import_controller = APIRouterPro(
 )
 async def preview_shot_grid_asset_import(
     request: Request,
-    project_id: Annotated[int, Path(alias='projectId', gt=0)],
+    project_id: Annotated[int, Path(alias='projectId', gt=0, le=SQL_BIGINT_MAX)],
     file: Annotated[UploadFile, File(description='资产 .xlsx 文件')],
     query_db: Annotated[AsyncSession, DBSessionDependency()],
     current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
@@ -69,12 +71,12 @@ async def preview_shot_grid_asset_import(
 )
 async def commit_shot_grid_asset_import(
     request: Request,
-    project_id: Annotated[int, Path(alias='projectId', gt=0)],
+    project_id: Annotated[int, Path(alias='projectId', gt=0, le=SQL_BIGINT_MAX)],
     command: AssetImportCommitRequestModel,
-    idempotency_key: Annotated[str, Header(alias='X-Idempotency-Key', min_length=1, max_length=100)],
     query_db: Annotated[AsyncSession, DBSessionDependency()],
     current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
     access: Annotated[ShotGridProjectAccessModel, ProjectRoleDependency('director')],
+    idempotency_key: Annotated[str | None, Header(alias='X-Idempotency-Key')] = None,
 ) -> Response:
     redis = getattr(request.app.state, 'redis', None)
     if redis is None:

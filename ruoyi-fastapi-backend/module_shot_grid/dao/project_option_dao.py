@@ -8,6 +8,7 @@ from module_admin.entity.do.user_do import SysUser
 from module_shot_grid.entity.do.project_do import ShotGridProjectMember
 from module_shot_grid.entity.do.storage_do import ShotGridProjectStorage, ShotGridStorageRoot
 from module_shot_grid.entity.vo.project_option_vo import (
+    ShotGridAssetAssigneeOptionQueryModel,
     ShotGridMemberCandidateQueryModel,
     ShotGridShotAssigneeOptionQueryModel,
 )
@@ -155,3 +156,14 @@ class ShotGridProjectOptionDao:
             )
         ).mappings()
         return [dict(row) for row in rows], total
+
+    @classmethod
+    async def get_asset_assignee_option_page(
+        cls,
+        db: AsyncSession,
+        project_id: int,
+        query: ShotGridAssetAssigneeOptionQueryModel,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """资产任务与镜头任务共用同一项目成员和制作人缩写资格。"""
+
+        return await cls.get_shot_assignee_option_page(db, project_id, query)

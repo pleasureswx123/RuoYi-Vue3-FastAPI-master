@@ -8,6 +8,7 @@ EXPECTED_ROUTES = {
     ('GET', '/shot-grid/member-candidates'): 'shotgrid:project:add',
     ('GET', '/shot-grid/projects/{projectId}/member-candidates'): 'shotgrid:member:add',
     ('GET', '/shot-grid/projects/{projectId}/shot-assignee-options'): 'shotgrid:shot:list',
+    ('GET', '/shot-grid/projects/{projectId}/asset-assignee-options'): 'shotgrid:asset:list',
 }
 
 
@@ -36,7 +37,9 @@ def test_project_option_routes_and_permissions_are_stable() -> None:
             role_checks = [call for call in _dependency_calls(route) if isinstance(call, CheckShotGridProjectRole)]
             assert len(role_checks) == 1
             assert role_checks[0].allowed_roles == {'director'}
-        if route.path.endswith('/projects/{projectId}/shot-assignee-options'):
+        if route.path.endswith(
+            ('/projects/{projectId}/shot-assignee-options', '/projects/{projectId}/asset-assignee-options')
+        ):
             access_checks = [call for call in _dependency_calls(route) if isinstance(call, CheckShotGridProjectAccess)]
             assert len(access_checks) == 1
             assert not any(isinstance(call, CheckShotGridProjectRole) for call in _dependency_calls(route))

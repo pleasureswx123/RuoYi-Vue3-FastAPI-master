@@ -6,6 +6,7 @@ import pytest
 from sqlalchemy import true
 
 from module_shot_grid.entity.vo.project_option_vo import (
+    ShotGridAssetAssigneeOptionQueryModel,
     ShotGridMemberCandidateQueryModel,
     ShotGridProjectPathPreviewRequestModel,
     ShotGridShotAssigneeOptionQueryModel,
@@ -191,4 +192,45 @@ async def test_shot_assignee_options_return_project_role_and_producer_code(monke
         'pageSize': 20,
         'total': 1,
         'hasNext': False,
+    }
+
+
+@pytest.mark.asyncio
+async def test_asset_assignee_options_return_the_same_safe_projection(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        'module_shot_grid.service.project_option_service.ShotGridProjectOptionDao.get_asset_assignee_option_page',
+        AsyncMock(
+            return_value=(
+                [
+                    {
+                        'user_id': 8,
+                        'user_name': 'asset_creator',
+                        'nick_name': '资产制作人',
+                        'avatar': '',
+                        'dept_id': 100,
+                        'dept_name': '策划部',
+                        'project_role': 'creator',
+                        'producer_code': 'AC',
+                    }
+                ],
+                1,
+            )
+        ),
+    )
+
+    result = await ShotGridProjectOptionService.get_asset_assignee_option_page(
+        AsyncMock(),
+        1001,
+        ShotGridAssetAssigneeOptionQueryModel(pageNum=1, pageSize=20),
+    )
+
+    assert result.rows[0].model_dump(by_alias=True) == {
+        'userId': 8,
+        'userName': 'asset_creator',
+        'nickName': '资产制作人',
+        'avatar': '',
+        'deptId': 100,
+        'deptName': '策划部',
+        'projectRole': 'creator',
+        'producerCode': 'AC',
     }

@@ -30,6 +30,7 @@ from module_shot_grid.exceptions import ShotGridDomainException, shot_grid_error
 from module_shot_grid.service.asset_excel_parser import AssetExcelParser
 from module_shot_grid.service.excel_security_service import ExcelSecurityService
 from module_shot_grid.service.import_preview_store import ImportPreviewStore
+from module_shot_grid.service.project_access_service import ShotGridProjectAccessService
 from module_shot_grid.service.project_path_service import ShotGridProjectPathService
 from utils.log_util import logger
 
@@ -143,7 +144,7 @@ class AssetImportService:
         redis: aioredis.Redis,
         project_id: int,
         command: AssetImportCommitRequestModel,
-        idempotency_key: str,
+        idempotency_key: str | None,
         current_user: CurrentUserModel,
         *,
         has_all_scope: bool = False,
@@ -207,6 +208,7 @@ class AssetImportService:
                 actor_name=actor_name,
                 dept_name=dept_name,
                 selection_hash=selection_hash,
+                current_user=current_user,
             )
         except IntegrityError as exc:
             await db.rollback()
@@ -295,8 +297,14 @@ class AssetImportService:
         actor_name: str,
         dept_name: str | None,
         selection_hash: str,
+        current_user: CurrentUserModel,
     ) -> AssetImportCommitResultModel:
-        await cls._require_ready_storage(db, project_id, for_update=True)
+        await cls._require_ready_storage(
+            db,
+            project_id,
+            for_update=True,
+            current_user=current_user,
+        )
         cls._validate_storage_segments(rows)
         await cls._resolve_assignees(db, project_id, rows)
         cls._raise_selected_row_errors(rows)
@@ -742,9 +750,19 @@ class AssetImportService:
         project_id: int,
         *,
         for_update: bool = False,
+        current_user: CurrentUserModel | None = None,
     ) -> None:
         project, storage = await AssetImportDao.get_project_storage(db, project_id, for_update=for_update)
-        if project is None or storage is None or storage.storage_status != 'ready':
+        if project is None:
+            raise shot_grid_error(404, 'SG_PROJECT_NOT_FOUND', '项目不存在或不可见')
+        if project.project_status in {'completed', 'archived'}:
+            raise shot_grid_error(409, 'SG_INVALID_STATE_TRANSITION', '已完成或归档项目只允许读取资产')
+        if for_update:
+            if current_user is None:
+                raise shot_grid_error(403, 'SG_PROJECT_ACCESS_DENIED', '无法复核资产导入权限')
+            access = await ShotGridProjectAccessService.resolve_access(db, current_user, project_id)
+            ShotGridProjectAccessService.require_roles(access, {'director'})
+        if storage is None or storage.storage_status != 'ready':
             raise shot_grid_error(409, 'SG_PROJECT_NOT_READY', '项目 NAS 存储尚未就绪，禁止导入资产')
 
     @classmethod
@@ -1032,7 +1050,7 @@ class AssetImportService:
         return int.from_bytes(hashlib.sha256(material).digest()[:8], byteorder='big', signed=True)
 
     @staticmethod
-    def _normalize_idempotency_key(value: str) -> str:
+    def _normalize_idempotency_key(value: str | None) -> str:
         normalized = value.strip() if value else ''
         if (
             not normalized

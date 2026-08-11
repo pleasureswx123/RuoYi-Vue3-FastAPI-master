@@ -43,7 +43,7 @@ async def test_assignable_members_only_include_active_members_and_users() -> Non
 
 
 @pytest.mark.asyncio
-async def test_project_storage_query_rejects_archived_project_and_locks_project_row() -> None:
+async def test_project_storage_query_keeps_project_status_visible_and_locks_project_row() -> None:
     db = RecordingDb()
 
     await AssetImportDao.get_project_storage(db, 1, for_update=True)  # type: ignore[arg-type]
@@ -51,7 +51,7 @@ async def test_project_storage_query_rejects_archived_project_and_locks_project_
     lock_tables = list(db.statement._for_update_arg.of)
 
     assert "sg_project.del_flag = '0'" in compiled
-    assert "sg_project.project_status != 'archived'" in compiled
+    assert 'sg_project.project_status' not in str(db.statement.whereclause)
     assert 'LEFT OUTER JOIN sg_project_storage' in compiled
     assert lock_tables == [ShotGridProject.__table__]
 

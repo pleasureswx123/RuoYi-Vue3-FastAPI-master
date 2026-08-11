@@ -46,9 +46,16 @@ async def get_shot_grid_asset_page(
     project_id: Annotated[int, Path(alias='projectId', gt=0, le=SQL_BIGINT_MAX)],
     asset_query: Annotated[ShotGridAssetListQueryModel, Query()],
     query_db: Annotated[AsyncSession, DBSessionDependency()],
+    current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
     access: Annotated[ShotGridProjectAccessModel, ProjectAccessDependency()],
 ) -> Response:
-    result = await ShotGridAssetCrudService.get_asset_page(query_db, project_id, asset_query)
+    result = await ShotGridAssetCrudService.get_asset_page(
+        query_db,
+        project_id,
+        asset_query,
+        current_user,
+        access,
+    )
     return ResponseUtil.success(msg='查询成功', model_content=result)
 
 
@@ -81,9 +88,16 @@ async def get_shot_grid_asset_detail(
     project_id: Annotated[int, Path(alias='projectId', gt=0, le=SQL_BIGINT_MAX)],
     asset_id: Annotated[int, Path(alias='assetId', gt=0, le=SQL_BIGINT_MAX)],
     query_db: Annotated[AsyncSession, DBSessionDependency()],
+    current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
     access: Annotated[ShotGridProjectAccessModel, ProjectAccessDependency()],
 ) -> Response:
-    result = await ShotGridAssetCrudService.get_asset_detail(query_db, project_id, asset_id)
+    result = await ShotGridAssetCrudService.get_asset_detail(
+        query_db,
+        project_id,
+        asset_id,
+        current_user,
+        access,
+    )
     return ResponseUtil.success(data=result)
 
 
@@ -150,9 +164,16 @@ async def get_shot_grid_asset_items(
     project_id: Annotated[int, Path(alias='projectId', gt=0, le=SQL_BIGINT_MAX)],
     asset_id: Annotated[int, Path(alias='assetId', gt=0, le=SQL_BIGINT_MAX)],
     query_db: Annotated[AsyncSession, DBSessionDependency()],
+    current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
     access: Annotated[ShotGridProjectAccessModel, ProjectAccessDependency()],
 ) -> Response:
-    result = await ShotGridAssetCrudService.get_asset_items(query_db, project_id, asset_id)
+    result = await ShotGridAssetCrudService.get_asset_items(
+        query_db,
+        project_id,
+        asset_id,
+        current_user,
+        access,
+    )
     return ResponseUtil.success(data=result)
 
 

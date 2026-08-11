@@ -191,6 +191,14 @@ class ShotGridVersionSummaryModel(ShotGridApiModel):
     submitted_time: datetime
 
 
+class ShotGridAssetThumbnailModel(ShotGridApiModel):
+    """资产或制作分项代表版本的受保护缩略图摘要。"""
+
+    file_id: str
+    name: str
+    url: str
+
+
 class ShotGridAssetItemModel(ShotGridApiModel):
     """资产制作分项详情。"""
 
@@ -206,6 +214,8 @@ class ShotGridAssetItemModel(ShotGridApiModel):
     task: ShotGridTaskSummaryModel | None = None
     latest_version: ShotGridVersionSummaryModel | None = None
     final_version: ShotGridVersionSummaryModel | None = None
+    thumbnail: ShotGridAssetThumbnailModel | None = None
+    allowed_actions: list[str] = Field(default_factory=list)
     lock_version: int
     create_time: datetime
     update_time: datetime
@@ -225,6 +235,8 @@ class ShotGridAssetListItemModel(ShotGridApiModel):
     item_count: int = 0
     usage_shot_count: int = 0
     assignee_user_ids: list[int] = Field(default_factory=list)
+    thumbnail: ShotGridAssetThumbnailModel | None = None
+    allowed_actions: list[str] = Field(default_factory=list)
     directory_status: DirectoryStatus
     lock_version: int
     update_time: datetime

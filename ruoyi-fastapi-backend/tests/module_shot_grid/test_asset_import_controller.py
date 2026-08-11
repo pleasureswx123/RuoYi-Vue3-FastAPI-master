@@ -24,3 +24,6 @@ def test_asset_import_controller_uses_project_role_and_interface_permissions() -
     assert source.count("UserInterfaceAuthDependency('shotgrid:asset:import')") == ASSET_IMPORT_ROUTE_COUNT
     assert source.count("ProjectRoleDependency('director')") == ASSET_IMPORT_ROUTE_COUNT
     assert "Header(alias='X-Idempotency-Key'" in source
+    assert 'idempotency_key: Annotated[str | None' in source
+    assert "Header(alias='X-Idempotency-Key', min_length=" not in source
+    assert source.count("Path(alias='projectId', gt=0, le=SQL_BIGINT_MAX)") == ASSET_IMPORT_ROUTE_COUNT

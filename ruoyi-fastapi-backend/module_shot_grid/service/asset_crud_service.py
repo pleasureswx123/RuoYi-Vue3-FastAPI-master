@@ -24,6 +24,7 @@ from module_shot_grid.entity.vo.asset_crud_vo import (
     ShotGridAssetItemUpdateModel,
     ShotGridAssetListItemModel,
     ShotGridAssetListQueryModel,
+    ShotGridAssetThumbnailModel,
     ShotGridAssetUpdateModel,
     ShotGridTaskSummaryModel,
     ShotGridVersionSummaryModel,
@@ -49,16 +50,37 @@ class ShotGridAssetCrudService:
         db: AsyncSession,
         project_id: int,
         query: ShotGridAssetListQueryModel,
+        current_user: CurrentUserModel,
+        access: ShotGridProjectAccessModel,
     ) -> PageModel[ShotGridAssetListItemModel]:
+        project_status, storage_status = await cls._get_project_read_context(db, project_id)
         rows, total = await ShotGridAssetCrudDao.get_asset_page(db, project_id, query)
         asset_ids = [int(row['asset_id']) for row in rows]
         directory_operations = await ShotGridAssetCrudDao.get_latest_directory_operations(db, project_id, asset_ids)
         assignees = await ShotGridAssetCrudDao.get_assignee_ids(db, project_id, asset_ids)
+        active_task_assets = await ShotGridAssetCrudDao.get_assets_with_active_tasks(db, project_id, asset_ids)
+        task_refs = await ShotGridAssetCrudDao.get_active_asset_task_refs(db, project_id, asset_ids)
+        version_rows = await ShotGridAssetCrudDao.get_versions_for_tasks(
+            db,
+            [int(row['task_id']) for row in task_refs],
+        )
+        thumbnails = cls._representative_thumbnail_map(task_refs, version_rows)
         models: list[ShotGridAssetListItemModel] = []
         for row in rows:
             asset_id = int(row['asset_id'])
             row['directory_status'] = cls._directory_status(directory_operations.get(asset_id))
             row['assignee_user_ids'] = assignees.get(asset_id, [])
+            row['thumbnail'] = thumbnails.get(asset_id)
+            row['allowed_actions'] = cls._asset_allowed_actions(
+                current_user,
+                access,
+                project_id=project_id,
+                project_status=project_status,
+                storage_status=storage_status,
+                lifecycle_status=row['lifecycle_status'],
+                has_active_items=bool(row['item_count']),
+                has_active_tasks=asset_id in active_task_assets,
+            )
             models.append(ShotGridAssetListItemModel.model_validate(row))
         return PageModel[ShotGridAssetListItemModel](
             rows=models,
@@ -74,11 +96,13 @@ class ShotGridAssetCrudService:
         db: AsyncSession,
         project_id: int,
         asset_id: int,
+        current_user: CurrentUserModel,
+        access: ShotGridProjectAccessModel,
     ) -> ShotGridAssetDetailModel:
         asset = await ShotGridAssetCrudDao.get_asset(db, project_id, asset_id)
         if asset is None:
             raise shot_grid_error(404, 'SG_ASSET_NOT_FOUND', '资产不存在或不可见')
-        return await cls._build_asset_detail(db, asset)
+        return await cls._build_asset_detail(db, asset, current_user, access)
 
     @classmethod
     async def get_asset_items(
@@ -86,11 +110,23 @@ class ShotGridAssetCrudService:
         db: AsyncSession,
         project_id: int,
         asset_id: int,
+        current_user: CurrentUserModel,
+        access: ShotGridProjectAccessModel,
     ) -> list[ShotGridAssetItemModel]:
         asset = await ShotGridAssetCrudDao.get_asset(db, project_id, asset_id)
         if asset is None:
             raise shot_grid_error(404, 'SG_ASSET_NOT_FOUND', '资产不存在或不可见')
-        return await cls._build_item_models(db, project_id, asset_id)
+        project_status, storage_status = await cls._get_project_read_context(db, project_id)
+        return await cls._build_item_models(
+            db,
+            project_id,
+            asset_id,
+            current_user=current_user,
+            access=access,
+            project_status=project_status,
+            storage_status=storage_status,
+            asset_lifecycle_status=asset.lifecycle_status,
+        )
 
     @classmethod
     async def create_asset(
@@ -104,7 +140,7 @@ class ShotGridAssetCrudService:
         actor_user_id, actor_name, dept_name = ShotGridProjectService._actor(current_user)
         cls._require_write_access(access, project_id, actor_user_id)
         try:
-            await cls._lock_writable_project(db, project_id)
+            await cls._lock_writable_project(db, project_id, current_user, actor_user_id)
             asset_name, asset_name_key, storage_dir_name, target_path, storage_path_key = cls._asset_identity(
                 command.asset_type,
                 command.asset_name,
@@ -179,7 +215,7 @@ class ShotGridAssetCrudService:
                 payload={'projectId': project_id, **command.model_dump(mode='json', by_alias=True)},
                 result={'projectId': project_id, 'assetId': asset.asset_id},
             )
-            result = await cls._build_asset_detail(db, asset)
+            result = await cls._build_asset_detail(db, asset, current_user, access)
             await db.commit()
         except IntegrityError as exc:
             await db.rollback()
@@ -205,7 +241,7 @@ class ShotGridAssetCrudService:
         actor_user_id, actor_name, dept_name = ShotGridProjectService._actor(current_user)
         cls._require_write_access(access, project_id, actor_user_id)
         try:
-            await cls._lock_writable_project(db, project_id)
+            await cls._lock_writable_project(db, project_id, current_user, actor_user_id)
             asset = await cls._lock_active_asset(db, project_id, asset_id)
             cls._require_lock_version(asset.lock_version, command.lock_version)
 
@@ -233,7 +269,7 @@ class ShotGridAssetCrudService:
                 },
                 result={'projectId': project_id, 'assetId': asset_id, 'lockVersion': new_lock_version},
             )
-            result = await cls._build_asset_detail(db, asset)
+            result = await cls._build_asset_detail(db, asset, current_user, access)
             await db.commit()
         except IntegrityError as exc:
             await db.rollback()
@@ -259,7 +295,7 @@ class ShotGridAssetCrudService:
         actor_user_id, actor_name, dept_name = ShotGridProjectService._actor(current_user)
         cls._require_write_access(access, project_id, actor_user_id)
         try:
-            await cls._lock_writable_project(db, project_id)
+            await cls._lock_writable_project(db, project_id, current_user, actor_user_id)
             asset = await cls._lock_active_asset(db, project_id, asset_id)
             cls._require_lock_version(asset.lock_version, command.lock_version)
             if await ShotGridAssetCrudDao.has_active_tasks_for_asset(db, project_id, asset_id):
@@ -287,7 +323,7 @@ class ShotGridAssetCrudService:
                 },
                 result={'projectId': project_id, 'assetId': asset_id, 'lifecycleStatus': 'archived'},
             )
-            result = await cls._build_asset_detail(db, asset)
+            result = await cls._build_asset_detail(db, asset, current_user, access)
             await db.commit()
         except ShotGridDomainException:
             await db.rollback()
@@ -310,7 +346,7 @@ class ShotGridAssetCrudService:
         actor_user_id, actor_name, dept_name = ShotGridProjectService._actor(current_user)
         cls._require_write_access(access, project_id, actor_user_id)
         try:
-            await cls._lock_writable_project(db, project_id)
+            await cls._lock_writable_project(db, project_id, current_user, actor_user_id)
             asset = await cls._lock_active_asset(db, project_id, asset_id)
             production_item, production_item_key = cls._item_identity(command.production_item)
             if production_item_key and await ShotGridAssetCrudDao.item_name_exists(
@@ -345,7 +381,14 @@ class ShotGridAssetCrudService:
                 },
                 result={'projectId': project_id, 'assetId': asset_id, 'assetItemId': item.asset_item_id},
             )
-            result = await cls._get_item_model(db, project_id, asset_id, item.asset_item_id)
+            result = await cls._get_item_model(
+                db,
+                project_id,
+                asset_id,
+                item.asset_item_id,
+                current_user,
+                access,
+            )
             await db.commit()
         except IntegrityError as exc:
             await db.rollback()
@@ -371,7 +414,7 @@ class ShotGridAssetCrudService:
         actor_user_id, actor_name, dept_name = ShotGridProjectService._actor(current_user)
         cls._require_write_access(access, project_id, actor_user_id)
         try:
-            await cls._lock_writable_project(db, project_id)
+            await cls._lock_writable_project(db, project_id, current_user, actor_user_id)
             item_preview = await ShotGridAssetCrudDao.get_asset_item(db, project_id, asset_item_id)
             if item_preview is None:
                 raise shot_grid_error(404, 'SG_ASSET_ITEM_NOT_FOUND', '资产制作分项不存在或不可见')
@@ -444,7 +487,14 @@ class ShotGridAssetCrudService:
                     'taskLockVersion': existing_task.lock_version if existing_task is not None else None,
                 },
             )
-            result = await cls._get_item_model(db, project_id, asset.asset_id, asset_item_id)
+            result = await cls._get_item_model(
+                db,
+                project_id,
+                asset.asset_id,
+                asset_item_id,
+                current_user,
+                access,
+            )
             await db.commit()
         except IntegrityError as exc:
             await db.rollback()
@@ -470,7 +520,7 @@ class ShotGridAssetCrudService:
         actor_user_id, actor_name, dept_name = ShotGridProjectService._actor(current_user)
         cls._require_write_access(access, project_id, actor_user_id)
         try:
-            await cls._lock_writable_project(db, project_id)
+            await cls._lock_writable_project(db, project_id, current_user, actor_user_id)
             item_preview = await ShotGridAssetCrudDao.get_asset_item(db, project_id, asset_item_id)
             if item_preview is None:
                 raise shot_grid_error(404, 'SG_ASSET_ITEM_NOT_FOUND', '资产制作分项不存在或不可见')
@@ -505,7 +555,14 @@ class ShotGridAssetCrudService:
                 },
                 result={'projectId': project_id, 'assetItemId': asset_item_id, 'lifecycleStatus': 'archived'},
             )
-            result = await cls._get_item_model(db, project_id, asset.asset_id, asset_item_id)
+            result = await cls._get_item_model(
+                db,
+                project_id,
+                asset.asset_id,
+                asset_item_id,
+                current_user,
+                access,
+            )
             await db.commit()
         except ShotGridDomainException:
             await db.rollback()
@@ -516,8 +573,24 @@ class ShotGridAssetCrudService:
         return result
 
     @classmethod
-    async def _build_asset_detail(cls, db: AsyncSession, asset: ShotGridAsset) -> ShotGridAssetDetailModel:
-        items = await cls._build_item_models(db, asset.project_id, asset.asset_id)
+    async def _build_asset_detail(
+        cls,
+        db: AsyncSession,
+        asset: ShotGridAsset,
+        current_user: CurrentUserModel,
+        access: ShotGridProjectAccessModel,
+    ) -> ShotGridAssetDetailModel:
+        project_status, storage_status = await cls._get_project_read_context(db, asset.project_id)
+        items = await cls._build_item_models(
+            db,
+            asset.project_id,
+            asset.asset_id,
+            current_user=current_user,
+            access=access,
+            project_status=project_status,
+            storage_status=storage_status,
+            asset_lifecycle_status=asset.lifecycle_status,
+        )
         operation = await ShotGridAssetCrudDao.get_latest_directory_operations(
             db,
             asset.project_id,
@@ -532,6 +605,9 @@ class ShotGridAssetCrudService:
             }
         )
         active_statuses = [item.asset_status for item in items if item.lifecycle_status == 'active']
+        has_active_tasks = any(
+            item.task is not None and item.task.task_status in ACTIVE_TASK_STATUSES for item in items
+        )
         return ShotGridAssetDetailModel(
             assetId=asset.asset_id,
             projectId=asset.project_id,
@@ -544,6 +620,17 @@ class ShotGridAssetCrudService:
             itemCount=len(active_statuses),
             usageShotCount=usage_count,
             assigneeUserIds=assignees,
+            thumbnail=cls._representative_thumbnail(items),
+            allowedActions=cls._asset_allowed_actions(
+                current_user,
+                access,
+                project_id=asset.project_id,
+                project_status=project_status,
+                storage_status=storage_status,
+                lifecycle_status=asset.lifecycle_status,
+                has_active_items=bool(active_statuses),
+                has_active_tasks=has_active_tasks,
+            ),
             directoryStatus=cls._directory_status(operation.get(asset.asset_id)),
             storageDirName=asset.storage_dir_name,
             remark=asset.remark,
@@ -561,18 +648,28 @@ class ShotGridAssetCrudService:
         db: AsyncSession,
         project_id: int,
         asset_id: int,
+        *,
+        current_user: CurrentUserModel,
+        access: ShotGridProjectAccessModel,
+        project_status: str,
+        storage_status: str | None,
+        asset_lifecycle_status: str,
     ) -> list[ShotGridAssetItemModel]:
         rows = await ShotGridAssetCrudDao.get_asset_items(db, project_id, asset_id)
         task_ids = [int(row['task_id']) for row in rows if row['task_id'] is not None]
         version_rows = await ShotGridAssetCrudDao.get_versions_for_tasks(db, task_ids)
+        version_rows_by_task: dict[int, list[dict[str, Any]]] = defaultdict(list)
         versions_by_task: dict[int, list[ShotGridVersionSummaryModel]] = defaultdict(list)
         for version in version_rows:
-            versions_by_task[int(version['task_id'])].append(ShotGridVersionSummaryModel.model_validate(version))
+            task_id = int(version['task_id'])
+            version_rows_by_task[task_id].append(version)
+            versions_by_task[task_id].append(ShotGridVersionSummaryModel.model_validate(version))
 
         result: list[ShotGridAssetItemModel] = []
         for row in rows:
             task: ShotGridTaskSummaryModel | None = None
             versions: list[ShotGridVersionSummaryModel] = []
+            thumbnail: ShotGridAssetThumbnailModel | None = None
             if row['task_id'] is not None:
                 task_id = int(row['task_id'])
                 task = ShotGridTaskSummaryModel(
@@ -587,6 +684,8 @@ class ShotGridAssetCrudService:
                     lockVersion=row['task_lock_version'],
                 )
                 versions = versions_by_task.get(task_id, [])
+                selected_version = cls._selected_version_row(version_rows_by_task.get(task_id, []))
+                thumbnail = cls._thumbnail(selected_version)
             final_version = next((version for version in versions if version.version_status == 'final'), None)
             item_status = cls._item_status(task, final_version is not None)
             result.append(
@@ -603,12 +702,85 @@ class ShotGridAssetCrudService:
                     task=task,
                     latestVersion=versions[0] if versions else None,
                     finalVersion=final_version,
+                    thumbnail=thumbnail,
+                    allowedActions=cls._item_allowed_actions(
+                        current_user,
+                        access,
+                        project_id=project_id,
+                        project_status=project_status,
+                        storage_status=storage_status,
+                        asset_lifecycle_status=asset_lifecycle_status,
+                        item_lifecycle_status=row['lifecycle_status'],
+                        has_versions=bool(versions),
+                        task_status=row['task_status'],
+                        has_uncommitted_submission=bool(row.get('has_uncommitted_submission')),
+                    ),
                     lockVersion=row['lock_version'],
                     createTime=row['create_time'],
                     updateTime=row['update_time'],
                 )
             )
         return result
+
+    @staticmethod
+    def _selected_version_row(version_rows: list[dict[str, Any]]) -> dict[str, Any] | None:
+        """缩略图只绑定当前最新版本，不回退旧版本。"""
+
+        return version_rows[0] if version_rows else None
+
+    @staticmethod
+    def _thumbnail(version_row: dict[str, Any] | None) -> ShotGridAssetThumbnailModel | None:
+        if (
+            version_row is None
+            or version_row.get('thumbnail_file_id') is None
+            or not version_row.get('thumbnail_business_file_name')
+        ):
+            return None
+        version_id = int(version_row['version_id'])
+        file_id = str(version_row['thumbnail_file_id'])
+        return ShotGridAssetThumbnailModel(
+            fileId=file_id,
+            name=version_row['thumbnail_business_file_name'],
+            url=f'/shot-grid/versions/{version_id}/files/{file_id}/download',
+        )
+
+    @classmethod
+    def _representative_thumbnail_map(
+        cls,
+        task_refs: list[dict[str, int]],
+        version_rows: list[dict[str, Any]],
+    ) -> dict[int, ShotGridAssetThumbnailModel]:
+        versions_by_task: dict[int, list[dict[str, Any]]] = defaultdict(list)
+        for row in version_rows:
+            versions_by_task[int(row['task_id'])].append(row)
+
+        selected: dict[int, ShotGridAssetThumbnailModel] = {}
+        ordered_refs = sorted(
+            task_refs,
+            key=lambda ref: (int(ref['asset_id']), int(ref['sort_order']), int(ref['asset_item_id'])),
+        )
+        for ref in ordered_refs:
+            asset_id = int(ref['asset_id'])
+            if asset_id in selected:
+                continue
+            version = cls._selected_version_row(versions_by_task.get(int(ref['task_id']), []))
+            thumbnail = cls._thumbnail(version)
+            if thumbnail is None:
+                continue
+            selected[asset_id] = thumbnail
+        return selected
+
+    @staticmethod
+    def _representative_thumbnail(items: list[ShotGridAssetItemModel]) -> ShotGridAssetThumbnailModel | None:
+        ordered_items = sorted(items, key=lambda item: (item.sort_order, item.asset_item_id))
+        return next(
+            (
+                item.thumbnail
+                for item in ordered_items
+                if item.lifecycle_status == 'active' and item.thumbnail is not None
+            ),
+            None,
+        )
 
     @classmethod
     async def _get_item_model(
@@ -617,20 +789,160 @@ class ShotGridAssetCrudService:
         project_id: int,
         asset_id: int,
         asset_item_id: int,
+        current_user: CurrentUserModel,
+        access: ShotGridProjectAccessModel,
     ) -> ShotGridAssetItemModel:
-        items = await cls._build_item_models(db, project_id, asset_id)
+        asset = await ShotGridAssetCrudDao.get_asset(db, project_id, asset_id)
+        if asset is None:
+            raise shot_grid_error(404, 'SG_ASSET_NOT_FOUND', '资产不存在或不可见')
+        project_status, storage_status = await cls._get_project_read_context(db, project_id)
+        items = await cls._build_item_models(
+            db,
+            project_id,
+            asset_id,
+            current_user=current_user,
+            access=access,
+            project_status=project_status,
+            storage_status=storage_status,
+            asset_lifecycle_status=asset.lifecycle_status,
+        )
         result = next((item for item in items if item.asset_item_id == asset_item_id), None)
         if result is None:
             raise shot_grid_error(404, 'SG_ASSET_ITEM_NOT_FOUND', '资产制作分项不存在或不可见')
         return result
 
     @classmethod
-    async def _lock_writable_project(cls, db: AsyncSession, project_id: int) -> None:
+    async def _get_project_read_context(cls, db: AsyncSession, project_id: int) -> tuple[str, str | None]:
+        project = await ShotGridProjectDao.get_project_by_id(db, project_id)
+        if project is None:
+            raise shot_grid_error(404, 'SG_PROJECT_NOT_FOUND', '项目不存在或不可见')
+        storage_status = await ShotGridAssetCrudDao.get_project_storage_status(db, project_id)
+        return str(project.project_status), storage_status
+
+    @classmethod
+    def _asset_allowed_actions(
+        cls,
+        current_user: CurrentUserModel,
+        access: ShotGridProjectAccessModel,
+        *,
+        project_id: int,
+        project_status: str,
+        storage_status: str | None,
+        lifecycle_status: str,
+        has_active_items: bool,
+        has_active_tasks: bool,
+    ) -> list[str]:
+        if (
+            not cls._can_manage_assets(
+                current_user,
+                access,
+                project_id=project_id,
+                project_status=project_status,
+                storage_status=storage_status,
+            )
+            or lifecycle_status != 'active'
+        ):
+            return []
+
+        actions: list[str] = []
+        if cls._has_permission(current_user, 'shotgrid:asset:edit'):
+            actions.append('asset.edit')
+        if (
+            not has_active_items
+            and not has_active_tasks
+            and cls._has_permission(current_user, 'shotgrid:asset:archive')
+        ):
+            actions.append('asset.archive')
+        if cls._has_permission(current_user, 'shotgrid:asset:add'):
+            actions.append('assetItem.add')
+        return actions
+
+    @classmethod
+    def _item_allowed_actions(
+        cls,
+        current_user: CurrentUserModel,
+        access: ShotGridProjectAccessModel,
+        *,
+        project_id: int,
+        project_status: str,
+        storage_status: str | None,
+        asset_lifecycle_status: str,
+        item_lifecycle_status: str,
+        has_versions: bool,
+        task_status: str | None,
+        has_uncommitted_submission: bool,
+    ) -> list[str]:
+        if (
+            not cls._can_manage_assets(
+                current_user,
+                access,
+                project_id=project_id,
+                project_status=project_status,
+                storage_status=storage_status,
+            )
+            or asset_lifecycle_status != 'active'
+            or item_lifecycle_status != 'active'
+        ):
+            return []
+
+        actions: list[str] = []
+        if not has_versions and cls._has_permission(current_user, 'shotgrid:asset:edit'):
+            actions.append('assetItem.edit')
+        if task_status not in ACTIVE_TASK_STATUSES and cls._has_permission(
+            current_user,
+            'shotgrid:asset:archive',
+        ):
+            actions.append('assetItem.archive')
+        if (
+            task_status != 'completed'
+            and not has_uncommitted_submission
+            and cls._has_permission(current_user, 'shotgrid:task:assign')
+        ):
+            actions.append('task.assign')
+        return actions
+
+    @staticmethod
+    def _can_manage_assets(
+        current_user: CurrentUserModel,
+        access: ShotGridProjectAccessModel,
+        *,
+        project_id: int,
+        project_status: str,
+        storage_status: str | None,
+    ) -> bool:
+        user = current_user.user
+        return bool(
+            user
+            and user.user_id is not None
+            and access.project_id == project_id
+            and access.user_id == user.user_id
+            and (access.has_all_scope or access.project_role == 'director')
+            and project_status not in {'completed', 'archived'}
+            and storage_status == 'ready'
+        )
+
+    @staticmethod
+    def _has_permission(current_user: CurrentUserModel, permission: str) -> bool:
+        user = current_user.user
+        return bool(
+            user and (user.admin or '*:*:*' in current_user.permissions or permission in current_user.permissions)
+        )
+
+    @classmethod
+    async def _lock_writable_project(
+        cls,
+        db: AsyncSession,
+        project_id: int,
+        current_user: CurrentUserModel,
+        actor_user_id: int,
+    ) -> None:
         project = await ShotGridProjectDao.get_project_by_id(db, project_id, for_update=True)
         if project is None:
             raise shot_grid_error(404, 'SG_PROJECT_NOT_FOUND', '项目不存在或不可见')
-        if project.project_status == 'archived':
-            raise shot_grid_error(409, 'SG_INVALID_STATE_TRANSITION', '归档项目只允许读取')
+        if project.project_status in {'completed', 'archived'}:
+            raise shot_grid_error(409, 'SG_INVALID_STATE_TRANSITION', '已完成或归档项目只允许读取资产')
+        refreshed_access = await ShotGridProjectAccessService.resolve_access(db, current_user, project_id)
+        cls._require_write_access(refreshed_access, project_id, actor_user_id)
         storage_status = await ShotGridAssetCrudDao.get_project_storage_status(db, project_id)
         if storage_status != 'ready':
             raise shot_grid_error(409, 'SG_PROJECT_NOT_READY', '项目 NAS 存储尚未就绪')

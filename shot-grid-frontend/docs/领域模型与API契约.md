@@ -4,8 +4,8 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 版本 | v1.8 |
-| 状态 | 普通管理、Excel 导入、独立任务、版本发布与 `auto_single` 审核后端已落地；独立业务前端项目管理及镜头管理/镜头 Excel 导入子集均已完成隔离真实环境浏览器旅程，镜头列表三视图、详情、CRUD/分配、受保护缩略图和 Excel preview/commit 已接入真实 API；目录/版本 Worker 默认关闭，资产需求人工处理、资产模板下载、`manual_batch`、媒体派生、其余业务页面与真实 UNC/完整 E2E 仍待实现 |
+| 版本 | v2.0 |
+| 状态 | 普通管理、Excel 导入、独立任务、版本发布与 `auto_single` 审核后端已落地；独立业务前端项目、镜头和资产真实页面均已接 API，三个子集均完成隔离浏览器旅程；目录/版本 Worker 默认关闭，资产需求人工处理、资产模板下载、`manual_batch`、媒体派生、其余业务页面与真实 UNC/完整 E2E 仍待实现 |
 | 建立日期 | 2026-08-07 |
 | 最近修订 | 2026-08-11 |
 | 数据库 | PostgreSQL |
@@ -41,7 +41,7 @@
 - PostgreSQL 初始基线中的审计时间使用 `timestamp(0)`；Shot Grid SQLAlchemy DO 使用 PostgreSQL 方言下编译为 `TIMESTAMP(0) WITHOUT TIME ZONE` 的统一类型。
 - 常规业务异常默认由统一响应工具以 HTTP 200 返回；Shot Grid 的真实 HTTP 409 等语义属于本模块需要显式实现的扩展契约。
 - RuoYi 平台基座本身没有通用 NAS 根目录配置、项目目录初始化、版本文件发布到 UNC 路径或跨数据库与文件系统补偿能力。Shot Grid 已新增项目目录 Outbox Worker、目录诊断/人工重试和独立版本发布 Worker，但两个 Worker 均默认关闭，物理补偿仍未实现；不得把 Shot Grid 领域扩展描述为平台通用能力，也不得以本地临时目录测试冒充真实 UNC 验收。
-- 独立业务前端已实现 Vue 3/Vite/Pinia/Vue Router/Axios/Element Plus 应用基座、自有登录页、六项本地路由白名单、统一请求与错误分流；项目页已接入真实项目范围列表、创建、详情/概览、编辑/归档、成员维护和存储诊断，并完成生产 Nginx 形态下的隔离项目管理子集旅程。镜头页已接入真实列表三视图、详情、CRUD/分配、受保护缩略图和 Excel 导入，并完成镜头列表/任务展示/镜头 Excel 导入隔离子集旅程。资产、审核和文件等其余业务数据页面尚未接入真实 CRUD；两个子集旅程都不等于完整系统 E2E。
+- 独立业务前端已实现 Vue 3/Vite/Pinia/Vue Router/Axios/Element Plus 应用基座、自有登录页、六项本地路由白名单、统一请求与错误分流；项目页已接入真实项目管理并完成生产 Nginx 形态下的隔离子集旅程。镜头页已接入真实三视图、详情、CRUD/分配、受保护缩略图和 Excel 导入，并完成隔离子集旅程。资产页已接入真实三视图、详情、资产/制作分项 CRUD、分配/改派、受保护缩略图和 Excel preview/commit，也已完成 20.0.2 隔离子集旅程；资产模板仍未交付，真实版本缩略图文件未造夹具。审核和文件等其余业务数据页面尚未接入真实 CRUD；任何子集旅程都不等于完整系统 E2E。
 
 ## 3. 领域边界
 
@@ -444,6 +444,8 @@ MVP 项目角色：
 - `asset_name_key` 必须由后端统一算法生成，手工创建和 Excel 导入共用同一实现；前端不得自行提交该值。
 - 资产创建时按 Windows/SMB 安全规则生成并确认 `storage_dir_name`；`asset_type`、`asset_name`、规范键和目录快照共同构成稳定身份，创建后普通编辑均不可修改。
 - 制作分项、任务描述、状态、制作人、缩略图、最新版本和批准版本来自 `sg_asset_item` 及其唯一任务；资产完成状态按全部活动制作分项聚合。
+- 制作分项 `thumbnail` 只取其当前最新版本的首个 `file_role=thumbnail` 文件；最新版本没有缩略图时返回 `null`，不得回退旧版本。资产父级 `thumbnail` 按活动制作分项 `(sort_order, asset_item_id)` 升序选择第一张非空缩略图，保证列表、详情和不同前端视图的代表图一致。
+- 资产与制作分项响应分别携带后端计算的 `allowedActions`。动作集合必须同时满足平台权限、项目访问/角色、项目非 `completed/archived`、项目存储 `ready`、资源活动状态以及任务/版本约束；前端不得自行合成。
 - 参考图片使用平台文件引用，业务类型为 `shotgrid_asset_reference`。
 
 #### 6.6.1 正式资产表头映射
@@ -1388,8 +1390,8 @@ active ─────────────────────归档─�
 - `preparing` 是项目创建后的默认业务状态，与存储 `initializing/ready` 分开。
 - `completed` 必须通过动作接口设置；所有纳入交付的活动镜头和资产制作分项都必须存在已完成任务与唯一最终版本，资产完成状态由其全部活动分项聚合。
 - `archived` 为只读终态，MVP 不提供恢复接口。
-- 当前代码对 `completed`、`archived` 项目下的集、场次、镜头创建/修改/归档在锁内拒绝；镜头 Excel preview 普通读取项目状态并拒绝，commit 再以 `FOR UPDATE` 锁定项目重检，稳定返回 HTTP 409 / `SG_INVALID_STATE_TRANSITION`。项目 `completed` 时 `allowedActions` 只可包含已授权的 `project.archive`，`archived` 时为空；镜头详情在两种状态下均不返回写动作。
-- 上述终态镜像门禁只确认了项目自身、集、场次、镜头和镜头导入这批路径。资产、成员、任务、版本、审核、文件和目录操作等全域写接口尚未统一完成同一轮治理，文档和前端不得将局部门禁外推为全系统不可变保证。
+- 当前代码对 `completed`、`archived` 项目下的集、场次、镜头、资产和资产制作分项创建/修改/归档在锁内拒绝；镜头与资产 Excel preview 普通读取项目状态并拒绝，commit 再以 `FOR UPDATE` 锁定项目重检，稳定返回 HTTP 409 / `SG_INVALID_STATE_TRANSITION`。项目 `completed` 时 `allowedActions` 只可包含已授权的 `project.archive`，`archived` 时为空；镜头、资产和制作分项在两种状态下均不返回写动作。
+- 上述终态镜像门禁确认了项目自身、集、场次、镜头、资产、资产制作分项及两类 Excel 导入。成员、任务、版本、审核、文件和目录操作等其余全域写接口尚未统一完成同一轮治理，文档和前端不得将本批门禁外推为全系统不可变保证。
 - `current_phase` 只允许 `planning`、`asset_production`、`shot_production`、`review`、`delivery`、`completed`，由项目总监或管理员显式调整；它不替代任务状态机。
 
 ### 7.7 审核单状态机
@@ -1780,7 +1782,7 @@ ShotGridDomainException
 - `/getInfo` 后端只输出不含 `password` 的专用安全用户 VO；前端会话只保存 `userId`、`userName`、`nickName`、`avatar`、部门摘要、角色和权限列表。
 - 范围导航只接受 `workbench`、`projects`、`shots`、`assets`、`reviews`、`files`，并映射到固定本地路径；无任何有效导航时进入 403，不得默认授予六项菜单。
 - 退出无论后端调用是否成功都清理本地会话；后端错误仍向调用方报告，不能因本地清理而伪装退出接口成功。
-- 项目一级页已调用真实项目、成员和存储接口，不包含失败回退 Mock；工作台、镜头、资产、版本审核和文件与 NAS 一级页仍主要是下一批真实 API 接入边界。
+- 项目一级页已调用真实项目、成员和存储接口，镜头与资产一级页也已接入真实列表多视图、详情、CRUD/分配、受保护缩略图和对应 Excel 预检/提交，均不包含失败回退 Mock；工作台、版本审核和文件与 NAS 一级页仍主要是下一批真实 API 接入边界。
 - 生产构建页面根路径固定为 `/shot-grid-app/`。仓库 Nginx 模板必须对该路径提供 SPA 深链回退，并将 `/prod-api/...` 剥离 `/prod-api` 后代理到后端。本批隔离运行已验证页面根路径和项目详情深链返回 200 `text/html`、`/prod-api/captchaImage` 返回 200 JSON；这只证明当前生产代理形态和项目管理子集，不代表完整部署或生产就绪。
 
 ## 10. 第一批项目 API
@@ -2708,9 +2710,11 @@ GET /shot-grid/imports/assets/template
 Permission: shotgrid:asset:import
 ```
 
-该资产模板下载路径仍是冻结设计，当前代码尚未实现；不得因镜头模板端点已交付而推断资产模板也可下载。
+该资产模板下载路径仍是冻结设计，当前代码尚未实现。仓库原样表不能直接成为部署资源，必须先通过规定的 `artifact_tool` 安全匿名化、渲染和复核流程；工具链不可用时保持失败关闭，不复制或透传原样表，也不得因镜头模板端点已交付而推断资产模板可下载。
 
 当前正式样表 `docs/资产-样表.xlsx` 的主数据区为 `Sheet1!A:G`，表头依次为“类型、名称、描述、制作分项、备注、状态、制作人”。导入器只读取从 A1 开始的首段连续非空表头；H:I 虽在筛选范围内但表头为空，不参与解析。
+
+原样表结构为 12 个逻辑资产、20 个制作分项：Environment 2/4、Prop 4/4、Character 6/12。预检查冻结口径为 total 20、valid 19、warningRows 3、errorRows 1；第 6—8 行缺少制作分项，仅产生警告，第 16 行复合制作人产生错误。原始父级/分项结构统计、可导入行数和用户最终选择行数是三个不同口径，响应和页面不得混写。
 
 样表使用合并单元格表达父子层级：合并区域内的“类型、名称、描述”必须取合并区域左上角值；不得对普通未合并空白单元格盲目前向填充。每个有效明细行创建一个制作分项，同一合并资产区域只创建一个 `sg_asset`。
 
@@ -2969,6 +2973,7 @@ PUT  /shot-grid/review-lists/{reviewListId}/versions/order
 ### 15.6 资产 API
 
 ```http
+GET  /shot-grid/projects/{projectId}/asset-assignee-options
 GET  /shot-grid/projects/{projectId}/assets
 POST /shot-grid/projects/{projectId}/assets
 GET  /shot-grid/projects/{projectId}/assets/{assetId}
@@ -2982,7 +2987,17 @@ Permissions:
   shotgrid:asset:list|add|query|edit|archive
 ```
 
-列表支持 `assetType`、`assetStatus`、`assigneeUserId`、`keyword`、分页和白名单排序。创建请求示例：
+`asset-assignee-options` 要求 `shotgrid:asset:list` 与项目访问，支持 `pageNum/pageSize/keyword`；只返回活动项目成员、有效未删除平台账号且具有非空项目内 `producerCode` 的 `userId/userName/nickName/avatar/deptId/deptName/projectRole/producerCode` 安全摘要。关键字只匹配账号、昵称和制作人缩写；候选响应不是写入授权，创建、编辑、导入、首次分配和改派事务仍重新校验成员状态。
+
+列表支持 `assetType`、`assetStatus`、`assigneeUserId`、`keyword`、分页和白名单排序。资产列表、详情和制作分项响应分别包含：
+
+- 资产 `allowedActions`：可选 `asset.edit`、`assetItem.add`、`asset.archive`；资产归档只在不存在活动制作分项和活动任务时返回。
+- 制作分项 `allowedActions`：可选 `assetItem.edit`、`assetItem.archive`、`task.assign`；已有正式版本后不返回普通编辑，活动任务阻止归档，任务已完成或存在任何非 `committed` 版本提交时不返回分配/改派。
+- 制作分项 `thumbnail`：只来自当前最新版本首个缩略图文件；无缩略图返回 `null`，不回退旧版本。
+- 父资产 `thumbnail`：按活动制作分项 `(sortOrder, assetItemId)` 升序选择第一张可用缩略图；前端不得根据视图或加载顺序重新计算。
+- 缩略图 URL 只使用受保护相对路径 `/shot-grid/versions/{versionId}/files/{fileId}/download`，必须经统一鉴权请求层获取 Blob。
+
+创建请求示例：
 
 ```json
 {
@@ -3012,7 +3027,7 @@ Permissions:
 5. 制作分项提供单一主制作人时，为该分项创建唯一 `asset_image` 任务；
 6. 提交后异步确保 NAS 目录。
 
-资产详情返回制作分项列表、每个分项的唯一任务及最新/最终版本、使用镜头数和 `directoryStatus`。资产类型、显示名称、规范键和 `storageDirName/storagePathKey` 在创建时组成不可拆分的稳定身份，普通 PUT 只接受描述、排序、备注和 `lockVersion`；该 PUT 是三项非身份主数据的完整快照，省略描述或备注表示清空，省略排序表示归零。重命名、改类型或目录迁移必须使用后续受控动作。制作分项尚无版本时可补充或纠正主数据；已有版本后，其名称、描述、排序和备注等主数据均禁止普通修改。归档不能级联删除历史版本。
+资产详情返回制作分项列表、每个分项的唯一任务及最新/最终版本、后端动作集合、确定性缩略图、使用镜头数和 `directoryStatus`。资产类型、显示名称、规范键和 `storageDirName/storagePathKey` 在创建时组成不可拆分的稳定身份，普通 PUT 只接受描述、排序、备注和 `lockVersion`；该 PUT 是三项非身份主数据的完整快照，省略描述或备注表示清空，省略排序表示归零。重命名、改类型或目录迁移必须使用后续受控动作。制作分项尚无版本时可补充或纠正主数据；已有版本后，其名称、描述、排序和备注等主数据均禁止普通修改。归档不能级联删除历史版本。资产和制作分项写接口均在锁内拒绝 `completed/archived` 项目；资产导入 preview 先普通读取拒绝，commit 再锁项目重检。
 
 ### 15.7 任务查询与编辑 API
 
@@ -3353,7 +3368,7 @@ NAS I/O 不得在数据库事务内执行。`sg_storage_operation` 和 `sg_versi
 
 ## 20. 第一批验收用例
 
-目录 Worker 与版本发布 Worker 本批均提供了 DAO、路径适配器、租约/心跳/重试服务、内部 Scheduler 任务和针对性测试入口；目录链另有管理 API。本批后端 Ruff check/format 覆盖 163 个文件并通过，模板、项目选项、终态写门禁及镜头导入等 10 个定向测试文件 78 passed；完整 `tests/module_shot_grid` 为 465 passed、2 skipped，跳过项源于当前 Windows 账号没有创建符号链接权限。项目选项/成员候选、镜头制作人选项和镜头模板路由已由 OpenAPI/路由测试确认。独立业务前端 lint、18 文件/66 单测和生产构建通过，构建处理 1757 个模块，并覆盖镜头详情 A→B→C 快切时取消旧请求和拒绝迟到响应、切项目关闭创建/导入弹窗并清理旧预检会话、写请求发出后切项目/路由时对 create/import/edit/assign 迟到结果的上下文隔离，以及同一 ID 切走再返回并重开弹窗时的 `operationGeneration` ABA 防护。生产镜像与项目管理子集此前已验证；镜头管理/镜头 Excel 导入子集也已在隔离 PostgreSQL、Redis DB 15、真实 FastAPI/平台账号、生产 Nginx 和 Chrome 下完成下述旅程。自动化文件系统用例只能在显式 `allow_local_root=True` 时使用临时本地目录；逻辑 `healthy` 或 `storageStatus=ready` 夹具与 Worker 关闭的旅程都不能证明真实 UNC。以下完整登录、目录创建和版本文件发布仍要求在对应真实环境分别验证；当前子集证据不能替代完整系统 E2E 或真实 NAS 门禁。
+目录 Worker 与版本发布 Worker 本批均提供了 DAO、路径适配器、租约/心跳/重试服务、内部 Scheduler 任务和针对性测试入口；目录链另有管理 API。本批后端 Ruff check 扩大到 `module_shot_grid config middlewares tests/module_shot_grid` 并通过，Ruff format `--check` 报告 177 files already formatted；包含资产契约、制作人选项、终态 CRUD/导入门禁和既有镜头链的 11 个定向测试文件 90 passed，完整 `tests/module_shot_grid` 为 483 passed、2 skipped，两个跳过项均因当前环境不允许创建目录符号链接。项目选项/成员候选、镜头/资产制作人选项和镜头模板路由已由 OpenAPI/路由测试确认。独立业务前端 lint、23 文件/91 单测和生产构建通过，构建处理 1774 个模块，仅保留既有 `@vueuse/core` PURE annotation 两条警告；测试覆盖镜头与资产接口/视图、资产导入与受保护缩略图、详情 A→B→C 快切、切项目/路由时的迟到结果隔离、`operationGeneration` ABA 防护和项目范围 stale/ABA 回归。生产镜像下的项目、镜头与资产三个子集均已在隔离 PostgreSQL、Redis DB 15、真实 FastAPI/平台账号、生产 Nginx 和 Chrome 下完成旅程。自动化文件系统用例只能在显式 `allow_local_root=True` 时使用临时本地目录；逻辑 `healthy` 或 `storageStatus=ready` 夹具与 Worker 关闭的旅程都不能证明真实 UNC。完整登录、目录创建和版本文件发布仍要求在对应真实环境分别验证；静态门禁和当前子集证据不能替代完整系统 E2E、真实资产模板/缩略图或真实 NAS 门禁。
 
 ### 20.0 已完成的项目管理子集旅程
 
@@ -3397,6 +3412,32 @@ NAS I/O 不得在数据库事务内执行。`sg_storage_operation` 和 `sg_versi
 commit 结果中的复用集/场均为 0、资产关系为 0。数据库终态确认 2 集、8 场、24 镜头、24 任务（三名制作人各 8）、24 待匹配需求、0 镜头资产关系、1 个 `committed` 导入批次、镜头时长合计 79000 ms；2 条集目录操作和 24 条镜头目录操作均为 `pending`。同事务审计恰 1 条且 `status=0`，`method` 字符串长度 79，未超过字段上限。Redis 预检键在提交后为 0。
 
 该旅程验证的是镜头列表/详情/任务展示和镜头 Excel 首次提交子集，没有执行资产导入、浏览器幂等重放、镜头 CRUD/改派全动作、任务—版本—审核或异常权限全矩阵。项目使用逻辑 `storageStatus=ready` 夹具且 Worker 关闭，26 条目录操作保持 `pending`；它不证明真实 UNC/NAS、Windows 服务账号、共享 ACL、写探针或故障恢复，也不是完整系统 E2E。验收后已关闭浏览器和后端 PID 12996，删除临时 Nginx 容器/镜像、隔离数据库、Redis DB 15 数据及临时文件；18080/19098 端口空闲，原 9099 服务、PostgreSQL 服务及其他数据库和 Redis 其他 DB 未改动。
+
+### 20.0.2 已完成的资产管理与资产 Excel 导入子集旅程
+
+验证环境使用隔离 PostgreSQL、Redis DB 15、真实 FastAPI/平台账号、最终生产构建、生产 Nginx 和 Chrome；项目为逻辑 `storageStatus=ready` 夹具，目录 Worker 保持关闭。实际走通：
+
+```text
+登录并进入资产一级页
+→ 上传 docs/资产-样表.xlsx
+→ preview UI 为 total=20、valid=19、warningRows=3、errorRows=1
+→ 错误行不可选，选中全部 19 个 canImport 行并一次 commit 成功
+→ 创建 11 个活动资产、19 个制作分项、19 个任务和 1 个自动匹配
+→ 表格、卡片、类型看板同源；Environment 筛选为 2，蒋浩筛选为 8
+→ 创建临时 assetId=12/assetItemId=20，编辑父资产与分项，依次归档分项和父资产
+→ taskId=3 从 userId=880103、lockVersion=0 改派到 userId=880102、lockVersion=1
+→ 详情深链 /projects/880001/assets/2 与 reload 成功
+→ 浏览器控制台 0 error/0 warning
+→ 退出后访问详情深链，重定向到 /login?redirect=/projects/880001/assets/2
+```
+
+数据库终态为 11 个活动资产、19 个活动制作分项和 19 个任务；类型分布 Character 5、Environment 2、Prop 4。临时资产和分项最终均为 `archived/lockVersion=2`，临时分项 `taskCount=0`，因此活动数量保持 11/19/19。任务最终分布为蒋浩 8、嘉璋 3、占峰 8。自动匹配 1 条来自显式隔离资产需求夹具，不是镜头样表自然生成的需求。
+
+`sys_oper_log` 共 7 条且全部成功，分别覆盖导入、资产创建/编辑、制作分项编辑/归档、父资产归档和任务改派。12 条 `ensure_asset_directory` Outbox 全部为 `pending`，符合 Worker 关闭预期。localStorage 为空，sessionStorage 仅有前端传输配置和 repeat-submit 元数据，不含认证、导入 Token 或幂等密钥；退出后 Redis `access_token:*` 为 0。
+
+本旅程只验证真实缩略图空态，没有构造或下载真实版本缩略图文件；因此不能用它证明“当前 latest 缩略图/父级代表图”的媒体文件链，相关聚合规则由后端定向测试覆盖。`completed/archived` 下 CRUD 与 preview/commit 的 HTTP 409 / `SG_INVALID_STATE_TRANSITION` 也由后端定向自动化覆盖，本浏览器旅程未另建终态项目。资产模板下载因 `artifact_tool` 安全流程不可用而保持未交付，UI 静态禁用且未调用端点。逻辑 ready、Worker 关闭和 12 条 pending Outbox 不证明真实 UNC/NAS I/O；该结论只能称为“隔离资产管理/资产导入子集 E2E PASS”，不是完整系统 E2E、真实 NAS E2E 或生产就绪。
+
+验收后已关闭 Playwright，停止后端 PID 29056/32996，删除唯一临时 Nginx 容器；复用的 `nginx:1.27-alpine` 镜像未由本批构建且保留。18081/19099 端口空闲，隔离 PostgreSQL 库存在数/连接数为 0/0，Redis DB 15 `DBSIZE=0` 且 owner 键为 0，54 项 TEMP 精确删除，backend `.venv` 不存在。原 9099 PID 4820 仍监听，基础 PostgreSQL/Redis 均为 healthy，无 E2E Git 残留。
 
 ### 20.1 正向闭环
 
@@ -3471,8 +3512,8 @@ commit 结果中的复用集/场均为 0、资产关系为 0。数据库终态�
 4. 确认公司是否存在统一 UNC 桌面协议处理器；未确认前只提供查看和复制路径。
 5. 冻结 NAS/AD/Windows 共享 ACL 部署方案，明确网页权限之外的直接 SMB 访问边界。
 6. 决定已完成任务是否需要“重新打开”；MVP 当前禁止，未来动作必须有原因和审计。
-7. 两类样表、模板版本、默认最大行数、文件大小、预览 TTL 和资产名称规范化已冻结；镜头下载模板已使用冻结 SHA-256 的匿名包内副本，资产模板下载仍待实现。上传原文件仅临时解析、不长期留存，确需留存时必须另走受保护文件引用。
+7. 两类样表、模板版本、默认最大行数、文件大小、预览 TTL 和资产名称规范化已冻结；镜头下载模板已使用冻结 SHA-256 的匿名包内副本。资产模板必须先通过规定的 `artifact_tool` 安全匿名化、渲染和复核流程，当前工具链不可用，因此下载端点保持未实现。上传原文件仅临时解析、不长期留存，确需留存时必须另走受保护文件引用。
 8. 决定资产模板是否增加跨重新保存仍保留的稳定 `sourceRowId/rowUid`；未引入前需冻结人工去重治理流程。
-9. 22 张基础表、`20260810_01 → 20260811_06` 迁移链、种子、项目/成员/集/场次/镜头/资产/制作分项普通管理、两类导入 API、镜头匿名模板、项目内镜头制作人选项、独立任务管理、默认关闭的版本发布 Worker、正式版本/主文件引用/`auto_single` 审核闭环，以及默认关闭的 NAS 目录 Outbox Worker、目录诊断和人工重试已转化为代码；独立业务前端应用基座、项目管理真实页面、镜头三视图/详情/CRUD/分配/Excel 导入和生产 Docker/Nginx 配置也已实现。项目管理子集和镜头列表/任务展示/镜头 Excel 导入子集均已完成隔离浏览器旅程。资产模板下载、资产需求人工处理、`manual_batch`、媒体派生、其余业务页面真实 API 接入、制作人员完整旅程、UNC/NAS 部署验收和完整系统 E2E 继续按本契约分批实现。
+9. 22 张基础表、`20260810_01 → 20260811_06` 迁移链、种子、项目/成员/集/场次/镜头/资产/制作分项普通管理、两类导入 API、镜头匿名模板、项目内镜头/资产制作人选项、资产/分项动作与缩略图聚合、独立任务管理、默认关闭的版本发布 Worker、正式版本/主文件引用/`auto_single` 审核闭环，以及默认关闭的 NAS 目录 Outbox Worker、目录诊断和人工重试已转化为代码；独立业务前端应用基座、项目/镜头/资产真实页面和生产 Docker/Nginx 配置也已实现。项目、镜头与资产三个子集均已完成隔离浏览器旅程。资产模板下载、真实版本缩略图浏览器链、资产需求人工处理、`manual_batch`、媒体派生、其余业务页面真实 API 接入、制作人员完整旅程、UNC/NAS 部署验收和完整系统 E2E 继续按本契约分批实现。
 
 上述 1—8 是评审、部署或数据治理参数，不得由页面开发临时猜测。第 9 项只说明当前第一批实现边界，未落地的契约章节仍是设计，不是已实现能力。

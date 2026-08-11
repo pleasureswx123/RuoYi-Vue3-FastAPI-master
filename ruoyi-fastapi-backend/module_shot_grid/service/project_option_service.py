@@ -4,6 +4,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from common.vo import PageModel
 from module_shot_grid.dao.project_option_dao import ShotGridProjectOptionDao
 from module_shot_grid.entity.vo.project_option_vo import (
+    ShotGridAssetAssigneeOptionModel,
+    ShotGridAssetAssigneeOptionQueryModel,
     ShotGridMemberCandidateModel,
     ShotGridMemberCandidateQueryModel,
     ShotGridProjectPathPreviewModel,
@@ -84,6 +86,22 @@ class ShotGridProjectOptionService:
         rows, total = await ShotGridProjectOptionDao.get_shot_assignee_option_page(db, project_id, query)
         return PageModel[ShotGridShotAssigneeOptionModel](
             rows=[ShotGridShotAssigneeOptionModel.model_validate(row) for row in rows],
+            pageNum=query.page_num,
+            pageSize=query.page_size,
+            total=total,
+            hasNext=query.page_num * query.page_size < total,
+        )
+
+    @classmethod
+    async def get_asset_assignee_option_page(
+        cls,
+        db: AsyncSession,
+        project_id: int,
+        query: ShotGridAssetAssigneeOptionQueryModel,
+    ) -> PageModel[ShotGridAssetAssigneeOptionModel]:
+        rows, total = await ShotGridProjectOptionDao.get_asset_assignee_option_page(db, project_id, query)
+        return PageModel[ShotGridAssetAssigneeOptionModel](
+            rows=[ShotGridAssetAssigneeOptionModel.model_validate(row) for row in rows],
             pageNum=query.page_num,
             pageSize=query.page_size,
             total=total,
