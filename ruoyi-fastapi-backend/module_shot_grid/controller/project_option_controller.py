@@ -11,13 +11,15 @@ from common.aspect.pre_auth import PreAuthDependency
 from common.router import APIRouterPro
 from common.vo import DataResponseModel, PageResponseModel
 from module_admin.entity.do.user_do import SysUser
-from module_shot_grid.dependencies.project_access import ProjectRoleDependency
+from module_shot_grid.dependencies.project_access import ProjectAccessDependency, ProjectRoleDependency
 from module_shot_grid.entity.vo.access_vo import ShotGridProjectAccessModel
 from module_shot_grid.entity.vo.project_option_vo import (
     ShotGridMemberCandidateModel,
     ShotGridMemberCandidateQueryModel,
     ShotGridProjectPathPreviewModel,
     ShotGridProjectPathPreviewRequestModel,
+    ShotGridShotAssigneeOptionModel,
+    ShotGridShotAssigneeOptionQueryModel,
     ShotGridStorageRootOptionModel,
 )
 from module_shot_grid.service.project_option_service import ShotGridProjectOptionService
@@ -101,5 +103,26 @@ async def get_shot_grid_project_member_candidates(
         query_db,
         candidate_query,
         data_scope_sql,
+    )
+    return ResponseUtil.success(msg='查询成功', model_content=result)
+
+
+@project_option_controller.get(
+    '/projects/{projectId}/shot-assignee-options',
+    summary='分页查询项目内可分配的镜头制作人',
+    response_model=PageResponseModel[ShotGridShotAssigneeOptionModel],
+    dependencies=[UserInterfaceAuthDependency('shotgrid:shot:list')],
+)
+async def get_shot_grid_shot_assignee_options(
+    request: Request,
+    project_id: Annotated[int, Path(alias='projectId', gt=0, le=SQL_BIGINT_MAX)],
+    option_query: Annotated[ShotGridShotAssigneeOptionQueryModel, Query()],
+    query_db: Annotated[AsyncSession, DBSessionDependency()],
+    access: Annotated[ShotGridProjectAccessModel, ProjectAccessDependency()],
+) -> Response:
+    result = await ShotGridProjectOptionService.get_shot_assignee_option_page(
+        query_db,
+        access.project_id,
+        option_query,
     )
     return ResponseUtil.success(msg='查询成功', model_content=result)

@@ -236,7 +236,12 @@ async def test_successful_commit_audits_before_commit_then_deletes_preview_token
     find_mock = AsyncMock(return_value=None)
     get_batch_mock = AsyncMock(return_value=batch)
     get_payload_mock = AsyncMock(return_value=payload)
-    get_project_mock = AsyncMock(return_value=(SimpleNamespace(project_id=2), SimpleNamespace(storage_status='ready')))
+    get_project_mock = AsyncMock(
+        return_value=(
+            SimpleNamespace(project_id=2, project_status='active'),
+            SimpleNamespace(storage_status='ready'),
+        )
+    )
     revalidate_mock = AsyncMock()
     write_mock = AsyncMock(return_value=ShotImportCommitResultModel.model_validate(_commit_snapshot()))
 
@@ -350,8 +355,20 @@ def test_archived_episode_and_scene_cannot_be_reused_by_import() -> None:
 def test_project_storage_not_ready_uses_frozen_error_key() -> None:
     with pytest.raises(ShotGridDomainException) as exc_info:
         ShotGridShotImportService._require_ready_project(
-            SimpleNamespace(project_id=1),
+            SimpleNamespace(project_id=1, project_status='active'),
             SimpleNamespace(storage_status='initializing'),
         )
     assert exc_info.value.error_key == 'SG_PROJECT_NOT_READY'
+    assert exc_info.value.http_status == CONFLICT_STATUS
+
+
+@pytest.mark.parametrize('project_status', ['completed', 'archived'])
+def test_completed_or_archived_project_cannot_preview_or_commit_import(project_status: str) -> None:
+    with pytest.raises(ShotGridDomainException) as exc_info:
+        ShotGridShotImportService._require_ready_project(
+            SimpleNamespace(project_id=1, project_status=project_status),
+            SimpleNamespace(storage_status='ready'),
+        )
+
+    assert exc_info.value.error_key == 'SG_INVALID_STATE_TRANSITION'
     assert exc_info.value.http_status == CONFLICT_STATUS

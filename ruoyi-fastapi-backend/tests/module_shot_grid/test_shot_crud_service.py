@@ -163,6 +163,42 @@ def test_read_projection_missing_directory_operation_uses_frozen_not_found_error
     assert exc_info.value.error_key == 'SG_STORAGE_OPERATION_NOT_FOUND'
 
 
+@pytest.mark.parametrize('project_status', ['completed', 'archived'])
+def test_completed_or_archived_project_hides_all_shot_actions(project_status: str) -> None:
+    row = _shot_projection_row()
+    row['project_status'] = project_status
+
+    actions = ShotGridShotCrudService._allowed_actions(row, _current_user(), _access())
+
+    assert actions == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('project_status', ['completed', 'archived'])
+async def test_completed_or_archived_project_rejects_shot_writes(
+    monkeypatch: pytest.MonkeyPatch,
+    project_status: str,
+) -> None:
+    monkeypatch.setattr(
+        'module_shot_grid.service.shot_crud_service.ShotGridShotCrudDao.lock_project_storage',
+        AsyncMock(
+            return_value=(
+                SimpleNamespace(project_id=PROJECT_ID, project_status=project_status),
+                SimpleNamespace(storage_status='ready'),
+            )
+        ),
+    )
+
+    with pytest.raises(ShotGridDomainException) as exc_info:
+        await ShotGridShotCrudService._lock_writable_project(
+            AsyncMock(),
+            PROJECT_ID,
+            require_storage_ready=False,
+        )
+
+    assert exc_info.value.error_key == 'SG_INVALID_STATE_TRANSITION'
+
+
 @pytest.mark.asyncio
 async def test_list_reads_versions_files_and_feedback_in_one_batch_query(monkeypatch: pytest.MonkeyPatch) -> None:
     row = _shot_projection_row()

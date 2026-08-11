@@ -1,6 +1,8 @@
 import json
+import re
 from collections.abc import Awaitable, Callable
 from urllib.parse import parse_qs, urlencode
+from uuid import UUID
 
 from fastapi import FastAPI, Request
 from fastapi.datastructures import Headers, QueryParams
@@ -30,6 +32,11 @@ class TransportCryptoMiddleware:
     _MONITOR_RESPONSE_MODE_HEADER = 'x-transport-response-mode'
     _MONITOR_STATUS_HEADER = 'x-transport-crypto-status'
     _MONITOR_KID_HEADER = 'x-transport-key-id'
+    _SHOT_GRID_VERSION_FILE_DOWNLOAD_PATTERN = re.compile(
+        r'^/shot-grid/versions/([1-9][0-9]*)/files/'
+        r'([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})/download$'
+    )
+    _SQL_BIGINT_MAX = 9_223_372_036_854_775_807
 
     def __init__(self, app: ASGIApp) -> None:
         """
@@ -55,8 +62,11 @@ class TransportCryptoMiddleware:
 
         current_app = scope.get('app')
         path = self._normalize_path(str(scope.get('path', '')))
+        method = str(scope.get('method', '')).upper()
         if (
             self._is_excluded_path(path)
+            or self._is_shot_grid_template_download(method, path)
+            or self._is_shot_grid_version_file_download(method, path)
             or TransportCryptoConfig.transport_crypto_mode == 'off'
             or not self._is_enabled_path(path)
         ):
@@ -711,6 +721,28 @@ class TransportCryptoMiddleware:
             if excluded_path.strip()
         ]
         return any(path == excluded_path or path.startswith(f'{excluded_path}/') for excluded_path in excluded_paths)
+
+    @classmethod
+    def _is_shot_grid_template_download(cls, method: str, path: str) -> bool:
+        """仅精确排除镜头模板 GET，避免同前缀 JSON 路由降级为明文。"""
+
+        return method == 'GET' and path == '/shot-grid/imports/shots/template'
+
+    @classmethod
+    def _is_shot_grid_version_file_download(cls, method: str, path: str) -> bool:
+        """仅精确排除鉴权版本文件 GET，避免版本审核 JSON 路由降级为明文。"""
+
+        if method != 'GET':
+            return False
+        match = cls._SHOT_GRID_VERSION_FILE_DOWNLOAD_PATTERN.fullmatch(path)
+        if match is None:
+            return False
+        if int(match.group(1)) > cls._SQL_BIGINT_MAX:
+            return False
+        try:
+            return str(UUID(match.group(2))) == match.group(2).lower()
+        except ValueError:
+            return False
 
     @classmethod
     def _is_required_path(cls, path: str) -> bool:

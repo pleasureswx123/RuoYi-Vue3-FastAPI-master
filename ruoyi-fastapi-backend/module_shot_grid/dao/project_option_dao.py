@@ -5,8 +5,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from module_admin.entity.do.dept_do import SysDept
 from module_admin.entity.do.user_do import SysUser
+from module_shot_grid.entity.do.project_do import ShotGridProjectMember
 from module_shot_grid.entity.do.storage_do import ShotGridProjectStorage, ShotGridStorageRoot
-from module_shot_grid.entity.vo.project_option_vo import ShotGridMemberCandidateQueryModel
+from module_shot_grid.entity.vo.project_option_vo import (
+    ShotGridMemberCandidateQueryModel,
+    ShotGridShotAssigneeOptionQueryModel,
+)
 
 
 class ShotGridProjectOptionDao:
@@ -92,6 +96,60 @@ class ShotGridProjectOptionDao:
         rows = (
             await db.execute(
                 statement.order_by(SysUser.nick_name, SysUser.user_id)
+                .offset((query.page_num - 1) * query.page_size)
+                .limit(query.page_size)
+            )
+        ).mappings()
+        return [dict(row) for row in rows], total
+
+    @classmethod
+    async def get_shot_assignee_option_page(
+        cls,
+        db: AsyncSession,
+        project_id: int,
+        query: ShotGridShotAssigneeOptionQueryModel,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """分页返回项目内真实可分配的镜头制作人。"""
+
+        statement = (
+            select(
+                SysUser.user_id,
+                SysUser.user_name,
+                SysUser.nick_name,
+                SysUser.avatar,
+                SysUser.dept_id,
+                SysDept.dept_name,
+                ShotGridProjectMember.project_role,
+                ShotGridProjectMember.producer_code,
+            )
+            .join(ShotGridProjectMember, ShotGridProjectMember.user_id == SysUser.user_id)
+            .outerjoin(SysDept, SysDept.dept_id == SysUser.dept_id)
+            .where(
+                ShotGridProjectMember.project_id == project_id,
+                ShotGridProjectMember.member_status == 'active',
+                ShotGridProjectMember.producer_code.is_not(None),
+                func.length(func.trim(ShotGridProjectMember.producer_code)) > 0,
+                SysUser.status == '0',
+                SysUser.del_flag == '0',
+            )
+        )
+        keyword = query.keyword.strip() if query.keyword else None
+        if keyword:
+            statement = statement.where(
+                or_(
+                    SysUser.user_name.ilike(f'%{keyword}%'),
+                    SysUser.nick_name.ilike(f'%{keyword}%'),
+                    ShotGridProjectMember.producer_code.ilike(f'%{keyword}%'),
+                )
+            )
+        total = int(await db.scalar(select(func.count()).select_from(statement.order_by(None).subquery())) or 0)
+        rows = (
+            await db.execute(
+                statement.order_by(
+                    SysUser.nick_name,
+                    SysUser.user_name,
+                    SysUser.user_id,
+                )
                 .offset((query.page_num - 1) * query.page_size)
                 .limit(query.page_size)
             )

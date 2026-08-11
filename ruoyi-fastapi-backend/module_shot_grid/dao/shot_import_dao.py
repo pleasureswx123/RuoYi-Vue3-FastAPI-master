@@ -31,7 +31,6 @@ class ShotGridShotImportDao:
             .where(
                 ShotGridProject.project_id == project_id,
                 ShotGridProject.del_flag == '0',
-                ShotGridProject.project_status != 'archived',
             )
         )
         if for_update:

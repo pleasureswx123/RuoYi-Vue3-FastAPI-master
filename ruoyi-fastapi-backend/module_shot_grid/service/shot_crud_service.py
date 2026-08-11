@@ -437,8 +437,8 @@ class ShotGridShotCrudService:
         project, storage = await ShotGridShotCrudDao.lock_project_storage(db, project_id)
         if project is None:
             raise shot_grid_error(404, 'SG_PROJECT_NOT_FOUND', '项目不存在或不可见')
-        if project.project_status == 'archived':
-            raise shot_grid_error(409, 'SG_INVALID_STATE_TRANSITION', '归档项目只允许读取')
+        if project.project_status in {'completed', 'archived'}:
+            raise shot_grid_error(409, 'SG_INVALID_STATE_TRANSITION', '已完成或归档项目只允许读取')
         if require_storage_ready and (storage is None or storage.storage_status != 'ready'):
             raise shot_grid_error(409, 'SG_PROJECT_NOT_READY', '项目 NAS 存储尚未就绪，禁止维护镜头')
         return project, storage
@@ -636,7 +636,7 @@ class ShotGridShotCrudService:
             return []
         if (
             row['lifecycle_status'] != 'active'
-            or row.get('project_status') == 'archived'
+            or row.get('project_status') in {'completed', 'archived'}
             or row.get('storage_status') != 'ready'
         ):
             return []

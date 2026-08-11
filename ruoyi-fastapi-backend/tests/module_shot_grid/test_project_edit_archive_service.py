@@ -197,6 +197,7 @@ async def test_update_project_does_not_query_versions_when_sensitive_fields_are_
     ('project', 'command', 'error_key'),
     [
         (_project(status='archived'), _update(), 'SG_INVALID_STATE_TRANSITION'),
+        (_project(status='completed'), _update(), 'SG_INVALID_STATE_TRANSITION'),
         (_project(lock_version=UPDATED_LOCK_VERSION), _update(), 'SG_OPTIMISTIC_LOCK_CONFLICT'),
     ],
 )
@@ -251,6 +252,18 @@ def test_project_detail_actions_include_edit_and_archive_only_with_matching_perm
     assert 'project.archive' in actions
 
 
+def test_completed_project_detail_only_allows_archive() -> None:
+    actions = ShotGridProjectService._allowed_actions(
+        _current_user(),
+        _access(),
+        'director',
+        project_status='completed',
+        storage_status='ready',
+    )
+
+    assert actions == ['project.archive']
+
+
 @pytest.mark.asyncio
 async def test_archive_project_preserves_row_and_freezes_response_before_commit(
     monkeypatch: pytest.MonkeyPatch,
@@ -281,6 +294,28 @@ async def test_archive_project_preserves_row_and_freezes_response_before_commit(
     assert audit_args['business_type'] == DELETE_BUSINESS_TYPE
     assert audit_args['oper_param']['reason'] == '项目已经交付'
     assert audit_args['oper_url'] == f'/shot-grid/projects/{PROJECT_ID}/archive'
+    db.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_archive_completed_project_remains_a_legal_terminal_action(monkeypatch: pytest.MonkeyPatch) -> None:
+    mocks = _patch_dependencies(
+        monkeypatch,
+        project=_project(status='completed'),
+        snapshot=_snapshot(status='archived'),
+    )
+    db = AsyncMock()
+
+    result = await ShotGridProjectService.archive_project(
+        db,
+        PROJECT_ID,
+        ShotGridProjectArchiveModel(reason='交付完成后归档', lockVersion=ORIGINAL_LOCK_VERSION),
+        _current_user(),
+        _access(),
+    )
+
+    assert result.project_status == 'archived'
+    mocks['update_project'].assert_awaited_once()
     db.commit.assert_awaited_once()
 
 

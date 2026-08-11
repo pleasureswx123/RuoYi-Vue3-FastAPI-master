@@ -388,7 +388,7 @@ class ShotGridProjectService:
         try:
             user_id, actor_name, dept_name = cls._actor(current_user)
             cls._require_mutation_access(access, project_id, user_id)
-            project = await cls._lock_mutable_project(db, project_id)
+            project = await cls._lock_mutable_project(db, project_id, allow_completed=True)
             cls._ensure_lock_version(project.lock_version, command.lock_version)
 
             updated = await ShotGridProjectDao.update_project(
@@ -440,12 +440,20 @@ class ShotGridProjectService:
         return ShotGridProjectListItemModel.model_validate(values)
 
     @classmethod
-    async def _lock_mutable_project(cls, db: AsyncSession, project_id: int) -> ShotGridProject:
+    async def _lock_mutable_project(
+        cls,
+        db: AsyncSession,
+        project_id: int,
+        *,
+        allow_completed: bool = False,
+    ) -> ShotGridProject:
         project = await ShotGridProjectDao.get_project_by_id(db, project_id, for_update=True)
         if project is None:
             raise shot_grid_error(404, 'SG_PROJECT_NOT_FOUND', '项目不存在或不可见')
         if project.project_status == 'archived':
             raise shot_grid_error(409, 'SG_INVALID_STATE_TRANSITION', '归档项目只允许读取')
+        if project.project_status == 'completed' and not allow_completed:
+            raise shot_grid_error(409, 'SG_INVALID_STATE_TRANSITION', '已完成项目只允许读取或归档')
         return project
 
     @staticmethod
@@ -508,6 +516,12 @@ class ShotGridProjectService:
             return []
         if project_status == 'archived':
             return []
+        if project_status == 'completed':
+            return (
+                ['project.archive']
+                if cls._has_permission(current_user, cls.PROJECT_ACTION_PERMISSIONS['project.archive'])
+                else []
+            )
         actions: list[str] = []
         for action, permissions in cls.PROJECT_ACTION_PERMISSIONS.items():
             if action == 'storage.retry' and storage_status != 'failed':

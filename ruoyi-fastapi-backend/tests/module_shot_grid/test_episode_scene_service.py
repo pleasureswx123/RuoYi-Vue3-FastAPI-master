@@ -324,6 +324,32 @@ def test_write_service_requires_director_but_all_scope_can_manage() -> None:
     assert actor_name == 'director'
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize('project_status', ['completed', 'archived'])
+async def test_completed_or_archived_project_rejects_episode_scene_writes(
+    monkeypatch: pytest.MonkeyPatch,
+    project_status: str,
+) -> None:
+    monkeypatch.setattr(
+        'module_shot_grid.service.episode_scene_service.ShotGridEpisodeSceneDao.lock_project_storage',
+        AsyncMock(
+            return_value=(
+                SimpleNamespace(project_id=PROJECT_ID, project_status=project_status),
+                SimpleNamespace(storage_status='ready'),
+            )
+        ),
+    )
+
+    with pytest.raises(ShotGridDomainException) as exc_info:
+        await ShotGridEpisodeSceneService._lock_writable_project(
+            AsyncMock(),
+            PROJECT_ID,
+            require_storage_ready=False,
+        )
+
+    assert exc_info.value.error_key == 'SG_INVALID_STATE_TRANSITION'
+
+
 def test_audit_method_names_fit_platform_column() -> None:
     actions = (
         'create_episode',

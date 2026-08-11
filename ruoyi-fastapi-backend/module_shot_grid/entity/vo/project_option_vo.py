@@ -62,3 +62,24 @@ class ShotGridMemberCandidateModel(ShotGridApiModel):
     avatar: str | None = None
     dept_id: int | None = None
     dept_name: str | None = None
+
+
+class ShotGridShotAssigneeOptionQueryModel(ShotGridApiModel):
+    """镜头首位制作人选项分页查询。"""
+
+    page_num: int = Field(default=1, ge=1)
+    page_size: int = Field(default=20, ge=1, le=100)
+    keyword: str | None = Field(default=None, max_length=100)
+
+
+class ShotGridShotAssigneeOptionModel(ShotGridApiModel):
+    """项目内可承担镜头任务的活动制作人安全投影。"""
+
+    user_id: int = Field(gt=0, le=SQL_BIGINT_MAX)
+    user_name: str
+    nick_name: str
+    avatar: str | None = None
+    dept_id: int | None = None
+    dept_name: str | None = None
+    project_role: Literal['director', 'creator']
+    producer_code: str

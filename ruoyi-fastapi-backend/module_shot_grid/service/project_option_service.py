@@ -8,6 +8,8 @@ from module_shot_grid.entity.vo.project_option_vo import (
     ShotGridMemberCandidateQueryModel,
     ShotGridProjectPathPreviewModel,
     ShotGridProjectPathPreviewRequestModel,
+    ShotGridShotAssigneeOptionModel,
+    ShotGridShotAssigneeOptionQueryModel,
     ShotGridStorageRootOptionModel,
 )
 from module_shot_grid.exceptions import shot_grid_error
@@ -66,6 +68,22 @@ class ShotGridProjectOptionService:
         rows, total = await ShotGridProjectOptionDao.get_member_candidate_page(db, query, data_scope_sql)
         return PageModel[ShotGridMemberCandidateModel](
             rows=[ShotGridMemberCandidateModel.model_validate(row) for row in rows],
+            pageNum=query.page_num,
+            pageSize=query.page_size,
+            total=total,
+            hasNext=query.page_num * query.page_size < total,
+        )
+
+    @classmethod
+    async def get_shot_assignee_option_page(
+        cls,
+        db: AsyncSession,
+        project_id: int,
+        query: ShotGridShotAssigneeOptionQueryModel,
+    ) -> PageModel[ShotGridShotAssigneeOptionModel]:
+        rows, total = await ShotGridProjectOptionDao.get_shot_assignee_option_page(db, project_id, query)
+        return PageModel[ShotGridShotAssigneeOptionModel](
+            rows=[ShotGridShotAssigneeOptionModel.model_validate(row) for row in rows],
             pageNum=query.page_num,
             pageSize=query.page_size,
             total=total,

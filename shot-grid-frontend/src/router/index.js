@@ -49,6 +49,12 @@ const routes = [
         meta: { title: '镜头管理', routeKey: 'shots' }
       },
       {
+        path: 'projects/:projectId/shots/:shotId',
+        name: 'shot-detail',
+        component: () => import('@/views/shot/ShotDetailView.vue'),
+        meta: { title: '镜头详情', routeKey: 'shots' }
+      },
+      {
         path: 'assets',
         name: 'assets',
         component: () => import('@/views/asset/AssetListView.vue'),

@@ -8,6 +8,7 @@ from sqlalchemy import true
 from module_shot_grid.entity.vo.project_option_vo import (
     ShotGridMemberCandidateQueryModel,
     ShotGridProjectPathPreviewRequestModel,
+    ShotGridShotAssigneeOptionQueryModel,
 )
 from module_shot_grid.exceptions import ShotGridDomainException
 from module_shot_grid.service.project_option_service import ShotGridProjectOptionService
@@ -142,3 +143,52 @@ async def test_member_candidates_return_page_without_contact_fields(monkeypatch:
     assert dumped['userId'] == CANDIDATE_USER_ID
     assert 'email' not in dumped
     assert 'phonenumber' not in dumped
+
+
+@pytest.mark.asyncio
+async def test_shot_assignee_options_return_project_role_and_producer_code(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        'module_shot_grid.service.project_option_service.ShotGridProjectOptionDao.get_shot_assignee_option_page',
+        AsyncMock(
+            return_value=(
+                [
+                    {
+                        'user_id': 7,
+                        'user_name': 'yangjingfeng',
+                        'nick_name': '杨景锋',
+                        'avatar': '',
+                        'dept_id': 100,
+                        'dept_name': '策划部',
+                        'project_role': 'creator',
+                        'producer_code': 'YJF',
+                    }
+                ],
+                1,
+            )
+        ),
+    )
+
+    result = await ShotGridProjectOptionService.get_shot_assignee_option_page(
+        AsyncMock(),
+        1001,
+        ShotGridShotAssigneeOptionQueryModel(pageNum=1, pageSize=20),
+    )
+
+    assert result.model_dump(by_alias=True) == {
+        'rows': [
+            {
+                'userId': 7,
+                'userName': 'yangjingfeng',
+                'nickName': '杨景锋',
+                'avatar': '',
+                'deptId': 100,
+                'deptName': '策划部',
+                'projectRole': 'creator',
+                'producerCode': 'YJF',
+            }
+        ],
+        'pageNum': 1,
+        'pageSize': 20,
+        'total': 1,
+        'hasNext': False,
+    }

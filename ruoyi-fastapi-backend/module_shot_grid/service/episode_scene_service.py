@@ -391,8 +391,8 @@ class ShotGridEpisodeSceneService:
         project, storage = await ShotGridEpisodeSceneDao.lock_project_storage(db, project_id)
         if project is None:
             raise shot_grid_error(404, 'SG_PROJECT_NOT_FOUND', '项目不存在或不可见')
-        if project.project_status == 'archived':
-            raise shot_grid_error(409, 'SG_INVALID_STATE_TRANSITION', '归档项目只允许读取')
+        if project.project_status in {'completed', 'archived'}:
+            raise shot_grid_error(409, 'SG_INVALID_STATE_TRANSITION', '已完成或归档项目只允许读取')
         if require_storage_ready and (storage is None or storage.storage_status != 'ready'):
             raise shot_grid_error(409, 'SG_PROJECT_NOT_READY', '项目存储尚未就绪，不能创建业务数据')
         return project, storage
