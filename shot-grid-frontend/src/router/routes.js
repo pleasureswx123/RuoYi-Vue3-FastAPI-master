@@ -18,6 +18,8 @@ export const stableRoutes = [
       { path: 'projects/:projectId/scenes', name: 'ProjectScenes', component: () => import('@/views/project/ProjectSectionView.vue'), props: true, meta: { navigationKey: 'projects', section: '场次' } },
       { path: 'projects/:projectId/shots', name: 'ProjectShots', component: () => import('@/views/shot/ShotListView.vue'), props: true, meta: { navigationKey: 'shots', section: '镜头' } },
       { path: 'projects/:projectId/assets', name: 'ProjectAssets', component: () => import('@/views/asset/AssetListView.vue'), props: true, meta: { navigationKey: 'assets', section: '资产' } },
+      { path: 'projects/:projectId/import/shots', name: 'ShotImport', component: () => import('@/views/import/ImportView.vue'), props: (route) => ({ projectId: route.params.projectId, importType: 'shot' }), meta: { navigationKey: 'shots', section: '镜头导入' } },
+      { path: 'projects/:projectId/import/assets', name: 'AssetImport', component: () => import('@/views/import/ImportView.vue'), props: (route) => ({ projectId: route.params.projectId, importType: 'asset' }), meta: { navigationKey: 'assets', section: '资产导入' } },
       { path: 'projects/:projectId/reviews', name: 'ProjectReviews', component: () => import('@/views/project/ProjectSectionView.vue'), props: true, meta: { navigationKey: 'reviews', section: '审核' } },
       { path: 'projects/:projectId/members', name: 'ProjectMembers', component: () => import('@/views/project/ProjectMembersView.vue'), props: true, meta: { navigationKey: 'projects', section: '成员' } },
       { path: 'shots/:shotId', name: 'ShotDetail', component: () => import('@/views/shot/ShotDetailView.vue'), props: true, meta: { navigationKey: 'shots' } },
