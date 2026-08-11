@@ -146,6 +146,25 @@ class ShotGridReviewDao:
         )
 
     @staticmethod
+    async def lock_auto_review_lists(db, project_id: int, version_id: int):
+        """锁定版本的自动审核单，使审核结果与审核单状态在同一事务内落库。"""
+        return list(
+            (
+                await db.scalars(
+                    select(ShotGridReviewList)
+                    .where(
+                        ShotGridReviewList.project_id == project_id,
+                        ShotGridReviewList.auto_version_id == version_id,
+                        ShotGridReviewList.review_mode == 'auto_single',
+                        ShotGridReviewList.del_flag == '0',
+                    )
+                    .order_by(ShotGridReviewList.review_list_id)
+                    .with_for_update()
+                )
+            ).all()
+        )
+
+    @staticmethod
     async def actions(db, project_id: int, version_id: int):
         return list(
             (

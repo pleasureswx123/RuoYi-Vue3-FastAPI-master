@@ -19,7 +19,7 @@ async def test_cross_project_file_id_is_rejected(monkeypatch):
     )
     with pytest.raises(Exception) as error:
         await ShotGridVersionQueryService.authorize_file(object(), _user(), 1, 2, 3, 'foreign-file')
-    assert error.value.status_code == 404
+    assert error.value.http_status == 404
     assert error.value.error_key == 'SG_VERSION_FILE_NOT_FOUND'
 
 
@@ -44,7 +44,7 @@ async def test_platform_deny_acl_overrides_project_file_access(monkeypatch):
     monkeypatch.setattr(ShotGridVersionQueryService, '_has_explicit_deny', AsyncMock(return_value=True))
     with pytest.raises(Exception) as error:
         await ShotGridVersionQueryService.authorize_file(object(), _user(), 1, 2, 3, 'owned-file')
-    assert error.value.status_code == 403
+    assert error.value.http_status == 403
     assert error.value.error_key == 'SG_VERSION_FILE_DENIED'
 
 

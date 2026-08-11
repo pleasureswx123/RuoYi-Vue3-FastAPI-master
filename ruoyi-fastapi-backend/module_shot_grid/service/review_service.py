@@ -3,6 +3,7 @@ from datetime import datetime
 
 from sqlalchemy.exc import IntegrityError
 
+from module_shot_grid.dao.project_audit_dao import ShotGridProjectAuditDao
 from module_shot_grid.dao.review_dao import ShotGridReviewDao
 from module_shot_grid.entity.do.review_do import (
     ShotGridNote,
@@ -166,6 +167,7 @@ class ShotGridReviewService:
             raise shot_grid_error(409, 'SG_REVIEW_STATUS_CONFLICT', '当前任务或版本状态不允许执行审核动作')
 
         target_status = {'approve': 'final', 'reject': 'rejected', 'defer': 'pending_review'}[action]
+        auto_review_lists = await ShotGridReviewDao.lock_auto_review_lists(db, project_id, version_id)
         if action == 'approve':
             for candidate in versions:
                 if candidate.version_id != version_id and candidate.version_status == 'final':
@@ -174,6 +176,11 @@ class ShotGridReviewService:
             task.task_status = 'completed'
         elif action == 'reject':
             task.task_status = 'revision'
+        if action in {'approve', 'reject'}:
+            for review_list in auto_review_lists:
+                review_list.review_status = 'completed'
+                review_list.lock_version += 1
+                review_list.update_by = str(user_id)
         version.version_status = target_status
         version.lock_version += 1
         task.lock_version += 1
@@ -191,6 +198,18 @@ class ShotGridReviewService:
             ),
         )
         try:
+            await ShotGridProjectAuditDao.add_success_log(
+                db,
+                title='Shot Grid版本审核',
+                business_type=0,
+                method='ShotGridReviewService.review_action',
+                request_method='POST',
+                oper_name=str(user_id),
+                dept_name=None,
+                oper_url=f'/shot-grid/projects/{project_id}/tasks/{task_id}/versions/{version_id}/{action}',
+                oper_param={'projectId': project_id, 'taskId': task_id, 'versionId': version_id, 'action': action},
+                result={'versionStatus': target_status, 'taskStatus': task.task_status},
+            )
             await db.commit()
         except IntegrityError as exc:
             await db.rollback()
@@ -245,6 +264,7 @@ class ShotGridReviewService:
             note_status='open',
         )
         ShotGridReviewDao.add(db, row)
+        await cls._audit_append(db, project_id, version_id, user_id, 'note_created', {'mandatory': body.is_mandatory})
         await db.commit()
         await db.refresh(row)
         return cls._dump_note(row, replies=[])
@@ -254,15 +274,19 @@ class ShotGridReviewService:
         await cls._require_note(db, project_id, version_id, note_id)
         row = ShotGridNoteReply(project_id=project_id, note_id=note_id, reply_user_id=user_id, content=body.content)
         ShotGridReviewDao.add(db, row)
+        await cls._audit_append(db, project_id, version_id, user_id, 'note_replied', {'noteId': note_id})
         await db.commit()
         await db.refresh(row)
         return cls._dump_reply(row)
 
     @classmethod
-    async def update_status(cls, db, project_id: int, version_id: int, note_id: int, status: str):
+    async def update_status(cls, db, project_id: int, version_id: int, note_id: int, status: str, *, user_id: int = 0):
         row = await cls._require_note(db, project_id, version_id, note_id, lock=True)
         if row.note_status != status:
             row.note_status = status
+            await cls._audit_append(
+                db, project_id, version_id, user_id, 'note_status_changed', {'noteId': note_id, 'status': status}
+            )
             await db.commit()
             await db.refresh(row)
         return {'noteId': row.note_id, 'versionId': row.version_id, 'status': row.note_status}
@@ -307,3 +331,18 @@ class ShotGridReviewService:
             'content': row.content,
             'createTime': row.create_time,
         }
+
+    @staticmethod
+    async def _audit_append(db, project_id, version_id, user_id, action, result):
+        await ShotGridProjectAuditDao.add_success_log(
+            db,
+            title='Shot Grid审核记录',
+            business_type=0,
+            method=f'ShotGridReviewService.{action}',
+            request_method='POST',
+            oper_name=str(user_id),
+            dept_name=None,
+            oper_url=f'/shot-grid/projects/{project_id}/versions/{version_id}',
+            oper_param={'projectId': project_id, 'versionId': version_id, 'action': action},
+            result=result,
+        )

@@ -12,6 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from config.env import UploadConfig
 from module_admin.entity.do.file_do import SysFileReference
 from module_shot_grid.config import SHOT_GRID_VERSION_CONFIG
+from module_shot_grid.dao.project_audit_dao import ShotGridProjectAuditDao
 from module_shot_grid.dao.version_submission_dao import ShotGridVersionSubmissionDao
 from module_shot_grid.entity.do.review_do import ShotGridReviewList, ShotGridReviewListVersion
 from module_shot_grid.entity.do.version_do import ShotGridVersion, ShotGridVersionFile, ShotGridVersionSubmission
@@ -433,6 +434,18 @@ class ShotGridVersionSubmissionWorker:
             task.update_by = str(item.submitted_by)
             item.submission_status = 'committed'
             item.last_error_key = item.last_error_message = None
+            await ShotGridProjectAuditDao.add_success_log(
+                db,
+                title='Shot Grid版本正式入库',
+                business_type=0,
+                method='ShotGridVersionSubmissionWorker._finalize',
+                request_method='WORKER',
+                oper_name=str(item.submitted_by),
+                dept_name=None,
+                oper_url=f'/shot-grid/projects/{project_id}/tasks/{task_id}/version-submissions/{submission_id}',
+                oper_param={'projectId': project_id, 'taskId': task_id, 'submissionId': submission_id},
+                result={'versionId': version.version_id, 'versionNo': version.version_no},
+            )
             await db.commit()
         except Exception:
             await db.rollback()
