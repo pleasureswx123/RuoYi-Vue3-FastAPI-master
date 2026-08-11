@@ -14,7 +14,10 @@ def test_search_query_normalizes_keyword_and_page_boundary() -> None:
 def test_discovery_queries_apply_member_scope_and_stable_order() -> None:
     source = Path('module_shot_grid/dao/discovery_dao.py').read_text(encoding='utf-8')
     assert "member_status == 'active'" in source
+    assert "project_status != 'archived'" in source
+    assert "ShotGridProject.del_flag == '0'" in source
     assert 'project_id.in_(member_projects)' in source
+    assert '_active_task_owner()' in source
     assert 'resource_id.desc()' in source
 
 

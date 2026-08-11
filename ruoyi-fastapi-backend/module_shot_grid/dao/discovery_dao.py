@@ -1,18 +1,59 @@
 # ruff: noqa: ANN001, ANN202, ANN205, ANN206
-from sqlalchemy import String, and_, cast, func, literal, or_, select, union_all
+from sqlalchemy import String, and_, cast, exists, func, literal, or_, select, union_all
 
 from module_admin.entity.do.file_do import SysFileInfo
-from module_shot_grid.entity.do.asset_do import ShotGridAsset
+from module_shot_grid.entity.do.asset_do import ShotGridAsset, ShotGridAssetItem
 from module_shot_grid.entity.do.project_do import ShotGridProject, ShotGridProjectMember, ShotGridShot
 from module_shot_grid.entity.do.task_do import ShotGridTask
 from module_shot_grid.entity.do.version_do import ShotGridVersion, ShotGridVersionFile
 
 
 def _member_projects(user_id: int):
-    return select(ShotGridProjectMember.project_id).where(
-        ShotGridProjectMember.user_id == user_id,
-        ShotGridProjectMember.member_status == 'active',
+    """当前用户仍有效、且项目仍处于日常工作范围内的项目。"""
+
+    return (
+        select(ShotGridProjectMember.project_id)
+        .join(ShotGridProject, ShotGridProject.project_id == ShotGridProjectMember.project_id)
+        .where(
+            ShotGridProjectMember.user_id == user_id,
+            ShotGridProjectMember.member_status == 'active',
+            ShotGridProject.del_flag == '0',
+            ShotGridProject.project_status != 'archived',
+        )
     )
+
+
+def _active_task_owner(task=ShotGridTask):
+    """任务所属镜头或制作分项必须仍是活动交付对象。"""
+
+    active_shot = exists(
+        select(1).where(
+            ShotGridShot.shot_id == task.shot_id,
+            ShotGridShot.project_id == task.project_id,
+            ShotGridShot.del_flag == '0',
+            ShotGridShot.lifecycle_status == 'active',
+        )
+    )
+    active_item = exists(
+        select(1)
+        .select_from(ShotGridAssetItem)
+        .join(
+            ShotGridAsset,
+            and_(
+                ShotGridAsset.asset_id == ShotGridAssetItem.asset_id,
+                ShotGridAsset.project_id == ShotGridAssetItem.project_id,
+            ),
+        )
+        .where(
+            ShotGridAssetItem.asset_item_id == task.asset_item_id,
+            ShotGridAssetItem.project_id == task.project_id,
+            ShotGridAssetItem.del_flag == '0',
+            ShotGridAssetItem.lifecycle_status == 'active',
+            ShotGridAsset.del_flag == '0',
+            ShotGridAsset.lifecycle_status == 'active',
+        )
+    )
+    return or_(active_shot, active_item)
 
 
 class ShotGridDiscoveryDao:
@@ -29,7 +70,11 @@ class ShotGridDiscoveryDao:
 
         queries = []
         if resource_type in {'all', 'shot'}:
-            conditions = [*common(ShotGridShot), ShotGridShot.del_flag == '0']
+            conditions = [
+                *common(ShotGridShot),
+                ShotGridShot.del_flag == '0',
+                ShotGridShot.lifecycle_status == 'active',
+            ]
             if keyword:
                 conditions.append(
                     or_(
@@ -48,23 +93,25 @@ class ShotGridDiscoveryDao:
                 ).where(*conditions)
             )
         if resource_type in {'all', 'asset'}:
-            conditions = [*common(ShotGridAsset), ShotGridAsset.del_flag == '0']
+            conditions = [
+                *common(ShotGridAsset),
+                ShotGridAsset.del_flag == '0',
+                ShotGridAsset.lifecycle_status == 'active',
+            ]
             if keyword:
-                conditions.append(
-                    or_(ShotGridAsset.asset_name.ilike(f'%{keyword}%'), ShotGridAsset.asset_code.ilike(f'%{keyword}%'))
-                )
+                conditions.append(ShotGridAsset.asset_name.ilike(f'%{keyword}%'))
             queries.append(
                 select(
                     literal('asset'),
                     cast(ShotGridAsset.asset_id, String),
                     ShotGridAsset.project_id,
                     ShotGridAsset.asset_name,
-                    ShotGridAsset.asset_code,
+                    ShotGridAsset.asset_type,
                     ShotGridAsset.update_time,
                 ).where(*conditions)
             )
         if resource_type in {'all', 'task'}:
-            conditions = [*common(ShotGridTask), ShotGridTask.del_flag == '0']
+            conditions = [*common(ShotGridTask), ShotGridTask.del_flag == '0', _active_task_owner()]
             if keyword:
                 conditions.append(ShotGridTask.task_name.ilike(f'%{keyword}%'))
             queries.append(
@@ -78,7 +125,7 @@ class ShotGridDiscoveryDao:
                 ).where(*conditions)
             )
         if resource_type in {'all', 'version'}:
-            conditions = common(ShotGridVersion)
+            conditions = [*common(ShotGridVersion), _active_task_owner()]
             if keyword:
                 conditions.append(
                     or_(
@@ -94,7 +141,15 @@ class ShotGridDiscoveryDao:
                     (literal('V') + cast(ShotGridVersion.version_no, String)),
                     ShotGridVersion.changelog,
                     ShotGridVersion.submitted_time,
-                ).where(*conditions)
+                )
+                .join(
+                    ShotGridTask,
+                    and_(
+                        ShotGridTask.task_id == ShotGridVersion.task_id,
+                        ShotGridTask.project_id == ShotGridVersion.project_id,
+                    ),
+                )
+                .where(*conditions)
             )
         if resource_type in {'all', 'file'}:
             conditions = [
@@ -116,8 +171,15 @@ class ShotGridDiscoveryDao:
                     ShotGridVersion.submitted_time,
                 )
                 .join(ShotGridVersion, ShotGridVersion.version_id == ShotGridVersionFile.version_id)
+                .join(
+                    ShotGridTask,
+                    and_(
+                        ShotGridTask.task_id == ShotGridVersion.task_id,
+                        ShotGridTask.project_id == ShotGridVersion.project_id,
+                    ),
+                )
                 .join(SysFileInfo, SysFileInfo.file_id == ShotGridVersionFile.file_id)
-                .where(*conditions)
+                .where(*conditions, ShotGridTask.del_flag == '0', _active_task_owner())
             )
         return union_all(*queries).subquery('discovery')
 
@@ -148,6 +210,8 @@ class ShotGridDiscoveryDao:
             ShotGridVersion.project_id.in_(member_projects),
             SysFileInfo.status == 'active',
             SysFileInfo.del_flag == '0',
+            ShotGridTask.del_flag == '0',
+            _active_task_owner(),
         ]
         if query.project_id:
             conditions.append(ShotGridVersion.project_id == query.project_id)
@@ -186,7 +250,11 @@ class ShotGridDiscoveryDao:
     @staticmethod
     async def workbench(db, user_id: int, limit: int):
         projects = _member_projects(user_id)
-        task_conditions = [ShotGridTask.project_id.in_(projects), ShotGridTask.del_flag == '0']
+        task_conditions = [
+            ShotGridTask.project_id.in_(projects),
+            ShotGridTask.del_flag == '0',
+            _active_task_owner(),
+        ]
         mine = (
             await db.execute(
                 select(ShotGridTask, ShotGridProject.project_name)
@@ -217,6 +285,7 @@ class ShotGridDiscoveryDao:
                     .where(
                         ShotGridTask.project_id.in_(director_ids),
                         ShotGridTask.del_flag == '0',
+                        _active_task_owner(),
                         ShotGridTask.task_status == 'pending_review',
                     )
                     .order_by(ShotGridTask.update_time.desc(), ShotGridTask.task_id.desc())
@@ -239,7 +308,12 @@ class ShotGridDiscoveryDao:
                 select(ShotGridVersion, ShotGridTask.task_name, ShotGridProject.project_name)
                 .join(ShotGridTask, ShotGridTask.task_id == ShotGridVersion.task_id)
                 .join(ShotGridProject, ShotGridProject.project_id == ShotGridVersion.project_id)
-                .where(ShotGridVersion.project_id.in_(projects), ShotGridVersion.submitted_by == user_id)
+                .where(
+                    ShotGridVersion.project_id.in_(projects),
+                    ShotGridVersion.submitted_by == user_id,
+                    ShotGridTask.del_flag == '0',
+                    _active_task_owner(),
+                )
                 .order_by(ShotGridVersion.submitted_time.desc(), ShotGridVersion.version_id.desc())
                 .limit(limit)
             )
@@ -254,7 +328,11 @@ class ShotGridDiscoveryDao:
                 )
                 .outerjoin(
                     ShotGridTask,
-                    and_(ShotGridTask.project_id == ShotGridProject.project_id, ShotGridTask.del_flag == '0'),
+                    and_(
+                        ShotGridTask.project_id == ShotGridProject.project_id,
+                        ShotGridTask.del_flag == '0',
+                        _active_task_owner(),
+                    ),
                 )
                 .where(ShotGridProject.project_id.in_(projects), ShotGridProject.del_flag == '0')
                 .group_by(ShotGridProject.project_id)
