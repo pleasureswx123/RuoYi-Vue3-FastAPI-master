@@ -2,6 +2,7 @@ import json
 from unittest.mock import AsyncMock
 
 import pytest
+from sqlalchemy import true
 
 from common.aspect.interface_auth import CheckUserInterfaceAuth
 from module_admin.entity.vo.user_vo import CurrentUserModel, UserInfoModel
@@ -79,9 +80,11 @@ async def test_project_create_returns_real_http_and_body_202(monkeypatch: pytest
             roles=[],
             user=UserInfoModel(userId=1, userName='director'),
         ),
+        user_data_scope_sql=true(),
     )
 
     body = json.loads(response.body)
     assert response.status_code == ACCEPTED_STATUS
     assert body['code'] == ACCEPTED_STATUS
     assert body['data']['projectId'] == PROJECT_ID
+    assert str(create_project.await_args.args[-1]) == 'true'

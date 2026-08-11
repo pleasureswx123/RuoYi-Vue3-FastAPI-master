@@ -37,6 +37,12 @@ const routes = [
         meta: { title: '项目', routeKey: 'projects' }
       },
       {
+        path: 'projects/:projectId/overview',
+        name: 'project-overview',
+        component: () => import('@/views/project/ProjectDetailView.vue'),
+        meta: { title: '项目详情', routeKey: 'projects' }
+      },
+      {
         path: 'shots',
         name: 'shots',
         component: () => import('@/views/shot/ShotListView.vue'),

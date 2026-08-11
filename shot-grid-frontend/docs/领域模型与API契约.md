@@ -4,8 +4,8 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 版本 | v1.6 |
-| 状态 | 普通管理、Excel 导入、独立任务、版本发布与 `auto_single` 审核后端已落地；独立业务前端应用基座已实现，六个业务页仍为无 Mock 边界占位；目录/版本 Worker 默认关闭，资产需求人工处理、`manual_batch`、媒体派生、业务 CRUD 与真实 UNC/完整 E2E 仍待实现 |
+| 版本 | v1.7 |
+| 状态 | 普通管理、Excel 导入、独立任务、版本发布与 `auto_single` 审核后端已落地；独立业务前端项目管理页已接入真实 API，并通过隔离真实 PostgreSQL/Redis/平台账号/生产 Nginx 项目管理子集旅程；目录/版本 Worker 默认关闭，资产需求人工处理、`manual_batch`、媒体派生、其余业务页面与真实 UNC/完整 E2E 仍待实现 |
 | 建立日期 | 2026-08-07 |
 | 最近修订 | 2026-08-11 |
 | 数据库 | PostgreSQL |
@@ -41,7 +41,7 @@
 - PostgreSQL 初始基线中的审计时间使用 `timestamp(0)`；Shot Grid SQLAlchemy DO 使用 PostgreSQL 方言下编译为 `TIMESTAMP(0) WITHOUT TIME ZONE` 的统一类型。
 - 常规业务异常默认由统一响应工具以 HTTP 200 返回；Shot Grid 的真实 HTTP 409 等语义属于本模块需要显式实现的扩展契约。
 - RuoYi 平台基座本身没有通用 NAS 根目录配置、项目目录初始化、版本文件发布到 UNC 路径或跨数据库与文件系统补偿能力。Shot Grid 已新增项目目录 Outbox Worker、目录诊断/人工重试和独立版本发布 Worker，但两个 Worker 均默认关闭，物理补偿仍未实现；不得把 Shot Grid 领域扩展描述为平台通用能力，也不得以本地临时目录测试冒充真实 UNC 验收。
-- 独立业务前端已实现 Vue 3/Vite/Pinia/Vue Router/Axios/Element Plus 应用基座、自有登录页、六项本地路由白名单、统一请求与错误分流；项目、镜头、资产、审核和文件业务数据页面尚未接入真实 CRUD。
+- 独立业务前端已实现 Vue 3/Vite/Pinia/Vue Router/Axios/Element Plus 应用基座、自有登录页、六项本地路由白名单、统一请求与错误分流；项目页已接入真实项目范围列表、创建、详情/概览、编辑/归档、成员维护和存储诊断，并完成生产 Nginx 形态下的隔离项目管理子集旅程。镜头、资产、审核和文件等其余业务数据页面尚未接入真实 CRUD；该子集旅程不等于完整系统 E2E。
 
 ## 3. 领域边界
 
@@ -1778,7 +1778,8 @@ ShotGridDomainException
 - `/getInfo` 后端只输出不含 `password` 的专用安全用户 VO；前端会话只保存 `userId`、`userName`、`nickName`、`avatar`、部门摘要、角色和权限列表。
 - 范围导航只接受 `workbench`、`projects`、`shots`、`assets`、`reviews`、`files`，并映射到固定本地路径；无任何有效导航时进入 403，不得默认授予六项菜单。
 - 退出无论后端调用是否成功都清理本地会话；后端错误仍向调用方报告，不能因本地清理而伪装退出接口成功。
-- 当前六个一级页面不调用业务列表接口，也不包含 Mock；它们是下一批接入项目、镜头、资产、审核和文件真实 API 的路由边界。
+- 项目一级页已调用真实项目、成员和存储接口，不包含失败回退 Mock；工作台、镜头、资产、版本审核和文件与 NAS 一级页仍主要是下一批真实 API 接入边界。
+- 生产构建页面根路径固定为 `/shot-grid-app/`。仓库 Nginx 模板必须对该路径提供 SPA 深链回退，并将 `/prod-api/...` 剥离 `/prod-api` 后代理到后端。本批隔离运行已验证页面根路径和项目详情深链返回 200 `text/html`、`/prod-api/captchaImage` 返回 200 JSON；这只证明当前生产代理形态和项目管理子集，不代表完整部署或生产就绪。
 
 ## 10. 第一批项目 API
 
@@ -1794,6 +1795,27 @@ Permissions:
 
 普通项目创建人只能看到 `enabled` 且最近探测可用的根目录选项，不返回 `credentialRef`、`rootPathKey` 或错误堆栈。路径预览请求：
 
+根目录选项响应只包含安全摘要：
+
+```json
+{
+  "data": [
+    {
+      "storageRootId": 10,
+      "rootCode": "PLAN_SMB",
+      "rootName": "策划部",
+      "protocol": "smb_unc",
+      "lastProbeStatus": "healthy",
+      "lastProbeTime": "2026-08-11T10:00:00"
+    }
+  ]
+}
+```
+
+`lastProbeStatus=healthy` 是后端根目录配置与最近探测状态的筛选条件。仅在隔离数据库中写入该值的逻辑夹具不证明真实 SMB/UNC 已由正式 Windows Worker 账号访问或写入，不能作为 NAS/AD/共享 ACL 验收证据。
+
+路径预览请求：
+
 ```json
 {
   "projectType": "ai_short_film",
@@ -1802,7 +1824,22 @@ Permissions:
 }
 ```
 
-响应返回经规范化校验的目录名、完整路径预览和冲突状态；预览不创建数据库记录或目录。创建项目时必须重新校验，不能信任旧预览结果。
+响应返回经规范化校验的目录名、完整路径预览和冲突状态：
+
+```json
+{
+  "data": {
+    "storageRootId": 10,
+    "rootName": "策划部",
+    "projectDirectoryName": "罗刹夫人",
+    "projectRelativePath": "AI影视短片\\罗刹夫人",
+    "projectPathPreview": "\\\\192.168.10.64\\策划部\\AI影视短片\\罗刹夫人",
+    "pathConflict": false
+  }
+}
+```
+
+该 POST 是无副作用预览：不创建数据库记录、不创建目录，也不改变根目录探测状态。创建项目时必须重新锁定并校验根目录和路径冲突，不能信任旧预览结果。
 
 管理员配置接口：
 
@@ -2077,6 +2114,32 @@ Permissions:
 两者均携带 `lockVersion`。启动要求存储已 `ready`；完成要求所有纳入交付的活动镜头和资产制作分项均有 `completed` 任务及唯一 `final` 版本。失败返回尚未完成对象的安全汇总，不返回无界列表。
 
 ## 11. 第一批项目成员 API
+
+### 11.0 成员候选分页
+
+```http
+GET /shot-grid/member-candidates?pageNum=1&pageSize=20&keyword=杨景锋
+Permission: shotgrid:project:add
+
+GET /shot-grid/projects/{projectId}/member-candidates?pageNum=1&pageSize=20&keyword=杨景锋
+Permission: shotgrid:member:add
+Project role: director
+```
+
+第一条用于创建项目选择初始总监和成员；第二条用于已创建项目的成员维护，并额外执行项目总监角色校验。二者都不等于某个项目的活动成员列表，均通过 `DataScopeDependency(SysUser)` 约束候选范围，只返回未删除、未停用且当前操作者有权选择的 `sys_user` 安全投影。分页响应 `rows` 中单项为：
+
+```json
+{
+  "userId": 2,
+  "userName": "yangjingfeng",
+  "nickName": "杨景锋",
+  "avatar": "",
+  "deptId": 100,
+  "deptName": "制作部"
+}
+```
+
+响应不得包含密码、手机号、邮箱、登录 IP、盐、Token 或其他认证字段。候选查询只解决安全选人；项目创建和添加/恢复成员事务继续应用同一 `DataScope(SysUser)`，重新校验账号状态、项目角色与项目内制作人缩写唯一性。成员添加、修改和移除在锁定项目行后还必须重新校验操作者仍为 `director`，不能只依赖 Controller 进入时的角色结果。
 
 ### 11.1 成员列表
 
@@ -3239,7 +3302,29 @@ NAS I/O 不得在数据库事务内执行。`sg_storage_operation` 和 `sg_versi
 
 ## 20. 第一批验收用例
 
-目录 Worker 与版本发布 Worker 本批均提供了 DAO、路径适配器、租约/心跳/重试服务、内部 Scheduler 任务和针对性测试入口；目录链另有管理 API。独立业务前端第一批已通过 lint、24 个单元测试和生产构建，但尚未使用真实后端、PostgreSQL、Redis 和平台账号完成登录 E2E。自动化文件系统用例只能在显式 `allow_local_root=True` 时使用临时本地目录；生产默认仍只接受 UNC。以下登录、目录创建和版本文件发布都要求在对应真实环境验证。未执行真实认证与 UNC E2E 前，源码存在、前端构建、单元测试、Mock、临时目录测试、迁移成功或 Scheduler 注册成功都不是生产验收证据。
+目录 Worker 与版本发布 Worker 本批均提供了 DAO、路径适配器、租约/心跳/重试服务、内部 Scheduler 任务和针对性测试入口；目录链另有管理 API。本批后端 Ruff check/format 覆盖 157 个文件并通过，定向测试 26 passed，完整 `tests/module_shot_grid` 为 441 passed、2 skipped；两个跳过项源于当前 Windows 账号没有创建符号链接权限。四条项目选项/候选路由已由 OpenAPI/路由测试确认。独立业务前端 lint、13 文件/44 单测和生产构建通过，生产镜像与项目管理子集旅程也已验证。自动化文件系统用例只能在显式 `allow_local_root=True` 时使用临时本地目录；隔离数据库中的逻辑 `healthy` 根目录也不能证明真实 UNC。以下完整登录、目录创建和版本文件发布仍要求在对应真实环境分别验证；当前子集证据不能替代完整系统 E2E 或真实 NAS 门禁。
+
+### 20.0 已完成的项目管理子集旅程
+
+验证环境使用当前 PostgreSQL 初始化基线创建的隔离数据库，Alembic head 为 `20260811_06`；Redis 使用隔离 DB 15；浏览器通过生产 Nginx 和真实平台管理员账号访问真实 FastAPI 后端。已走通：
+
+```text
+登录与六项导航
+→ 健康根目录选项、路径预览
+→ POST 创建项目，HTTP 202
+→ 项目详情、真实概览与详情深链刷新
+→ PUT 编辑项目，HTTP 200
+→ 项目成员候选
+→ POST 添加、PUT 修改、DELETE 软移除成员，均 HTTP 200
+→ 存储操作详情
+→ POST 归档，HTTP 200，并在归档列表回查
+→ POST 退出，HTTP 200
+→ 退出后访问详情深链，返回带 redirect 的登录页
+```
+
+数据库终态确认项目为 `archived`、`lockVersion=2`，管理员成员仍为 `active`，测试制作人员已软移除且最后缩写为 `NG2`；项目存储为 `initializing`，`initialize_project` 操作为 `pending`；项目与成员写入留下 6 条同事务审计。退出后 Redis 中 `access_token:*` 为 0。
+
+测试根 `\\127.0.0.1\shot-grid-e2e` 只是隔离数据库中的逻辑 `healthy` 夹具，目录 Worker 明确关闭。该旅程没有连接真实 SMB 共享、没有以正式 Windows/NAS 服务账号执行目录创建，也没有验证 NAS/AD/共享 ACL、写探针、失败重试或 Leader 接管。因此它只能称为“项目管理子集浏览器旅程”，不能称为完整系统 E2E、真实 NAS E2E 或生产就绪。
 
 ### 20.1 正向闭环
 
@@ -3316,6 +3401,6 @@ NAS I/O 不得在数据库事务内执行。`sg_storage_operation` 和 `sg_versi
 6. 决定已完成任务是否需要“重新打开”；MVP 当前禁止，未来动作必须有原因和审计。
 7. 两类样表、模板版本、默认最大行数、文件大小、预览 TTL 和资产名称规范化已冻结；上传原文件仅临时解析、不长期留存，确需留存时必须另走受保护文件引用。
 8. 决定资产模板是否增加跨重新保存仍保留的稳定 `sourceRowId/rowUid`；未引入前需冻结人工去重治理流程。
-9. 22 张基础表、`20260810_01 → 20260811_06` 迁移链、种子、项目/成员/集/场次/镜头/资产/制作分项普通管理、两类导入 API、独立任务管理、默认关闭的版本发布 Worker、正式版本/主文件引用/`auto_single` 审核闭环，以及默认关闭的 NAS 目录 Outbox Worker、目录诊断和人工重试已转化为代码；独立业务前端应用基座也已实现。资产需求人工处理、`manual_batch`、媒体派生、业务页面真实 API 接入、真实登录、UNC/NAS 部署验收和完整 E2E 继续按本契约分批实现。
+9. 22 张基础表、`20260810_01 → 20260811_06` 迁移链、种子、项目/成员/集/场次/镜头/资产/制作分项普通管理、两类导入 API、独立任务管理、默认关闭的版本发布 Worker、正式版本/主文件引用/`auto_single` 审核闭环，以及默认关闭的 NAS 目录 Outbox Worker、目录诊断和人工重试已转化为代码；独立业务前端应用基座、项目管理真实页面和生产 Docker/Nginx 配置也已实现，并已完成隔离项目管理子集浏览器旅程。资产需求人工处理、`manual_batch`、媒体派生、其余业务页面真实 API 接入、制作人员完整旅程、UNC/NAS 部署验收和完整系统 E2E 继续按本契约分批实现。
 
 上述 1—8 是评审、部署或数据治理参数，不得由页面开发临时猜测。第 9 项只说明当前第一批实现边界，未落地的契约章节仍是设计，不是已实现能力。

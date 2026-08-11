@@ -3,9 +3,12 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from sqlalchemy.dialects import postgresql
 
+from module_admin.entity.do.user_do import SysUser
 from module_shot_grid.dao.project_dao import ShotGridProjectDao
 from module_shot_grid.dao.project_member_dao import ShotGridProjectMemberDao
 from module_shot_grid.entity.vo.project_vo import ShotGridProjectListQueryModel
+
+VISIBLE_USER_ID = 2
 
 
 def _postgresql_sql(statement: object) -> str:
@@ -28,6 +31,19 @@ async def test_member_access_query_only_recognizes_active_membership() -> None:
 
     sql = _postgresql_sql(db.execute.await_args.args[0])
     assert "sg_project_member.member_status = 'active'" in sql
+
+
+@pytest.mark.asyncio
+async def test_active_member_candidate_validation_applies_user_data_scope() -> None:
+    result = MagicMock()
+    result.scalars.return_value.all.return_value = []
+    db = AsyncMock()
+    db.execute.return_value = result
+
+    await ShotGridProjectMemberDao.get_active_users(db, {VISIBLE_USER_ID, 3}, SysUser.user_id == VISIBLE_USER_ID)
+
+    sql = _postgresql_sql(db.execute.await_args.args[0])
+    assert 'sys_user.user_id = 2' in sql
 
 
 @pytest.mark.asyncio

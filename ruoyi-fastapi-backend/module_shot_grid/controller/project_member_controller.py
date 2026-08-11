@@ -1,13 +1,16 @@
 from typing import Annotated
 
 from fastapi import Path, Request, Response
+from sqlalchemy import ColumnElement
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from common.aspect.data_scope import DataScopeDependency
 from common.aspect.db_seesion import DBSessionDependency
 from common.aspect.interface_auth import UserInterfaceAuthDependency
 from common.aspect.pre_auth import CurrentUserDependency, PreAuthDependency
 from common.router import APIRouterPro
 from common.vo import DataResponseModel, ResponseBaseModel
+from module_admin.entity.do.user_do import SysUser
 from module_admin.entity.vo.user_vo import CurrentUserModel
 from module_shot_grid.dependencies.project_access import ProjectAccessDependency, ProjectRoleDependency
 from module_shot_grid.entity.vo.access_vo import ShotGridProjectAccessModel
@@ -56,6 +59,7 @@ async def add_shot_grid_project_member(
     command: ShotGridProjectMemberAddModel,
     query_db: Annotated[AsyncSession, DBSessionDependency()],
     current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
+    user_data_scope_sql: Annotated[ColumnElement, DataScopeDependency(SysUser)],
     access: Annotated[ShotGridProjectAccessModel, ProjectRoleDependency('director')],
 ) -> Response:
     result = await ShotGridProjectMemberService.add_member(
@@ -63,6 +67,7 @@ async def add_shot_grid_project_member(
         project_id,
         command,
         current_user,
+        user_data_scope_sql,
     )
     return ResponseUtil.success(data=result)
 

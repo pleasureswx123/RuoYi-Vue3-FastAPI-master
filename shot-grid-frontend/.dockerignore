@@ -1,0 +1,8 @@
+node_modules
+dist
+coverage
+.vite
+参考资料
+docs
+tests
+*.log

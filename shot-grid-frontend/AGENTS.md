@@ -8,7 +8,7 @@
 - 基础后端：`../ruoyi-fastapi-backend/`。
 - 后台管理端参考实现：`../ruoyi-fastapi-frontend/`。
 - 当前主数据库：PostgreSQL。
-- 当前目录已建立可独立构建的 Vue 3/Vite/Pinia/Vue Router/Axios/Element Plus 应用基座，包含自有登录页、真实验证码/登录/用户信息/退出/范围导航调用、六项本地白名单路由、业务 Layout、统一请求与传输加密、401 会话清理，以及 403/404/5xx 分流。六个业务页面当前只声明后续真实 API 接入边界，不含 Mock 或业务 CRUD。后端已建立 PostgreSQL 领域表、`20260810_01 → 20260811_06` 迁移链、导航、项目/成员/范围查询、集/场次/镜头/资产/制作分项普通管理、两类 Excel 预检与正式提交、独立任务管理、默认关闭的版本发布 Worker、不可覆盖版本、`auto_single` 自动审核单、意见/回复/解决及 `approve/reject/defer` 审核闭环，以及默认关闭的 NAS 目录 Outbox Worker、目录操作诊断和人工重试。资产需求人工处理、`manual_batch`、媒体派生、业务页面真实数据接入、真实 UNC 与完整 E2E 尚未实现；不得把前端构建、单元测试、后端增量、临时本地目录测试、需求设计、静态页面或 Mock 数据描述成已完成生产闭环，也不得把尚未执行的真实 UNC E2E 描述成 NAS 生产验收通过。
+- 当前目录已建立可独立构建的 Vue 3/Vite/Pinia/Vue Router/Axios/Element Plus 应用基座，包含自有登录页、真实验证码/登录/用户信息/退出/范围导航调用、六项本地白名单路由、业务 Layout、统一请求与传输加密、401 会话清理，以及 403/404/5xx 分流。项目页已接入真实项目范围列表、创建、详情/概览、编辑、归档、成员维护、存储状态和目录操作诊断接口，不含失败回退 Mock；工作台、镜头、资产、版本审核和文件与 NAS 一级页仍主要是后续真实数据接入边界。后端已建立 PostgreSQL 领域表、`20260810_01 → 20260811_06` 迁移链、导航、项目/成员/范围查询、集/场次/镜头/资产/制作分项普通管理、两类 Excel 预检与正式提交、独立任务管理、默认关闭的版本发布 Worker、不可覆盖版本、`auto_single` 自动审核单、意见/回复/解决及 `approve/reject/defer` 审核闭环，以及默认关闭的 NAS 目录 Outbox Worker、目录操作诊断和人工重试。生产 Dockerfile 与 Nginx 模板固定 `/shot-grid-app/` 和 `/prod-api/`；本批已使用隔离真实 PostgreSQL、Redis、平台管理员账号和生产 Nginx 完成项目管理子集浏览器旅程。资产需求人工处理、`manual_batch`、媒体派生、其余业务页面真实数据接入和真实 UNC 仍未完成；该子集旅程不是完整系统 E2E 或生产就绪证明。不得把逻辑 `healthy` 测试记录、临时本地目录、项目创建 HTTP 202 或初始化中页面描述成 NAS 生产验收通过。
 
 需求文档定义产品意图，本文件补充工程边界和必须保持的数据不变量。若需求文档与已确认的后端契约不一致，应先记录差异，再修改实现；不得在页面组件中用临时兼容掩盖数据模型冲突。
 
@@ -254,7 +254,7 @@ ruoyi-fastapi-frontend
 
 不得绕过统一请求层自行创建不带认证、错误处理或传输加密的 Axios 实例。上传、下载或流媒体接口需要排除应用层加密时，应与后端协议共同确认，不能在单个页面私自关闭安全策略。
 
-### 6.1 第一批应用基座的已实现契约
+### 6.1 应用基座与项目管理页的已实现契约
 
 - 开发环境页面根路径为 `/`，API 前缀为 `/dev-api`，Vite 代理将该前缀剥离后转发到后端；生产构建根路径固定为 `/shot-grid-app/`，API 前缀为 `/prod-api`。
 - 生产反向代理必须把 `/prod-api/...` 转发为后端真实的 `/...`，即剥离 `/prod-api`；不得把页面基路径 `/shot-grid-app/` 与后端业务前缀 `/shot-grid` 混用。
@@ -263,7 +263,13 @@ ruoyi-fastapi-frontend
 - `/getInfo` 使用专用安全用户 VO 输出当前用户信息，不包含 `password`；业务端 Pinia 还会把用户对象投影为 `userId`、`userName`、`nickName`、`avatar` 和部门摘要，不缓存后端额外用户字段。
 - `/shot-grid/navigation` 的 `routeKey` 只接受 `workbench`、`projects`、`shots`、`assets`、`reviews`、`files`。前端同时校验本地路径，拒绝未知键、重复键和路径不匹配项，不接受后端注入组件路径。
 - 统一 `ApiError` 保留 `status`、`httpStatus`、`code`、`errorKey`、`data`、`details` 和原始响应；401 清理本地会话并回登录，403 进入无权限页，404 与 5xx 分别展示不存在和服务异常，服务异常不得伪装成空数据。
-- 六个一级业务页面当前只是边界占位，明确提示“业务数据功能待接入”和“未使用 Mock 数据”；不得据此宣称项目、镜头、资产、审核或文件业务页面已经完成。
+- 项目列表调用 `GET /shot-grid/projects`，普通用户保持成员范围；只有具备 `shotgrid:project:all` 时才显示并提交显式 `scope=all`。列表包含搜索、状态、范围、排序和服务端分页，加载失败不能伪装为空数据。
+- 创建项目只从 `GET /shot-grid/storage-roots/options` 选择后端判定为 `enabled + healthy` 的根目录，通过 `POST /shot-grid/storage-roots/{storageRootId}/project-path-preview` 获取无副作用路径预览，并从 `GET /shot-grid/member-candidates` 选择创建时的有效平台用户。已创建项目的成员维护改用 `GET /shot-grid/projects/{projectId}/member-candidates`，由后端同时校验 `shotgrid:member:add`、项目总监角色和 `DataScope(SysUser)`。候选响应只允许安全身份摘要，前端不得要求后端返回密码、联系方式或完整用户实体。
+- 创建项目必须携带稳定 `X-Idempotency-Key`。后端 HTTP 202 只表示项目、成员、存储绑定和初始化 Outbox 已受理；页面必须显示“正在初始化”，不能在 `storageStatus=ready` 前把物理 NAS 初始化描述为成功。逻辑 `healthy` 根目录选项或测试夹具也不等于真实 UNC 可访问、可写或 Worker 已验收。
+- 项目详情页使用真实详情与概览聚合，并按后端 `allowedActions`、平台权限和项目角色控制编辑、归档、成员维护、路径查看与目录重试。普通编辑提交完整可编辑字段和当前 `lockVersion`；项目代号、NAS 绑定与状态不在普通 PUT 中修改，归档走独立动作。
+- 项目成员候选与成员列表是不同资源；添加、角色/制作人缩写修改和移除分别走项目成员接口。前端按钮显隐不能代替后端在项目行锁内重新校验操作者仍为项目总监。
+- 项目存储面板可以查看授权后的路径快照、复制路径、查询目录操作分页/详情并发起人工重试；浏览器未确认桌面协议处理器前不提供“打开 UNC”。生产 Docker/Nginx 代码固定把页面部署在 `/shot-grid-app/`，并把 `/prod-api/...` 剥离前缀后代理到后端，同时保留 SPA 深链回退；该配置已在隔离项目管理子集的真实浏览器旅程中验证，完整系统与真实 UNC/NAS 验收边界仍见本文件末尾说明。
+- 工作台、镜头、资产、版本审核和文件与 NAS 一级页面当前仍主要是边界占位，不得据此宣称这些业务页面已经完成。
 
 ## 7. 推荐目录与依赖方向
 
@@ -465,7 +471,7 @@ MVP 不能只以页面数量验收，至少需要真实走通：
 
 构建成功只证明静态产物可生成，不等于上述业务链路通过。
 
-截至 2026-08-11，独立业务前端已实际执行 `npm.cmd run lint`、`npm.cmd run test`（24 个单元测试）和 `npm.cmd run build:prod` 并通过；尚未使用真实后端、PostgreSQL、Redis 和平台账号执行登录/刷新/退出浏览器 E2E，也未验证生产 Nginx 前缀剥离。该结果只能作为应用基座静态与单元级证据，不能标记阶段 1 完整验收通过。
+截至 2026-08-11，本批已实际执行并通过 `npm.cmd run lint`、Vitest 13 个测试文件/44 个测试、`npm.cmd run build:prod`；生产构建处理 1744 个模块，主入口 317.35 kB，仅出现第三方依赖 `PURE` 注释构建警告。生产 Docker/Nginx 镜像构建成功，`/shot-grid-app/` 与项目详情深链均返回 200 `text/html`，`/prod-api/captchaImage` 返回 200 JSON 且前缀剥离正确。真实平台管理员账号经该 Nginx 完成登录、六项导航、根目录选项/路径预览、项目创建 HTTP 202、详情/概览、深链刷新、编辑、成员候选及增改移、存储操作详情、归档/列表回查、退出和退出后深链回登录页的项目管理子集旅程。该结果只关闭项目管理子集及生产代理门禁：测试根为 `\\127.0.0.1\shot-grid-e2e` 的逻辑 `healthy` 夹具，Worker 关闭，存储保持 `initializing`，没有验证真实 UNC/SMB/NAS 服务账号、目录创建或完整系统 E2E。
 
 ## 15. 变更纪律
 

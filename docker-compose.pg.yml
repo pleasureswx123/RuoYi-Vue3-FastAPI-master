@@ -1,4 +1,20 @@
 services:
+  # Shot Grid 独立业务前端
+  shot-grid-frontend:
+    build:
+      context: ./shot-grid-frontend
+      dockerfile: Dockerfile
+    image: shot-grid-frontend:20260811
+    container_name: shot-grid-frontend
+    ports:
+      - "12581:80"
+    environment:
+      BACKEND_UPSTREAM: http://ruoyi-backend-pg:9099
+    depends_on:
+      - ruoyi-backend-pg
+    networks:
+      - ruoyi-network
+
   # 前端服务
   ruoyi-frontend:
     build:

@@ -105,8 +105,10 @@ request.interceptors.response.use(
       return response.data
     }
     const payload = response.data
-    const code = Number(payload?.code ?? SUCCESS_CODE)
-    if (code === SUCCESS_CODE) {
+    const code = Number(payload?.code ?? response.status ?? SUCCESS_CODE)
+    const isHttpSuccess = response.status >= 200 && response.status < 300
+    const isEnvelopeSuccess = code >= 200 && code < 300 && payload?.success !== false
+    if (isHttpSuccess && isEnvelopeSuccess) {
       return payload
     }
     const error = createApiError(response)

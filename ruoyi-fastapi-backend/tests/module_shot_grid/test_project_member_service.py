@@ -3,8 +3,10 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from sqlalchemy import true
 
 from module_admin.entity.vo.user_vo import CurrentUserModel, UserInfoModel
+from module_shot_grid.entity.vo.access_vo import ShotGridProjectAccessModel
 from module_shot_grid.entity.vo.project_member_vo import (
     ShotGridProjectMemberAddModel,
     ShotGridProjectMemberUpdateModel,
@@ -27,6 +29,17 @@ def _patch_project_lock(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         'module_shot_grid.service.project_member_service.ShotGridProjectDao.get_project_by_id',
         AsyncMock(return_value=SimpleNamespace(project_id=10, project_status='active')),
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.project_member_service.ShotGridProjectAccessService.resolve_access',
+        AsyncMock(
+            return_value=ShotGridProjectAccessModel(
+                projectId=10,
+                userId=1,
+                projectRole='director',
+                hasAllScope=False,
+            )
+        ),
     )
 
 
@@ -194,6 +207,7 @@ async def test_readding_removed_member_restores_same_membership_record(
         10,
         ShotGridProjectMemberAddModel(userId=2, projectRole='creator', producerCode='YJF'),
         _current_user(),
+        true(),
     )
 
     assert result.user_id == MEMBER_USER_ID
@@ -224,7 +238,38 @@ async def test_readding_active_member_remains_conflict(monkeypatch: pytest.Monke
             10,
             ShotGridProjectMemberAddModel(userId=2, projectRole='creator'),
             _current_user(),
+            true(),
         )
 
     assert exc_info.value.error_key == 'SG_MEMBER_ALREADY_EXISTS'
     restore_member.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_member_write_revalidates_role_after_project_lock(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_project_lock(monkeypatch)
+    monkeypatch.setattr(
+        'module_shot_grid.service.project_member_service.ShotGridProjectAccessService.resolve_access',
+        AsyncMock(
+            side_effect=ShotGridDomainException(http_status=403, error_key='SG_PROJECT_ACCESS_DENIED', message='无权')
+        ),
+    )
+    get_member = AsyncMock()
+    monkeypatch.setattr(
+        'module_shot_grid.service.project_member_service.ShotGridProjectMemberDao.get_member_for_update',
+        get_member,
+    )
+    db = AsyncMock()
+
+    with pytest.raises(ShotGridDomainException) as exc_info:
+        await ShotGridProjectMemberService.update_member(
+            db,
+            10,
+            2,
+            ShotGridProjectMemberUpdateModel(producerCode='NEW'),
+            _current_user(),
+        )
+
+    assert exc_info.value.error_key == 'SG_PROJECT_ACCESS_DENIED'
+    get_member.assert_not_awaited()
+    db.rollback.assert_awaited_once()

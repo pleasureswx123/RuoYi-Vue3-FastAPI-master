@@ -16,6 +16,10 @@ function successAdapter(data) {
   return async config => ({ data, status: 200, statusText: 'OK', headers: {}, config, request: {} })
 }
 
+function acceptedAdapter(data) {
+  return async config => ({ data, status: 202, statusText: 'Accepted', headers: {}, config, request: {} })
+}
+
 describe('统一请求层', () => {
   afterEach(() => setSessionExpiredHandler(null))
 
@@ -50,6 +54,23 @@ describe('统一请求层', () => {
       errorKey: 'SG_OPTIMISTIC_LOCK_CONFLICT',
       details: { expected: 3 }
     })
+  })
+
+  it('接受真实 HTTP 202 与 code 202 的异步受理响应', async () => {
+    const response = await request.post(
+      '/shot-grid/projects',
+      { projectCode: 'LCFR' },
+      {
+        headers: { repeatSubmit: false },
+        adapter: acceptedAdapter({
+          code: 202,
+          success: true,
+          data: { projectId: 8, storageStatus: 'initializing' }
+        })
+      }
+    )
+
+    expect(response.data).toEqual({ projectId: 8, storageStatus: 'initializing' })
   })
 
   it('并发 401 只触发一次会话失效处理', async () => {

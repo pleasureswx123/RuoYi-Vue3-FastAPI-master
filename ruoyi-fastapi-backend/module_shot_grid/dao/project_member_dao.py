@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import case, func, select, update
+from sqlalchemy import ColumnElement, case, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from module_admin.entity.do.dept_do import SysDept
@@ -73,7 +73,12 @@ class ShotGridProjectMemberDao:
         ).scalar_one_or_none()
 
     @classmethod
-    async def get_active_users(cls, db: AsyncSession, user_ids: set[int]) -> set[int]:
+    async def get_active_users(
+        cls,
+        db: AsyncSession,
+        user_ids: set[int],
+        data_scope_sql: ColumnElement,
+    ) -> set[int]:
         """返回有效且启用的平台用户ID。"""
 
         if not user_ids:
@@ -85,6 +90,7 @@ class ShotGridProjectMemberDao:
                         SysUser.user_id.in_(user_ids),
                         SysUser.status == '0',
                         SysUser.del_flag == '0',
+                        data_scope_sql,
                     )
                 )
             )

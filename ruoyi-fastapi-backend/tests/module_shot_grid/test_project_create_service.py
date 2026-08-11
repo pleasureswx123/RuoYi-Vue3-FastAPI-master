@@ -2,6 +2,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from sqlalchemy import true
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -88,7 +89,7 @@ async def test_create_project_commits_project_members_storage_outbox_and_audit(
     mocks = _patch_create_dependencies(monkeypatch)
     db = AsyncMock()
 
-    result = await ShotGridProjectService.create_project(db, _command(), _current_user(), 'request-1')
+    result = await ShotGridProjectService.create_project(db, _command(), _current_user(), 'request-1', true())
 
     assert result.project_id == PROJECT_ID
     assert result.project_status == 'preparing'
@@ -134,7 +135,7 @@ async def test_create_project_freezes_response_before_commit_expires_orm_state(
 
     db.commit.side_effect = expire_on_commit
 
-    result = await ShotGridProjectService.create_project(db, _command(), _current_user(), 'request-1')
+    result = await ShotGridProjectService.create_project(db, _command(), _current_user(), 'request-1', true())
 
     assert result.project_id == PROJECT_ID
     assert expired is True
@@ -149,7 +150,7 @@ async def test_create_project_rolls_back_every_domain_write_when_audit_fails(
     db = AsyncMock()
 
     with pytest.raises(RuntimeError, match='audit failed'):
-        await ShotGridProjectService.create_project(db, _command(), _current_user(), 'request-1')
+        await ShotGridProjectService.create_project(db, _command(), _current_user(), 'request-1', true())
 
     db.commit.assert_not_awaited()
     db.rollback.assert_awaited_once()
@@ -194,7 +195,7 @@ async def test_same_idempotency_key_with_different_command_stops_before_domain_w
     db = AsyncMock()
 
     with pytest.raises(ShotGridDomainException) as exc_info:
-        await ShotGridProjectService.create_project(db, changed, _current_user(), 'request-1')
+        await ShotGridProjectService.create_project(db, changed, _current_user(), 'request-1', true())
 
     assert exc_info.value.error_key == 'SG_IDEMPOTENCY_CONFLICT'
     add_project.assert_not_awaited()
@@ -235,7 +236,7 @@ async def test_concurrent_unique_conflict_recheck_rejects_different_command(
     db = AsyncMock()
 
     with pytest.raises(ShotGridDomainException) as exc_info:
-        await ShotGridProjectService.create_project(db, changed, _current_user(), 'request-1')
+        await ShotGridProjectService.create_project(db, changed, _current_user(), 'request-1', true())
 
     assert exc_info.value.error_key == 'SG_IDEMPOTENCY_CONFLICT'
     assert db.rollback.await_count == EXPECTED_ROLLBACKS_AFTER_CONCURRENT_CONFLICT

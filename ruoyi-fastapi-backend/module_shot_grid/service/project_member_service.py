@@ -1,5 +1,6 @@
 from datetime import datetime
 
+from sqlalchemy import ColumnElement
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,6 +15,7 @@ from module_shot_grid.entity.vo.project_member_vo import (
     ShotGridProjectMemberUpdateModel,
 )
 from module_shot_grid.exceptions import ShotGridDomainException, shot_grid_error
+from module_shot_grid.service.project_access_service import ShotGridProjectAccessService
 from module_shot_grid.service.project_service import ShotGridProjectService
 
 
@@ -32,16 +34,22 @@ class ShotGridProjectMemberService:
         project_id: int,
         command: ShotGridProjectMemberAddModel,
         current_user: CurrentUserModel,
+        user_data_scope_sql: ColumnElement,
     ) -> ShotGridProjectMemberModel:
         _, actor_name, dept_name = ShotGridProjectService._actor(current_user)
         try:
             await cls._lock_mutable_project(db, project_id)
+            await cls._refresh_write_access(db, project_id, current_user)
             existing = await ShotGridProjectMemberDao.get_member_including_removed_for_update(
                 db, project_id, command.user_id
             )
             if existing is not None and existing.member_status == 'active':
                 raise shot_grid_error(409, 'SG_MEMBER_ALREADY_EXISTS', '该用户已经是项目成员')
-            active_users = await ShotGridProjectMemberDao.get_active_users(db, {command.user_id})
+            active_users = await ShotGridProjectMemberDao.get_active_users(
+                db,
+                {command.user_id},
+                user_data_scope_sql,
+            )
             if command.user_id not in active_users:
                 raise shot_grid_error(
                     422,
@@ -129,6 +137,7 @@ class ShotGridProjectMemberService:
         _, actor_name, dept_name = ShotGridProjectService._actor(current_user)
         try:
             await cls._lock_mutable_project(db, project_id)
+            await cls._refresh_write_access(db, project_id, current_user)
             member = await ShotGridProjectMemberDao.get_member_for_update(db, project_id, user_id)
             if member is None:
                 raise shot_grid_error(404, 'SG_MEMBER_NOT_FOUND', '项目成员不存在')
@@ -208,6 +217,7 @@ class ShotGridProjectMemberService:
         actor_user_id, actor_name, dept_name = ShotGridProjectService._actor(current_user)
         try:
             await cls._lock_mutable_project(db, project_id)
+            await cls._refresh_write_access(db, project_id, current_user)
             member = await ShotGridProjectMemberDao.get_member_for_update(db, project_id, user_id)
             if member is None:
                 raise shot_grid_error(404, 'SG_MEMBER_NOT_FOUND', '项目成员不存在')
@@ -257,6 +267,18 @@ class ShotGridProjectMemberService:
         if project.project_status == 'archived':
             raise shot_grid_error(409, 'SG_INVALID_STATE_TRANSITION', '归档项目只允许读取')
         return project
+
+    @classmethod
+    async def _refresh_write_access(
+        cls,
+        db: AsyncSession,
+        project_id: int,
+        current_user: CurrentUserModel,
+    ) -> None:
+        """项目行锁后重验操作者角色，关闭成员撤权与写入之间的竞态窗口。"""
+
+        access = await ShotGridProjectAccessService.resolve_access(db, current_user, project_id)
+        ShotGridProjectAccessService.require_roles(access, {'director'})
 
     @classmethod
     async def _audit(

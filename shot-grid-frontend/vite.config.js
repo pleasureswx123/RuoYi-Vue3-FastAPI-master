@@ -20,7 +20,7 @@ export default defineConfig(({ mode }) => {
       open: false,
       proxy: {
         [env.VITE_APP_BASE_API || '/dev-api']: {
-          target: 'http://127.0.0.1:9099',
+          target: env.VITE_APP_PROXY_TARGET || 'http://127.0.0.1:9099',
           changeOrigin: true,
           rewrite: requestPath => requestPath.replace(new RegExp(`^${env.VITE_APP_BASE_API || '/dev-api'}`), '')
         }

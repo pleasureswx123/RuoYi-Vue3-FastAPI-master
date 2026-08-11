@@ -3,6 +3,7 @@ import json
 from datetime import datetime
 from typing import Any
 
+from sqlalchemy import ColumnElement
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -122,6 +123,7 @@ class ShotGridProjectService:
         command: ShotGridProjectCreateModel,
         current_user: CurrentUserModel,
         idempotency_key: str,
+        user_data_scope_sql: ColumnElement,
     ) -> ShotGridProjectCreationAcceptedModel:
         user_id, actor_name, dept_name = cls._actor(current_user)
         idempotency_prefix, stable_idempotency_key, idempotency_lock = cls._build_idempotency_identity(
@@ -148,7 +150,7 @@ class ShotGridProjectService:
                 raise shot_grid_error(503, 'SG_STORAGE_ROOT_UNAVAILABLE', 'NAS 根目录当前不可达或不可写')
 
             user_ids = set(command.director_user_ids) | {member.user_id for member in command.members}
-            active_user_ids = await ShotGridProjectMemberDao.get_active_users(db, user_ids)
+            active_user_ids = await ShotGridProjectMemberDao.get_active_users(db, user_ids, user_data_scope_sql)
             invalid_user_ids = sorted(user_ids - active_user_ids)
             if invalid_user_ids:
                 raise shot_grid_error(
