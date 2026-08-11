@@ -8,7 +8,7 @@
 - 基础后端：`../ruoyi-fastapi-backend/`。
 - 后台管理端参考实现：`../ruoyi-fastapi-frontend/`。
 - 当前主数据库：PostgreSQL。
-- 当前目录已有需求、计划和契约文档，但尚未创建可运行的前端工程。后端已建立 PostgreSQL 领域表、`20260810_01 → 05` 迁移链、导航、项目/成员/范围查询、集/场次/镜头/资产/制作分项普通管理、两类 Excel 预检与正式提交，以及默认关闭的 NAS 目录 Outbox Worker、目录操作诊断和人工重试；任务动作、资产需求人工处理、版本文件发布和审核闭环尚未实现。不得把后端增量、临时本地目录测试、需求设计、静态页面或 Mock 数据描述成已完成业务闭环，也不得把尚未执行的真实 UNC E2E 描述成 NAS 生产验收通过。
+- 当前目录已有需求、计划和契约文档，但尚未创建可运行的前端工程。后端已建立 PostgreSQL 领域表、`20260810_01 → 20260811_06` 迁移链、导航、项目/成员/范围查询、集/场次/镜头/资产/制作分项普通管理、两类 Excel 预检与正式提交、独立任务管理、默认关闭的版本发布 Worker、不可覆盖版本、`auto_single` 自动审核单、意见/回复/解决及 `approve/reject/defer` 审核闭环，以及默认关闭的 NAS 目录 Outbox Worker、目录操作诊断和人工重试。资产需求人工处理、`manual_batch`、媒体派生、业务前端、真实 UNC 与完整 E2E 尚未实现；不得把后端增量、临时本地目录测试、需求设计、静态页面或 Mock 数据描述成已完成生产闭环，也不得把尚未执行的真实 UNC E2E 描述成 NAS 生产验收通过。
 
 需求文档定义产品意图，本文件补充工程边界和必须保持的数据不变量。若需求文档与已确认的后端契约不一致，应先记录差异，再修改实现；不得在页面组件中用临时兼容掩盖数据模型冲突。
 
@@ -146,6 +146,9 @@ ruoyi-fastapi-frontend
 - 确认通过并设置最终版本必须由后端在同一事务内完成，并处理并发审核；同一任务同时只能有一个最终版本。
 - 审核单与版本是有序多对多关系，关系记录必须保存顺序，不得依赖前端数组的偶然顺序。
 - 上传平台受保护文件不等于版本成功。必须通过 `sg_version_submission` 完成 NAS 临时写入、摘要校验和原子改名，再在短数据库事务中创建正式版本、文件引用、`auto_single` 审核单并把任务改为待审核。退回后再次上传必须生成新版本和新审核单，不能覆盖旧记录。
+- 首次分配任务时 `taskLockVersion` 必须为空，受控改派已有任务时必须提交当前 `taskLockVersion`；开始任务必须提交当前 `lockVersion`。任务存在任何非 `committed` 版本提交（包括 `failed`）时禁止改派。
+- 版本暂存先为平台私有源文件建立 `businessType=shotgrid_version_submission` 临时引用；正式版本事务再切换为 `shotgrid_version` 主文件引用。`committed` 的 `versionId` 通过正式版本按 `submissionId` 反查，提交记录本身不保存重复的 `versionId`。
+- 审核动作必须携带幂等键和版本 `lockVersion`。`approve` 必须拒绝仍存在的 open mandatory 意见，`reject` 必须有原因或 open mandatory 意见，`defer` 只记录动作；意见回复不可覆盖，解决意见使用独立动作。当前后端只实现 `auto_single` 查询与闭环，`manual_batch` 仍是后续能力。
 
 ### 4.4 文件
 
@@ -156,11 +159,13 @@ ruoyi-fastapi-frontend
 - 镜头主产出物业务文件名固定为 `{项目缩写}_EP{集号至少3位}_{场次号至少3位}_S{镜头号至少3位}_{制作人缩写}_V{版本号至少3位}_{服务端毫秒时间戳}.{mp4|mov}`，例如 `WGZR_EP001_001_S001_YJF_V001_1786094626499.mp4`。文件名版本号必须与正式版本记录一致。
 - 资产主产出物业务文件名固定为 `{项目缩写}_Asset_{Character|Environment|Prop}_{资产名称}_{制作分项}_{制作人缩写}_V{版本号至少3位}_{服务端毫秒时间戳}.{jpg|png}`，例如 `WGZR_Asset_Environment_动力舱室内_动力舱恐怖气氛主视角_YJF_V001_1786094626499.jpg`。资产名称和制作分项都必须安全规范化，且制作分项取任务所属 `sg_asset_item` 的稳定值。
 - 镜头和资产文件名使用的版本号与服务端毫秒时间戳都只能生成一次；同一幂等请求必须复用已生成值和业务文件名。
-- 镜头任务只接受 MP4/MOV，资产任务只接受 JPG/PNG；后端必须校验实际内容类型。
+- 镜头任务只接受 MP4/MOV，资产任务只接受 JPG/PNG；后端按真实字节校验 JPEG/PNG 与 MP4/MOV 容器签名/品牌。该门禁不是 codec、视频轨、可解码性或转码探测，不得描述成完整媒体有效性验证。
+- 平台私有上传当前单文件上限为 100 MiB，`mov` 已加入上传白名单；该基座上限不等于媒体处理或真实 NAS 大文件验收已经完成。
 - 缩略图、转码、代理文件和媒体元数据属于后端或异步处理能力；前端不得用占位地址假装处理成功。
 - 浏览器通常不能可靠直接打开 UNC/NAS 路径。MVP 应提供查看和复制路径；只有存在已确认的桌面协议处理器时才能提供“打开 NAS”。
 - NAS 根目录只能来自管理员白名单。项目创建必须同时写入项目存储绑定和目录 Outbox；项目存储为 `ready` 前不得进入正式业务写入。
 - NAS 目录 Worker 默认关闭，只在 PostgreSQL、显式开启配置且当前进程仍是 Application Leader 时消费 Outbox。领取、NAS I/O 和结果回写必须保持“短事务、事务外 I/O、短事务”，并以数据库租约、心跳和 owner + attempt fencing 防止旧持有者覆盖新终态。租约接管窗口不承诺物理 I/O 完全不重叠，当前执行器仅允许幂等目录创建和随机 `O_EXCL` 写探针。
+- NAS 版本发布 Worker 同样默认关闭，只在 PostgreSQL、显式开启 `SHOT_GRID_VERSION_WORKER_ENABLED` 且当前进程仍是 Application Leader 时消费提交。每次 attempt 必须使用含 attempt 和随机值的同目录唯一临时文件名；目标已存在时只有真实大小和 SHA-256 均一致才视为幂等成功，禁止覆盖。领取、文件 I/O、正式版本事务和结果回写保持短事务边界，正常关机或失锁必须 drain 活动任务。
 - 项目初始化和项目级对账的目标路径相对 NAS 存储根目录；集、镜头、资产目录目标相对项目根目录。人工重试新建 `reconcile_directory` 并保留旧失败操作，不得覆盖原操作或复用第二条 `initialize_project`。
 - 当前 Worker 单轮串行消费；软超时只用于诊断并继续心跳，不能宣称支持批内并发或能硬杀仍在执行的 SMB 线程。生产启用前必须使用正式 Windows Worker 账号、NAS/AD/共享 ACL 和隔离 UNC 根目录完成真实验证。
 - 平台权限不能约束用户绕过网页直接访问 SMB 共享；部署必须单独配置 NAS/AD/Windows 共享 ACL，并明确平台外直接访问边界。
@@ -217,7 +222,7 @@ ruoyi-fastapi-frontend
 - 时间字段与后端基座保持一致：SQLAlchemy 使用 `DateTime`，PostgreSQL 使用 `timestamp(0) without time zone`。
 - `del_flag = '2'` 只表示逻辑删除；业务归档使用明确状态字段，归档后保持 `del_flag = '0'`。
 - 结构升级同时提交 SQLAlchemy DO、PostgreSQL Alembic 迁移和 `ruoyi-fastapi-backend/sql/ruoyi-fastapi-pg.sql`，不依赖 `create_all()` 修改已有表。
-- 当前 Shot Grid head 为 `20260810_05`；05 在 DDL 前拒绝状态、重试时间、租约和完成时间组合不一致的历史目录操作，并增加项目维度的目录操作查询索引。该 revision 不把全平台 Alembic 链变成可从真正空库独立建库的 baseline。
+- 当前 Shot Grid head 为 `20260811_06`；06 在 DDL 前拒绝重复源文件、每任务多条未解决提交，以及状态/租约/错误组合不一致的历史版本提交，并增加“我的任务”索引、版本提交唯一性/状态约束和审核动作持久化幂等字段。该 revision 不把全平台 Alembic 链变成可从真正空库独立建库的 baseline。
 
 业务 API 统一使用 `/shot-grid` 前缀，权限码统一使用 `shotgrid:<resource>:<action>` 形式。若后端已有不同的正式契约，以已提交接口为准，并同步修订本文件和需求说明。
 

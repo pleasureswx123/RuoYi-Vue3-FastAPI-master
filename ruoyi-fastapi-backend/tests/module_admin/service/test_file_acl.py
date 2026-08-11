@@ -116,6 +116,25 @@ def test_private_file_acl_does_not_apply_parent_department_without_include_child
     assert result is False
 
 
+def test_business_authorization_still_honors_explicit_deny_for_file_owner() -> None:
+    current_user = make_current_user(10, admin=True)
+    file_acl = make_acl('user', 10, effect='deny')
+
+    with patch.object(FileAclDao, 'get_effective_file_acl_list', new=AsyncMock(return_value=[file_acl])):
+        result = asyncio.run(
+            CommonService._has_private_file_download_permission(
+                make_query_db(),
+                current_user,
+                make_file_info(owner_user_id=10),
+                FILE_ID,
+                datetime.now(),
+                business_access_granted=True,
+            )
+        )
+
+    assert result is False
+
+
 def test_file_acl_department_options_are_returned_as_tree() -> None:
     dept_list = [
         SimpleNamespace(dept_id=PARENT_DEPT_ID, dept_name='研发中心', parent_id=0),

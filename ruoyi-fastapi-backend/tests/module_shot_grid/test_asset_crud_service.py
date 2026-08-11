@@ -20,6 +20,7 @@ ASSET_ID = 20
 ASSET_ITEM_ID = 30
 ASSIGNEE_USER_ID = 2
 UPDATED_SORT_ORDER = 20
+RENAMED_TASK_LOCK_VERSION = 3
 
 
 def _current_user() -> CurrentUserModel:
@@ -333,6 +334,89 @@ async def test_item_edit_cannot_silently_change_existing_task_requirements(
         )
 
     assert exc_info.value.error_key == 'SG_INVALID_STATE_TRANSITION'
+
+
+@pytest.mark.asyncio
+async def test_item_rename_without_versions_syncs_existing_task_name_and_lock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    asset = SimpleNamespace(asset_id=ASSET_ID, asset_name='动力舱室内')
+    item = SimpleNamespace(
+        asset_item_id=ASSET_ITEM_ID,
+        asset_id=ASSET_ID,
+        lifecycle_status='active',
+        lock_version=0,
+        production_item='主视角',
+        production_item_key='主视角',
+        description='旧描述',
+        sort_order=10,
+        remark=None,
+        update_by='old',
+        update_time=None,
+    )
+    task = SimpleNamespace(
+        assignee_user_id=ASSIGNEE_USER_ID,
+        requirements='原要求',
+        task_name='动力舱室内 - 主视角',
+        lock_version=2,
+        update_by='old',
+        update_time=None,
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.asset_crud_service.ShotGridAssetCrudService._lock_writable_project',
+        AsyncMock(),
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.asset_crud_service.ShotGridAssetCrudService._lock_active_asset',
+        AsyncMock(return_value=asset),
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.asset_crud_service.ShotGridAssetCrudDao.get_asset_item',
+        AsyncMock(return_value=item),
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.asset_crud_service.ShotGridAssetCrudService._resolve_item_update',
+        AsyncMock(return_value=('恐怖气氛主视角', '恐怖气氛主视角', '旧描述', 10, None)),
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.asset_crud_service.ShotGridAssetCrudService._validate_item_task_update',
+        AsyncMock(return_value=task),
+    )
+    audit = AsyncMock()
+    monkeypatch.setattr(
+        'module_shot_grid.service.asset_crud_service.ShotGridAssetCrudService._audit',
+        audit,
+    )
+    expected = object()
+    monkeypatch.setattr(
+        'module_shot_grid.service.asset_crud_service.ShotGridAssetCrudService._get_item_model',
+        AsyncMock(return_value=expected),
+    )
+    db = AsyncMock()
+
+    result = await ShotGridAssetCrudService.update_asset_item(
+        db,
+        PROJECT_ID,
+        ASSET_ITEM_ID,
+        ShotGridAssetItemUpdateModel(
+            productionItem='恐怖气氛主视角',
+            lockVersion=0,
+        ),
+        _current_user(),
+        _access(),
+    )
+
+    assert result is expected
+    assert item.production_item == '恐怖气氛主视角'
+    assert item.lock_version == 1
+    assert task.task_name == '动力舱室内 - 恐怖气氛主视角'
+    assert task.lock_version == RENAMED_TASK_LOCK_VERSION
+    assert task.update_by == 'director'
+    assert task.update_time == item.update_time
+    assert audit.await_args.kwargs['result']['taskLockVersion'] == RENAMED_TASK_LOCK_VERSION
+    db.flush.assert_awaited_once()
+    db.commit.assert_awaited_once()
+    db.rollback.assert_not_awaited()
 
 
 @pytest.mark.parametrize(

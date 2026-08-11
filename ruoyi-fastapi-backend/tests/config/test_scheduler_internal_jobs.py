@@ -13,6 +13,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from config.env import DataBaseConfig
 from config.get_scheduler import SchedulerUtil
 from module_task.shot_grid_storage_task import run_shot_grid_storage_outbox
+from module_task.shot_grid_version_task import run_shot_grid_version_publisher
 
 POLL_INTERVAL_SECONDS = 7
 
@@ -72,6 +73,36 @@ def test_storage_worker_config_requires_postgresql_and_explicit_enable() -> None
         assert SchedulerUtil._get_shot_grid_storage_worker_config() is enabled_config
 
 
+def test_version_worker_config_requires_postgresql_and_explicit_enable() -> None:
+    enabled_config = SimpleNamespace(enabled=True)
+    disabled_config = SimpleNamespace(enabled=False)
+
+    with (
+        patch.object(DataBaseConfig, 'db_type', 'mysql'),
+        patch('config.get_scheduler.importlib.import_module') as import_module,
+    ):
+        assert SchedulerUtil._get_shot_grid_version_worker_config() is None
+        import_module.assert_not_called()
+
+    with (
+        patch.object(DataBaseConfig, 'db_type', 'postgresql'),
+        patch(
+            'config.get_scheduler.importlib.import_module',
+            return_value=SimpleNamespace(SHOT_GRID_VERSION_WORKER_CONFIG=disabled_config),
+        ),
+    ):
+        assert SchedulerUtil._get_shot_grid_version_worker_config() is None
+
+    with (
+        patch.object(DataBaseConfig, 'db_type', 'postgresql'),
+        patch(
+            'config.get_scheduler.importlib.import_module',
+            return_value=SimpleNamespace(SHOT_GRID_VERSION_WORKER_CONFIG=enabled_config),
+        ),
+    ):
+        assert SchedulerUtil._get_shot_grid_version_worker_config() is enabled_config
+
+
 @pytest.mark.asyncio
 async def test_storage_internal_job_is_interval_singleton_and_replaceable() -> None:
     """校验内部任务采用配置轮询周期，且重复注册仍只有一个实例。"""
@@ -96,6 +127,37 @@ async def test_storage_internal_job_is_interval_singleton_and_replaceable() -> N
         job = jobs[0]
         assert job.id == '_shot_grid_storage_outbox'
         assert job.func is run_shot_grid_storage_outbox
+        assert isinstance(job.trigger, IntervalTrigger)
+        assert job.trigger.interval.total_seconds() == POLL_INTERVAL_SECONDS
+        assert job.coalesce is True
+        assert job.max_instances == 1
+    finally:
+        test_scheduler.shutdown(wait=False)
+
+
+@pytest.mark.asyncio
+async def test_version_internal_job_is_interval_singleton_and_replaceable() -> None:
+    test_scheduler = _build_memory_scheduler()
+    test_scheduler.start(paused=True)
+    worker_config = SimpleNamespace(enabled=True, poll_interval_seconds=POLL_INTERVAL_SECONDS)
+
+    try:
+        with (
+            patch('config.get_scheduler.scheduler', test_scheduler),
+            patch.object(
+                SchedulerUtil,
+                '_get_shot_grid_version_worker_config',
+                return_value=worker_config,
+            ),
+        ):
+            SchedulerUtil._register_shot_grid_version_job()
+            SchedulerUtil._register_shot_grid_version_job()
+
+        jobs = test_scheduler.get_jobs()
+        assert len(jobs) == 1
+        job = jobs[0]
+        assert job.id == '_shot_grid_version_publisher'
+        assert job.func is run_shot_grid_version_publisher
         assert isinstance(job.trigger, IntervalTrigger)
         assert job.trigger.interval.total_seconds() == POLL_INTERVAL_SECONDS
         assert job.coalesce is True

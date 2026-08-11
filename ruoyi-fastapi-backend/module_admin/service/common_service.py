@@ -24,6 +24,10 @@ from module_admin.service.file_access_service import FileAuditService
 from utils.file_util import FileByteRange, FileDownloadResult, FileUtil
 from utils.upload_util import FilePathUtil, UploadUtil
 
+MAX_DOWNLOAD_FILENAME_LENGTH = 255
+ASCII_CONTROL_LIMIT = 32
+ASCII_DELETE_CODE = 127
+
 
 class CommonService:
     """
@@ -186,6 +190,8 @@ class CommonService:
         current_user: CurrentUserModel,
         file_id: str,
         enforce_owner_permission: bool = True,
+        business_access_granted: bool = False,
+        download_filename: str | None = None,
         file_data_scope_sql: ColumnElement | None = None,
         range_header: str | None = None,
     ) -> FileDownloadResult:
@@ -197,6 +203,8 @@ class CommonService:
         :param current_user: 当前用户对象
         :param file_id: 文件ID
         :param enforce_owner_permission: 是否校验文件所有者权限
+        :param business_access_granted: 是否已通过受控业务关系授权
+        :param download_filename: 业务侧覆盖的安全下载文件名
         :param file_data_scope_sql: 文件数据权限对应的查询sql语句
         :param range_header: Range请求头
         :return: 文件下载结果
@@ -230,15 +238,26 @@ class CommonService:
         )
         if is_expired:
             is_allowed = False
-        elif not enforce_owner_permission or file_info.access_type == 'public':
+        elif file_info.access_type == 'public':
             is_allowed = True
-        else:
-            is_allowed = await cls._has_private_file_download_permission(
+        elif business_access_granted:
+            is_allowed = await cls.check_private_file_download_permission_services(
                 query_db,
                 current_user,
                 file_info,
                 file_id,
-                current_time,
+                current_time=current_time,
+                business_access_granted=True,
+            )
+        elif not enforce_owner_permission:
+            is_allowed = True
+        else:
+            is_allowed = await cls.check_private_file_download_permission_services(
+                query_db,
+                current_user,
+                file_info,
+                file_id,
+                current_time=current_time,
             )
         if not is_allowed:
             await cls._enqueue_file_access_log(
@@ -280,7 +299,7 @@ class CommonService:
             )
             raise
 
-        original_name = file_info.original_name
+        original_name = cls._safe_download_filename(download_filename) or file_info.original_name
         await query_db.rollback()
         await cls._enqueue_file_access_log(
             request,
@@ -305,6 +324,7 @@ class CommonService:
         file_info: SysFileInfo,
         file_id: str,
         current_time: datetime,
+        business_access_granted: bool = False,
     ) -> bool:
         """
         校验私有文件下载权限
@@ -319,7 +339,9 @@ class CommonService:
         user = current_user.user
         if user is None or user.user_id is None:
             return False
-        if bool(getattr(user, 'admin', False)) or user.user_id == file_info.owner_user_id:
+        if not business_access_granted and (
+            bool(getattr(user, 'admin', False)) or user.user_id == file_info.owner_user_id
+        ):
             return True
 
         file_acl_list = await FileAclDao.get_effective_file_acl_list(query_db, file_id, current_time)
@@ -341,12 +363,58 @@ class CommonService:
 
         if 'deny' in matched_effects:
             return False
+        if business_access_granted:
+            return True
         if user.user_id == file_info.upload_user_id and getattr(file_info, 'uploader_access_enabled', '1') in {
             '1',
             True,
         }:
             return True
         return 'allow' in matched_effects
+
+    @classmethod
+    async def check_private_file_download_permission_services(
+        cls,
+        query_db: AsyncSession,
+        current_user: CurrentUserModel,
+        file_info: SysFileInfo,
+        file_id: str,
+        *,
+        current_time: datetime | None = None,
+        business_access_granted: bool = False,
+    ) -> bool:
+        """复用平台 ACL 决策；受控业务授权仍不能覆盖显式拒绝。"""
+
+        if file_info.access_type != 'private':
+            return file_info.access_type == 'public'
+        checked_time = current_time or datetime.now()
+        if file_info.expire_time and file_info.expire_time < checked_time:
+            return False
+        return await cls._has_private_file_download_permission(
+            query_db,
+            current_user,
+            file_info,
+            file_id,
+            checked_time,
+            business_access_granted=business_access_granted,
+        )
+
+    @staticmethod
+    def _safe_download_filename(filename: str | None) -> str | None:
+        """净化业务侧覆盖的下载文件名，禁止路径和控制字符进入响应头。"""
+
+        if filename is None:
+            return None
+        safe_name = UploadUtil.get_original_filename(filename).strip()
+        if (
+            not safe_name
+            or len(safe_name) > MAX_DOWNLOAD_FILENAME_LENGTH
+            or any(
+                ord(character) < ASCII_CONTROL_LIMIT or ord(character) == ASCII_DELETE_CODE for character in safe_name
+            )
+        ):
+            raise ServiceException(message='下载文件名不合法')
+        return safe_name
 
     @staticmethod
     def _get_current_user_role_ids(user: object) -> set[int]:

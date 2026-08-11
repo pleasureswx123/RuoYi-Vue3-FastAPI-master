@@ -16,6 +16,7 @@ declare
     test_version_2_id bigint;
     test_manual_review_list_id bigint;
     test_file_id varchar(36) := '00000000-0000-0000-0000-000000000001';
+    test_file_2_id varchar(36) := '00000000-0000-0000-0000-000000000002';
 begin
     if exists (
         select 1
@@ -266,6 +267,43 @@ begin
         repeat('a', 64), current_timestamp, current_timestamp
     );
 
+    begin
+        insert into sg_version_submission (
+            project_id, task_id, source_file_id, reserved_version_no, generated_at_ms,
+            business_file_name, target_relative_path, temporary_relative_path,
+            source_sha256, source_file_size, changelog, submission_status,
+            submitted_by, idempotency_key, lease_owner, lease_until, create_time, update_time
+        ) values (
+            test_project_id, test_task_id, test_file_id, 98, 1786094626598,
+            'SGTEST_EP001_001_S001_ADMIN_V098_1786094626598.mp4',
+            'VIDEO/EP01/S001/v098.mp4', 'VIDEO/EP01/S001/.sgtmp-98.part',
+            repeat('a', 64), 1, '非法租约状态', 'pending',
+            1, 'constraint-test-invalid-lease', 'worker', current_timestamp + interval '5 minutes',
+            current_timestamp, current_timestamp
+        );
+        raise exception 'ck_sg_submission_execution_state 未拒绝 pending 持有租约';
+    exception
+        when check_violation then null;
+    end;
+
+    begin
+        insert into sg_version_submission (
+            project_id, task_id, source_file_id, reserved_version_no, generated_at_ms,
+            business_file_name, target_relative_path, temporary_relative_path,
+            source_sha256, source_file_size, changelog, submission_status,
+            submitted_by, idempotency_key, create_time, update_time
+        ) values (
+            test_project_id, test_task_id, test_file_id, 97, 1786094626597,
+            'SGTEST_EP001_001_S001_ADMIN_V097_1786094626597.mp4',
+            'VIDEO/EP01/S001/v097.mp4', 'VIDEO/EP01/S001/.sgtmp-97.part',
+            repeat('a', 64), 1, '非法失败状态', 'failed',
+            1, 'constraint-test-invalid-error', current_timestamp, current_timestamp
+        );
+        raise exception 'ck_sg_submission_error_state 未拒绝 failed 缺少错误摘要';
+    exception
+        when check_violation then null;
+    end;
+
     insert into sg_version_submission (
         project_id, task_id, source_file_id, reserved_version_no, generated_at_ms,
         business_file_name, target_relative_path, temporary_relative_path,
@@ -279,6 +317,24 @@ begin
         1, 'constraint-test-v1', current_timestamp, current_timestamp
     ) returning submission_id into test_submission_1_id;
 
+    begin
+        insert into sg_version_submission (
+            project_id, task_id, source_file_id, reserved_version_no, generated_at_ms,
+            business_file_name, target_relative_path, temporary_relative_path,
+            source_sha256, source_file_size, changelog, submission_status,
+            submitted_by, idempotency_key, create_time, update_time
+        ) values (
+            test_project_id, test_task_id, test_file_id, 99, 1786094626599,
+            'SGTEST_EP001_001_S001_ADMIN_V099_1786094626599.mp4',
+            'VIDEO/EP01/S001/v099.mp4', 'VIDEO/EP01/S001/.sgtmp-99.part',
+            repeat('a', 64), 1, '重复源文件', 'committed',
+            1, 'constraint-test-duplicate-file', current_timestamp, current_timestamp
+        );
+        raise exception 'uk_sg_version_submission_source_file 未拒绝重复源文件';
+    exception
+        when unique_violation then null;
+    end;
+
     insert into sg_version (
         project_id, task_id, submission_id, version_no, changelog,
         submitted_by, submitted_time, generated_at_ms
@@ -287,13 +343,21 @@ begin
         1, current_timestamp, 1786094626499
     ) returning version_id into test_version_1_id;
 
+    insert into sys_file_info (
+        file_id, original_name, stored_name, storage_key, file_hash,
+        create_time, update_time
+    ) values (
+        test_file_2_id, 'source-2.mp4', 'source-2.mp4', 'shot-grid-test/source-2.mp4',
+        repeat('b', 64), current_timestamp, current_timestamp
+    );
+
     insert into sg_version_submission (
         project_id, task_id, source_file_id, reserved_version_no, generated_at_ms,
         business_file_name, target_relative_path, temporary_relative_path,
         source_sha256, source_file_size, changelog, submission_status,
         submitted_by, idempotency_key, create_time, update_time
     ) values (
-        test_project_id, test_task_id, test_file_id, 2, 1786094626500,
+        test_project_id, test_task_id, test_file_2_id, 2, 1786094626500,
         'SGTEST_EP001_001_S001_ADMIN_V002_1786094626500.mp4',
         'VIDEO/EP01/S001/v002.mp4', 'VIDEO/EP01/S001/.sgtmp-2.part',
         repeat('b', 64), 1, '第二版', 'committed',

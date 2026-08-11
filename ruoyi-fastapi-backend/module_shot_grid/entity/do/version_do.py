@@ -100,11 +100,28 @@ class ShotGridVersionSubmission(Base):
             "(lease_owner is not null and btrim(lease_owner) <> '' and lease_until is not null)",
             name='ck_sg_submission_lease',
         ),
+        CheckConstraint(
+            "(submission_status in ('publishing', 'committing') "
+            "and lease_owner is not null and btrim(lease_owner) <> '' and lease_until is not null) or "
+            "(submission_status in ('pending', 'published', 'committed', 'failed') "
+            'and lease_owner is null and lease_until is null)',
+            name='ck_sg_submission_execution_state',
+        ),
+        CheckConstraint(
+            "(submission_status = 'failed' and last_error_key is not null "
+            "and btrim(last_error_key) <> '' and last_error_message is not null "
+            "and btrim(last_error_message) <> '') or "
+            "(submission_status <> 'failed' and last_error_key is null and last_error_message is null)",
+            name='ck_sg_submission_error_state',
+        ),
+        Index('uk_sg_version_submission_source_file', 'source_file_id', unique=True),
         Index(
             'uk_sg_version_submission_active',
             'task_id',
             unique=True,
-            postgresql_where=text("submission_status IN ('pending', 'publishing', 'published', 'committing')"),
+            postgresql_where=text(
+                "submission_status IN ('pending', 'publishing', 'published', 'committing', 'failed')"
+            ),
         ),
         Index('idx_sg_submission_status_lease_update', 'submission_status', 'lease_until', 'update_time'),
         {'comment': 'Shot Grid版本暂存与NAS发布编排表'},

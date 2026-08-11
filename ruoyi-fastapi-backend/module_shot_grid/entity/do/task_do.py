@@ -89,5 +89,13 @@ class ShotGridTask(ShotGridMutableAuditMixin, Base):
             'task_status',
             'due_date',
         ),
+        Index(
+            'idx_sg_task_assignee_status_due',
+            'assignee_user_id',
+            'task_status',
+            'due_date',
+            'task_id',
+            postgresql_where=text("del_flag = '0'"),
+        ),
         {'comment': 'Shot Grid制作任务表'},
     )

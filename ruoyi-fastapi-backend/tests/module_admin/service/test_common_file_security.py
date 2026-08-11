@@ -465,6 +465,44 @@ def test_file_manager_can_download_private_file_without_owner_match(tmp_path: Pa
     assert download_result.filename == 'contract.pdf'
 
 
+def test_business_authorized_download_uses_business_name_and_checks_acl(tmp_path: Path) -> None:
+    private_root = tmp_path / 'private'
+    target = private_root / 'upload' / '2026' / '08' / 'source.mp4'
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b'business-content')
+    file_info = SimpleNamespace(
+        storage_type='local',
+        access_type='private',
+        upload_user_id=10,
+        owner_user_id=10,
+        uploader_access_enabled='1',
+        expire_time=None,
+        storage_key='upload/2026/08/source.mp4',
+        original_name='source.mp4',
+    )
+    request = SimpleNamespace(base_url='https://example.test/prod-api/', headers={}, client=None)
+
+    with (
+        patch.object(UploadConfig, 'PRIVATE_UPLOAD_PATH', str(private_root)),
+        patch.object(FileInfoDao, 'get_file_info_by_id', new=AsyncMock(return_value=file_info)),
+        patch.object(FileAclDao, 'get_effective_file_acl_list', new=AsyncMock(return_value=[])),
+        patch.object(CommonService, '_enqueue_file_access_log', new_callable=AsyncMock),
+    ):
+        result = asyncio.run(
+            CommonService.download_managed_file_services(
+                request,
+                make_query_db(),
+                make_current_user(user_id=20),
+                'file-id',
+                business_access_granted=True,
+                download_filename='WGZR_EP001_001_S001_YJF_V001_1786094626499.mp4',
+            )
+        )
+        assert asyncio.run(collect_stream(result.data)) == b'business-content'
+
+    assert result.filename == 'WGZR_EP001_001_S001_YJF_V001_1786094626499.mp4'
+
+
 def test_file_manager_download_rejects_file_outside_data_scope() -> None:
     request = SimpleNamespace(base_url='https://example.test/prod-api/', headers={}, client=None)
     query_db = make_query_db()

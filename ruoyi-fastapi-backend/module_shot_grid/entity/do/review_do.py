@@ -124,6 +124,9 @@ class ShotGridReviewAction(Base):
     from_status = Column(String(20), nullable=False, comment='操作前版本状态')
     to_status = Column(String(20), nullable=False, comment='操作后版本状态')
     reason = Column(String(1000), nullable=True, comment='原因或说明')
+    idempotency_key = Column(String(100), nullable=False, comment='客户端审核动作幂等键')
+    request_hash = Column(CHAR(64), nullable=False, comment='规范化审核命令SHA-256')
+    result_snapshot = Column(SHOT_GRID_JSON, nullable=False, comment='首次成功响应快照')
     create_time = Column(SHOT_GRID_DATETIME, nullable=False, default=datetime.now, comment='操作时间')
 
     __table_args__ = (
@@ -147,6 +150,17 @@ class ShotGridReviewAction(Base):
             "(action_type = 'reject' and from_status = 'pending_review' and to_status = 'rejected') or "
             "(action_type = 'defer' and from_status = 'pending_review' and to_status = 'pending_review')",
             name='ck_sg_review_action_transition',
+        ),
+        CheckConstraint("btrim(idempotency_key) <> ''", name='ck_sg_review_action_idempotency'),
+        CheckConstraint(
+            "request_hash ~ '^[0-9a-f]{64}$'",
+            name='ck_sg_review_action_request_hash',
+        ),
+        UniqueConstraint(
+            'version_id',
+            'reviewer_user_id',
+            'idempotency_key',
+            name='uk_sg_review_action_idempotency',
         ),
         Index('idx_sg_review_action_version_time', 'version_id', 'create_time'),
         {'comment': 'Shot Grid审核动作不可变历史表'},

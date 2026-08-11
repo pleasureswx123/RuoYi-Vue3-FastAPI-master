@@ -232,6 +232,7 @@ class UploadSettings:
         'bz2',
         # 视频格式
         'mp4',
+        'mov',
         'avi',
         'rmvb',
         # pdf

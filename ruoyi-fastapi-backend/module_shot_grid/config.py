@@ -61,3 +61,35 @@ class ShotGridStorageWorkerConfig(BaseSettings):
 
 
 SHOT_GRID_STORAGE_WORKER_CONFIG = ShotGridStorageWorkerConfig()
+
+
+class ShotGridVersionWorkerConfig(BaseSettings):
+    """Shot Grid 版本文件 NAS 发布 Worker 安全与重试边界。"""
+
+    model_config = SettingsConfigDict(env_prefix='SHOT_GRID_VERSION_WORKER_', extra='ignore')
+
+    enabled: bool = Field(default=False, description='是否显式启用真实版本文件 NAS 发布 Worker')
+    poll_interval_seconds: float = Field(default=2, gt=0, le=60)
+    batch_size: int = Field(default=5, gt=0, le=20)
+    lease_seconds: int = Field(default=900, ge=60, le=7200)
+    heartbeat_seconds: int = Field(default=30, ge=5, le=600)
+    operation_timeout_seconds: int = Field(default=300, ge=10, le=3600)
+    max_attempts: int = Field(default=5, ge=1, le=20)
+    retry_delays_seconds: tuple[int, ...] = Field(default=(5, 15, 60, 300), min_length=1, max_length=19)
+
+    @model_validator(mode='after')
+    def validate_worker_boundaries(self) -> 'ShotGridVersionWorkerConfig':
+        if self.heartbeat_seconds >= self.lease_seconds:
+            raise ValueError('版本发布 Worker 心跳间隔必须小于租约时间')
+        if self.operation_timeout_seconds >= self.lease_seconds:
+            raise ValueError('版本发布 Worker 单次 I/O 软超时必须小于租约时间')
+        if len(self.retry_delays_seconds) < max(self.max_attempts - 1, 1):
+            raise ValueError('版本发布 Worker 退避序列不足以覆盖自动重试次数')
+        if any(delay <= 0 for delay in self.retry_delays_seconds):
+            raise ValueError('版本发布 Worker 退避秒数必须为正整数')
+        if tuple(sorted(self.retry_delays_seconds)) != self.retry_delays_seconds:
+            raise ValueError('版本发布 Worker 退避秒数必须按非递减顺序配置')
+        return self
+
+
+SHOT_GRID_VERSION_WORKER_CONFIG = ShotGridVersionWorkerConfig()

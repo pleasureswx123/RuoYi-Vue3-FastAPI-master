@@ -2235,6 +2235,7 @@ CREATE TABLE sg_task (
 	CONSTRAINT ck_sg_task_del_flag CHECK (del_flag in ('0', '2'))
 );
 CREATE INDEX idx_sg_task_project_assignee_status_due ON sg_task (project_id, assignee_user_id, task_status, due_date);
+CREATE INDEX idx_sg_task_assignee_status_due ON sg_task (assignee_user_id, task_status, due_date, task_id) WHERE del_flag = '0';
 CREATE UNIQUE INDEX uk_sg_task_asset_item ON sg_task (asset_item_id) WHERE asset_item_id IS NOT NULL AND del_flag = '0';
 CREATE UNIQUE INDEX uk_sg_task_shot ON sg_task (shot_id) WHERE shot_id IS NOT NULL AND del_flag = '0';
 COMMENT ON TABLE sg_task IS 'Shot Grid制作任务表';
@@ -2299,11 +2300,14 @@ CREATE TABLE sg_version_submission (
 	CONSTRAINT ck_sg_submission_idempotency CHECK (btrim(idempotency_key) <> ''),
 	CONSTRAINT ck_sg_submission_attempt_count CHECK (attempt_count >= 0),
 	CONSTRAINT ck_sg_submission_lease CHECK ((lease_owner is null and lease_until is null) or (lease_owner is not null and btrim(lease_owner) <> '' and lease_until is not null)),
+	CONSTRAINT ck_sg_submission_execution_state CHECK ((submission_status in ('publishing', 'committing') and lease_owner is not null and btrim(lease_owner) <> '' and lease_until is not null) or (submission_status in ('pending', 'published', 'committed', 'failed') and lease_owner is null and lease_until is null)),
+	CONSTRAINT ck_sg_submission_error_state CHECK ((submission_status = 'failed' and last_error_key is not null and btrim(last_error_key) <> '' and last_error_message is not null and btrim(last_error_message) <> '') or (submission_status <> 'failed' and last_error_key is null and last_error_message is null)),
 	FOREIGN KEY(source_file_id) REFERENCES sys_file_info (file_id) ON DELETE RESTRICT,
 	FOREIGN KEY(submitted_by) REFERENCES sys_user (user_id) ON DELETE RESTRICT
 );
 CREATE INDEX idx_sg_submission_status_lease_update ON sg_version_submission (submission_status, lease_until, update_time);
-CREATE UNIQUE INDEX uk_sg_version_submission_active ON sg_version_submission (task_id) WHERE submission_status IN ('pending', 'publishing', 'published', 'committing');
+CREATE UNIQUE INDEX uk_sg_version_submission_source_file ON sg_version_submission (source_file_id);
+CREATE UNIQUE INDEX uk_sg_version_submission_active ON sg_version_submission (task_id) WHERE submission_status IN ('pending', 'publishing', 'published', 'committing', 'failed');
 COMMENT ON TABLE sg_version_submission IS 'Shot Grid版本暂存与NAS发布编排表';
 COMMENT ON COLUMN sg_version_submission.submission_id IS '版本提交ID';
 COMMENT ON COLUMN sg_version_submission.project_id IS '项目ID';
@@ -2417,6 +2421,9 @@ CREATE TABLE sg_review_action (
 	from_status VARCHAR(20) NOT NULL,
 	to_status VARCHAR(20) NOT NULL,
 	reason VARCHAR(1000),
+	idempotency_key VARCHAR(100) NOT NULL,
+	request_hash CHAR(64) NOT NULL,
+	result_snapshot JSONB NOT NULL,
 	create_time TIMESTAMP(0) WITHOUT TIME ZONE NOT NULL,
 	PRIMARY KEY (action_id),
 	CONSTRAINT fk_sg_review_action_version_project FOREIGN KEY(version_id, project_id) REFERENCES sg_version (version_id, project_id) ON DELETE RESTRICT,
@@ -2424,6 +2431,9 @@ CREATE TABLE sg_review_action (
 	CONSTRAINT ck_sg_review_action_from_status CHECK (from_status in ('pending_review', 'rejected', 'final')),
 	CONSTRAINT ck_sg_review_action_to_status CHECK (to_status in ('pending_review', 'rejected', 'final')),
 	CONSTRAINT ck_sg_review_action_transition CHECK ((action_type = 'approve' and from_status = 'pending_review' and to_status = 'final') or (action_type = 'reject' and from_status = 'pending_review' and to_status = 'rejected') or (action_type = 'defer' and from_status = 'pending_review' and to_status = 'pending_review')),
+	CONSTRAINT ck_sg_review_action_idempotency CHECK (btrim(idempotency_key) <> ''),
+	CONSTRAINT ck_sg_review_action_request_hash CHECK (request_hash ~ '^[0-9a-f]{64}$'),
+	CONSTRAINT uk_sg_review_action_idempotency UNIQUE (version_id, reviewer_user_id, idempotency_key),
 	FOREIGN KEY(reviewer_user_id) REFERENCES sys_user (user_id) ON DELETE RESTRICT
 );
 CREATE INDEX idx_sg_review_action_version_time ON sg_review_action (version_id, create_time);
@@ -2436,6 +2446,9 @@ COMMENT ON COLUMN sg_review_action.action_type IS '审核动作';
 COMMENT ON COLUMN sg_review_action.from_status IS '操作前版本状态';
 COMMENT ON COLUMN sg_review_action.to_status IS '操作后版本状态';
 COMMENT ON COLUMN sg_review_action.reason IS '原因或说明';
+COMMENT ON COLUMN sg_review_action.idempotency_key IS '客户端审核动作幂等键';
+COMMENT ON COLUMN sg_review_action.request_hash IS '规范化审核命令SHA-256';
+COMMENT ON COLUMN sg_review_action.result_snapshot IS '首次成功响应快照';
 COMMENT ON COLUMN sg_review_action.create_time IS '操作时间';
 
 -- sg_review_list
@@ -2786,7 +2799,7 @@ create table if not exists alembic_version (
     constraint alembic_version_pkc primary key (version_num)
 );
 delete from alembic_version;
-insert into alembic_version(version_num) values ('20260810_05');
+insert into alembic_version(version_num) values ('20260811_06');
 
 
 CREATE OR REPLACE FUNCTION "find_in_set"(int8, varchar)

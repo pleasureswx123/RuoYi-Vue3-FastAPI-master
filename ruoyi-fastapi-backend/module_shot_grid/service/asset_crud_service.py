@@ -393,6 +393,7 @@ class ShotGridAssetCrudService:
             existing_task = await cls._validate_item_task_update(db, project_id, asset_item_id, command)
 
             now = datetime.now().replace(microsecond=0)
+            production_item_changed = item.production_item != production_item
             item.production_item = production_item
             item.production_item_key = production_item_key
             item.description = description
@@ -401,6 +402,12 @@ class ShotGridAssetCrudService:
             item.update_by = actor_name
             item.update_time = now
             item.lock_version += 1
+            if existing_task is not None and production_item_changed:
+                task_suffix = production_item or '待补制作分项'
+                existing_task.task_name = f'{asset.asset_name} - {task_suffix}'[:MAX_TASK_NAME_LENGTH]
+                existing_task.update_by = actor_name
+                existing_task.update_time = now
+                existing_task.lock_version += 1
             if (
                 existing_task is None
                 and 'assignee_user_id' in command.model_fields_set
@@ -434,6 +441,7 @@ class ShotGridAssetCrudService:
                     'projectId': project_id,
                     'assetItemId': asset_item_id,
                     'lockVersion': item.lock_version,
+                    'taskLockVersion': existing_task.lock_version if existing_task is not None else None,
                 },
             )
             result = await cls._get_item_model(db, project_id, asset.asset_id, asset_item_id)

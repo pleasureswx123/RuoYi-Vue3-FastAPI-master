@@ -13,6 +13,7 @@ from module_shot_grid.schema import (
     SHOT_GRID_SCHEMA_REVISION,
     SHOT_GRID_STORAGE_WORKER_SCHEMA_REVISION,
     SHOT_GRID_TABLE_NAMES,
+    SHOT_GRID_TASK_VERSION_REVIEW_SCHEMA_REVISION,
 )
 
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
@@ -181,6 +182,56 @@ def test_storage_worker_migration_is_an_explicit_non_postgresql_noop() -> None:
         action()
 
 
+def test_task_version_review_migration_guards_and_installs_the_frozen_contract() -> None:
+    class SqlRecorder:
+        def __init__(self) -> None:
+            self.statements: list[str] = []
+
+        def execute(self, statement: object) -> None:
+            self.statements.append(str(statement))
+
+    migration = _migration_namespace(SHOT_GRID_TASK_VERSION_REVIEW_SCHEMA_REVISION)
+    recorder = SqlRecorder()
+    action_globals = migration['upgrade'].__globals__
+    action_globals['op'] = recorder
+    action_globals['_is_postgresql'] = lambda: True
+
+    assert migration['revision'] == SHOT_GRID_TASK_VERSION_REVIEW_SCHEMA_REVISION
+    assert migration['down_revision'] == SHOT_GRID_STORAGE_WORKER_SCHEMA_REVISION
+
+    migration['upgrade']()
+
+    guard_sql = recorder.statements[0]
+    upgrade_sql = '\n'.join(recorder.statements)
+    assert guard_sql.lstrip().startswith('DO $shot_grid_task_version_review_guard$')
+    assert 'ALTER TABLE' not in guard_sql
+    assert 'SG_VERSION_FILE_ALREADY_BOUND' in guard_sql
+    assert 'SG_VERSION_SUBMISSION_ACTIVE' in guard_sql
+    assert 'SG_VERSION_SUBMISSION_EXECUTION_STATE_CONFLICT' in guard_sql
+    assert 'idx_sg_task_assignee_status_due' in upgrade_sql
+    assert 'uk_sg_version_submission_source_file' in upgrade_sql
+    assert "'failed'" in upgrade_sql
+    assert 'ck_sg_submission_execution_state' in upgrade_sql
+    assert 'idempotency_key VARCHAR(100)' in upgrade_sql
+    assert 'uk_sg_review_action_idempotency' in upgrade_sql
+
+    recorder.statements.clear()
+    migration['downgrade']()
+    downgrade_sql = '\n'.join(recorder.statements)
+    assert 'DROP COLUMN result_snapshot' in downgrade_sql
+    assert 'DROP INDEX uk_sg_version_submission_source_file' in downgrade_sql
+    assert 'DROP INDEX idx_sg_task_assignee_status_due' in downgrade_sql
+
+
+def test_task_version_review_migration_is_an_explicit_non_postgresql_noop() -> None:
+    migration = _migration_namespace(SHOT_GRID_TASK_VERSION_REVIEW_SCHEMA_REVISION)
+
+    for action_name in ('upgrade', 'downgrade'):
+        action = migration[action_name]
+        action.__globals__['_is_postgresql'] = lambda: False
+        action()
+
+
 def test_postgresql_baseline_is_stamped_at_the_current_head() -> None:
     baseline = (BACKEND_ROOT / 'sql' / 'ruoyi-fastapi-pg.sql').read_text(encoding='utf-8')
 
@@ -192,6 +243,10 @@ def test_postgresql_baseline_is_stamped_at_the_current_head() -> None:
     assert 'ck_sg_project_member_removal' in baseline
     assert 'ck_sg_version_file_primary_role' in baseline
     assert 'ck_sg_storage_operation_execution_state' in baseline
+    assert 'ck_sg_submission_execution_state' in baseline
+    assert 'uk_sg_version_submission_source_file' in baseline
+    assert 'idx_sg_task_assignee_status_due' in baseline
+    assert 'uk_sg_review_action_idempotency' in baseline
     assert (
         'CREATE INDEX idx_sg_storage_operation_project_aggregate_latest '
         'ON sg_storage_operation (project_id, aggregate_type, aggregate_id, operation_id DESC)' in baseline
@@ -213,7 +268,7 @@ def test_migration_ddl_contains_every_named_metadata_constraint_and_index() -> N
     migration = _migration_namespace(SHOT_GRID_INITIAL_SCHEMA_REVISION)
     ddl = '\n'.join(migration['SHOT_GRID_DDL'])
     migration_source = '\n'.join(
-        path.read_text(encoding='utf-8') for path in (BACKEND_ROOT / 'alembic' / 'versions').glob('*-20260810_*.py')
+        path.read_text(encoding='utf-8') for path in (BACKEND_ROOT / 'alembic' / 'versions').glob('*-202608*_*.py')
     )
     metadata_names = {
         item.name

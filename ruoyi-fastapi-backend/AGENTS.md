@@ -224,15 +224,20 @@ PostgreSQL 迁移是当前项目的必需交付物。只有插件清单继续声
 
 ### 7.4 Shot Grid 当前数据库边界
 
-- Shot Grid 领域模块位于 `module_shot_grid/`，包含 22 张 `sg_` 表 DO、项目访问依赖、范围导航、项目创建/存储状态/成员/范围查询、镜头和资产 Excel 预检与正式提交，以及 NAS 目录 Outbox Worker、目录操作查询和人工重试接口。
+- Shot Grid 领域模块位于 `module_shot_grid/`，包含 22 张 `sg_` 表 DO、项目访问依赖、范围导航、项目创建/存储状态/成员/范围查询、镜头和资产 Excel 预检与正式提交、独立任务管理、版本提交/NAS 发布、`auto_single` 自动审核闭环，以及 NAS 目录 Outbox Worker、目录操作查询和人工重试接口。
 - 首个增量迁移为 `20260810_01`，并已同步 `sql/ruoyi-fastapi-pg.sql`、菜单、权限和字典种子。
 - `20260810_04` 是无版本历史库的采用/向前修复迁移：统一秒级时间精度和空字符串审计默认值，补强序场次、资产制作分项、主文件及集/场次编号约束；不得改写历史 01/02/03 代替修复。无 `alembic_version` 的历史库只能在备份和克隆核验后 stamp 01，再执行 upgrade head。04 必须在任何 ALTER 前预检冲突并整体失败，不能猜测修复业务数据；downgrade 不恢复从未被正式 revision 声明的旧弱漂移，秒以下精度只能从升级前备份恢复。
-- 当前 head `20260810_05` 在任何 DDL 前预检 `sg_storage_operation` 的状态、重试时间、租约和完成时间组合，冲突时以 `SG_STORAGE_OPERATION_EXECUTION_STATE_CONFLICT` 整体失败；通过后增加执行状态一致性 `CHECK` 以及“项目+聚合+最新操作”和“项目+创建时间”两个非唯一索引。05 的 downgrade 会恢复 04 版 `target_relative_path` 列注释，并移除本 revision 新增的一个约束和两个索引，但不修改目录操作数据。
+- 当前 head `20260811_06` 在任何 DDL 前预检版本提交的源文件唯一性、每任务未解决提交唯一性，以及状态、租约和错误字段组合；冲突分别以 `SG_VERSION_FILE_ALREADY_BOUND`、`SG_VERSION_SUBMISSION_ACTIVE` 或 `SG_VERSION_SUBMISSION_EXECUTION_STATE_CONFLICT` 整体失败。通过后增加“我的任务”索引、源文件全局唯一索引、将 `failed` 纳入每任务未解决提交部分唯一索引、提交执行/错误状态 `CHECK`，并为审核动作增加持久化幂等键、请求哈希和首次成功响应快照。06 的 downgrade 精确移除本 revision 对象，并把活动提交索引恢复为 05 的不含 `failed` 语义，不修改业务数据。
 - Shot Grid 只承诺 PostgreSQL；非 PostgreSQL 环境不得把 `sg_` 模型加入平台元数据，Shot Grid revision 的升级和降级必须保持 no-op。
 - 已有平台 PostgreSQL 库通过 Alembic 执行增量迁移；新库通过同步后的 PostgreSQL 初始化 SQL 建立全量结构并写入 Alembic head。当前仍不存在完整平台 Alembic baseline，不得声称首个 Shot Grid revision 能从真正空库独立建立 RuoYi 平台。
-- 项目创建/编辑/归档、成员变更、集/场次/镜头/资产普通管理、Excel 正式提交和目录人工重试必须由 Service 在同一数据库事务写领域数据、必要的 Outbox 与 `SysOperLog`；不得使用会异步入 Redis 的平台 `@Log` 冒充同事务审计。项目、集、场次、镜头、资产和制作分项已实现业务归档而非物理删除；任务动作、资产需求人工处理、版本文件发布和审核闭环仍待后续实现。
-- 资产创建时同时冻结 `asset_type/asset_name/asset_name_key/storage_dir_name/storage_path_key`；普通编辑只允许描述、排序和备注，重命名、改类型或目录迁移必须使用后续受控动作。制作分项无版本时可补充，已有版本后主数据冻结。未来任何正式版本创建事务必须先按统一锁序取得所属项目行锁，再锁任务/提交/版本资源，避免与项目类型或画幅修改产生 TOCTOU。
+- 项目创建/编辑/归档、成员变更、集/场次/镜头/资产普通管理、任务分配/改派/开始、Excel 正式提交、版本正式提交、审核意见/回复/解决、审核动作和目录人工重试必须由 Service 在同一数据库事务写领域数据、必要的 Outbox/文件引用与 `SysOperLog`；不得使用会异步入 Redis 的平台 `@Log` 冒充同事务审计。项目、集、场次、镜头、资产和制作分项已实现业务归档而非物理删除；资产需求人工处理、`manual_batch` 审核单、媒体派生和业务前端仍待后续实现。
+- 资产创建时同时冻结 `asset_type/asset_name/asset_name_key/storage_dir_name/storage_path_key`；普通编辑只允许描述、排序和备注，重命名、改类型或目录迁移必须使用后续受控动作。制作分项无版本时可补充，已有版本后主数据冻结；资产图片版本提交前必须补齐制作分项。正式版本事务统一按 `project → task/submission → version → auto_single review list → note` 顺序加锁，避免项目元数据、改派、提交和审核并发穿透。
+- 任务列表提供项目范围与跨项目 `GET /shot-grid/tasks/mine`；首次分配的 `taskLockVersion` 必须为空，已有任务改派时必须携带当前 `taskLockVersion`，开始任务必须携带 `lockVersion`。任务存在任何非 `committed` 提交（包括 `failed`）时禁止改派，只允许重试原提交或走后续明确治理动作。
+- 版本提交固定为“平台私有上传 → 创建临时 `businessType=shotgrid_version_submission` 文件引用 → 默认关闭的版本发布 Worker → NAS 摘要校验与无覆盖原子发布 → 正式版本/主文件引用/`auto_single` 审核单短事务”。`committed` 的 `versionId` 通过 `sg_version.submission_id` 反查，`sg_version_submission` 不重复保存 `version_id`。每次领取使用含 attempt 和随机值的唯一临时文件名；目标文件已存在时仅摘要和大小完全一致才按幂等成功处理，禁止覆盖。
+- 当前文件类型门禁按真实字节校验 JPEG/PNG 与 MP4/MOV 容器签名/品牌，不包含 codec、视频轨、可解码性或转码探测；平台私有上传上限仍为 100 MiB。不得把签名嗅探描述成完整媒体有效性验证。
+- 审核意见与回复是版本绑定的不可变历史，意见只通过解决动作改变状态。`approve/reject/defer` 均要求 `X-Idempotency-Key`，审核动作把规范化请求哈希和首次成功结果快照持久化；同键异命令必须冲突。`approve` 必须拒绝仍存在的 open mandatory 意见，`reject` 必须有原因或 open mandatory 意见，`defer` 只记录动作而不改变版本状态。当前只实现自动单版本审核单，`manual_batch` 仍是设计能力。
 - 目录 Worker 默认关闭，仅在 PostgreSQL 且 `SHOT_GRID_STORAGE_WORKER_ENABLED=true` 时由 Application Leader 注册内部任务 `_shot_grid_storage_outbox`。每条操作执行前再次检查 Leader；数据库以 `FOR UPDATE SKIP LOCKED` 提供领取互斥，并以有期限租约和 owner + attempt fencing 拒绝旧持有者迟到回写。租约接管窗口不承诺旧、新 Worker 的物理 I/O 完全不重叠，因此当前执行器只能承载幂等目录创建和随机 `O_EXCL` 写探针。内部任务不得被数据库 Scheduler 同步当成普通 `sys_job` 删除或记录成高频任务日志。
+- 版本发布 Worker 同样默认关闭，仅在 PostgreSQL、`SHOT_GRID_VERSION_WORKER_ENABLED=true` 且当前进程仍持有 Application Leader 时注册内部任务 `_shot_grid_version_publisher`。领取、NAS I/O、提交正式版本和结果回写保持短事务/事务外 I/O 边界，并使用租约心跳与 owner + attempt fencing；正常关机或失锁必须 drain 已登记版本发布 Job。自动化测试显式允许的本地临时目录不能冒充真实 UNC 验收。
 - `initialize_project` 及项目级 `reconcile_directory` 的 `target_relative_path` 相对 NAS 存储根目录，值等于项目绑定的 `project_relative_path`；集、镜头、资产级 `ensure_*` 及 `reconcile_directory` 的目标相对项目根目录。不得把这两个作用域混为一套路径拼接规则。
 - Worker 必须先提交领取短事务，再在线程中执行路径校验、幂等建目录和写探针，最后以短事务回写结果；软超时只做诊断并继续心跳续租，不能声称能够硬终止仍在运行的 SMB I/O。APScheduler 的 AsyncIOExecutor 不会等待已取消 Job，因此正常关机和 Leader 失锁必须显式 drain 已登记的 NAS Job，完成当前 I/O 与租约收尾后才能关闭数据库或重新竞争。当前单轮批次串行消费，尚未启用批内并发。
 - 项目初始化成功才把项目存储改为 `ready`；项目级最终失败改为 `failed`。动态目录失败只记录安全错误，不得把已经就绪的项目根存储降级为初始化失败。人工重试不覆盖旧操作：项目和动态目录都新建 `reconcile_directory`，要求原因、幂等键和重新校验后的路径快照，并在同事务写操作日志。

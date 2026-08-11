@@ -145,6 +145,7 @@ class SchedulerUtil:
     _scheduler_configured: bool = False
     _event_listener_scheduler: AsyncIOScheduler | None = None
     _shot_grid_storage_job_id: str = '_shot_grid_storage_outbox'
+    _shot_grid_version_job_id: str = '_shot_grid_version_publisher'
 
     @staticmethod
     def _parse_job_args(job_args: str | None) -> list[Any] | None:
@@ -269,6 +270,39 @@ class SchedulerUtil:
         )
 
     @classmethod
+    def _get_shot_grid_version_worker_config(cls) -> Any | None:
+        """按数据库方言和显式开关获取 Shot Grid 版本发布 Worker 配置。"""
+
+        if DataBaseConfig.db_type != 'postgresql':
+            return None
+        try:
+            shot_grid_config = importlib.import_module('module_shot_grid.config')
+        except ImportError:
+            return None
+        worker_config = getattr(shot_grid_config, 'SHOT_GRID_VERSION_WORKER_CONFIG', None)
+        if worker_config is None or not worker_config.enabled:
+            return None
+        return worker_config
+
+    @classmethod
+    def _register_shot_grid_version_job(cls) -> None:
+        """为 Application Leader 注册 Shot Grid 版本发布内部任务。"""
+
+        worker_config = cls._get_shot_grid_version_worker_config()
+        if worker_config is None:
+            return
+        scheduler.add_job(
+            func=module_task.shot_grid_version_task.run_shot_grid_version_publisher,
+            trigger='interval',
+            seconds=worker_config.poll_interval_seconds,
+            id=cls._shot_grid_version_job_id,
+            name='Shot Grid版本文件NAS发布',
+            coalesce=True,
+            max_instances=1,
+            replace_existing=True,
+        )
+
+    @classmethod
     def _ensure_scheduler_event_listener(cls) -> None:
         """确保同一个 Scheduler 实例只注册一次事件监听器。"""
         if cls._event_listener_scheduler is scheduler:
@@ -386,6 +420,7 @@ class SchedulerUtil:
         # 添加事件监听器及仅由 Leader 执行的内部任务
         cls._ensure_scheduler_event_listener()
         cls._register_shot_grid_storage_job()
+        cls._register_shot_grid_version_job()
 
         if cls._should_enable_scheduler_sync():
             # 添加任务状态同步任务（每30秒从数据库同步一次任务状态）
@@ -468,6 +503,7 @@ class SchedulerUtil:
         if getattr(scheduler, 'running', False):
             scheduler.shutdown()
         await module_task.shot_grid_storage_task.wait_for_shot_grid_storage_outbox_shutdown()
+        await module_task.shot_grid_version_task.wait_for_shot_grid_version_publisher_shutdown()
         await cls._dispose_sync_async_engine()
         cls._dispose_sync_engines()
         cls._ensure_reacquire_task()
@@ -988,6 +1024,7 @@ class SchedulerUtil:
         # AsyncIOExecutor.shutdown(wait=True) 只会取消并立即返回；显式等待 NAS Job
         # 收敛当前不可强杀的 SMB I/O 和租约后，应用才能继续关闭数据库。
         await module_task.shot_grid_storage_task.wait_for_shot_grid_storage_outbox_shutdown()
+        await module_task.shot_grid_version_task.wait_for_shot_grid_version_publisher_shutdown()
         # 必须在Redis连接池关闭前，原子释放当前进程持有的Application leader租约
         redis = cls._redis
         cls._redis = None
