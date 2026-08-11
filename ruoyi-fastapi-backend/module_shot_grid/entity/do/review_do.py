@@ -15,6 +15,7 @@ from sqlalchemy import (
     UniqueConstraint,
     text,
 )
+from sqlalchemy.orm import relationship
 
 from config.database import Base
 from module_shot_grid.entity.do.base_do import (
@@ -54,6 +55,7 @@ class ShotGridNote(Base):
         onupdate=datetime.now,
         comment='更新时间',
     )
+    replies = relationship('ShotGridNoteReply', order_by='ShotGridNoteReply.reply_id', lazy='raise')
 
     __table_args__ = (
         ForeignKeyConstraint(

@@ -9,6 +9,12 @@ export const listTaskVersions = (projectId, taskId, config = {}) => request.get(
 export const getTaskVersion = (projectId, taskId, versionId, config = {}) => request.get(`/shot-grid/projects/${projectId}/tasks/${taskId}/versions/${versionId}`, config)
 export const getFinalTaskVersion = (projectId, taskId, config = {}) => request.get(`/shot-grid/projects/${projectId}/tasks/${taskId}/versions/final`, config)
 
+const noteBase = (projectId, versionId) => `/shot-grid/projects/${projectId}/versions/${versionId}/notes`
+export const listVersionNotes = (projectId, versionId, config = {}) => request.get(noteBase(projectId, versionId), config)
+export const createVersionNote = (projectId, versionId, data) => request.post(noteBase(projectId, versionId), data)
+export const replyVersionNote = (projectId, versionId, noteId, data) => request.post(`${noteBase(projectId, versionId)}/${noteId}/replies`, data)
+export const updateVersionNoteStatus = (projectId, versionId, noteId, status) => request.patch(`${noteBase(projectId, versionId)}/${noteId}/status`, { status })
+
 export const versionFileUrl = (projectId, taskId, versionId, fileId, disposition = 'inline') =>
   `/shot-grid/projects/${projectId}/tasks/${taskId}/versions/${versionId}/files/${fileId}?disposition=${disposition}`
 
