@@ -41,7 +41,7 @@ class ShotGridEpisodeWriteModel(ShotGridLockVersionModel):
 
 
 class ShotGridSceneWriteModel(ShotGridLockVersionModel):
-    episode_id: int = Field(gt=0)
+    episode_id: int | None = Field(default=None, gt=0)
     scene_no: int = Field(ge=0)
     scene_name: str | None = Field(default=None, max_length=200)
     description: str | None = None
@@ -89,7 +89,7 @@ class ShotGridAssetWriteModel(ShotGridLockVersionModel):
 
 
 class ShotGridAssetItemWriteModel(ShotGridLockVersionModel):
-    asset_id: int = Field(gt=0)
+    asset_id: int | None = Field(default=None, gt=0)
     production_item: str | None = Field(default=None, max_length=240)
     description: str | None = None
     sort_order: int = Field(default=0, ge=0)

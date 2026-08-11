@@ -5,4 +5,4 @@ export const listScenes = (projectId, episodeId, params, config = {}) => request
 export const getScene = (projectId, sceneId, config = {}) => request.get(`${base(projectId)}/scenes/${sceneId}`, config)
 export const createScene = (projectId, episodeId, data) => request.post(`${base(projectId)}/episodes/${episodeId}/scenes`, data)
 export const updateScene = (projectId, sceneId, data) => request.put(`${base(projectId)}/scenes/${sceneId}`, data)
-export const archiveScene = (projectId, sceneId, lockVersion) => request.post(`${base(projectId)}/scenes/${sceneId}/archive`, { lockVersion })
+export const archiveScene = (projectId, sceneId, lockVersion) => request.put(`${base(projectId)}/scenes/${sceneId}/archive`, { lockVersion })
