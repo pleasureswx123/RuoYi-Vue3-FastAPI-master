@@ -2161,6 +2161,9 @@ CREATE TABLE sg_shot_asset_requirement (
 	resolution_status VARCHAR(20) DEFAULT 'pending' NOT NULL,
 	asset_id BIGINT,
 	source_import_batch_id BIGINT NOT NULL,
+	source_sheet_name VARCHAR(31) NOT NULL,
+	source_row_no INTEGER NOT NULL,
+	lock_version INTEGER DEFAULT 0 NOT NULL,
 	resolved_by BIGINT,
 	resolved_time TIMESTAMP(0) WITHOUT TIME ZONE,
 	resolution_reason VARCHAR(500),
@@ -2176,6 +2179,9 @@ CREATE TABLE sg_shot_asset_requirement (
 	CONSTRAINT ck_sg_requirement_raw_name CHECK (btrim(raw_name) <> ''),
 	CONSTRAINT ck_sg_requirement_normalized_name CHECK (btrim(normalized_name) <> ''),
 	CONSTRAINT ck_sg_requirement_status CHECK (resolution_status in ('pending', 'matched', 'conflict', 'ignored')),
+	CONSTRAINT ck_sg_requirement_source_sheet CHECK (btrim(source_sheet_name) <> ''),
+	CONSTRAINT ck_sg_requirement_source_row CHECK (source_row_no > 0),
+	CONSTRAINT ck_sg_requirement_lock_version CHECK (lock_version >= 0),
 	CONSTRAINT ck_sg_requirement_matched_asset CHECK ((resolution_status = 'matched' and asset_id is not null) or (resolution_status <> 'matched' and asset_id is null)),
 	FOREIGN KEY(resolved_by) REFERENCES sys_user (user_id) ON DELETE RESTRICT
 );
@@ -2191,6 +2197,9 @@ COMMENT ON COLUMN sg_shot_asset_requirement.normalized_name IS '规范化匹配�
 COMMENT ON COLUMN sg_shot_asset_requirement.resolution_status IS '解析状态';
 COMMENT ON COLUMN sg_shot_asset_requirement.asset_id IS '匹配资产ID';
 COMMENT ON COLUMN sg_shot_asset_requirement.source_import_batch_id IS '来源镜头导入批次ID';
+COMMENT ON COLUMN sg_shot_asset_requirement.source_sheet_name IS '来源Sheet名称';
+COMMENT ON COLUMN sg_shot_asset_requirement.source_row_no IS '来源Excel物理行号';
+COMMENT ON COLUMN sg_shot_asset_requirement.lock_version IS '乐观锁版本';
 COMMENT ON COLUMN sg_shot_asset_requirement.resolved_by IS '人工解决用户ID';
 COMMENT ON COLUMN sg_shot_asset_requirement.resolved_time IS '解决时间';
 COMMENT ON COLUMN sg_shot_asset_requirement.resolution_reason IS '解决或忽略原因';

@@ -17,6 +17,7 @@ export const stableRoutes = [
       { path: 'projects/:projectId/overview', name: 'ProjectOverview', component: () => import('@/views/project/ProjectOverviewView.vue'), props: true, meta: { navigationKey: 'projects' } },
       { path: 'projects/:projectId/scenes', name: 'ProjectScenes', component: () => import('@/views/project/ProjectSectionView.vue'), props: true, meta: { navigationKey: 'projects', section: '场次' } },
       { path: 'projects/:projectId/shots', name: 'ProjectShots', component: () => import('@/views/shot/ShotListView.vue'), props: true, meta: { navigationKey: 'shots', section: '镜头' } },
+      { path: 'projects/:projectId/asset-requirements', name: 'AssetRequirements', component: () => import('@/views/shot/RequirementListView.vue'), props: true, meta: { navigationKey: 'shots', section: '待匹配需求' } },
       { path: 'projects/:projectId/assets', name: 'ProjectAssets', component: () => import('@/views/asset/AssetListView.vue'), props: true, meta: { navigationKey: 'assets', section: '资产' } },
       { path: 'projects/:projectId/import/shots', name: 'ShotImport', component: () => import('@/views/import/ImportView.vue'), props: (route) => ({ projectId: route.params.projectId, importType: 'shot' }), meta: { navigationKey: 'shots', section: '镜头导入' } },
       { path: 'projects/:projectId/import/assets', name: 'AssetImport', component: () => import('@/views/import/ImportView.vue'), props: (route) => ({ projectId: route.params.projectId, importType: 'asset' }), meta: { navigationKey: 'assets', section: '资产导入' } },
