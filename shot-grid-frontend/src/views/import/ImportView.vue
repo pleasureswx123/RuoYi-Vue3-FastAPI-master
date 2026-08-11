@@ -99,7 +99,7 @@ onMounted(restoreResult)
     </template>
 
     <el-result v-if="result" icon="success" title="导入结果已持久化" :sub-title="`批次 ${result.batchId}`">
-      <template #extra><div v-if="!isShot" class="result-grid"><b>新增资产 {{ Object.values(result.createdAssetsByType || {}).reduce((a, b) => a + b, 0) }}</b><span>制作分项 {{ result.createdAssetItems || 0 }}</span><span>唯一自动匹配 {{ result.autoMatchedRequirements || 0 }}</span><span>待匹配 {{ result.pendingRequirements || 0 }}</span><span>冲突 {{ result.conflictRequirements || 0 }}</span></div><div v-else>新增镜头 {{ result.createdShots || 0 }} · 提交 {{ result.committedRows || 0 }} 行<span v-if="result.idempotentReplay">（幂等重放）</span></div></template>
+      <template #extra><router-link v-if="!isShot" :to="`/projects/${projectId}/asset-requirements`"><el-button type="primary" plain>处理待匹配需求</el-button></router-link><div v-if="!isShot" class="result-grid"><b>新增资产 {{ Object.values(result.createdAssetsByType || {}).reduce((a, b) => a + b, 0) }}</b><span>制作分项 {{ result.createdAssetItems || 0 }}</span><span>唯一自动匹配 {{ result.autoMatchedRequirements || 0 }}</span><span>待匹配 {{ result.pendingRequirements || 0 }}</span><span>冲突 {{ result.conflictRequirements || 0 }}</span></div><div v-else>新增镜头 {{ result.createdShots || 0 }} · 提交 {{ result.committedRows || 0 }} 行<span v-if="result.idempotentReplay">（幂等重放）</span></div></template>
     </el-result>
   </section>
 </template>

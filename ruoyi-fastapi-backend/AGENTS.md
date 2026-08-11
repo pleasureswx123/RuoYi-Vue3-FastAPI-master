@@ -395,3 +395,9 @@ python -m pytest tests/cli -q
 6. 日志和响应不泄露敏感数据。
 7. Ruff、目标测试及必要集成验证已真实执行。
 8. 文档、SQL、插件清单或 CLI 帮助已同步。
+
+## 17. 待匹配需求已确认契约
+
+- 待匹配需求查询与处理以 `sg_shot_asset_requirement.lock_version` 执行乐观锁；重复处理、过期版本及处理期间失效的镜头或候选资产统一返回 HTTP 409。
+- 人工候选严格限制为同项目、同 `asset_type`、`lifecycle_status = active` 且 `del_flag = '0'` 的资产；服务端不得从描述或备注推断 Character/Prop。
+- 人工绑定在同一事务内更新需求、创建已有即复用的 `sg_shot_asset` 关系和审计字段；来源 Sheet 与物理行号持久化在需求记录中。

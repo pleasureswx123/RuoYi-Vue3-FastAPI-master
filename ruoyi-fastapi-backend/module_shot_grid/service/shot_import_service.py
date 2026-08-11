@@ -455,6 +455,8 @@ class ShotGridShotImportService:
                             normalized_name=requirement.normalized_name,
                             resolution_status='pending',
                             source_import_batch_id=batch_id,
+                            source_sheet_name=row.sheet_name,
+                            source_row_no=row.row_number,
                             create_by=audit_user,
                         )
                     )

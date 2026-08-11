@@ -207,6 +207,8 @@ class ShotGridShotAssetRequirement(Base):
     resolution_status = Column(String(20), nullable=False, server_default='pending', comment='解析状态')
     asset_id = Column(BigInteger, nullable=True, comment='匹配资产ID')
     source_import_batch_id = Column(BigInteger, nullable=False, comment='来源镜头导入批次ID')
+    source_sheet_name = Column(String(31), nullable=False, comment='来源Sheet名称')
+    source_row_no = Column(Integer, nullable=False, comment='来源Excel物理行号')
     resolved_by = Column(
         BigInteger,
         ForeignKey('sys_user.user_id', ondelete='RESTRICT'),
@@ -219,6 +221,7 @@ class ShotGridShotAssetRequirement(Base):
     create_time = Column(SHOT_GRID_DATETIME, nullable=False, default=datetime.now, comment='创建时间')
     update_by = Column(String(64), nullable=True, comment='更新者')
     update_time = Column(SHOT_GRID_DATETIME, nullable=True, comment='更新时间')
+    lock_version = Column(Integer, nullable=False, server_default='0', comment='乐观锁版本')
 
     __table_args__ = (
         ForeignKeyConstraint(
@@ -243,6 +246,9 @@ class ShotGridShotAssetRequirement(Base):
             "asset_type in ('Character', 'Environment', 'Prop')",
             name='ck_sg_requirement_asset_type',
         ),
+        CheckConstraint("btrim(source_sheet_name) <> ''", name='ck_sg_requirement_source_sheet'),
+        CheckConstraint('source_row_no > 0', name='ck_sg_requirement_source_row'),
+        CheckConstraint('lock_version >= 0', name='ck_sg_requirement_lock_version'),
         CheckConstraint("btrim(raw_name) <> ''", name='ck_sg_requirement_raw_name'),
         CheckConstraint("btrim(normalized_name) <> ''", name='ck_sg_requirement_normalized_name'),
         CheckConstraint(
