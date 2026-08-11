@@ -260,6 +260,9 @@ pip3 install -r requirements.txt
 # 如果使用的是PostgreSQL数据库，请执行以下命令安装项目依赖环境
 pip3 install -r requirements-pg.txt
 
+# PostgreSQL 模式下运行后端测试（包含 asyncpg、pytest 等已声明依赖）
+pip3 install -r requirements-test-pg.txt
+
 # 安装AI插件依赖，如果不需要AI插件，可忽略此步骤
 ruoyi plugin install-deps ai
 

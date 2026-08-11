@@ -27,6 +27,10 @@
 - 默认依赖文件为 `requirements-pg.txt`。
 - 默认本地基础设施为根目录 `docker-compose.dev.yml`。
 - `requirements.txt`、MySQL SQL 和 MySQL Compose 属于保留的兼容路径，不是当前首要运行基线。
+- PostgreSQL 运行依赖由 `requirements-pg.txt` 声明，测试环境统一安装
+  `requirements-test-pg.txt`；两者必须包含 `asyncpg`，禁止依赖开发机全局包补齐驱动或 pytest。
+- `config.database` 在创建 SQLAlchemy Engine 前校验当前方言的同步、异步驱动；缺失时应报告对应
+  requirements 安装命令，不得退化为难以定位的全量 pytest 收集异常。
 
 新增 Shot Grid 或其他独立业务模块时，业务设计文档不能替代后端事实核对。实现前必须逐项对齐当前 DO/VO、响应与异常、权限依赖、文件引用、时间与逻辑删除语义以及 PostgreSQL 迁移约定；兼容扩展必须显式标注并验证，禁止把设计草案直接当成后端已有契约。
 

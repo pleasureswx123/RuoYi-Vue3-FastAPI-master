@@ -1,3 +1,4 @@
+from importlib.util import find_spec
 from urllib.parse import quote_plus
 
 from sqlalchemy import Engine, create_engine
@@ -5,6 +6,34 @@ from sqlalchemy.ext.asyncio import AsyncAttrs, AsyncEngine, async_sessionmaker, 
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 from config.env import DataBaseConfig
+
+DATABASE_DRIVERS = {
+    'mysql': (('asyncmy', '异步'), ('pymysql', '同步')),
+    'postgresql': (('asyncpg', '异步'), ('psycopg2', '同步')),
+}
+
+
+def validate_database_drivers() -> None:
+    """在创建 Engine 前校验当前数据库模式所需驱动，并给出可执行的安装提示。"""
+    missing_drivers = [
+        f'{driver}（{usage}）'
+        for driver, usage in DATABASE_DRIVERS[DataBaseConfig.db_type]
+        if find_spec(driver) is None
+    ]
+    if not missing_drivers:
+        return
+
+    if DataBaseConfig.db_type == 'postgresql':
+        install_command = 'python -m pip install -r requirements-pg.txt'
+        test_command = 'python -m pip install -r requirements-test-pg.txt'
+    else:
+        install_command = 'python -m pip install -r requirements.txt'
+        test_command = install_command
+    missing_text = '、'.join(missing_drivers)
+    raise RuntimeError(
+        f'数据库模式 {DataBaseConfig.db_type!r} 缺少驱动：{missing_text}。'
+        f'运行环境请执行 `{install_command}`；测试环境请执行 `{test_command}`。'
+    )
 
 
 def build_async_sqlalchemy_database_url() -> str:
@@ -23,6 +52,8 @@ def build_async_sqlalchemy_database_url() -> str:
         f'{DataBaseConfig.db_host}:{DataBaseConfig.db_port}/{DataBaseConfig.db_database}'
     )
 
+
+validate_database_drivers()
 
 ASYNC_SQLALCHEMY_DATABASE_URL = build_async_sqlalchemy_database_url()
 
