@@ -1,0 +1,194 @@
+:root {
+  color-scheme: dark;
+  font-family:
+    Inter, "PingFang SC", "Microsoft YaHei", system-ui, -apple-system,
+    BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  --sg-bg: #090b0f;
+  --sg-surface: #11141a;
+  --sg-surface-raised: #171b22;
+  --sg-surface-soft: #1c212a;
+  --sg-border: rgba(255, 255, 255, 0.09);
+  --sg-border-strong: rgba(255, 255, 255, 0.16);
+  --sg-text: #f3f5f7;
+  --sg-text-secondary: #a6adb8;
+  --sg-text-muted: #747d8b;
+  --sg-accent: #ffb657;
+  --sg-accent-strong: #ff9f2f;
+  --sg-accent-soft: rgba(255, 182, 87, 0.12);
+  --sg-danger: #ff6b6b;
+  --sg-success: #62d49b;
+  --sg-radius-sm: 8px;
+  --sg-radius-md: 14px;
+  --sg-radius-lg: 20px;
+  --sg-shadow: 0 18px 50px rgba(0, 0, 0, 0.28);
+  --el-color-primary: #ffad48;
+  --el-color-primary-light-3: #ffc275;
+  --el-color-primary-light-5: #ffd19a;
+  --el-color-primary-light-7: #ffe2bf;
+  --el-color-primary-light-8: #ffead2;
+  --el-color-primary-light-9: #fff4e8;
+  --el-color-primary-dark-2: #d88729;
+  --el-bg-color: var(--sg-surface);
+  --el-bg-color-overlay: var(--sg-surface-raised);
+  --el-fill-color-blank: var(--sg-surface);
+  --el-border-color: var(--sg-border);
+  --el-text-color-primary: var(--sg-text);
+  --el-text-color-regular: var(--sg-text-secondary);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  min-width: 320px;
+  min-height: 100%;
+  margin: 0;
+}
+
+body {
+  min-height: 100vh;
+  color: var(--sg-text);
+  background:
+    radial-gradient(circle at 72% -12%, rgba(255, 169, 69, 0.09), transparent 32%),
+    var(--sg-bg);
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+.el-button:focus-visible,
+.el-input__wrapper:focus-within {
+  outline: 2px solid var(--sg-accent);
+  outline-offset: 2px;
+}
+
+.sg-page {
+  width: min(100%, 1440px);
+  margin: 0 auto;
+  padding: 32px clamp(20px, 3vw, 48px) 56px;
+}
+
+.sg-page-heading {
+  display: flex;
+  gap: 24px;
+  align-items: flex-end;
+  justify-content: space-between;
+  margin-bottom: 28px;
+}
+
+.sg-eyebrow {
+  margin: 0 0 8px;
+  color: var(--sg-accent);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.sg-page-title {
+  margin: 0;
+  color: var(--sg-text);
+  font-size: clamp(26px, 3vw, 38px);
+  font-weight: 650;
+  letter-spacing: -0.035em;
+}
+
+.sg-page-description {
+  max-width: 760px;
+  margin: 10px 0 0;
+  color: var(--sg-text-secondary);
+  font-size: 14px;
+  line-height: 1.75;
+}
+
+.sg-boundary-panel {
+  display: grid;
+  min-height: 280px;
+  place-items: center;
+  padding: clamp(28px, 5vw, 72px);
+  text-align: center;
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.025), transparent 70%),
+    var(--sg-surface);
+  border: 1px solid var(--sg-border);
+  border-radius: var(--sg-radius-lg);
+  box-shadow: var(--sg-shadow);
+}
+
+.sg-boundary-panel__icon {
+  display: grid;
+  width: 64px;
+  height: 64px;
+  margin: 0 auto 22px;
+  color: var(--sg-accent);
+  background: var(--sg-accent-soft);
+  border: 1px solid rgba(255, 182, 87, 0.24);
+  border-radius: 18px;
+  place-items: center;
+}
+
+.sg-boundary-panel__icon .el-icon {
+  font-size: 28px;
+}
+
+.sg-boundary-panel h2 {
+  margin: 0 0 10px;
+  font-size: 21px;
+  font-weight: 600;
+}
+
+.sg-boundary-panel p {
+  max-width: 620px;
+  margin: 0;
+  color: var(--sg-text-secondary);
+  font-size: 14px;
+  line-height: 1.8;
+}
+
+.sg-boundary-panel__meta {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 24px;
+  padding: 7px 12px;
+  color: var(--sg-text-muted);
+  font-size: 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--sg-border);
+  border-radius: 999px;
+}
+
+.sg-boundary-panel__dot {
+  width: 7px;
+  height: 7px;
+  background: var(--sg-accent);
+  border-radius: 50%;
+}
+
+@media (max-width: 720px) {
+  .sg-page {
+    padding: 24px 18px 40px;
+  }
+
+  .sg-page-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}

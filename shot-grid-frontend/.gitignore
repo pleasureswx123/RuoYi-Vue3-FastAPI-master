@@ -1,0 +1,11 @@
+node_modules/
+dist/
+coverage/
+.vite/
+.env.local
+.env.*.local
+*.log
+!.gitkeep
+
+# 历史参考工程不属于正式业务前端源码。
+参考资料/

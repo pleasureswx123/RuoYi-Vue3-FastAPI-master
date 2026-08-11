@@ -4,8 +4,8 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 版本 | v1.5 |
-| 状态 | 普通管理、Excel 导入、独立任务、版本发布与 `auto_single` 审核后端已落地；目录/版本 Worker 默认关闭，资产需求人工处理、`manual_batch`、媒体派生、前端与真实 UNC/完整 E2E 仍待实现 |
+| 版本 | v1.6 |
+| 状态 | 普通管理、Excel 导入、独立任务、版本发布与 `auto_single` 审核后端已落地；独立业务前端应用基座已实现，六个业务页仍为无 Mock 边界占位；目录/版本 Worker 默认关闭，资产需求人工处理、`manual_batch`、媒体派生、业务 CRUD 与真实 UNC/完整 E2E 仍待实现 |
 | 建立日期 | 2026-08-07 |
 | 最近修订 | 2026-08-11 |
 | 数据库 | PostgreSQL |
@@ -26,6 +26,7 @@
 - 用户主表是 `sys_user`。
 - `sys_user.user_id` 是 BigInteger 自增主键。
 - 当前用户通过 `CurrentUserModel.user.userId` 获取。
+- `/getInfo` 的 `CurrentUserModel.user` 使用专用 `CurrentUserInfoModel`，该安全响应模型不包含 `password`；独立业务前端还会二次投影必要身份字段，不缓存完整用户对象。
 - 接口权限使用 `UserInterfaceAuthDependency`。
 - 登录认证使用 `PreAuthDependency`。
 - API 模型使用 snake_case Python 字段和 camelCase JSON alias。
@@ -40,6 +41,7 @@
 - PostgreSQL 初始基线中的审计时间使用 `timestamp(0)`；Shot Grid SQLAlchemy DO 使用 PostgreSQL 方言下编译为 `TIMESTAMP(0) WITHOUT TIME ZONE` 的统一类型。
 - 常规业务异常默认由统一响应工具以 HTTP 200 返回；Shot Grid 的真实 HTTP 409 等语义属于本模块需要显式实现的扩展契约。
 - RuoYi 平台基座本身没有通用 NAS 根目录配置、项目目录初始化、版本文件发布到 UNC 路径或跨数据库与文件系统补偿能力。Shot Grid 已新增项目目录 Outbox Worker、目录诊断/人工重试和独立版本发布 Worker，但两个 Worker 均默认关闭，物理补偿仍未实现；不得把 Shot Grid 领域扩展描述为平台通用能力，也不得以本地临时目录测试冒充真实 UNC 验收。
+- 独立业务前端已实现 Vue 3/Vite/Pinia/Vue Router/Axios/Element Plus 应用基座、自有登录页、六项本地路由白名单、统一请求与错误分流；项目、镜头、资产、审核和文件业务数据页面尚未接入真实 CRUD。
 
 ## 3. 领域边界
 
@@ -1619,6 +1621,8 @@ Permission: shotgrid:navigation:list
 - 菜单管理负责标题、图标、顺序、显示、停用和角色授权；用户、角色、字典等系统管理菜单仍只由 `ruoyi-fastapi-frontend` 解析；
 - MVP 不修改公共 `sys_menu` 增加应用字段；未来出现多个独立业务应用后再评审通用应用范围模型。
 
+当前业务端已按上述六个 `routeKey` 建立固定本地注册表，并同时校验返回路径。未知键、重复键或路径不匹配项会被丢弃；后端返回值不能注入 Vue 组件。当前六个目标页面只展示“业务数据功能待接入、未使用 Mock 数据”的实施边界，不代表对应业务 CRUD 已完成。
+
 ### 8.6 平台字典种子与治理边界
 
 首批平台字典：
@@ -1647,9 +1651,14 @@ Permission: shotgrid:navigation:list
 登录和平台用户信息继续使用：
 
 ```text
+GET  /captchaImage
 POST /login
 GET  /getInfo
+POST /logout
+GET  /shot-grid/navigation
 ```
+
+独立业务前端开发环境从 `/` 运行，并以 `/dev-api` 作为代理前缀；生产静态资源基路径固定为 `/shot-grid-app/`，API 前缀为 `/prod-api`。生产反向代理必须剥离 `/prod-api` 后再转发后端真实路径，例如浏览器请求 `/prod-api/getInfo` 时后端收到 `/getInfo`。`/shot-grid-app/` 是页面部署路径，不是后端 `/shot-grid` 业务 API 前缀。
 
 ### 9.2 请求与响应命名
 
@@ -1715,6 +1724,8 @@ Shot Grid 模块内的错误响应遵守：
 
 `PreAuthDependency` 和 `UserInterfaceAuthDependency` 生成的平台认证、接口授权响应可以不包含 Shot Grid `errorKey`；前端应先执行平台统一错误处理，再处理 Shot Grid 领域错误。
 
+独立业务前端统一把失败转换为 `ApiError`，并保留 `status`、`httpStatus`、`code`、`errorKey`、`data`、`details` 和原始响应。401 必须清除本地 `Admin-Token` 与身份/导航状态并回登录；403、404 和 5xx 分别进入无权限、页面不存在和服务异常路径，5xx 不得回退为空数据；409、413 和 416 保留为可区分的业务提示。
+
 现有 `ServiceException` 会进入平台通用异常处理并返回 HTTP 200，不能直接承载上述状态语义。后端实现必须新增 Shot Grid 领域异常及处理器，例如：
 
 ```text
@@ -1758,6 +1769,16 @@ ShotGridDomainException
 同一用户、同一业务动作、同一幂等键重复请求返回第一次结果，不重复创建记录。
 
 幂等结果存储位置和 TTL 在后端实现设计时确定，默认使用 Redis。
+
+### 9.7 独立业务前端认证与路由契约
+
+- 自有登录页只提交账号、密码和按 `/captchaImage` 返回决定是否启用的验证码，不提供记住密码，不在 LocalStorage、SessionStorage 或 Pinia 中保存密码。
+- Token 沿用平台 Cookie 名 `Admin-Token`，`path=/`，请求头使用 `Authorization: Bearer <token>`。同域不同路径部署可共享该 Cookie，但真实共享效果仍需在生产域、HTTPS 和浏览器策略下验收。
+- 登录成功后必须依次完成 `/getInfo` 和 `/shot-grid/navigation` 初始化；刷新受保护路由时复用同一初始化流程，初始化并发请求只允许一个在途 Promise。
+- `/getInfo` 后端只输出不含 `password` 的专用安全用户 VO；前端会话只保存 `userId`、`userName`、`nickName`、`avatar`、部门摘要、角色和权限列表。
+- 范围导航只接受 `workbench`、`projects`、`shots`、`assets`、`reviews`、`files`，并映射到固定本地路径；无任何有效导航时进入 403，不得默认授予六项菜单。
+- 退出无论后端调用是否成功都清理本地会话；后端错误仍向调用方报告，不能因本地清理而伪装退出接口成功。
+- 当前六个一级页面不调用业务列表接口，也不包含 Mock；它们是下一批接入项目、镜头、资产、审核和文件真实 API 的路由边界。
 
 ## 10. 第一批项目 API
 
@@ -3218,7 +3239,7 @@ NAS I/O 不得在数据库事务内执行。`sg_storage_operation` 和 `sg_versi
 
 ## 20. 第一批验收用例
 
-目录 Worker 与版本发布 Worker 本批均提供了 DAO、路径适配器、租约/心跳/重试服务、内部 Scheduler 任务和针对性测试入口；目录链另有管理 API。自动化文件系统用例只能在显式 `allow_local_root=True` 时使用临时本地目录；生产默认仍只接受 UNC。以下目录创建和版本文件发布都要求在隔离 NAS 根目录上使用正式 Windows Worker 服务账号验证，并核对 NAS/AD/共享 ACL。未执行真实 UNC E2E 前，源码存在、Mock、临时目录测试、迁移成功或 Scheduler 注册成功都不是生产验收证据。
+目录 Worker 与版本发布 Worker 本批均提供了 DAO、路径适配器、租约/心跳/重试服务、内部 Scheduler 任务和针对性测试入口；目录链另有管理 API。独立业务前端第一批已通过 lint、24 个单元测试和生产构建，但尚未使用真实后端、PostgreSQL、Redis 和平台账号完成登录 E2E。自动化文件系统用例只能在显式 `allow_local_root=True` 时使用临时本地目录；生产默认仍只接受 UNC。以下登录、目录创建和版本文件发布都要求在对应真实环境验证。未执行真实认证与 UNC E2E 前，源码存在、前端构建、单元测试、Mock、临时目录测试、迁移成功或 Scheduler 注册成功都不是生产验收证据。
 
 ### 20.1 正向闭环
 
@@ -3295,6 +3316,6 @@ NAS I/O 不得在数据库事务内执行。`sg_storage_operation` 和 `sg_versi
 6. 决定已完成任务是否需要“重新打开”；MVP 当前禁止，未来动作必须有原因和审计。
 7. 两类样表、模板版本、默认最大行数、文件大小、预览 TTL 和资产名称规范化已冻结；上传原文件仅临时解析、不长期留存，确需留存时必须另走受保护文件引用。
 8. 决定资产模板是否增加跨重新保存仍保留的稳定 `sourceRowId/rowUid`；未引入前需冻结人工去重治理流程。
-9. 22 张基础表、`20260810_01 → 20260811_06` 迁移链、种子、项目/成员/集/场次/镜头/资产/制作分项普通管理、两类导入 API、独立任务管理、默认关闭的版本发布 Worker、正式版本/主文件引用/`auto_single` 审核闭环，以及默认关闭的 NAS 目录 Outbox Worker、目录诊断和人工重试已转化为代码；资产需求人工处理、`manual_batch`、媒体派生、业务前端、真实 UNC/NAS 部署验收和完整 E2E 继续按本契约分批实现。
+9. 22 张基础表、`20260810_01 → 20260811_06` 迁移链、种子、项目/成员/集/场次/镜头/资产/制作分项普通管理、两类导入 API、独立任务管理、默认关闭的版本发布 Worker、正式版本/主文件引用/`auto_single` 审核闭环，以及默认关闭的 NAS 目录 Outbox Worker、目录诊断和人工重试已转化为代码；独立业务前端应用基座也已实现。资产需求人工处理、`manual_batch`、媒体派生、业务页面真实 API 接入、真实登录、UNC/NAS 部署验收和完整 E2E 继续按本契约分批实现。
 
 上述 1—8 是评审、部署或数据治理参数，不得由页面开发临时猜测。第 9 项只说明当前第一批实现边界，未落地的契约章节仍是设计，不是已实现能力。

@@ -128,12 +128,54 @@ class UserInfoModel(UserModel):
     role: list[RoleModel | None] | None = Field(default=[], description='角色信息')
 
 
+class CurrentUserInfoModel(BaseModel):
+    """当前登录用户的安全响应模型，不包含密码等认证凭证。"""
+
+    model_config = ConfigDict(
+        alias_generator=to_camel,
+        from_attributes=True,
+        populate_by_name=True,
+        extra='ignore',
+    )
+
+    user_id: int | None = Field(default=None, description='用户ID')
+    dept_id: int | None = Field(default=None, description='部门ID')
+    user_name: str | None = Field(default=None, description='用户账号')
+    nick_name: str | None = Field(default=None, description='用户昵称')
+    user_type: str | None = Field(default=None, description='用户类型（00系统用户）')
+    email: str | None = Field(default=None, description='用户邮箱')
+    phonenumber: str | None = Field(default=None, description='手机号码')
+    sex: Literal['0', '1', '2'] | None = Field(default=None, description='用户性别（0男 1女 2未知）')
+    avatar: str | None = Field(default=None, description='头像地址')
+    status: Literal['0', '1'] | None = Field(default=None, description='帐号状态（0正常 1停用）')
+    del_flag: Literal['0', '2'] | None = Field(default=None, description='删除标志（0代表存在 2代表删除）')
+    login_ip: str | None = Field(default=None, description='最后登录IP')
+    login_date: datetime | None = Field(default=None, description='最后登录时间')
+    pwd_update_date: datetime | None = Field(default=None, description='密码最后更新时间')
+    create_by: str | None = Field(default=None, description='创建者')
+    create_time: datetime | None = Field(default=None, description='创建时间')
+    update_by: str | None = Field(default=None, description='更新者')
+    update_time: datetime | None = Field(default=None, description='更新时间')
+    remark: str | None = Field(default=None, description='备注')
+    admin: bool | None = Field(default=False, description='是否为admin')
+    post_ids: str | None = Field(default=None, description='岗位ID信息')
+    role_ids: str | None = Field(default=None, description='角色ID信息')
+    dept: DeptModel | None = Field(default=None, description='部门信息')
+    role: list[RoleModel | None] | None = Field(default=[], description='角色信息')
+
+    @model_validator(mode='after')
+    def check_admin(self) -> 'CurrentUserInfoModel':
+        """保持平台现有的超级管理员判定语义。"""
+        self.admin = self.user_id == 1
+        return self
+
+
 class CurrentUserModel(BaseModel):
     model_config = ConfigDict(alias_generator=to_camel)
 
     permissions: list = Field(description='权限信息')
     roles: list = Field(description='角色信息')
-    user: UserInfoModel | None = Field(description='用户信息')
+    user: CurrentUserInfoModel | None = Field(description='用户信息')
     pwd_chrtype: str = Field(default='0', description='密码字符范围')
     is_default_modify_pwd: bool = Field(default=False, description='是否初始密码修改提醒')
     is_password_expired: bool = Field(default=False, description='密码是否过期提醒')

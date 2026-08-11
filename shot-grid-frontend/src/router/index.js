@@ -1,0 +1,81 @@
+import { createRouter, createWebHistory } from 'vue-router'
+
+const routes = [
+  {
+    path: '/login',
+    name: 'login',
+    component: () => import('@/views/login/LoginView.vue'),
+    meta: { public: true, title: '登录' }
+  },
+  {
+    path: '/service-unavailable',
+    name: 'service-unavailable',
+    component: () => import('@/views/error/ServiceUnavailableView.vue'),
+    meta: { public: true, title: '服务暂不可用' }
+  },
+  {
+    path: '/forbidden',
+    name: 'forbidden',
+    component: () => import('@/views/error/ForbiddenView.vue'),
+    meta: { public: true, title: '无访问权限' }
+  },
+  {
+    path: '/',
+    name: 'root',
+    component: () => import('@/layout/AppLayout.vue'),
+    children: [
+      {
+        path: 'workbench',
+        name: 'workbench',
+        component: () => import('@/views/workbench/WorkbenchView.vue'),
+        meta: { title: '工作台', routeKey: 'workbench' }
+      },
+      {
+        path: 'projects',
+        name: 'projects',
+        component: () => import('@/views/project/ProjectListView.vue'),
+        meta: { title: '项目', routeKey: 'projects' }
+      },
+      {
+        path: 'shots',
+        name: 'shots',
+        component: () => import('@/views/shot/ShotListView.vue'),
+        meta: { title: '镜头管理', routeKey: 'shots' }
+      },
+      {
+        path: 'assets',
+        name: 'assets',
+        component: () => import('@/views/asset/AssetListView.vue'),
+        meta: { title: '资产库管理', routeKey: 'assets' }
+      },
+      {
+        path: 'reviews',
+        name: 'reviews',
+        component: () => import('@/views/review/ReviewListView.vue'),
+        meta: { title: '版本审核', routeKey: 'reviews' }
+      },
+      {
+        path: 'files',
+        name: 'files',
+        component: () => import('@/views/file/FileCenterView.vue'),
+        meta: { title: '文件与 NAS', routeKey: 'files' }
+      }
+    ]
+  },
+  {
+    path: '/:pathMatch(.*)*',
+    name: 'not-found',
+    component: () => import('@/views/error/NotFoundView.vue'),
+    meta: { title: '页面不存在' }
+  }
+]
+
+export function createShotGridRouter() {
+  return createRouter({
+    history: createWebHistory(import.meta.env.BASE_URL),
+    routes,
+    scrollBehavior: () => ({ top: 0 })
+  })
+}
+
+export default createShotGridRouter()

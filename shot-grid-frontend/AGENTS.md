@@ -8,7 +8,7 @@
 - 基础后端：`../ruoyi-fastapi-backend/`。
 - 后台管理端参考实现：`../ruoyi-fastapi-frontend/`。
 - 当前主数据库：PostgreSQL。
-- 当前目录已有需求、计划和契约文档，但尚未创建可运行的前端工程。后端已建立 PostgreSQL 领域表、`20260810_01 → 20260811_06` 迁移链、导航、项目/成员/范围查询、集/场次/镜头/资产/制作分项普通管理、两类 Excel 预检与正式提交、独立任务管理、默认关闭的版本发布 Worker、不可覆盖版本、`auto_single` 自动审核单、意见/回复/解决及 `approve/reject/defer` 审核闭环，以及默认关闭的 NAS 目录 Outbox Worker、目录操作诊断和人工重试。资产需求人工处理、`manual_batch`、媒体派生、业务前端、真实 UNC 与完整 E2E 尚未实现；不得把后端增量、临时本地目录测试、需求设计、静态页面或 Mock 数据描述成已完成生产闭环，也不得把尚未执行的真实 UNC E2E 描述成 NAS 生产验收通过。
+- 当前目录已建立可独立构建的 Vue 3/Vite/Pinia/Vue Router/Axios/Element Plus 应用基座，包含自有登录页、真实验证码/登录/用户信息/退出/范围导航调用、六项本地白名单路由、业务 Layout、统一请求与传输加密、401 会话清理，以及 403/404/5xx 分流。六个业务页面当前只声明后续真实 API 接入边界，不含 Mock 或业务 CRUD。后端已建立 PostgreSQL 领域表、`20260810_01 → 20260811_06` 迁移链、导航、项目/成员/范围查询、集/场次/镜头/资产/制作分项普通管理、两类 Excel 预检与正式提交、独立任务管理、默认关闭的版本发布 Worker、不可覆盖版本、`auto_single` 自动审核单、意见/回复/解决及 `approve/reject/defer` 审核闭环，以及默认关闭的 NAS 目录 Outbox Worker、目录操作诊断和人工重试。资产需求人工处理、`manual_batch`、媒体派生、业务页面真实数据接入、真实 UNC 与完整 E2E 尚未实现；不得把前端构建、单元测试、后端增量、临时本地目录测试、需求设计、静态页面或 Mock 数据描述成已完成生产闭环，也不得把尚未执行的真实 UNC E2E 描述成 NAS 生产验收通过。
 
 需求文档定义产品意图，本文件补充工程边界和必须保持的数据不变量。若需求文档与已确认的后端契约不一致，应先记录差异，再修改实现；不得在页面组件中用临时兼容掩盖数据模型冲突。
 
@@ -230,7 +230,7 @@ ruoyi-fastapi-frontend
 
 `shot-grid-frontend` 的技术栈、核心依赖版本、构建方式和基础工程组织以 `../ruoyi-fastapi-frontend/` 为首要参考；初始化或升级依赖前先核对其 `package.json`、Vite 配置和现有基础设施，未经用户明确批准不得另起一套前端技术体系。
 
-初始化工程时默认沿用后台管理端已使用的技术栈：
+当前独立工程沿用后台管理端已使用的技术栈：
 
 - Vue 3
 - Vite
@@ -253,6 +253,17 @@ ruoyi-fastapi-frontend
 - 基础布局、图标、字典和通用格式化工具。
 
 不得绕过统一请求层自行创建不带认证、错误处理或传输加密的 Axios 实例。上传、下载或流媒体接口需要排除应用层加密时，应与后端协议共同确认，不能在单个页面私自关闭安全策略。
+
+### 6.1 第一批应用基座的已实现契约
+
+- 开发环境页面根路径为 `/`，API 前缀为 `/dev-api`，Vite 代理将该前缀剥离后转发到后端；生产构建根路径固定为 `/shot-grid-app/`，API 前缀为 `/prod-api`。
+- 生产反向代理必须把 `/prod-api/...` 转发为后端真实的 `/...`，即剥离 `/prod-api`；不得把页面基路径 `/shot-grid-app/` 与后端业务前缀 `/shot-grid` 混用。
+- 登录页直接调用平台 `GET /captchaImage`、`POST /login`，会话初始化调用 `GET /getInfo` 和 `GET /shot-grid/navigation`，退出调用 `POST /logout`；当前没有请求失败后回退 Mock 的逻辑。
+- 业务端与管理端沿用 `Admin-Token` Cookie，Cookie `path=/`，请求通过统一 Axios 实例发送 `Authorization: Bearer <token>`；是否共享登录态还取决于两个应用部署在同一 Cookie 域及浏览器安全策略。
+- `/getInfo` 使用专用安全用户 VO 输出当前用户信息，不包含 `password`；业务端 Pinia 还会把用户对象投影为 `userId`、`userName`、`nickName`、`avatar` 和部门摘要，不缓存后端额外用户字段。
+- `/shot-grid/navigation` 的 `routeKey` 只接受 `workbench`、`projects`、`shots`、`assets`、`reviews`、`files`。前端同时校验本地路径，拒绝未知键、重复键和路径不匹配项，不接受后端注入组件路径。
+- 统一 `ApiError` 保留 `status`、`httpStatus`、`code`、`errorKey`、`data`、`details` 和原始响应；401 清理本地会话并回登录，403 进入无权限页，404 与 5xx 分别展示不存在和服务异常，服务异常不得伪装成空数据。
+- 六个一级业务页面当前只是边界占位，明确提示“业务数据功能待接入”和“未使用 Mock 数据”；不得据此宣称项目、镜头、资产、审核或文件业务页面已经完成。
 
 ## 7. 推荐目录与依赖方向
 
@@ -323,6 +334,7 @@ shot-grid-frontend/
 
 - 路由参数进入 API 前必须校验，不能只依赖 TypeScript 或组件 Props。
 - 登录和用户信息可以复用 `/login`、`/getInfo` 等平台接口。
+- 独立业务端提供自有登录页，真实复用 `/captchaImage`、`/login`、`/getInfo` 和 `/logout`；不复制管理后台系统菜单，也不持久化用户密码。
 - 不得直接把后台管理端 `/getRouters` 返回的全部管理菜单加载到业务应用。业务端使用 `/shot-grid/navigation` 获取 `route_name='ShotGrid'` 根节点下的范围菜单，并只通过本地白名单解析稳定路由键。
 - 前端路由守卫和按钮权限只改善用户体验；项目成员、资源归属和动作权限必须由后端逐接口校验。
 - 后端项目权限必须在平台接口权限之外增加项目成员、项目角色和资源归属校验；现有部门型 `DataScopeDependency` 不能代替项目成员关系。
@@ -374,6 +386,7 @@ shot-grid-frontend/
   - 5xx：服务异常，不得伪装成空数据。
 - 页面卸载、项目切换和筛选变化时取消过期请求，避免旧响应覆盖新上下文。
 - Mock 只用于独立 UI 开发；接入真实接口后不得保留“请求失败自动回退到 Mock”的生产逻辑。
+- 当前统一请求层把响应体错误和真实 HTTP 错误都转换为 `ApiError`，业务页面处理错误时必须保留并优先使用 `httpStatus`、`code`、`errorKey` 和 `details`，不得只比较中文 `msg`。
 
 ## 12. 安全与隐私
 
@@ -400,7 +413,7 @@ shot-grid-frontend/
 
 ## 14. 验证与验收
 
-初始化工程时至少提供以下 npm scripts：
+工程至少提供以下 npm scripts：
 
 ```json
 {
@@ -451,6 +464,8 @@ MVP 不能只以页面数量验收，至少需要真实走通：
 - 页面刷新、项目切换和登录过期不会泄露上一个项目的数据。
 
 构建成功只证明静态产物可生成，不等于上述业务链路通过。
+
+截至 2026-08-11，独立业务前端已实际执行 `npm.cmd run lint`、`npm.cmd run test`（24 个单元测试）和 `npm.cmd run build:prod` 并通过；尚未使用真实后端、PostgreSQL、Redis 和平台账号执行登录/刷新/退出浏览器 E2E，也未验证生产 Nginx 前缀剥离。该结果只能作为应用基座静态与单元级证据，不能标记阶段 1 完整验收通过。
 
 ## 15. 变更纪律
 

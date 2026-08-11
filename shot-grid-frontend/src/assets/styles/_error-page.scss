@@ -1,0 +1,90 @@
+.error-page {
+  display: grid;
+  min-height: 100vh;
+  padding: 28px;
+  background:
+    radial-gradient(circle at 50% 0, rgba(255, 182, 87, 0.1), transparent 32%),
+    var(--sg-bg);
+  place-items: center;
+}
+
+.error-card {
+  position: relative;
+  width: min(100%, 640px);
+  padding: clamp(34px, 6vw, 64px);
+  overflow: hidden;
+  text-align: center;
+  background: var(--sg-surface);
+  border: 1px solid var(--sg-border);
+  border-radius: var(--sg-radius-lg);
+  box-shadow: var(--sg-shadow);
+}
+
+.error-card__code {
+  position: absolute;
+  top: -20px;
+  right: 14px;
+  color: rgba(255, 255, 255, 0.025);
+  font-size: 112px;
+  font-weight: 800;
+  letter-spacing: -0.08em;
+  pointer-events: none;
+}
+
+.error-card__icon {
+  position: relative;
+  display: grid;
+  width: 70px;
+  height: 70px;
+  margin: 0 auto 24px;
+  color: var(--sg-accent);
+  background: var(--sg-accent-soft);
+  border: 1px solid rgba(255, 182, 87, 0.22);
+  border-radius: 21px;
+  place-items: center;
+}
+
+.error-card__icon.is-warning {
+  color: var(--sg-danger);
+  background: rgba(255, 107, 107, 0.09);
+  border-color: rgba(255, 107, 107, 0.2);
+}
+
+.error-card__icon .el-icon {
+  font-size: 30px;
+}
+
+.error-card h1 {
+  position: relative;
+  margin: 0;
+  font-size: clamp(25px, 4vw, 34px);
+  font-weight: 600;
+  letter-spacing: -0.035em;
+}
+
+.error-card p {
+  position: relative;
+  max-width: 500px;
+  margin: 15px auto 28px;
+  color: var(--sg-text-secondary);
+  font-size: 14px;
+  line-height: 1.8;
+}
+
+.error-card__actions {
+  position: relative;
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+}
+
+.error-card__actions .el-button--primary {
+  color: #17130e;
+  font-weight: 700;
+}
+
+@media (max-width: 520px) {
+  .error-page { padding: 16px; }
+  .error-card__actions { flex-direction: column; }
+  .error-card__actions .el-button { width: 100%; margin-left: 0; }
+}
