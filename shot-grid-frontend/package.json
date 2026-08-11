@@ -3,8 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "packageManager": "npm@11.4.2",
   "engines": {
-    "node": ">=18.0.0"
+    "node": "20.20.2",
+    "npm": "11.4.2"
   },
   "scripts": {
     "dev": "vite",
