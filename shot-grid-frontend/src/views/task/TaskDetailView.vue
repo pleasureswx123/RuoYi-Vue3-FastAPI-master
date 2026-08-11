@@ -1,16 +1,49 @@
 <script setup>
-import { onMounted, ref } from 'vue'
+import { onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useRoute } from 'vue-router'
+import { ElMessage } from 'element-plus'
 import { getTask, startTask } from '@/api/shot-grid/tasks'
+import { getVersionSubmission, initializeVersionSubmission, retryVersionSubmission, uploadProtectedVersionFile } from '@/api/shot-grid/versions'
 
 const props = defineProps({ taskId: { type: String, required: true } })
 const route = useRoute(), projectId = String(route.query.projectId || ''), task = ref(null), reason = ref('')
 async function load() { task.value = await getTask(projectId, props.taskId) }
 async function start() { await startTask(projectId, props.taskId, { reason: reason.value || null }); await load() }
+const selectedFile = ref(null), submitting = ref(false), polling = ref(0)
+const submission = ref(null), form = reactive({ changelog: '' }), uploadPercent = ref(0)
+function chooseFile(file) { selectedFile.value = file.raw; uploadPercent.value = 0 }
+function stopPolling() { if (polling.value) window.clearTimeout(polling.value); polling.value = 0 }
+async function refreshSubmission() {
+  if (!submission.value?.submissionId) return
+  submission.value = await getVersionSubmission(projectId, props.taskId, submission.value.submissionId)
+  if (!['committed', 'failed'].includes(submission.value.status) && !submission.value.errorKey) polling.value = window.setTimeout(refreshSubmission, 1500)
+  else if (submission.value.status === 'committed') await load()
+}
+async function submitVersion() {
+  if (!selectedFile.value || !form.changelog.trim()) return ElMessage.warning('请选择文件并填写修改说明')
+  submitting.value = true
+  try {
+    const uploaded = await uploadProtectedVersionFile(selectedFile.value, value => { uploadPercent.value = value })
+    submission.value = await initializeVersionSubmission(projectId, props.taskId, {
+      fileId: uploaded.fileId, changelog: form.changelog.trim(),
+      idempotencyKey: crypto.randomUUID()
+    })
+    await refreshSubmission()
+  } finally { submitting.value = false }
+}
+async function retrySubmission() {
+  submission.value = await retryVersionSubmission(projectId, props.taskId, submission.value.submissionId)
+  await refreshSubmission()
+}
 onMounted(load)
+onBeforeUnmount(stopPolling)
 const actionLabels = { assigned: '分配', reassigned: '改派', started: '开始任务' }
+const stageLabels = { uploaded: '上传完成，等待 Worker', nas_publishing: '正在发布到 NAS', nas_published: 'NAS 发布完成', database_committing: '正在正式入库', completed: '版本提交完成', failed: '提交失败' }
 </script>
 <template>
-  <section class="page"><span class="eyebrow">TASK / {{ taskId }}</span><template v-if="task"><h1>{{ task.taskName }}</h1><p class="lead">状态：{{ task.taskStatus }} · 负责人 #{{ task.assigneeUserId }}</p><div v-if="task.taskStatus === 'not_started'" class="task-actions"><el-input v-model="reason" placeholder="代操作时填写原因"/><el-button type="success" @click="start">开始任务</el-button></div><h2>任务历史</h2><el-timeline><el-timeline-item v-for="item in task.history" :key="item.historyId" :timestamp="item.createTime"><strong>{{ actionLabels[item.action] || item.action }}</strong><span> · 操作人 #{{ item.actorUserId }}</span><el-tag v-if="item.delegated" type="warning">代操作</el-tag><p v-if="item.detail?.reason">原因：{{ item.detail.reason }}</p></el-timeline-item></el-timeline></template></section>
+  <section class="page"><span class="eyebrow">TASK / {{ taskId }}</span><template v-if="task"><h1>{{ task.taskName }}</h1><p class="lead">状态：{{ task.taskStatus }} · 负责人 #{{ task.assigneeUserId }}</p><div v-if="task.taskStatus === 'not_started'" class="task-actions"><el-input v-model="reason" placeholder="代操作时填写原因"/><el-button type="success" @click="start">开始任务</el-button></div>
+  <template v-if="['in_progress', 'revision'].includes(task.taskStatus)"><h2>提交审核版本</h2><div class="version-submit"><el-upload :auto-upload="false" :limit="1" :accept="task.taskKind === 'shot_video' ? '.mp4,.mov' : '.jpg,.png'" :on-change="chooseFile"><el-button>选择审核媒体</el-button></el-upload><el-input v-model="form.changelog" type="textarea" maxlength="5000" show-word-limit placeholder="本轮修改说明"/><el-button type="primary" :loading="submitting" @click="submitVersion">上传并提交</el-button></div></template>
+  <el-card v-if="submission" class="submission-status"><template #header>版本 V{{ String(submission.reservedVersionNo).padStart(3, '0') }}</template><el-steps :active="submission.stage === 'completed' ? 3 : submission.stage === 'database_committing' ? 2 : submission.stage?.startsWith('nas_') ? 1 : 0" finish-status="success"><el-step title="受保护上传"/><el-step title="NAS 发布"/><el-step title="正式入库"/></el-steps><el-progress v-if="uploadPercent < 100" :percentage="uploadPercent"/><p>{{ stageLabels[submission.stage] }}；进度仅随服务端真实状态更新。</p><el-alert v-if="submission.errorMessage" :title="submission.errorMessage" type="error" show-icon/><el-button v-if="submission.retryable" @click="retrySubmission">重试当前提交</el-button></el-card>
+  <h2>任务历史</h2><el-timeline><el-timeline-item v-for="item in task.history" :key="item.historyId" :timestamp="item.createTime"><strong>{{ actionLabels[item.action] || item.action }}</strong><span> · 操作人 #{{ item.actorUserId }}</span><el-tag v-if="item.delegated" type="warning">代操作</el-tag><p v-if="item.detail?.reason">原因：{{ item.detail.reason }}</p></el-timeline-item></el-timeline></template></section>
 </template>
-<style scoped>.task-actions{display:flex;gap:12px;max-width:600px;margin:20px 0}.el-tag{margin-left:8px}</style>
+<style scoped>.task-actions{display:flex;gap:12px;max-width:600px;margin:20px 0}.el-tag{margin-left:8px}.version-submit{display:grid;gap:12px;max-width:720px}.submission-status{margin:24px 0;max-width:900px}.submission-status p{margin:18px 0}</style>

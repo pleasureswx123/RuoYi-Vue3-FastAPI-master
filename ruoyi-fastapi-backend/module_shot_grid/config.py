@@ -43,3 +43,16 @@ class ShotGridStorageWorkerConfig(BaseSettings):
 
 
 SHOT_GRID_STORAGE_WORKER_CONFIG = ShotGridStorageWorkerConfig()
+
+
+class ShotGridVersionSubmissionConfig(BaseSettings):
+    """版本审核媒体的上传和 NAS 发布边界。"""
+
+    model_config = SettingsConfigDict(env_prefix='SHOT_GRID_VERSION_', extra='ignore')
+
+    max_video_size_bytes: int = Field(default=2 * 1024 * 1024 * 1024, gt=0)
+    max_image_size_bytes: int = Field(default=50 * 1024 * 1024, gt=0)
+    lease_seconds: int = Field(default=300, ge=10, le=3600)
+
+
+SHOT_GRID_VERSION_CONFIG = ShotGridVersionSubmissionConfig()
