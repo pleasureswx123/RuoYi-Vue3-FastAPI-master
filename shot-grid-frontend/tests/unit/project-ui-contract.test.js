@@ -21,8 +21,10 @@ test('项目创建加载可用根目录、后端路径预览和可搜索多选�
 })
 
 test('项目列表覆盖权限、失败、重试、空态和分页', async () => {
-  const view = await read('src/views/project/index.vue')
+  const [view, routes] = await Promise.all([read('src/views/project/index.vue'), read('src/router/routes.js')])
   for (const marker of ['forbidden', 'loadError', 'loadProjects', 'EmptyState', 'el-pagination']) assert.match(view, new RegExp(marker))
+  assert.match(routes, /path: 'projects'.+import\('\@\/views\/project\/index\.vue'\)/)
+  assert.doesNotMatch(routes, /ProjectListView/)
 })
 
 test('成员按钮服从接口权限且刷新后重新请求', async () => {
