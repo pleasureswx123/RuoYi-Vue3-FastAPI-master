@@ -3,43 +3,77 @@ name: Shot Grid Frontend
 on:
   push:
     branches: [main, master]
-    paths:
-      - "shot-grid-frontend/**"
-      - ".github/workflows/shot-grid-frontend.yml"
   pull_request:
     branches: [main, master]
-    paths:
-      - "shot-grid-frontend/**"
-      - ".github/workflows/shot-grid-frontend.yml"
+  merge_group:
+
+env:
+  NODE_VERSION: 20.20.2
+  NPM_VERSION: 11.4.2
 
 jobs:
-  quality-gate:
+  frontend-lint:
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: shot-grid-frontend
-
     steps:
       - uses: actions/checkout@v5
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
-          node-version: 20.20.2
+          node-version: ${{ env.NODE_VERSION }}
           cache: npm
           cache-dependency-path: shot-grid-frontend/package-lock.json
+      - name: 安装并记录工具版本
+        run: |
+          npm install --global npm@"$NPM_VERSION"
+          node --version
+          npm --version
+      - name: 按锁文件安装依赖
+        run: env -u npm_config_http_proxy npm ci
+      - name: 前端 lint
+        run: env -u npm_config_http_proxy npm run lint
 
-      - name: Set up npm
-        run: npm install --global npm@11.4.2
+  frontend-test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: shot-grid-frontend
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: shot-grid-frontend/package-lock.json
+      - name: 安装并记录工具版本
+        run: |
+          npm install --global npm@"$NPM_VERSION"
+          node --version
+          npm --version
+      - name: 按锁文件安装依赖
+        run: env -u npm_config_http_proxy npm ci
+      - name: 前端测试
+        run: env -u npm_config_http_proxy npm test
 
-      - name: Install locked dependencies
-        run: npm ci
-
-      - name: Lint
-        run: npm run lint
-
-      - name: Test
-        run: npm test
-
-      - name: Build production bundle
-        run: npm run build:prod
+  frontend-build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: shot-grid-frontend
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: shot-grid-frontend/package-lock.json
+      - name: 安装并记录工具版本
+        run: |
+          npm install --global npm@"$NPM_VERSION"
+          node --version
+          npm --version
+      - name: 按锁文件安装依赖
+        run: env -u npm_config_http_proxy npm ci
+      - name: 前端生产构建
+        run: env -u npm_config_http_proxy npm run build:prod
