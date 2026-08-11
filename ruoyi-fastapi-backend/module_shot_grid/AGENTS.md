@@ -30,3 +30,9 @@
 - 人工审核单只能由项目总监在项目作用域内创建；候选版本必须同时属于当前项目、任务未删除，且任务与版本均为 `pending_review`。
 - `sg_review_list_version` 是审核单版本集合及连续审核顺序的唯一事实来源；客户端排序必须提交完整的 `{ versionId, sortOrder }` 集合，并使用审核单 `lockVersion` 防止并发覆盖。
 - 自动单版本审核单仍只允许在版本正式提交事务中创建，人工审核单接口不接受 `auto_single` 或 `autoVersionId`。
+
+## 18. 已确认的工作台、搜索与文件发现契约
+
+- `/shot-grid/workbench` 在后端按活动项目成员关系聚合我的任务、待审核、修改中、近期提交和项目摘要；前端不得读取全量业务表自行统计。
+- `/shot-grid/search` 与 `/shot-grid/files` 统一使用 `pageNum`、`pageSize`、`keyword`、`orderByColumn`、`isAsc`，并在 SQL 查询阶段应用活动项目成员范围。
+- 文件发现只返回业务文件元数据与受保护的版本文件下载入口。NAS 相对路径只向项目总监或跨项目管理员返回；没有已确认桌面协议前，客户端只允许查看和复制路径。

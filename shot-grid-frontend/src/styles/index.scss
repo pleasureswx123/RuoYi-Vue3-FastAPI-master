@@ -79,3 +79,15 @@ h1 { margin: 8px 0 12px; font-size: clamp(34px, 5vw, 60px); line-height: 1; lett
 .selection-actions, .commit-bar { justify-content: space-between; }
 .import-page pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.5 ui-monospace, monospace; }
 .issue--error { color: var(--el-color-danger); }.issue--warning { color: var(--el-color-warning-dark-2); }
+.dashboard-card { margin: 20px 0; padding: 18px; border: 1px solid #e7e9ef; border-radius: 12px; background: #fff; }
+.dashboard-card h2 { display: flex; gap: 8px; align-items: center; margin-top: 0; }
+.dashboard-card small { color: #8492a6; font-size: 13px; }
+.search-input { max-width: 460px; margin: 12px 0 20px; }
+.global-search { position: relative; width: min(420px, 42vw); margin-left: auto; margin-right: 20px; }
+.search-results { position: absolute; z-index: 50; top: calc(100% + 8px); width: 100%; padding: 8px; border: 1px solid #dfe3ea; border-radius: 10px; background: white; box-shadow: 0 12px 34px rgba(20,30,50,.16); }
+.search-results p { padding: 10px; margin: 0; color: #667085; }
+.search-results button { display: grid; grid-template-columns: 44px 1fr; width: 100%; padding: 9px; border: 0; border-radius: 7px; background: transparent; text-align: left; cursor: pointer; }
+.search-results button:hover, .search-results button:focus { background: #f1f5f9; }
+.search-results button span { color: #64748b; }
+.search-results button small { grid-column: 2; overflow: hidden; color: #8492a6; text-overflow: ellipsis; white-space: nowrap; }
+code { overflow-wrap: anywhere; }
