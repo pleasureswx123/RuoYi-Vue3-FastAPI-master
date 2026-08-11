@@ -12,6 +12,7 @@
 - `sg_storage_root.unc_root_path` 是唯一可用于执行 I/O 的管理员白名单根目录；项目完整路径快照不能替代当前根配置。
 - NAS I/O 不得包含在领取或结算事务中。初始化只有对应初始化操作成功后才能将项目存储标记为 `ready`。
 - 管理员诊断响应不得包含 `credential_ref`、根路径、目标路径或 Worker 标识。真实 SMB 验收必须在受控测试共享完成。
+- 项目初始化目录固定包含 `ASSET/Character`、`ASSET/Environment`、`ASSET/Prop` 和 `VIDEO`；真实 SMB 验收按 `docs/shot_grid_smb_acceptance.md` 分开记录真实共享与临时目录结果。
 - 镜头和资产制作分项各自只允许一个正常状态制作任务；首次分配创建任务，后续分配更新原任务，
   PostgreSQL 部分唯一索引与 Service 行锁/成员校验共同维护该不变量。
 - 任务负责人必须是同项目活动成员且拥有项目内唯一的有效 `producer_code`；任务只能单归属镜头或资产制作分项。

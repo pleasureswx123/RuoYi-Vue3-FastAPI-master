@@ -34,7 +34,20 @@ def test_existing_directories_are_idempotent_and_business_files_are_preserved(tm
     ShotGridStoragePathService.ensure_directories(target, 'initialize_project')
 
     assert business_file.read_bytes() == b'business-data'
-    assert all((target / name).is_dir() for name in ('EPISODE', 'SHOT', 'ASSET', 'REVIEW', 'DELIVERABLE'))
+    assert all(
+        (target / name).is_dir()
+        for name in (
+            'EPISODE',
+            'SHOT',
+            'ASSET',
+            'ASSET/Character',
+            'ASSET/Environment',
+            'ASSET/Prop',
+            'VIDEO',
+            'REVIEW',
+            'DELIVERABLE',
+        )
+    )
 
 
 @pytest.mark.parametrize(

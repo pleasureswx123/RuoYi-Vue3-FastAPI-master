@@ -10,12 +10,16 @@ from module_shot_grid.entity.do.project_do import (
     ShotGridScene,
     ShotGridShot,
 )
-from module_shot_grid.entity.do.storage_do import ShotGridProjectStorage
+from module_shot_grid.entity.do.storage_do import ShotGridProjectStorage, ShotGridStorageRoot
 from module_shot_grid.entity.do.task_do import ShotGridTask
 from module_shot_grid.entity.do.version_do import ShotGridVersion, ShotGridVersionFile, ShotGridVersionSubmission
 
 
 class ShotGridVersionSubmissionDao:
+    @staticmethod
+    async def storage_root(db, storage_root_id: int) -> ShotGridStorageRoot | None:
+        return await db.get(ShotGridStorageRoot, storage_root_id)
+
     @classmethod
     async def versions(cls, db, project_id: int, task_id: int):
         return list(

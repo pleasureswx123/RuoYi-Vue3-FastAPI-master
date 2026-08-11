@@ -1,6 +1,7 @@
 # ruff: noqa: ANN001, ANN205, ANN206, ASYNC240, PLR2004
 import asyncio
 import hashlib
+import ntpath
 import os
 import re
 import time
@@ -297,12 +298,20 @@ class ShotGridVersionSubmissionWorker:
 
     @classmethod
     async def _publish(cls, db, item):
-        file_info = await ShotGridVersionSubmissionDao.file(db, item.source_file_id)
-        storage = (await ShotGridVersionSubmissionDao.lock_task_context(db, item.project_id, item.task_id))[1]
-        source = Path(UploadConfig.PRIVATE_UPLOAD_PATH).resolve() / file_info.storage_key
-        temp = ShotGridStoragePathService.resolve(storage.project_path_snapshot, item.temporary_relative_path)
-        target = ShotGridStoragePathService.resolve(storage.project_path_snapshot, item.target_relative_path)
         try:
+            file_info = await ShotGridVersionSubmissionDao.file(db, item.source_file_id)
+            storage = (await ShotGridVersionSubmissionDao.lock_task_context(db, item.project_id, item.task_id))[1]
+            root = await ShotGridVersionSubmissionDao.storage_root(db, storage.storage_root_id)
+            if root is None or root.root_status != 'enabled' or root.del_flag != '0':
+                raise shot_grid_error(409, 'SG_VERSION_STORAGE_ROOT_UNAVAILABLE', '管理员白名单存储根不可用')
+            source = Path(UploadConfig.PRIVATE_UPLOAD_PATH).resolve() / file_info.storage_key
+            # 完整项目路径快照仅供审计。I/O 每次都从当前白名单根开始解析，并再次执行根目录包含校验。
+            temp = ShotGridStoragePathService.resolve(
+                root.unc_root_path, ntpath.join(storage.project_relative_path, item.temporary_relative_path)
+            )
+            target = ShotGridStoragePathService.resolve(
+                root.unc_root_path, ntpath.join(storage.project_relative_path, item.target_relative_path)
+            )
             digest, size = await asyncio.to_thread(cls._copy_hash_publish, source, temp, target, item.source_sha256)
             item = await ShotGridVersionSubmissionDao.get(
                 db, item.project_id, item.task_id, item.submission_id, lock=True
