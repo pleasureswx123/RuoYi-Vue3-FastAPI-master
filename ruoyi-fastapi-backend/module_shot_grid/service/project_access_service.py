@@ -27,8 +27,11 @@ class ShotGridProjectAccessService:
         if user is None or user.user_id is None:
             raise shot_grid_error(403, 'SG_PROJECT_ACCESS_DENIED', '无法识别当前用户')
 
-        if await ShotGridProjectDao.get_project_by_id(db, project_id) is None:
+        project = await ShotGridProjectDao.get_project_by_id(db, project_id)
+        if project is None:
             raise shot_grid_error(404, 'SG_PROJECT_NOT_FOUND', '项目不存在或不可见')
+        if getattr(project, 'project_status', None) == 'archived':
+            raise shot_grid_error(409, 'SG_PROJECT_ARCHIVED', '项目已归档，不能继续访问业务接口')
 
         has_all_scope = bool(
             user.admin or '*:*:*' in current_user.permissions or 'shotgrid:project:all' in current_user.permissions

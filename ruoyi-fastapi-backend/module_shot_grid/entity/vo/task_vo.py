@@ -10,6 +10,7 @@ class ShotGridTaskAssignModel(ShotGridApiModel):
     assignee_user_id: int = Field(gt=0, description='负责人用户ID')
     due_date: date | None = Field(default=None, description='截止日期')
     requirements: str | None = Field(default=None, max_length=10000, description='制作要求')
+    reason: str = Field(min_length=1, max_length=500, description='分配或改派原因')
 
 
 class ShotGridTaskQueryModel(ShotGridPageQueryModel):

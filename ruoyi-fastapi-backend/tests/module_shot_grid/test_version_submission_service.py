@@ -157,6 +157,34 @@ async def test_non_assignee_cannot_initialize_submission():
     assert caught.value.error_key == 'SG_VERSION_SUBMIT_ASSIGNEE_REQUIRED'
 
 
+@pytest.mark.asyncio
+async def test_director_delegated_submission_requires_reason():
+    task = SimpleNamespace(assignee_user_id=8)
+    context = (task,) + (None,) * 12
+    access = SimpleNamespace(has_all_scope=False, project_role='director')
+    with (
+        patch(
+            'module_shot_grid.service.version_submission_service.ShotGridVersionSubmissionDao.by_idempotency',
+            AsyncMock(return_value=None),
+        ),
+        patch(
+            'module_shot_grid.service.version_submission_service.ShotGridVersionSubmissionDao.lock_task_context',
+            AsyncMock(return_value=context),
+        ),
+        pytest.raises(ShotGridDomainException) as caught,
+    ):
+        await ShotGridVersionSubmissionService.initialize(
+            object(),
+            3,
+            8,
+            SimpleNamespace(idempotency_key='key', reason=None),
+            user_id=7,
+            user_name='director',
+            access=access,
+        )
+    assert caught.value.error_key == 'SG_VERSION_DELEGATION_REASON_REQUIRED'
+
+
 def _published_submission():
     return SimpleNamespace(
         submission_status='published',

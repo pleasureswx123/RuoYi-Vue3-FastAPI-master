@@ -89,7 +89,12 @@ class ShotGridTaskService:
                 action=action,
                 actor_user_id=actor_user_id,
                 subject_user_id=command.assignee_user_id,
-                detail={'previousAssigneeUserId': previous_user_id, 'producerCode': member.producer_code},
+                detail={
+                    'previousAssigneeUserId': previous_user_id,
+                    'targetAssigneeUserId': command.assignee_user_id,
+                    'producerCode': member.producer_code,
+                    'reason': command.reason,
+                },
                 create_by=actor_name,
             )
         )
@@ -107,6 +112,8 @@ class ShotGridTaskService:
         delegated = task.assignee_user_id != actor_user_id
         if delegated and not (access.has_all_scope or access.project_role == 'director'):
             raise shot_grid_error(403, 'SG_TASK_START_DENIED', '只有负责人本人、项目总监或管理员可以开始任务')
+        if delegated and not (command.reason or '').strip():
+            raise shot_grid_error(422, 'SG_TASK_DELEGATION_REASON_REQUIRED', '代开始任务必须填写原因')
         if task.task_status == 'in_progress':
             return cls.dump(task)
         if task.task_status != 'not_started':
