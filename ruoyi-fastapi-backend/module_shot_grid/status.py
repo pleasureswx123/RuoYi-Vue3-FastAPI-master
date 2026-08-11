@@ -5,7 +5,7 @@ from sqlalchemy import and_, case, func, select
 from sqlalchemy.orm import aliased
 
 from module_shot_grid.entity.do.asset_do import ShotGridAsset, ShotGridAssetItem
-from module_shot_grid.entity.do.project_do import ShotGridShot
+from module_shot_grid.entity.do.project_do import ShotGridEpisode, ShotGridScene, ShotGridShot
 from module_shot_grid.entity.do.task_do import ShotGridTask
 from module_shot_grid.entity.do.version_do import ShotGridVersion
 
@@ -56,7 +56,29 @@ def build_shot_status_cte(name: str = 'sg_shot_status'):
                 final_version.version_status == 'final',
             ),
         )
-        .where(ShotGridShot.del_flag == '0', ShotGridShot.lifecycle_status == 'active')
+        .join(
+            ShotGridScene,
+            and_(
+                ShotGridScene.scene_id == ShotGridShot.scene_id,
+                ShotGridScene.project_id == ShotGridShot.project_id,
+                ShotGridScene.episode_id == ShotGridShot.episode_id,
+            ),
+        )
+        .join(
+            ShotGridEpisode,
+            and_(
+                ShotGridEpisode.episode_id == ShotGridShot.episode_id,
+                ShotGridEpisode.project_id == ShotGridShot.project_id,
+            ),
+        )
+        .where(
+            ShotGridShot.del_flag == '0',
+            ShotGridShot.lifecycle_status == 'active',
+            ShotGridScene.del_flag == '0',
+            ShotGridScene.lifecycle_status == 'active',
+            ShotGridEpisode.del_flag == '0',
+            ShotGridEpisode.lifecycle_status == 'active',
+        )
         .cte(name)
     )
 
@@ -87,7 +109,19 @@ def build_asset_item_status_cte(name: str = 'sg_asset_item_status'):
                 final_version.version_status == 'final',
             ),
         )
-        .where(ShotGridAssetItem.del_flag == '0', ShotGridAssetItem.lifecycle_status == 'active')
+        .join(
+            ShotGridAsset,
+            and_(
+                ShotGridAsset.asset_id == ShotGridAssetItem.asset_id,
+                ShotGridAsset.project_id == ShotGridAssetItem.project_id,
+            ),
+        )
+        .where(
+            ShotGridAssetItem.del_flag == '0',
+            ShotGridAssetItem.lifecycle_status == 'active',
+            ShotGridAsset.del_flag == '0',
+            ShotGridAsset.lifecycle_status == 'active',
+        )
         .cte(name)
     )
 
