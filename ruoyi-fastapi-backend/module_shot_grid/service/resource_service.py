@@ -45,9 +45,16 @@ class ShotGridResourceService:
         return cls._dump(kind, row)
 
     @classmethod
+    async def ensure_parent(cls, db, kind, project_id, resource_id) -> None:
+        model, pk = cls.MODELS[kind]
+        if not await ShotGridResourceDao.get(db, model, pk, resource_id, project_id):
+            raise shot_grid_error(409, 'SG_RESOURCE_PROJECT_MISMATCH', '嵌套资源不属于同一项目')
+
+    @classmethod
     async def create(cls, db: AsyncSession, kind: str, project_id: int, command, username: str):
         model, _ = cls.MODELS[kind]
         values = command.model_dump(exclude={'lock_version'})
+        cls._discard_missing_parent(kind, values)
         await cls._validate_scope(db, kind, project_id, values)
         cls._derive_values(kind, values)
         row = model(project_id=project_id, lifecycle_status='active', create_by=username, update_by=username, **values)
@@ -65,6 +72,7 @@ class ShotGridResourceService:
     async def update(cls, db: AsyncSession, kind: str, project_id: int, resource_id: int, command, username: str):
         model, pk = cls.MODELS[kind]
         values = command.model_dump(exclude={'lock_version'})
+        cls._discard_missing_parent(kind, values)
         await cls._validate_scope(db, kind, project_id, values)
         cls._derive_values(kind, values)
         values.update(update_by=username, update_time=datetime.now())
@@ -138,6 +146,12 @@ class ShotGridResourceService:
         elif kind == 'assetItem':
             name = values.get('production_item')
             values['production_item_key'] = name.strip().casefold() if name else None
+
+    @staticmethod
+    def _discard_missing_parent(kind, values) -> None:
+        parent_field = {'scene': 'episode_id', 'assetItem': 'asset_id'}.get(kind)
+        if parent_field and values.get(parent_field) is None:
+            values.pop(parent_field)
 
     @staticmethod
     async def _raise_missing_or_stale(db, model, pk, resource_id, project_id) -> NoReturn:

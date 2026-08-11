@@ -9,6 +9,8 @@ from common.aspect.pre_auth import CurrentUserDependency, PreAuthDependency
 from common.router import APIRouterPro
 from module_admin.entity.vo.user_vo import CurrentUserModel
 from module_shot_grid.dependencies.project_access import ProjectAccessDependency
+from module_shot_grid.entity.do.asset_do import ShotGridAssetItem
+from module_shot_grid.entity.do.project_do import ShotGridScene
 from module_shot_grid.entity.vo.access_vo import ShotGridProjectAccessModel
 from module_shot_grid.entity.vo.resource_vo import (
     ShotGridArchiveModel,
@@ -34,7 +36,15 @@ def _username(user: CurrentUserModel) -> str:
     return user.user.user_name
 
 
-def _register_resource(kind: str, plural: str, id_alias: str, command_type: type, permission: str) -> None:
+def _register_resource(
+    kind: str,
+    plural: str,
+    id_alias: str,
+    command_type: type,
+    permission: str,
+    *,
+    register_collection: bool = True,
+) -> None:
     async def page(
         request: Request,
         project_id: Annotated[int, Path(alias='projectId', gt=0)],
@@ -97,13 +107,14 @@ def _register_resource(kind: str, plural: str, id_alias: str, command_type: type
 
     base = f'/{plural}'
     item = f'{base}/{{{id_alias}}}'
-    resource_controller.add_api_route(
-        base,
-        page,
-        methods=['GET'],
-        summary=f'获取{kind}列表',
-        dependencies=[UserInterfaceAuthDependency(f'shotgrid:{permission}:list')],
-    )
+    if register_collection:
+        resource_controller.add_api_route(
+            base,
+            page,
+            methods=['GET'],
+            summary=f'获取{kind}列表',
+            dependencies=[UserInterfaceAuthDependency(f'shotgrid:{permission}:list')],
+        )
     resource_controller.add_api_route(
         item,
         detail,
@@ -111,13 +122,14 @@ def _register_resource(kind: str, plural: str, id_alias: str, command_type: type
         summary=f'获取{kind}详情',
         dependencies=[UserInterfaceAuthDependency(f'shotgrid:{permission}:query')],
     )
-    resource_controller.add_api_route(
-        base,
-        create,
-        methods=['POST'],
-        summary=f'创建{kind}',
-        dependencies=[UserInterfaceAuthDependency(f'shotgrid:{permission}:add')],
-    )
+    if register_collection:
+        resource_controller.add_api_route(
+            base,
+            create,
+            methods=['POST'],
+            summary=f'创建{kind}',
+            dependencies=[UserInterfaceAuthDependency(f'shotgrid:{permission}:add')],
+        )
     resource_controller.add_api_route(
         item,
         edit,
@@ -135,7 +147,89 @@ def _register_resource(kind: str, plural: str, id_alias: str, command_type: type
 
 
 _register_resource('episode', 'episodes', 'episodeId', ShotGridEpisodeWriteModel, 'episode')
-_register_resource('scene', 'scenes', 'sceneId', ShotGridSceneWriteModel, 'scene')
+_register_resource('scene', 'scenes', 'sceneId', ShotGridSceneWriteModel, 'scene', register_collection=False)
 _register_resource('shot', 'shots', 'shotId', ShotGridShotWriteModel, 'shot')
 _register_resource('asset', 'assets', 'assetId', ShotGridAssetWriteModel, 'asset')
-_register_resource('assetItem', 'asset-items', 'assetItemId', ShotGridAssetItemWriteModel, 'asset')
+_register_resource(
+    'assetItem', 'asset-items', 'assetItemId', ShotGridAssetItemWriteModel, 'asset', register_collection=False
+)
+
+
+@resource_controller.get(
+    '/episodes/{episodeId}/scenes',
+    summary='获取集下的场次列表',
+    dependencies=[UserInterfaceAuthDependency('shotgrid:scene:list')],
+)
+async def page_scenes(
+    request: Request,
+    project_id: Annotated[int, Path(alias='projectId', gt=0)],
+    episode_id: Annotated[int, Path(alias='episodeId', gt=0)],
+    query: Annotated[ShotGridResourceQueryModel, Query()],
+    query_db: Annotated[AsyncSession, DBSessionDependency()],
+    access: Annotated[ShotGridProjectAccessModel, ProjectAccessDependency()],
+) -> Response:
+    await ShotGridResourceService.ensure_parent(query_db, 'episode', project_id, episode_id)
+    result = await ShotGridResourceService.page(
+        query_db, 'scene', project_id, query, parents={ShotGridScene.episode_id: episode_id}
+    )
+    return ResponseUtil.success(dict_content=result)
+
+
+@resource_controller.post(
+    '/episodes/{episodeId}/scenes',
+    summary='在集下创建场次',
+    dependencies=[UserInterfaceAuthDependency('shotgrid:scene:add')],
+)
+async def create_scene(
+    request: Request,
+    project_id: Annotated[int, Path(alias='projectId', gt=0)],
+    episode_id: Annotated[int, Path(alias='episodeId', gt=0)],
+    command: ShotGridSceneWriteModel,
+    query_db: Annotated[AsyncSession, DBSessionDependency()],
+    current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
+    access: Annotated[ShotGridProjectAccessModel, ProjectAccessDependency()],
+) -> Response:
+    command.episode_id = episode_id
+    return ResponseUtil.success(
+        data=await ShotGridResourceService.create(query_db, 'scene', project_id, command, _username(current_user))
+    )
+
+
+@resource_controller.get(
+    '/assets/{assetId}/items',
+    summary='获取资产制作分项列表',
+    dependencies=[UserInterfaceAuthDependency('shotgrid:asset:list')],
+)
+async def page_asset_items(
+    request: Request,
+    project_id: Annotated[int, Path(alias='projectId', gt=0)],
+    asset_id: Annotated[int, Path(alias='assetId', gt=0)],
+    query: Annotated[ShotGridResourceQueryModel, Query()],
+    query_db: Annotated[AsyncSession, DBSessionDependency()],
+    access: Annotated[ShotGridProjectAccessModel, ProjectAccessDependency()],
+) -> Response:
+    await ShotGridResourceService.ensure_parent(query_db, 'asset', project_id, asset_id)
+    result = await ShotGridResourceService.page(
+        query_db, 'assetItem', project_id, query, parents={ShotGridAssetItem.asset_id: asset_id}
+    )
+    return ResponseUtil.success(dict_content=result)
+
+
+@resource_controller.post(
+    '/assets/{assetId}/items',
+    summary='在资产下创建制作分项',
+    dependencies=[UserInterfaceAuthDependency('shotgrid:asset:add')],
+)
+async def create_asset_item(
+    request: Request,
+    project_id: Annotated[int, Path(alias='projectId', gt=0)],
+    asset_id: Annotated[int, Path(alias='assetId', gt=0)],
+    command: ShotGridAssetItemWriteModel,
+    query_db: Annotated[AsyncSession, DBSessionDependency()],
+    current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
+    access: Annotated[ShotGridProjectAccessModel, ProjectAccessDependency()],
+) -> Response:
+    command.asset_id = asset_id
+    return ResponseUtil.success(
+        data=await ShotGridResourceService.create(query_db, 'assetItem', project_id, command, _username(current_user))
+    )

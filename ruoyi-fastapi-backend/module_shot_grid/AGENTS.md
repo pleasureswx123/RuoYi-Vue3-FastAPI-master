@@ -1,5 +1,9 @@
 # Shot Grid 后端对齐结论
 
+- 场次列表/创建冻结为 `/projects/{projectId}/episodes/{episodeId}/scenes`；场次详情、修改和归档保持项目下的 `/scenes/{sceneId}`。
+- 资产制作分项列表/创建冻结为 `/projects/{projectId}/assets/{assetId}/items`；详情、修改、归档和任务分配使用 `/asset-items/{assetItemId}`。Controller/Service 必须重新校验父资源与 `projectId` 归属，不信任请求体父 ID。
+- 集、场次、镜头、资产和制作分项归档统一为 `PUT .../archive` 并携带 `lockVersion`。
+
 - D-05 媒体边界集中在 `ShotGridVersionSubmissionConfig`：镜头为 MP4/MOV、H.264/AVC、2 GiB、3840×2160、600 秒，资产为 JPEG/PNG、50 MiB、8192×8192，MVP 不生成代理。Service 必须校验扩展名、声明 MIME、文件签名及任务媒体类型；编码、尺寸、时长与播放兼容性由受控样本集成测试门禁验证。
 
 - 版本发布使用平台私有 `sys_file_info` 和 `sys_file_reference`，不另建上传协议；初始化在

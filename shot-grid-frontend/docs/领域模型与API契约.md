@@ -2137,7 +2137,7 @@ storageDirName = "EP" + episodeNo 左侧补零至至少 2 位（NAS 目录使用
 
 ```http
 PUT  /shot-grid/projects/{projectId}/episodes/{episodeId}
-POST /shot-grid/projects/{projectId}/episodes/{episodeId}/archive
+PUT  /shot-grid/projects/{projectId}/episodes/{episodeId}/archive
 Permissions:
   shotgrid:episode:edit
   shotgrid:episode:archive
@@ -2187,7 +2187,7 @@ Permission: shotgrid:scene:add
 ```http
 GET  /shot-grid/projects/{projectId}/scenes/{sceneId}
 PUT  /shot-grid/projects/{projectId}/scenes/{sceneId}
-POST /shot-grid/projects/{projectId}/scenes/{sceneId}/archive
+PUT  /shot-grid/projects/{projectId}/scenes/{sceneId}/archive
 Permissions:
   shotgrid:scene:query
   shotgrid:scene:edit
@@ -2357,7 +2357,7 @@ Permission: shotgrid:shot:edit
 ### 13.5 归档镜头
 
 ```http
-POST /shot-grid/projects/{projectId}/shots/{shotId}/archive
+PUT  /shot-grid/projects/{projectId}/shots/{shotId}/archive
 Permission: shotgrid:shot:archive
 ```
 
@@ -2793,11 +2793,11 @@ GET  /shot-grid/projects/{projectId}/assets
 POST /shot-grid/projects/{projectId}/assets
 GET  /shot-grid/projects/{projectId}/assets/{assetId}
 PUT  /shot-grid/projects/{projectId}/assets/{assetId}
-POST /shot-grid/projects/{projectId}/assets/{assetId}/archive
+PUT  /shot-grid/projects/{projectId}/assets/{assetId}/archive
 GET  /shot-grid/projects/{projectId}/assets/{assetId}/items
 POST /shot-grid/projects/{projectId}/assets/{assetId}/items
 PUT  /shot-grid/projects/{projectId}/asset-items/{assetItemId}
-POST /shot-grid/projects/{projectId}/asset-items/{assetItemId}/archive
+PUT  /shot-grid/projects/{projectId}/asset-items/{assetItemId}/archive
 Permissions:
   shotgrid:asset:list|add|query|edit|archive
 ```
