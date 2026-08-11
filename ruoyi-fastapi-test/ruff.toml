@@ -63,6 +63,9 @@ max-returns = 10
 # Preserve types, even if a file imports `from __future__ import annotations`.
 keep-runtime-typing = true
 
+[lint.per-file-ignores]
+"shot_grid/**/*.py" = ["ANN001", "ANN201", "ANN202", "ASYNC240", "PLR2004", "TC001", "TC002", "TC003", "UP037"]
+
 [format]
 docstring-code-format = true
 quote-style = "single"
