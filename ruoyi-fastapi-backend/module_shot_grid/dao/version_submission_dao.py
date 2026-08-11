@@ -1,7 +1,7 @@
 # ruff: noqa: ANN001, ANN206
-from sqlalchemy import func, select
+from sqlalchemy import String, cast, func, select
 
-from module_admin.entity.do.file_do import SysFileInfo
+from module_admin.entity.do.file_do import SysFileInfo, SysFileReference
 from module_shot_grid.entity.do.asset_do import ShotGridAsset, ShotGridAssetItem
 from module_shot_grid.entity.do.project_do import (
     ShotGridEpisode,
@@ -12,10 +12,79 @@ from module_shot_grid.entity.do.project_do import (
 )
 from module_shot_grid.entity.do.storage_do import ShotGridProjectStorage
 from module_shot_grid.entity.do.task_do import ShotGridTask
-from module_shot_grid.entity.do.version_do import ShotGridVersion, ShotGridVersionSubmission
+from module_shot_grid.entity.do.version_do import ShotGridVersion, ShotGridVersionFile, ShotGridVersionSubmission
 
 
 class ShotGridVersionSubmissionDao:
+    @classmethod
+    async def versions(cls, db, project_id: int, task_id: int):
+        return list(
+            (
+                await db.execute(
+                    select(ShotGridVersion)
+                    .where(ShotGridVersion.project_id == project_id, ShotGridVersion.task_id == task_id)
+                    .order_by(ShotGridVersion.version_no.desc())
+                )
+            ).scalars()
+        )
+
+    @classmethod
+    async def version(cls, db, project_id: int, task_id: int, version_id: int):
+        return (
+            await db.execute(
+                select(ShotGridVersion).where(
+                    ShotGridVersion.project_id == project_id,
+                    ShotGridVersion.task_id == task_id,
+                    ShotGridVersion.version_id == version_id,
+                )
+            )
+        ).scalar_one_or_none()
+
+    @classmethod
+    async def final_version(cls, db, project_id: int, task_id: int):
+        return (
+            await db.execute(
+                select(ShotGridVersion).where(
+                    ShotGridVersion.project_id == project_id,
+                    ShotGridVersion.task_id == task_id,
+                    ShotGridVersion.version_status == 'final',
+                )
+            )
+        ).scalar_one_or_none()
+
+    @classmethod
+    async def version_files(cls, db, version_id: int):
+        return list(
+            (
+                await db.execute(
+                    select(ShotGridVersionFile)
+                    .where(ShotGridVersionFile.version_id == version_id)
+                    .order_by(ShotGridVersionFile.sort_order, ShotGridVersionFile.file_role)
+                )
+            ).scalars()
+        )
+
+    @classmethod
+    async def version_file(cls, db, project_id: int, task_id: int, version_id: int, file_id: str):
+        return (
+            await db.execute(
+                select(ShotGridVersionFile)
+                .join(ShotGridVersion, ShotGridVersion.version_id == ShotGridVersionFile.version_id)
+                .join(
+                    SysFileReference,
+                    (SysFileReference.file_id == ShotGridVersionFile.file_id)
+                    & (SysFileReference.business_type == 'shot_grid_version')
+                    & (SysFileReference.business_id == cast(ShotGridVersion.version_id, String)),
+                )
+                .where(
+                    ShotGridVersion.project_id == project_id,
+                    ShotGridVersion.task_id == task_id,
+                    ShotGridVersion.version_id == version_id,
+                    ShotGridVersionFile.file_id == file_id,
+                )
+            )
+        ).scalar_one_or_none()
+
     @classmethod
     async def lock_task_context(cls, db, project_id: int, task_id: int):
         stmt = (
