@@ -8,7 +8,16 @@ test('项目创建使用幂等键并阻止重复点击', async () => {
   const [api, view] = await Promise.all([read('src/api/shot-grid/projects.js'), read('src/views/project/index.vue')])
   assert.match(api, /X-Idempotency-Key/)
   assert.match(view, /submitting\.value/)
-  assert.match(view, /:disabled="submitting"/)
+  assert.match(view, /:disabled="submitting \|\|/)
+})
+
+test('项目创建加载可用根目录、后端路径预览和可搜索多选用户', async () => {
+  const [api, view] = await Promise.all([read('src/api/shot-grid/projectCreation.js'), read('src/views/project/index.vue')])
+  for (const endpoint of ['storage-roots', 'path-preview', '/users']) assert.match(api, new RegExp(endpoint))
+  assert.match(view, /listProjectStorageRoots/)
+  assert.match(view, /multiple filterable remote/)
+  assert.match(view, /pathPreview\.finalPath/)
+  assert.doesNotMatch(view, /NAS 根目录 #/)
 })
 
 test('项目列表覆盖权限、失败、重试、空态和分页', async () => {

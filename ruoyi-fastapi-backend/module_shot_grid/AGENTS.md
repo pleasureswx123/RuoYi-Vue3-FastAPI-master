@@ -39,6 +39,12 @@
 
 ## 19. 已确认的制作聚合状态与概览契约
 
+## 20. 已确认的项目创建发现契约
+
+- 普通业务端通过 `/shot-grid/project-creation/storage-roots`、`users` 和 `path-preview` 获取项目创建选项；三者统一要求 `shotgrid:project:add` 平台权限。
+- 根目录选项只包含启用、未删除且最近探测健康的白名单根；路径预览由后端规范化并检查占用，不向前端下发根路径供其自行拼接。
+- 用户候选只包含有效启用账号及有效部门；提交时仍由创建事务重新校验，不能信任前端选项缓存。
+
 - 镜头和资产制作分项统一使用 `no_task`、`not_started`、`in_progress`、`pending_review`、`revision`、`completed` 六态；`completed` 必须同时有 completed 唯一活动任务和 final 版本。
 - 资产必须由全部活动制作分项的唯一活动任务聚合，优先级为 `revision`、`pending_review`、`in_progress`、`no_task`、`not_started`；至少有一个分项且全部完成才为 `completed`。
 - 概览只统计未删除、未归档的集、场、镜头、资产和制作分项，并在 PostgreSQL 内聚合；整体进度固定按镜头与制作分项等对象权重计算，列表分页不得改变总统计。
