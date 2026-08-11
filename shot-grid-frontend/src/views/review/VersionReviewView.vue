@@ -7,8 +7,11 @@ import ProtectedVideoPreview from '@/components/media/ProtectedVideoPreview.vue'
 import ReviewAnnotationPanel from '@/components/review/ReviewAnnotationPanel.vue'
 import { approveVersion, createVersionNote, deferVersion, getTaskVersion, listTaskVersions, listVersionNotes, rejectVersion, replyVersionNote, versionFileUrl } from '@/api/shot-grid/versions'
 import { getErrorDetails } from '@/utils/requestErrors'
+import { getReviewList } from '@/api/shot-grid/reviews'
+import { useRouter } from 'vue-router'
 
-const props = defineProps({ versionId: { type: String, required: true }, projectId: { type: String, default: '' }, taskId: { type: String, default: '' } })
+const props = defineProps({ versionId: { type: String, required: true }, projectId: { type: String, default: '' }, taskId: { type: String, default: '' }, reviewListId: { type: String, default: '' } })
+const router = useRouter()
 const user = useUserStore(), versions = ref([]), version = ref(null), notes = ref([]), loading = ref(false), acting = ref(false)
 const validContext = computed(() => /^\d+$/.test(props.projectId) && /^\d+$/.test(props.taskId) && /^\d+$/.test(props.versionId))
 const canReview = computed(() => ['approve', 'reject', 'defer'].some(action => user.hasPermission(`shotgrid:review:${action}`)))
@@ -34,7 +37,17 @@ async function act(action) {
     acting.value = true
     const fn = { approve: approveVersion, reject: rejectVersion, defer: deferVersion }[action]
     await fn(props.projectId, props.taskId, props.versionId, { lockVersion: version.value.lockVersion, reason: reason?.trim() || null })
-    ElMessage.success('审核动作已记录'); await load()
+    ElMessage.success('审核动作已记录')
+    if (props.reviewListId) {
+      // 重新读取审核单详情，以持久化 sortOrder 决定下一项，不复用当前页面版本数组。
+      const reviewList = await getReviewList(props.projectId, props.reviewListId)
+      const ordered = [...reviewList.versions].sort((a, b) => a.sortOrder - b.sortOrder)
+      const currentIndex = ordered.findIndex(item => item.versionId === Number(props.versionId))
+      const next = ordered.slice(currentIndex + 1).find(item => item.versionStatus === 'pending_review')
+      if (next) return router.push({ name: 'VersionReview', params: { versionId: next.versionId }, query: { projectId: props.projectId, taskId: next.taskId, reviewListId: props.reviewListId } })
+      ElMessage.success('审核单中已无后续待审核版本')
+    }
+    await load()
   } catch (error) { if (!['cancel', 'close'].includes(error)) ElMessage.error(getErrorDetails(error).status === 409 ? '审核状态已变化，请刷新后查看最新结果。' : getErrorDetails(error).message) }
   finally { acting.value = false }
 }

@@ -3243,3 +3243,9 @@ Shot Grid 业务前端复用平台的 `POST /login`、`GET /getInfo`、`GET /cap
 版本审核使用任务归属路径下的 `POST .../versions/{versionId}/approve|reject|defer`，请求携带版本 `lockVersion`；退回必须携带非空 `reason`。接口同时校验平台权限、活动项目成员、`director` 项目角色、项目/任务/版本归属及待审核状态。重复动作、过期乐观锁、已完成任务和并发最终版本冲突返回 HTTP 409 与稳定 `errorKey`。
 
 `approve` 在同一事务及行锁内保证当前版本是任务唯一 `final` 并将任务置为 `completed`；`reject` 将当前版本置为 `rejected`、任务置为 `revision`，审核意见写入不可变动作历史；`defer` 保持版本和任务待审核语义，只记录不可变动作并推进乐观锁。普通更新接口不得直接写 `version_status` 或审核相关 `task_status`。退回后的下一次正式提交创建新版本，旧版本、自动审核单、意见、回复和审核动作均不可变。
+
+## 人工审核单 API（已实现基线）
+
+项目作用域接口为 `GET/POST /shot-grid/projects/{projectId}/review-lists`、`GET /eligible-versions`、`GET /{reviewListId}`、`PUT /{reviewListId}/order` 和 `POST /{reviewListId}/archive`。人工创建接口仅创建 `manual_batch`；`auto_single` 继续由版本正式提交事务生成。
+
+审核单版本使用 `sg_review_list_version(review_list_id, version_id, sort_order)` 持久化。审核单内版本和顺序分别唯一。创建和重排仅接受当前项目中任务、版本状态均为 `pending_review` 的版本；重排提交完整 `{ versionId, sortOrder }` 集合和 `lockVersion`，并发或状态变化返回 HTTP 409。连续审核每次动作完成后重新读取详情，并按持久化顺序进入下一待审核版本。
