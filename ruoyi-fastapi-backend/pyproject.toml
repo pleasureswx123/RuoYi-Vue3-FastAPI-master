@@ -8,6 +8,22 @@ version = "1.10.0"
 description = "RuoYi FastAPI backend internal CLI entrypoint"
 requires-python = ">=3.10"
 
+[project.optional-dependencies]
+development = [
+    "ruff==0.16.1",
+]
+postgresql = [
+    "asyncpg==0.31.0",
+    "psycopg2==2.9.12",
+]
+test-postgresql = [
+    "aiosqlite==0.22.1",
+    "asyncpg==0.31.0",
+    "psycopg2==2.9.12",
+    "pytest==9.0.2",
+    "pytest-asyncio==1.3.0",
+]
+
 [project.scripts]
 ruoyi = "cli.main:main"
 

@@ -2,12 +2,36 @@ name: Backend Tests
 
 on:
   push:
-    branches: [master]
+    branches: [main, master]
   pull_request:
-    branches: [master]
+    branches: [main, master]
 
 jobs:
-  pytest:
+  shot-grid:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ruoyi-fastapi-backend
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+          cache-dependency-path: |
+            ruoyi-fastapi-backend/requirements-pg.txt
+            ruoyi-fastapi-backend/requirements-test-pg.txt
+
+      - name: Install PostgreSQL test dependencies
+        run: python -m pip install -r requirements-test-pg.txt
+
+      - name: Run Shot Grid tests
+        run: python -m pytest tests/module_shot_grid -q
+
+  full-backend:
+    needs: shot-grid
     runs-on: ubuntu-latest
     env:
       # Typer otherwise forces ANSI help output when GITHUB_ACTIONS is set.
@@ -30,13 +54,14 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
           cache-dependency-path: |
-            ruoyi-fastapi-backend/requirements.txt
+            ruoyi-fastapi-backend/requirements-pg.txt
+            ruoyi-fastapi-backend/requirements-test-pg.txt
             ruoyi-fastapi-backend/plugins/ai/plugin.yaml
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt pytest pytest-asyncio aiosqlite
+          python -m pip install -r requirements-test-pg.txt
 
       - name: Install AI plugin dependencies
         run: |
@@ -55,4 +80,4 @@ jobs:
             portkey-ai==2.3.4
 
       - name: Run backend tests
-        run: pytest -q
+        run: python -m pytest -q

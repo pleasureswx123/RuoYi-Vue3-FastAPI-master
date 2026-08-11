@@ -53,6 +53,21 @@ cd ruoyi-fastapi-backend
 pip3 install -r requirements-pg.txt
 ```
 
+PostgreSQL 测试环境（在 Python 3.10+ 的干净虚拟环境中执行）：
+
+```bash
+cd ruoyi-fastapi-backend
+python -m pip install -r requirements-test-pg.txt
+python -m ruff check .
+python -m ruff format . --check
+python -m pytest tests/module_shot_grid -q
+```
+
+`requirements-test-pg.txt` 继承 PostgreSQL 运行依赖（包括 `asyncpg`），并固定声明
+`pytest`、`pytest-asyncio` 和测试使用的 `aiosqlite`，测试不应依赖开发机全局安装包。
+`pyproject.toml` 同时以 `development`、`postgresql`、`test-postgresql` 可选依赖组记录开发工具、
+PostgreSQL 运行驱动和 PostgreSQL 测试工具；仓库的完整应用安装仍以 requirements 文件为准。
+
 说明：
 
 - `requirements*.txt` 已包含当前项目自身安装项 `.`，因此不需要额外执行 `pip install -e .`
