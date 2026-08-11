@@ -10,6 +10,7 @@ from module_shot_grid.service.project_access_service import ShotGridProjectAcces
 
 FORBIDDEN_STATUS = 403
 NOT_FOUND_STATUS = 404
+CONFLICT_STATUS = 409
 
 
 def _current_user(user_id: int = 2, permissions: list[str] | None = None) -> CurrentUserModel:
@@ -101,6 +102,22 @@ async def test_missing_project_returns_stable_not_found(monkeypatch: pytest.Monk
 
     assert exc_info.value.http_status == NOT_FOUND_STATUS
     assert exc_info.value.error_key == 'SG_PROJECT_NOT_FOUND'
+
+
+@pytest.mark.asyncio
+async def test_archived_project_returns_business_conflict_even_for_all_scope(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        'module_shot_grid.service.project_access_service.ShotGridProjectDao.get_project_by_id',
+        AsyncMock(return_value=SimpleNamespace(project_id=10, project_status='archived')),
+    )
+
+    with pytest.raises(ShotGridDomainException) as exc_info:
+        await ShotGridProjectAccessService.resolve_access(
+            AsyncMock(), _current_user(permissions=['shotgrid:project:all']), project_id=10
+        )
+
+    assert exc_info.value.http_status == CONFLICT_STATUS
+    assert exc_info.value.error_key == 'SG_PROJECT_ARCHIVED'
 
 
 def test_project_role_dependency_allows_director_and_all_scope() -> None:

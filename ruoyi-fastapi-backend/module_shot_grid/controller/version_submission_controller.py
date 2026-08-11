@@ -54,7 +54,13 @@ async def initialize_submission(
     user = current_user.user
     return ResponseUtil.success(
         data=await ShotGridVersionSubmissionService.initialize(
-            db, project_id, task_id, command, user_id=user.user_id, user_name=user.user_name
+            db,
+            project_id,
+            task_id,
+            command,
+            user_id=user.user_id,
+            user_name=user.user_name,
+            access=access,
         )
     )
 

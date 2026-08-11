@@ -1,4 +1,4 @@
-# ruff: noqa: ANN001, ANN205, ANN206, ASYNC240, PLR2004
+# ruff: noqa: ANN001, ANN205, ANN206, ASYNC240, PLR0912, PLR2004
 import asyncio
 import hashlib
 import ntpath
@@ -16,6 +16,7 @@ from module_shot_grid.config import SHOT_GRID_VERSION_CONFIG
 from module_shot_grid.dao.project_audit_dao import ShotGridProjectAuditDao
 from module_shot_grid.dao.version_submission_dao import ShotGridVersionSubmissionDao
 from module_shot_grid.entity.do.review_do import ShotGridReviewList, ShotGridReviewListVersion
+from module_shot_grid.entity.do.task_do import ShotGridTaskHistory
 from module_shot_grid.entity.do.version_do import ShotGridVersion, ShotGridVersionFile, ShotGridVersionSubmission
 from module_shot_grid.exceptions import shot_grid_error
 from module_shot_grid.service.storage_path_service import ShotGridStoragePathService
@@ -49,7 +50,7 @@ class ShotGridVersionSubmissionService:
         }
 
     @classmethod
-    async def initialize(cls, db, project_id, task_id, command, *, user_id: int, user_name: str):
+    async def initialize(cls, db, project_id, task_id, command, *, user_id: int, user_name: str, access=None):
         existing = await ShotGridVersionSubmissionDao.by_idempotency(db, task_id, user_id, command.idempotency_key)
         if existing:
             return await cls.dump(db, existing)
@@ -71,8 +72,14 @@ class ShotGridVersionSubmissionService:
             asset_type,
             asset_name,
         ) = row
-        if task.assignee_user_id != user_id:
-            raise shot_grid_error(403, 'SG_VERSION_SUBMIT_ASSIGNEE_REQUIRED', '只有任务负责人可以提交版本')
+        delegated = task.assignee_user_id != user_id
+        can_delegate = access is not None and (access.has_all_scope or access.project_role == 'director')
+        if delegated and not can_delegate:
+            raise shot_grid_error(
+                403, 'SG_VERSION_SUBMIT_ASSIGNEE_REQUIRED', '只有任务负责人、项目总监或管理员可以提交版本'
+            )
+        if delegated and not (command.reason or '').strip():
+            raise shot_grid_error(422, 'SG_VERSION_DELEGATION_REASON_REQUIRED', '代提交版本必须填写原因')
         if task.task_status not in {'in_progress', 'revision'}:
             raise shot_grid_error(409, 'SG_VERSION_TASK_STATUS_INVALID', '只有制作中或修改中的任务可以提交版本')
         if storage.storage_status != 'ready':
@@ -130,6 +137,19 @@ class ShotGridVersionSubmissionService:
             idempotency_key=command.idempotency_key,
         )
         db.add(submission)
+        if delegated:
+            db.add(
+                ShotGridTaskHistory(
+                    project_id=project_id,
+                    task_id=task_id,
+                    action='version_submitted',
+                    actor_user_id=user_id,
+                    subject_user_id=task.assignee_user_id,
+                    is_delegated='1',
+                    detail={'reason': command.reason, 'targetAssigneeUserId': task.assignee_user_id},
+                    create_by=user_name,
+                )
+            )
         try:
             await db.commit()
             await db.refresh(submission)

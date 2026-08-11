@@ -55,7 +55,7 @@ async def test_removed_or_cross_project_member_cannot_be_assigned(monkeypatch, m
         await ShotGridTaskService.assign(
             _db(),
             10,
-            ShotGridTaskAssignModel(assigneeUserId=99),
+            ShotGridTaskAssignModel(assigneeUserId=99, reason='首次分配'),
             actor_user_id=1,
             actor_name='director',
             can_manage=True,
@@ -77,7 +77,7 @@ async def test_member_without_producer_code_cannot_be_assigned(monkeypatch):
         await ShotGridTaskService.assign(
             _db(),
             10,
-            ShotGridTaskAssignModel(assigneeUserId=2),
+            ShotGridTaskAssignModel(assigneeUserId=2, reason='首次分配'),
             actor_user_id=1,
             actor_name='director',
             can_manage=True,
@@ -103,7 +103,7 @@ async def test_repeated_assignment_is_idempotent_and_reassignment_updates_same_t
     result = await ShotGridTaskService.assign(
         db,
         10,
-        ShotGridTaskAssignModel(assigneeUserId=2),
+        ShotGridTaskAssignModel(assigneeUserId=2, reason='首次分配'),
         actor_user_id=1,
         actor_name='director',
         can_manage=True,
@@ -114,7 +114,7 @@ async def test_repeated_assignment_is_idempotent_and_reassignment_updates_same_t
     result = await ShotGridTaskService.assign(
         db,
         10,
-        ShotGridTaskAssignModel(assigneeUserId=3),
+        ShotGridTaskAssignModel(assigneeUserId=3, reason='制作调整'),
         actor_user_id=1,
         actor_name='director',
         can_manage=True,
