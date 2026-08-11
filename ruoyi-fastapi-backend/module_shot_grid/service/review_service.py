@@ -4,11 +4,150 @@ from datetime import datetime
 from sqlalchemy.exc import IntegrityError
 
 from module_shot_grid.dao.review_dao import ShotGridReviewDao
-from module_shot_grid.entity.do.review_do import ShotGridNote, ShotGridNoteReply, ShotGridReviewAction
+from module_shot_grid.entity.do.review_do import (
+    ShotGridNote,
+    ShotGridNoteReply,
+    ShotGridReviewAction,
+    ShotGridReviewList,
+)
 from module_shot_grid.exceptions import shot_grid_error
 
 
 class ShotGridReviewService:
+    @classmethod
+    async def list_review_lists(cls, db, project_id, query):
+        rows, total = await ShotGridReviewDao.review_lists(db, project_id, query)
+        return {'rows': [cls._dump_review_list(row) for row in rows], 'total': total}
+
+    @classmethod
+    async def review_list_detail(cls, db, project_id, review_list_id):
+        row = await cls._require_review_list(db, project_id, review_list_id)
+        versions = await ShotGridReviewDao.review_list_versions(db, review_list_id)
+        result = cls._dump_review_list(row)
+        result['versions'] = [cls._dump_review_list_version(*item) for item in versions]
+        return result
+
+    @classmethod
+    async def eligible_versions(cls, db, project_id, keyword=None):
+        return [
+            cls._dump_eligible_version(*item)
+            for item in await ShotGridReviewDao.eligible_versions(db, project_id, keyword)
+        ]
+
+    @classmethod
+    async def create_manual_review_list(cls, db, project_id, user_id, body):
+        await cls._validate_eligible_versions(db, project_id, body.versions)
+        row = ShotGridReviewList(
+            project_id=project_id,
+            review_list_name=body.review_list_name,
+            description=body.description,
+            review_date=body.review_date,
+            review_mode='manual_batch',
+            review_status='active',
+            create_by=str(user_id),
+            update_by=str(user_id),
+        )
+        db.add(row)
+        try:
+            await db.flush()
+            await ShotGridReviewDao.replace_review_list_versions(db, row.review_list_id, body.versions, user_id)
+            await db.commit()
+            return await cls.review_list_detail(db, project_id, row.review_list_id)
+        except IntegrityError as exc:
+            await db.rollback()
+            raise shot_grid_error(409, 'SG_REVIEW_LIST_DUPLICATE', '版本或审核顺序重复') from exc
+
+    @classmethod
+    async def reorder_review_list(cls, db, project_id, review_list_id, user_id, body):
+        row = await cls._require_review_list(db, project_id, review_list_id, lock=True)
+        if row.review_mode != 'manual_batch' or row.review_status == 'archived':
+            raise shot_grid_error(409, 'SG_REVIEW_LIST_NOT_EDITABLE', '当前审核单不可编辑顺序')
+        if row.lock_version != body.lock_version:
+            raise shot_grid_error(409, 'SG_REVIEW_LIST_LOCK_CONFLICT', '审核单已被其他用户修改，请刷新后重试')
+        current = await ShotGridReviewDao.review_list_versions(db, review_list_id)
+        if {item.version_id for item in body.versions} != {item[0].version_id for item in current}:
+            raise shot_grid_error(409, 'SG_REVIEW_LIST_VERSION_SET_CHANGED', '排序必须提交完整且不变的版本集合')
+        # 排序编辑也重新验证状态，避免选择后版本状态变化仍被写入审核队列。
+        await cls._validate_eligible_versions(db, project_id, body.versions)
+        row.lock_version += 1
+        row.update_by = str(user_id)
+        try:
+            await ShotGridReviewDao.replace_review_list_versions(db, review_list_id, body.versions, user_id)
+            await db.commit()
+            return await cls.review_list_detail(db, project_id, review_list_id)
+        except IntegrityError as exc:
+            await db.rollback()
+            raise shot_grid_error(409, 'SG_REVIEW_LIST_ORDER_CONFLICT', '版本或审核顺序重复') from exc
+
+    @classmethod
+    async def archive_review_list(cls, db, project_id, review_list_id, user_id, lock_version):
+        row = await cls._require_review_list(db, project_id, review_list_id, lock=True)
+        if row.lock_version != lock_version:
+            raise shot_grid_error(409, 'SG_REVIEW_LIST_LOCK_CONFLICT', '审核单已被其他用户修改，请刷新后重试')
+        if row.review_status != 'archived':
+            row.review_status = 'archived'
+            row.lock_version += 1
+            row.update_by = str(user_id)
+            await db.commit()
+        return cls._dump_review_list(row)
+
+    @classmethod
+    async def _validate_eligible_versions(cls, db, project_id, items):
+        ids = [item.version_id for item in items]
+        rows = await ShotGridReviewDao.versions_by_ids_for_update(db, project_id, ids)
+        if len(rows) != len(ids):
+            raise shot_grid_error(409, 'SG_REVIEW_LIST_VERSION_SCOPE_INVALID', '包含不存在、跨项目或无权访问的版本')
+        if any(
+            version.version_status != 'pending_review' or task.task_status != 'pending_review' for version, task in rows
+        ):
+            raise shot_grid_error(409, 'SG_REVIEW_LIST_VERSION_STATUS_INVALID', '版本业务状态已变化，不能加入审核单')
+
+    @staticmethod
+    async def _require_review_list(db, project_id, review_list_id, *, lock=False):
+        row = await ShotGridReviewDao.review_list(db, project_id, review_list_id, lock=lock)
+        if row is None:
+            raise shot_grid_error(404, 'SG_REVIEW_LIST_NOT_FOUND', '审核单不存在或不属于当前项目')
+        return row
+
+    @staticmethod
+    def _dump_review_list(row):
+        return {
+            'reviewListId': row.review_list_id,
+            'projectId': row.project_id,
+            'name': row.review_list_name,
+            'description': row.description,
+            'reviewDate': row.review_date,
+            'mode': row.review_mode,
+            'status': row.review_status,
+            'lockVersion': row.lock_version,
+            'createTime': row.create_time,
+            'updateTime': row.update_time,
+        }
+
+    @staticmethod
+    def _dump_review_list_version(link, version, task):
+        return {
+            'versionId': version.version_id,
+            'sortOrder': link.sort_order,
+            'taskId': version.task_id,
+            'taskName': task.task_name,
+            'versionNo': version.version_no,
+            'versionStatus': version.version_status,
+            'lockVersion': version.lock_version,
+        }
+
+    @staticmethod
+    def _dump_eligible_version(version, task):
+        return {
+            'versionId': version.version_id,
+            'taskId': version.task_id,
+            'taskName': task.task_name,
+            'versionNo': version.version_no,
+            'versionStatus': version.version_status,
+            'lockVersion': version.lock_version,
+            'submittedTime': version.submitted_time,
+        }
+
     @classmethod
     async def review_action(cls, db, project_id: int, task_id: int, version_id: int, user_id: int, action: str, body):
         # 锁顺序固定为任务、版本集合，保证并发审核不会形成两个最终版本。

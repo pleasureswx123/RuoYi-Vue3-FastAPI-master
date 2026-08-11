@@ -12,6 +12,7 @@ assert SPEC and SPEC.loader
 REVIEW_VO = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(REVIEW_VO)
 NoteCreateModel = REVIEW_VO.NoteCreateModel
+ManualReviewListCreateModel = REVIEW_VO.ManualReviewListCreateModel
 
 
 def _body(points):
@@ -46,3 +47,15 @@ def test_keeps_integer_milliseconds_and_natural_dimensions():
     model = NoteCreateModel.model_validate(_body([{'x': 0.5, 'y': 0.5}]))
     assert model.media_time_ms == 1234
     assert model.annotations[0].natural_width == 1920
+
+
+@pytest.mark.parametrize(
+    'versions',
+    [
+        [{'versionId': 1, 'sortOrder': 0}, {'versionId': 1, 'sortOrder': 1}],
+        [{'versionId': 1, 'sortOrder': 0}, {'versionId': 2, 'sortOrder': 0}],
+    ],
+)
+def test_review_list_rejects_duplicate_version_or_order(versions):
+    with pytest.raises(ValidationError):
+        ManualReviewListCreateModel.model_validate({'reviewListName': '日审', 'versions': versions})

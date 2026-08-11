@@ -21,12 +21,13 @@ export const stableRoutes = [
       { path: 'projects/:projectId/assets', name: 'ProjectAssets', component: () => import('@/views/asset/AssetListView.vue'), props: true, meta: { navigationKey: 'assets', section: '资产' } },
       { path: 'projects/:projectId/import/shots', name: 'ShotImport', component: () => import('@/views/import/ImportView.vue'), props: (route) => ({ projectId: route.params.projectId, importType: 'shot' }), meta: { navigationKey: 'shots', section: '镜头导入' } },
       { path: 'projects/:projectId/import/assets', name: 'AssetImport', component: () => import('@/views/import/ImportView.vue'), props: (route) => ({ projectId: route.params.projectId, importType: 'asset' }), meta: { navigationKey: 'assets', section: '资产导入' } },
-      { path: 'projects/:projectId/reviews', name: 'ProjectReviews', component: () => import('@/views/project/ProjectSectionView.vue'), props: true, meta: { navigationKey: 'reviews', section: '审核' } },
+      { path: 'projects/:projectId/reviews', name: 'ProjectReviews', component: () => import('@/views/review/ReviewListView.vue'), props: true, meta: { navigationKey: 'reviews', section: '审核' } },
+      { path: 'projects/:projectId/reviews/:reviewListId', name: 'ReviewWorkspace', component: () => import('@/views/review/ReviewWorkspaceView.vue'), props: true, meta: { navigationKey: 'reviews', section: '连续审核' } },
       { path: 'projects/:projectId/members', name: 'ProjectMembers', component: () => import('@/views/project/ProjectMembersView.vue'), props: true, meta: { navigationKey: 'projects', section: '成员' } },
       { path: 'shots/:shotId', name: 'ShotDetail', component: () => import('@/views/shot/ShotDetailView.vue'), props: true, meta: { navigationKey: 'shots' } },
       { path: 'assets/:assetId', name: 'AssetDetail', component: () => import('@/views/asset/AssetDetailView.vue'), props: true, meta: { navigationKey: 'assets' } },
       { path: 'tasks/:taskId', name: 'TaskDetail', component: () => import('@/views/task/TaskDetailView.vue'), props: true, meta: { navigationKey: 'workbench' } },
-      { path: 'versions/:versionId/review', name: 'VersionReview', component: () => import('@/views/review/VersionReviewView.vue'), props: route => ({ versionId: route.params.versionId, projectId: route.query.projectId, taskId: route.query.taskId }), meta: { navigationKey: 'reviews' } }
+      { path: 'versions/:versionId/review', name: 'VersionReview', component: () => import('@/views/review/VersionReviewView.vue'), props: route => ({ versionId: route.params.versionId, projectId: route.query.projectId, taskId: route.query.taskId, reviewListId: route.query.reviewListId }), meta: { navigationKey: 'reviews' } }
     ]
   },
   { path: '/:pathMatch(.*)*', name: 'NotFound', component: () => import('@/views/error/NotFoundView.vue'), meta: { public: true } }

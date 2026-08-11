@@ -1,4 +1,5 @@
 import json
+from datetime import date
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -73,3 +74,46 @@ class ReviewActionModel(ReviewModel):
 
 class RejectReviewActionModel(ReviewActionModel):
     reason: str = Field(min_length=1, max_length=1000)
+
+
+class ReviewListQueryModel(ReviewModel):
+    page_num: int = Field(default=1, ge=1)
+    page_size: int = Field(default=20, ge=1, le=100)
+    keyword: str | None = Field(default=None, max_length=200)
+    status: Literal['draft', 'active', 'completed', 'archived'] | None = None
+
+
+class ReviewListVersionModel(ReviewModel):
+    version_id: int = Field(gt=0)
+    sort_order: int = Field(ge=0)
+
+
+class ManualReviewListCreateModel(ReviewModel):
+    review_list_name: str = Field(min_length=1, max_length=240)
+    description: str | None = Field(default=None, max_length=4000)
+    review_date: date | None = None
+    versions: list[ReviewListVersionModel] = Field(min_length=1, max_length=200)
+
+    @model_validator(mode='after')
+    def unique_versions_and_orders(self) -> 'ManualReviewListCreateModel':
+        version_ids = [item.version_id for item in self.versions]
+        orders = [item.sort_order for item in self.versions]
+        if len(version_ids) != len(set(version_ids)):
+            raise ValueError('审核单内版本不能重复')
+        if len(orders) != len(set(orders)):
+            raise ValueError('审核顺序不能重复')
+        return self
+
+
+class ReviewListOrderUpdateModel(ReviewModel):
+    lock_version: int = Field(ge=0)
+    versions: list[ReviewListVersionModel] = Field(min_length=1, max_length=200)
+
+    @model_validator(mode='after')
+    def unique_versions_and_orders(self) -> 'ReviewListOrderUpdateModel':
+        ManualReviewListCreateModel(reviewListName='order validation', versions=self.versions)
+        return self
+
+
+class ReviewListArchiveModel(ReviewModel):
+    lock_version: int = Field(ge=0)

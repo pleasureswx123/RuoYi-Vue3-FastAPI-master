@@ -24,3 +24,9 @@
 - 三个动作固定按任务、任务全部版本的顺序加行锁，并校验项目归属、director 项目角色、平台权限、待审核状态和版本 `lockVersion`；冲突统一使用 HTTP 409 稳定领域错误。
 - `reject` 的非空意见直接绑定当前版本的不可变 `sg_review_action`，版本进入 `rejected`、任务进入 `revision`；后续提交生成新版本，不修改旧版本、旧审核单、意见、回复和动作。
 - `approve` 在同一事务中将其他历史 final 清为 rejected、当前版本设为唯一 final、任务设为 completed；`defer` 只递增锁并记录 pending_review → pending_review 动作。
+
+## 17. 已确认的人工审核单契约
+
+- 人工审核单只能由项目总监在项目作用域内创建；候选版本必须同时属于当前项目、任务未删除，且任务与版本均为 `pending_review`。
+- `sg_review_list_version` 是审核单版本集合及连续审核顺序的唯一事实来源；客户端排序必须提交完整的 `{ versionId, sortOrder }` 集合，并使用审核单 `lockVersion` 防止并发覆盖。
+- 自动单版本审核单仍只允许在版本正式提交事务中创建，人工审核单接口不接受 `auto_single` 或 `autoVersionId`。
