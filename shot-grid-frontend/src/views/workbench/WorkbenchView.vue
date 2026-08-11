@@ -3,6 +3,7 @@ import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { getWorkbench } from '@/api/shot-grid/discovery'
 import EmptyState from '@/components/EmptyState.vue'
 import { createLatestRequest } from '@/utils/latestRequest'
+import { productionStatusMeta } from '@/utils/productionStatus'
 
 const data = ref(null), loading = ref(false), error = ref('')
 const gate = createLatestRequest()
@@ -31,7 +32,7 @@ onMounted(load); onBeforeUnmount(() => gate.cancel())
         <el-table v-else :data="data[key]" size="small">
           <el-table-column prop="projectName" label="项目" min-width="150" />
           <el-table-column :prop="key === 'projectSummaries' ? 'projectStatus' : key === 'recentSubmissions' ? 'taskName' : 'taskName'" :label="key === 'projectSummaries' ? '状态' : '内容'" min-width="190" />
-          <el-table-column v-if="key === 'myTasks' || key === 'pendingReviews' || key === 'revisions'" prop="taskStatus" label="状态" width="130" />
+          <el-table-column v-if="key === 'myTasks' || key === 'pendingReviews' || key === 'revisions'" label="状态" width="130"><template #default="{ row }"><el-tag :type="productionStatusMeta(row.taskStatus).type">{{ productionStatusMeta(row.taskStatus).label }}</el-tag></template></el-table-column>
           <el-table-column v-if="key === 'recentSubmissions'" prop="versionNo" label="版本" width="90"><template #default="{ row }">V{{ String(row.versionNo).padStart(3, '0') }}</template></el-table-column>
           <el-table-column v-if="key === 'projectSummaries'" prop="taskCount" label="任务数" width="100" />
           <el-table-column v-if="key !== 'projectSummaries'" label="操作" width="90"><template #default="{ row }"><router-link :to="{ name: 'TaskDetail', params: { taskId: row.taskId }, query: { projectId: row.projectId } }">详情</router-link></template></el-table-column>

@@ -1,187 +1,94 @@
-from sqlalchemy import and_, func, select
+# ruff: noqa: ANN001, ANN205
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import aliased
 from sqlalchemy.sql import Subquery
 
-from module_shot_grid.entity.do.asset_do import ShotGridAsset, ShotGridAssetItem
-from module_shot_grid.entity.do.project_do import (
-    ShotGridEpisode,
-    ShotGridProject,
-    ShotGridScene,
-    ShotGridShot,
+from module_shot_grid.entity.do.project_do import ShotGridEpisode, ShotGridProject, ShotGridScene
+from module_shot_grid.status import (
+    COMPLETED,
+    NO_TASK,
+    PENDING_REVIEW,
+    REVISION,
+    build_asset_item_status_cte,
+    build_asset_status_cte,
+    build_shot_status_cte,
 )
-from module_shot_grid.entity.do.task_do import ShotGridTask
-from module_shot_grid.entity.do.version_do import ShotGridVersion
 
 
 class ShotGridProjectOverviewDao:
-    """项目概览聚合查询。"""
+    """完全由 PostgreSQL 聚合的项目概览；分页查询不会参与总统计。"""
+
+    @staticmethod
+    def _resource_counts(source, id_column, prefix: str):
+        return (
+            select(
+                source.c.project_id,
+                func.count(id_column).label(f'total_{prefix}'),
+                func.count(id_column).filter(source.c.aggregate_status == COMPLETED).label(f'completed_{prefix}'),
+                func.count(id_column)
+                .filter(source.c.aggregate_status == PENDING_REVIEW)
+                .label(f'pending_review_{prefix}'),
+                func.count(id_column).filter(source.c.aggregate_status == REVISION).label(f'revision_{prefix}'),
+                func.count(id_column).filter(source.c.aggregate_status == NO_TASK).label(f'unassigned_{prefix}'),
+            )
+            .group_by(source.c.project_id)
+            .cte(f'sg_{prefix}_metrics')
+        )
 
     @classmethod
     def build_overview_subquery(cls) -> Subquery:
-        """构造每项目一行的统计子查询，避免跨资源平铺联结造成重复计数。"""
-
         episode_metrics = (
-            select(
-                ShotGridEpisode.project_id.label('project_id'),
-                func.count(ShotGridEpisode.episode_id).label('total_episodes'),
-            )
+            select(ShotGridEpisode.project_id, func.count().label('total_episodes'))
             .where(ShotGridEpisode.del_flag == '0', ShotGridEpisode.lifecycle_status == 'active')
             .group_by(ShotGridEpisode.project_id)
             .cte('sg_episode_metrics')
         )
         scene_metrics = (
-            select(
-                ShotGridScene.project_id.label('project_id'),
-                func.count(ShotGridScene.scene_id).label('total_scenes'),
-            )
+            select(ShotGridScene.project_id, func.count().label('total_scenes'))
             .where(ShotGridScene.del_flag == '0', ShotGridScene.lifecycle_status == 'active')
             .group_by(ShotGridScene.project_id)
             .cte('sg_scene_metrics')
         )
+        shots = build_shot_status_cte()
+        items = build_asset_item_status_cte()
+        assets = build_asset_status_cte()
+        shot_metrics = cls._resource_counts(shots, shots.c.shot_id, 'shots')
+        item_metrics = cls._resource_counts(items, items.c.asset_item_id, 'asset_items')
+        asset_metrics = cls._resource_counts(assets, assets.c.asset_id, 'assets')
 
-        shot_task = aliased(ShotGridTask, name='overview_shot_task')
-        shot_final = aliased(ShotGridVersion, name='overview_shot_final')
-        shot_metrics = (
-            select(
-                ShotGridShot.project_id.label('project_id'),
-                func.count(ShotGridShot.shot_id).label('total_shots'),
-                func.count(ShotGridShot.shot_id)
-                .filter(and_(shot_task.task_status == 'completed', shot_final.version_id.is_not(None)))
-                .label('completed_shots'),
-                func.count(ShotGridShot.shot_id)
-                .filter(shot_task.task_status == 'pending_review')
-                .label('pending_review_shots'),
-                func.count(ShotGridShot.shot_id).filter(shot_task.task_status == 'revision').label('revision_shots'),
-                func.count(ShotGridShot.shot_id).filter(shot_task.task_id.is_(None)).label('unassigned_shots'),
-            )
-            .outerjoin(
-                shot_task,
-                and_(
-                    shot_task.project_id == ShotGridShot.project_id,
-                    shot_task.shot_id == ShotGridShot.shot_id,
-                    shot_task.del_flag == '0',
+        columns = [
+            func.coalesce(episode_metrics.c.total_episodes, 0).label('total_episodes'),
+            func.coalesce(scene_metrics.c.total_scenes, 0).label('total_scenes'),
+        ]
+        for metrics, names in (
+            (
+                shot_metrics,
+                ('total_shots', 'completed_shots', 'pending_review_shots', 'revision_shots', 'unassigned_shots'),
+            ),
+            (
+                asset_metrics,
+                ('total_assets', 'completed_assets', 'pending_review_assets', 'revision_assets', 'unassigned_assets'),
+            ),
+            (
+                item_metrics,
+                (
+                    'total_asset_items',
+                    'completed_asset_items',
+                    'pending_review_asset_items',
+                    'revision_asset_items',
+                    'unassigned_asset_items',
                 ),
-            )
-            .outerjoin(
-                shot_final,
-                and_(
-                    shot_final.project_id == ShotGridShot.project_id,
-                    shot_final.task_id == shot_task.task_id,
-                    shot_final.version_status == 'final',
-                ),
-            )
-            .where(ShotGridShot.del_flag == '0', ShotGridShot.lifecycle_status == 'active')
-            .group_by(ShotGridShot.project_id)
-            .cte('sg_shot_metrics')
-        )
-
-        asset_item = aliased(ShotGridAssetItem, name='overview_asset_item')
-        asset_task = aliased(ShotGridTask, name='overview_asset_task')
-        asset_final = aliased(ShotGridVersion, name='overview_asset_final')
-        asset_by_asset = (
-            select(
-                ShotGridAsset.project_id.label('project_id'),
-                ShotGridAsset.asset_id.label('asset_id'),
-                func.count(asset_item.asset_item_id).label('total_items'),
-                func.count(asset_item.asset_item_id)
-                .filter(and_(asset_task.task_status == 'completed', asset_final.version_id.is_not(None)))
-                .label('completed_items'),
-                func.count(asset_item.asset_item_id)
-                .filter(asset_task.task_status == 'pending_review')
-                .label('pending_review_items'),
-                func.count(asset_item.asset_item_id)
-                .filter(asset_task.task_status == 'revision')
-                .label('revision_items'),
-                func.count(asset_item.asset_item_id)
-                .filter(and_(asset_item.asset_item_id.is_not(None), asset_task.task_id.is_(None)))
-                .label('unassigned_items'),
-            )
-            .outerjoin(
-                asset_item,
-                and_(
-                    asset_item.project_id == ShotGridAsset.project_id,
-                    asset_item.asset_id == ShotGridAsset.asset_id,
-                    asset_item.del_flag == '0',
-                    asset_item.lifecycle_status == 'active',
-                ),
-            )
-            .outerjoin(
-                asset_task,
-                and_(
-                    asset_task.project_id == ShotGridAsset.project_id,
-                    asset_task.asset_item_id == asset_item.asset_item_id,
-                    asset_task.del_flag == '0',
-                ),
-            )
-            .outerjoin(
-                asset_final,
-                and_(
-                    asset_final.project_id == ShotGridAsset.project_id,
-                    asset_final.task_id == asset_task.task_id,
-                    asset_final.version_status == 'final',
-                ),
-            )
-            .where(ShotGridAsset.del_flag == '0', ShotGridAsset.lifecycle_status == 'active')
-            .group_by(ShotGridAsset.project_id, ShotGridAsset.asset_id)
-            .cte('sg_asset_by_asset_metrics')
-        )
-        asset_metrics = (
-            select(
-                asset_by_asset.c.project_id,
-                func.count(asset_by_asset.c.asset_id).label('total_assets'),
-                func.coalesce(func.sum(asset_by_asset.c.total_items), 0).label('total_asset_items'),
-                func.count(asset_by_asset.c.asset_id)
-                .filter(
-                    and_(
-                        asset_by_asset.c.total_items > 0,
-                        asset_by_asset.c.completed_items == asset_by_asset.c.total_items,
-                    )
-                )
-                .label('completed_assets'),
-                func.coalesce(func.sum(asset_by_asset.c.completed_items), 0).label('completed_asset_items'),
-                func.count(asset_by_asset.c.asset_id)
-                .filter(asset_by_asset.c.pending_review_items > 0)
-                .label('pending_review_assets'),
-                func.coalesce(func.sum(asset_by_asset.c.pending_review_items), 0).label('pending_review_asset_items'),
-                func.count(asset_by_asset.c.asset_id)
-                .filter(asset_by_asset.c.revision_items > 0)
-                .label('revision_assets'),
-                func.coalesce(func.sum(asset_by_asset.c.revision_items), 0).label('revision_asset_items'),
-                func.count(asset_by_asset.c.asset_id)
-                .filter((asset_by_asset.c.total_items == 0) | (asset_by_asset.c.unassigned_items > 0))
-                .label('unassigned_assets'),
-                func.coalesce(func.sum(asset_by_asset.c.unassigned_items), 0).label('unassigned_asset_items'),
-            )
-            .group_by(asset_by_asset.c.project_id)
-            .cte('sg_asset_metrics')
-        )
+            ),
+        ):
+            columns.extend(func.coalesce(getattr(metrics.c, field), 0).label(field) for field in names)
 
         return (
-            select(
-                ShotGridProject.project_id.label('project_id'),
-                func.coalesce(episode_metrics.c.total_episodes, 0).label('total_episodes'),
-                func.coalesce(scene_metrics.c.total_scenes, 0).label('total_scenes'),
-                func.coalesce(shot_metrics.c.total_shots, 0).label('total_shots'),
-                func.coalesce(asset_metrics.c.total_assets, 0).label('total_assets'),
-                func.coalesce(asset_metrics.c.total_asset_items, 0).label('total_asset_items'),
-                func.coalesce(shot_metrics.c.completed_shots, 0).label('completed_shots'),
-                func.coalesce(asset_metrics.c.completed_assets, 0).label('completed_assets'),
-                func.coalesce(asset_metrics.c.completed_asset_items, 0).label('completed_asset_items'),
-                func.coalesce(shot_metrics.c.pending_review_shots, 0).label('pending_review_shots'),
-                func.coalesce(asset_metrics.c.pending_review_assets, 0).label('pending_review_assets'),
-                func.coalesce(asset_metrics.c.pending_review_asset_items, 0).label('pending_review_asset_items'),
-                func.coalesce(shot_metrics.c.revision_shots, 0).label('revision_shots'),
-                func.coalesce(asset_metrics.c.revision_assets, 0).label('revision_assets'),
-                func.coalesce(asset_metrics.c.revision_asset_items, 0).label('revision_asset_items'),
-                func.coalesce(shot_metrics.c.unassigned_shots, 0).label('unassigned_shots'),
-                func.coalesce(asset_metrics.c.unassigned_assets, 0).label('unassigned_assets'),
-                func.coalesce(asset_metrics.c.unassigned_asset_items, 0).label('unassigned_asset_items'),
-            )
+            select(ShotGridProject.project_id.label('project_id'), *columns)
             .outerjoin(episode_metrics, episode_metrics.c.project_id == ShotGridProject.project_id)
             .outerjoin(scene_metrics, scene_metrics.c.project_id == ShotGridProject.project_id)
             .outerjoin(shot_metrics, shot_metrics.c.project_id == ShotGridProject.project_id)
             .outerjoin(asset_metrics, asset_metrics.c.project_id == ShotGridProject.project_id)
+            .outerjoin(item_metrics, item_metrics.c.project_id == ShotGridProject.project_id)
             .where(ShotGridProject.del_flag == '0')
             .subquery('sg_project_overview')
         )

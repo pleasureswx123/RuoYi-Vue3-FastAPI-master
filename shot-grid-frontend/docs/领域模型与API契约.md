@@ -1245,14 +1245,14 @@ ON sg_shot_asset_requirement (shot_id, asset_type, normalized_name);
 
 | 代码 | 中文 | 建议计算条件 |
 | --- | --- | --- |
-| `unassigned` | 未分配 | 尚未创建任务 |
+| `no_task` | 无任务 | 尚未创建任务 |
 | `not_started` | 未开始 | 唯一任务为 `not_started` |
 | `in_progress` | 制作中 | 唯一任务为 `in_progress` |
-| `reviewing` | 审核中 | 唯一任务为 `pending_review` |
+| `pending_review` | 待审核 | 唯一任务为 `pending_review` |
 | `revision` | 修改中 | 唯一任务为 `revision` |
 | `completed` | 已完成 | 唯一任务为 `completed` 且存在最终版本 |
 
-资产状态再由全部活动制作分项聚合：全部分项均为 `completed` 且至少存在一个分项时才是 `completed`；否则按 `revision`、`reviewing`、`in_progress`、`unassigned`、`not_started` 的优先顺序返回当前最需要处理的状态。普通成员不能直接写入任一聚合状态。
+资产状态再由全部活动制作分项的唯一活动任务聚合：全部分项均为 `completed` 且至少存在一个分项时才是 `completed`；否则按 `revision`、`pending_review`、`in_progress`、`no_task`、`not_started` 的优先顺序返回当前最需要处理的状态。普通成员不能直接写入任一聚合状态。项目概览、镜头三视图、资产列表和工作台统一复用 `no_task`、`not_started`、`in_progress`、`pending_review`、`revision`、`completed` 六个代码及同一展示映射。
 
 ### 7.2 任务状态流转
 

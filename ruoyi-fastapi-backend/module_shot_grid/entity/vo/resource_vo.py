@@ -9,10 +9,12 @@ from module_shot_grid.entity.vo.project_vo import AspectRatio, ProjectPhase
 
 LifecycleStatus = Literal['active', 'archived']
 AssetType = Literal['Character', 'Environment', 'Prop']
+AggregateStatus = Literal['no_task', 'not_started', 'in_progress', 'pending_review', 'revision', 'completed']
 
 
 class ShotGridResourceQueryModel(ShotGridPageQueryModel):
     lifecycle_status: LifecycleStatus | None = None
+    status: AggregateStatus | None = None
 
 
 class ShotGridProjectUpdateModel(ShotGridLockVersionModel):
