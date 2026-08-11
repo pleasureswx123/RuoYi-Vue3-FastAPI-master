@@ -64,6 +64,10 @@ class ShotGridTaskService:
                 raise shot_grid_error(409, 'SG_TASK_ALREADY_EXISTS', '该资源已存在唯一制作任务，请刷新后改派') from exc
             action = 'assigned'
         else:
+            if task.task_status in {'pending_review', 'completed'}:
+                raise shot_grid_error(
+                    409, 'SG_TASK_UPDATE_STATUS_CONFLICT', '待审核或已完成任务不能通过普通分配接口修改'
+                )
             changed = (
                 task.assignee_user_id != command.assignee_user_id
                 or task.due_date != command.due_date
