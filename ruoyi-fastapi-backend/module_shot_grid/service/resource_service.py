@@ -31,9 +31,10 @@ class ShotGridResourceService:
             page_num=query.page_num,
             page_size=query.page_size,
             lifecycle_status=query.lifecycle_status,
+            status=query.status,
             parents=parents,
         )
-        return {'rows': [cls._dump(kind, row) for row in rows], 'total': total}
+        return {'rows': [cls._dump_aggregate(kind, row) for row in rows], 'total': total}
 
     @classmethod
     async def detail(cls, db, kind, project_id, resource_id):
@@ -180,3 +181,14 @@ class ShotGridResourceService:
             'updateTime': row.update_time,
             'data': data,
         }
+
+    @classmethod
+    def _dump_aggregate(cls, kind, result):
+        if kind not in {'shot', 'asset'}:
+            return cls._dump(kind, result)
+        row, aggregate_status, item_count = result
+        payload = cls._dump(kind, row)
+        payload['aggregateStatus'] = aggregate_status
+        if kind == 'asset':
+            payload['itemCount'] = int(item_count or 0)
+        return payload

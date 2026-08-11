@@ -36,3 +36,9 @@
 - `/shot-grid/workbench` 在后端按活动项目成员关系聚合我的任务、待审核、修改中、近期提交和项目摘要；前端不得读取全量业务表自行统计。
 - `/shot-grid/search` 与 `/shot-grid/files` 统一使用 `pageNum`、`pageSize`、`keyword`、`orderByColumn`、`isAsc`，并在 SQL 查询阶段应用活动项目成员范围。
 - 文件发现只返回业务文件元数据与受保护的版本文件下载入口。NAS 相对路径只向项目总监或跨项目管理员返回；没有已确认桌面协议前，客户端只允许查看和复制路径。
+
+## 19. 已确认的制作聚合状态与概览契约
+
+- 镜头和资产制作分项统一使用 `no_task`、`not_started`、`in_progress`、`pending_review`、`revision`、`completed` 六态；`completed` 必须同时有 completed 唯一活动任务和 final 版本。
+- 资产必须由全部活动制作分项的唯一活动任务聚合，优先级为 `revision`、`pending_review`、`in_progress`、`no_task`、`not_started`；至少有一个分项且全部完成才为 `completed`。
+- 概览只统计未删除、未归档的集、场、镜头、资产和制作分项，并在 PostgreSQL 内聚合；整体进度固定按镜头与制作分项等对象权重计算，列表分页不得改变总统计。

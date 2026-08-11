@@ -42,7 +42,7 @@ def _register_resource(kind: str, plural: str, id_alias: str, command_type: type
         query_db: Annotated[AsyncSession, DBSessionDependency()],
         access: Annotated[ShotGridProjectAccessModel, ProjectAccessDependency()],
     ) -> Response:
-        return ResponseUtil.success(model_content=await ShotGridResourceService.page(query_db, kind, project_id, query))
+        return ResponseUtil.success(dict_content=await ShotGridResourceService.page(query_db, kind, project_id, query))
 
     async def detail(
         request: Request,
