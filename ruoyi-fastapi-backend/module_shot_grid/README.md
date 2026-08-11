@@ -48,6 +48,16 @@
 | `SHOT_GRID_IMPORT_PREVIEW_TTL_SECONDS` | `1800` | Redis 预览有效期 |
 | `SHOT_GRID_IMPORT_REDIS_KEY_PREFIX` | `shotgrid:import:preview` | Redis Key 前缀 |
 
+## NAS 目录消费者
+
+`ShotGridStorageOperationWorker` 消费 `sg_storage_operation`。每次领取和结算各自使用短事务，NAS I/O
+在线程中执行且不占用数据库事务；租约超时后其他 Worker 可接管，目录创建使用 `exist_ok=True` 保持幂等。
+生产环境应为每个进程设置唯一 Worker ID，并用独立进程循环调用 `run_once()`。可配置
+`SHOT_GRID_STORAGE_WORKER_LEASE_SECONDS`、`MAX_ATTEMPTS`、`RETRY_BASE_SECONDS` 和 `BATCH_SIZE`。
+
+管理员接口 `/shot-grid/admin/storage-operations` 提供脱敏诊断、失败重试与目录对账。真实验收必须使用
+管理员配置的受控 SMB 共享；临时目录测试只验证路径和幂等逻辑，不能作为 NAS/SMB 验收结论。
+
 安全门禁在线程中、`openpyxl` 建立工作簿对象前扫描全部 OOXML Sheet（含隐藏 Sheet），并在 Redis 写入和数据库提交前检查预览 JSON 大小。镜头模板版本为 `shot-v1`，资产模板版本为 `asset-v1`。上传原文件只用于临时解析，不持久化本地路径；若需长期保留，必须另走平台受保护文件和业务引用。
 
 ## 分层

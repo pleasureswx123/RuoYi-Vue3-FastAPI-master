@@ -29,3 +29,17 @@ class ShotGridImportConfig(BaseSettings):
 
 
 SHOT_GRID_IMPORT_CONFIG = ShotGridImportConfig()
+
+
+class ShotGridStorageWorkerConfig(BaseSettings):
+    """NAS 目录消费者运行参数。每个进程必须使用不同的 worker_id。"""
+
+    model_config = SettingsConfigDict(env_prefix='SHOT_GRID_STORAGE_WORKER_', extra='ignore')
+
+    lease_seconds: int = Field(default=60, ge=10, le=3600)
+    max_attempts: int = Field(default=5, ge=1, le=100)
+    retry_base_seconds: int = Field(default=30, ge=1, le=3600)
+    batch_size: int = Field(default=10, ge=1, le=100)
+
+
+SHOT_GRID_STORAGE_WORKER_CONFIG = ShotGridStorageWorkerConfig()
