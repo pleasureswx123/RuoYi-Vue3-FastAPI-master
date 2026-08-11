@@ -40,7 +40,20 @@ class ShotGridStoragePathService:
     def ensure_directories(target: Path, operation_type: str) -> None:
         targets = [target]
         if operation_type == 'initialize_project':
-            targets.extend(target / name for name in ('EPISODE', 'SHOT', 'ASSET', 'REVIEW', 'DELIVERABLE'))
+            targets.extend(
+                target / name
+                for name in (
+                    'EPISODE',
+                    'SHOT',
+                    'ASSET',
+                    'ASSET/Character',
+                    'ASSET/Environment',
+                    'ASSET/Prop',
+                    'VIDEO',
+                    'REVIEW',
+                    'DELIVERABLE',
+                )
+            )
         for directory in targets:
             # exist_ok 保证重放不覆盖、不删除任何已有业务文件。
             os.makedirs(directory, exist_ok=True)

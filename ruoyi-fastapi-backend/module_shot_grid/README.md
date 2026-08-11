@@ -63,6 +63,8 @@
 
 管理员接口 `/shot-grid/admin/storage-operations` 提供脱敏诊断、失败重试与目录对账。真实验收必须使用
 管理员配置的受控 SMB 共享；临时目录测试只验证路径和幂等逻辑，不能作为 NAS/SMB 验收结论。
+独立进程启动命令、最小权限准备、故障/并发矩阵和分离式结果记录模板见
+[`docs/shot_grid_smb_acceptance.md`](../docs/shot_grid_smb_acceptance.md)。
 
 安全门禁在线程中、`openpyxl` 建立工作簿对象前扫描全部 OOXML Sheet（含隐藏 Sheet），并在 Redis 写入和数据库提交前检查预览 JSON 大小。镜头模板版本为 `shot-v1`，资产模板版本为 `asset-v1`。上传原文件只用于临时解析，不持久化本地路径；若需长期保留，必须另走平台受保护文件和业务引用。
 
