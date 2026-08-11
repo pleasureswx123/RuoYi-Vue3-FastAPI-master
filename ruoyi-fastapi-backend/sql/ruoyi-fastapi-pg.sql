@@ -2263,6 +2263,26 @@ COMMENT ON COLUMN sg_task.remark IS '备注';
 COMMENT ON COLUMN sg_task.lock_version IS '乐观锁版本';
 COMMENT ON COLUMN sg_task.del_flag IS '删除标志（0正常 2删除）';
 
+-- sg_task_history
+CREATE TABLE sg_task_history (
+	history_id BIGSERIAL NOT NULL,
+	project_id BIGINT NOT NULL,
+	task_id BIGINT NOT NULL,
+	action VARCHAR(20) NOT NULL,
+	actor_user_id BIGINT NOT NULL,
+	subject_user_id BIGINT,
+	is_delegated CHAR(1) DEFAULT '0' NOT NULL,
+	detail JSONB DEFAULT '{}'::jsonb NOT NULL,
+	create_by VARCHAR(64) DEFAULT '' NOT NULL,
+	create_time TIMESTAMP(0) WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL,
+	PRIMARY KEY (history_id),
+	CONSTRAINT fk_sg_task_history_task_project FOREIGN KEY(task_id, project_id) REFERENCES sg_task (task_id, project_id) ON DELETE RESTRICT,
+	CONSTRAINT ck_sg_task_history_action CHECK (action in ('assigned', 'reassigned', 'started')),
+	CONSTRAINT ck_sg_task_history_delegated CHECK (is_delegated in ('0', '1'))
+);
+CREATE INDEX idx_sg_task_history_task_created ON sg_task_history (task_id, create_time);
+COMMENT ON TABLE sg_task_history IS 'Shot Grid任务动作历史';
+
 -- sg_version_submission
 CREATE TABLE sg_version_submission (
 	submission_id BIGSERIAL NOT NULL,
@@ -2792,7 +2812,7 @@ create table if not exists alembic_version (
     constraint alembic_version_pkc primary key (version_num)
 );
 delete from alembic_version;
-insert into alembic_version(version_num) values ('20260810_04');
+insert into alembic_version(version_num) values ('20260811_02');
 
 
 CREATE OR REPLACE FUNCTION "find_in_set"(int8, varchar)

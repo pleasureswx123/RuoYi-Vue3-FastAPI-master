@@ -12,7 +12,7 @@ from sqlalchemy import (
 )
 
 from config.database import Base
-from module_shot_grid.entity.do.base_do import ShotGridMutableAuditMixin
+from module_shot_grid.entity.do.base_do import SHOT_GRID_JSON, ShotGridCreateAuditMixin, ShotGridMutableAuditMixin
 
 
 class ShotGridTask(ShotGridMutableAuditMixin, Base):
@@ -90,4 +90,32 @@ class ShotGridTask(ShotGridMutableAuditMixin, Base):
             'due_date',
         ),
         {'comment': 'Shot Grid制作任务表'},
+    )
+
+
+class ShotGridTaskHistory(ShotGridCreateAuditMixin, Base):
+    """任务分配和状态动作的不可变历史。"""
+
+    __tablename__ = 'sg_task_history'
+
+    history_id = Column(BigInteger, primary_key=True, autoincrement=True, comment='历史ID')
+    project_id = Column(BigInteger, nullable=False, comment='项目ID')
+    task_id = Column(BigInteger, nullable=False, comment='任务ID')
+    action = Column(String(20), nullable=False, comment='动作')
+    actor_user_id = Column(BigInteger, nullable=False, comment='实际操作用户ID')
+    subject_user_id = Column(BigInteger, nullable=True, comment='动作目标用户ID')
+    is_delegated = Column(String(1), nullable=False, server_default='0', comment='是否代操作')
+    detail = Column(SHOT_GRID_JSON, nullable=False, server_default=text("'{}'"), comment='动作详情')
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ['task_id', 'project_id'],
+            ['sg_task.task_id', 'sg_task.project_id'],
+            name='fk_sg_task_history_task_project',
+            ondelete='RESTRICT',
+        ),
+        CheckConstraint("action in ('assigned', 'reassigned', 'started')", name='ck_sg_task_history_action'),
+        CheckConstraint("is_delegated in ('0', '1')", name='ck_sg_task_history_delegated'),
+        Index('idx_sg_task_history_task_created', 'task_id', 'create_time'),
+        {'comment': 'Shot Grid任务动作历史'},
     )
