@@ -149,7 +149,7 @@ def test_migration_ddl_contains_every_named_metadata_constraint_and_index() -> N
     migration = _migration_namespace(SHOT_GRID_INITIAL_SCHEMA_REVISION)
     ddl = '\n'.join(migration['SHOT_GRID_DDL'])
     migration_source = '\n'.join(
-        path.read_text(encoding='utf-8') for path in (BACKEND_ROOT / 'alembic' / 'versions').glob('*-20260810_*.py')
+        path.read_text(encoding='utf-8') for path in (BACKEND_ROOT / 'alembic' / 'versions').glob('*-202608*.py')
     )
     metadata_names = {
         item.name

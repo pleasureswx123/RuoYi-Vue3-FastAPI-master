@@ -3228,3 +3228,12 @@ Shot Grid 业务前端复用平台的 `POST /login`、`GET /getInfo`、`GET /cap
 普通 JSON API 根据后端公开传输策略使用 RSA-OAEP + AES-256-GCM 请求信封并解密响应信封。公钥版本失效时清除公钥缓存并最多重试一次。文件下载、Blob/ArrayBuffer、`/common/download`、`/common/download/resource`、`/common/files/`、`/system/file/download/`、Shot Grid 文件/媒体路径和带 `Range` 的媒体请求排除应用层信封，但继续携带 Bearer Token、项目上下文头并接受后端项目权限校验。
 
 请求层统一解析 `code/msg/data`。401 触发单次提示、平台退出尝试和本地会话清理；403、404、409、413、416 与 5xx 分别保留可区分错误，409 保留后端冲突消息与 `errorKey/data`，5xx 必须 reject，禁止转换为空列表。Blob 形式 JSON 错误必须先解析再交给统一错误处理。
+
+## 制作任务分配与开始动作（已实现契约）
+
+- `POST /shot-grid/projects/{projectId}/shots/{shotId}/assignment` 首次创建唯一 `shot_video` 任务，后续请求更新同一任务。
+- `POST /shot-grid/projects/{projectId}/asset-items/{assetItemId}/assignment` 首次创建唯一 `asset_image` 任务，后续请求更新同一任务。
+- `GET /shot-grid/projects/{projectId}/tasks`、`GET /shot-grid/projects/{projectId}/tasks/{taskId}` 与 `GET /shot-grid/tasks/mine` 分别提供项目列表、详情（含历史）和当前活动成员的本人任务。
+- 负责人必须是同项目活动成员，且 `producerCode` 符合 `[A-Z0-9]{2,12}` 并由项目成员部分唯一索引保证项目内唯一。
+- `POST /shot-grid/projects/{projectId}/tasks/{taskId}/start` 只允许任务负责人本人、项目总监或管理员；总监和管理员代操作时，历史记录保存实际操作人、任务负责人、代操作标记和可选原因。
+- `sg_task` 的归属检查约束禁止双归属、无归属和任务类型错配，镜头/资产分项部分唯一索引与 Service 目标行锁共同防止并发首次分配产生第二个正常任务。

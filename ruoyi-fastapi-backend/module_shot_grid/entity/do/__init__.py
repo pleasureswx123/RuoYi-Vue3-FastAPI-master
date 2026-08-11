@@ -29,7 +29,7 @@ from module_shot_grid.entity.do.storage_do import (
     ShotGridStorageOperation,
     ShotGridStorageRoot,
 )
-from module_shot_grid.entity.do.task_do import ShotGridTask
+from module_shot_grid.entity.do.task_do import ShotGridTask, ShotGridTaskHistory
 from module_shot_grid.entity.do.version_do import (
     ShotGridVersion,
     ShotGridVersionFile,
@@ -56,6 +56,7 @@ __all__ = [
     'ShotGridStorageOperation',
     'ShotGridStorageRoot',
     'ShotGridTask',
+    'ShotGridTaskHistory',
     'ShotGridVersion',
     'ShotGridVersionFile',
     'ShotGridVersionSubmission',
