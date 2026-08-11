@@ -97,6 +97,7 @@ class ShotGridVersionQueryService:
             'submittedBy': row.submitted_by,
             'submittedTime': row.submitted_time,
             'generatedAtMs': row.generated_at_ms,
+            'lockVersion': row.lock_version,
             'files': [cls._dump_file(item) for item in files],
         }
 

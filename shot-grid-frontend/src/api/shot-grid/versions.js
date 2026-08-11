@@ -27,3 +27,10 @@ export function uploadProtectedVersionFile(file, onProgress) {
     onUploadProgress: ({ loaded, total }) => onProgress?.(total ? Math.round(loaded * 100 / total) : 0)
   })
 }
+
+const reviewActionUrl = (projectId, taskId, versionId, action) =>
+  `/shot-grid/projects/${projectId}/tasks/${taskId}/versions/${versionId}/${action}`
+export const approveVersion = (projectId, taskId, versionId, data) => request.post(reviewActionUrl(projectId, taskId, versionId, 'approve'), data)
+export const rejectVersion = (projectId, taskId, versionId, data) => request.post(reviewActionUrl(projectId, taskId, versionId, 'reject'), data)
+export const deferVersion = (projectId, taskId, versionId, data) => request.post(reviewActionUrl(projectId, taskId, versionId, 'defer'), data)
+export const listReviewActions = (projectId, taskId, versionId) => request.get(reviewActionUrl(projectId, taskId, versionId, 'review-actions'))

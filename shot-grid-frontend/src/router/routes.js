@@ -26,7 +26,7 @@ export const stableRoutes = [
       { path: 'shots/:shotId', name: 'ShotDetail', component: () => import('@/views/shot/ShotDetailView.vue'), props: true, meta: { navigationKey: 'shots' } },
       { path: 'assets/:assetId', name: 'AssetDetail', component: () => import('@/views/asset/AssetDetailView.vue'), props: true, meta: { navigationKey: 'assets' } },
       { path: 'tasks/:taskId', name: 'TaskDetail', component: () => import('@/views/task/TaskDetailView.vue'), props: true, meta: { navigationKey: 'workbench' } },
-      { path: 'versions/:versionId/review', name: 'VersionReview', component: () => import('@/views/review/VersionReviewView.vue'), props: true, meta: { navigationKey: 'reviews' } }
+      { path: 'versions/:versionId/review', name: 'VersionReview', component: () => import('@/views/review/VersionReviewView.vue'), props: route => ({ versionId: route.params.versionId, projectId: route.query.projectId, taskId: route.query.taskId }), meta: { navigationKey: 'reviews' } }
     ]
   },
   { path: '/:pathMatch(.*)*', name: 'NotFound', component: () => import('@/views/error/NotFoundView.vue'), meta: { public: true } }

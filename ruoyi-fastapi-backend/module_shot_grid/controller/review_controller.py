@@ -1,3 +1,4 @@
+# ruff: noqa: ANN001, ANN202
 from typing import Annotated
 
 from fastapi import Body, Path, Request, Response
@@ -9,7 +10,14 @@ from common.aspect.pre_auth import PreAuthDependency
 from common.router import APIRouterPro
 from module_shot_grid.dependencies.project_access import ProjectAccessDependency, ProjectRoleDependency
 from module_shot_grid.entity.vo.access_vo import ShotGridProjectAccessModel
-from module_shot_grid.entity.vo.review_vo import NoteCreateModel, NoteReplyCreateModel, NoteStatusUpdateModel
+from module_shot_grid.entity.vo.review_vo import (
+    NoteCreateModel,
+    NoteReplyCreateModel,
+    NoteStatusUpdateModel,
+    RejectReviewActionModel,
+    ReviewActionModel,
+)
+from module_shot_grid.exceptions import shot_grid_error
 from module_shot_grid.service.review_service import ShotGridReviewService
 from utils.response_util import ResponseUtil
 
@@ -78,3 +86,82 @@ async def update_note_status(
     return ResponseUtil.success(
         data=await ShotGridReviewService.update_status(db, project_id, version_id, note_id, body.status)
     )
+
+
+# 审核状态只能通过以下具名动作改变；不存在通用版本/任务状态更新入口。
+review_action_controller = APIRouterPro(
+    prefix='/shot-grid/projects/{projectId}/tasks/{taskId}/versions/{versionId}',
+    order_num=56,
+    tags=['Shot Grid-版本审核动作'],
+    dependencies=[PreAuthDependency()],
+)
+
+
+async def _review_action(action, project_id, task_id, version_id, body, db, access):
+    return ResponseUtil.success(
+        data=await ShotGridReviewService.review_action(
+            db, project_id, task_id, version_id, access.user_id, action, body
+        )
+    )
+
+
+@review_action_controller.post(
+    '/approve', summary='确认版本通过', dependencies=[UserInterfaceAuthDependency('shotgrid:review:approve')]
+)
+async def approve_version(
+    request: Request,
+    project_id: Annotated[int, Path(alias='projectId', gt=0)],
+    task_id: Annotated[int, Path(alias='taskId', gt=0)],
+    version_id: Annotated[int, Path(alias='versionId', gt=0)],
+    body: Annotated[ReviewActionModel, Body()],
+    db: Annotated[AsyncSession, DBSessionDependency()],
+    access: Annotated[ShotGridProjectAccessModel, ProjectRoleDependency('director')],
+) -> Response:
+    return await _review_action('approve', project_id, task_id, version_id, body, db, access)
+
+
+@review_action_controller.post(
+    '/reject', summary='退回版本修改', dependencies=[UserInterfaceAuthDependency('shotgrid:review:reject')]
+)
+async def reject_version(
+    request: Request,
+    project_id: Annotated[int, Path(alias='projectId', gt=0)],
+    task_id: Annotated[int, Path(alias='taskId', gt=0)],
+    version_id: Annotated[int, Path(alias='versionId', gt=0)],
+    body: Annotated[RejectReviewActionModel, Body()],
+    db: Annotated[AsyncSession, DBSessionDependency()],
+    access: Annotated[ShotGridProjectAccessModel, ProjectRoleDependency('director')],
+) -> Response:
+    return await _review_action('reject', project_id, task_id, version_id, body, db, access)
+
+
+@review_action_controller.post(
+    '/defer', summary='稍后决定版本', dependencies=[UserInterfaceAuthDependency('shotgrid:review:defer')]
+)
+async def defer_version(
+    request: Request,
+    project_id: Annotated[int, Path(alias='projectId', gt=0)],
+    task_id: Annotated[int, Path(alias='taskId', gt=0)],
+    version_id: Annotated[int, Path(alias='versionId', gt=0)],
+    body: Annotated[ReviewActionModel, Body()],
+    db: Annotated[AsyncSession, DBSessionDependency()],
+    access: Annotated[ShotGridProjectAccessModel, ProjectRoleDependency('director')],
+) -> Response:
+    return await _review_action('defer', project_id, task_id, version_id, body, db, access)
+
+
+@review_action_controller.get(
+    '/review-actions', summary='审核动作历史', dependencies=[UserInterfaceAuthDependency('shotgrid:review:list')]
+)
+async def list_review_actions(
+    request: Request,
+    project_id: Annotated[int, Path(alias='projectId', gt=0)],
+    task_id: Annotated[int, Path(alias='taskId', gt=0)],
+    version_id: Annotated[int, Path(alias='versionId', gt=0)],
+    db: Annotated[AsyncSession, DBSessionDependency()],
+    access: Annotated[ShotGridProjectAccessModel, ProjectAccessDependency()],
+) -> Response:
+    version = await ShotGridReviewService._require_version(db, project_id, version_id)
+    if version.task_id != task_id:
+        raise shot_grid_error(404, 'SG_VERSION_NOT_FOUND', '版本不存在或不属于当前项目任务')
+    return ResponseUtil.success(data=await ShotGridReviewService.list_actions(db, project_id, version_id))

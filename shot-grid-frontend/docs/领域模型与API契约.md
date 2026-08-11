@@ -3237,3 +3237,9 @@ Shot Grid 业务前端复用平台的 `POST /login`、`GET /getInfo`、`GET /cap
 - 负责人必须是同项目活动成员，且 `producerCode` 符合 `[A-Z0-9]{2,12}` 并由项目成员部分唯一索引保证项目内唯一。
 - `POST /shot-grid/projects/{projectId}/tasks/{taskId}/start` 只允许任务负责人本人、项目总监或管理员；总监和管理员代操作时，历史记录保存实际操作人、任务负责人、代操作标记和可选原因。
 - `sg_task` 的归属检查约束禁止双归属、无归属和任务类型错配，镜头/资产分项部分唯一索引与 Service 目标行锁共同防止并发首次分配产生第二个正常任务。
+
+## 版本审核具名动作（已实现契约）
+
+版本审核使用任务归属路径下的 `POST .../versions/{versionId}/approve|reject|defer`，请求携带版本 `lockVersion`；退回必须携带非空 `reason`。接口同时校验平台权限、活动项目成员、`director` 项目角色、项目/任务/版本归属及待审核状态。重复动作、过期乐观锁、已完成任务和并发最终版本冲突返回 HTTP 409 与稳定 `errorKey`。
+
+`approve` 在同一事务及行锁内保证当前版本是任务唯一 `final` 并将任务置为 `completed`；`reject` 将当前版本置为 `rejected`、任务置为 `revision`，审核意见写入不可变动作历史；`defer` 保持版本和任务待审核语义，只记录不可变动作并推进乐观锁。普通更新接口不得直接写 `version_status` 或审核相关 `task_status`。退回后的下一次正式提交创建新版本，旧版本、自动审核单、意见、回复和审核动作均不可变。

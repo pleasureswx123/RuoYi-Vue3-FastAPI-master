@@ -17,3 +17,10 @@
 - 任务版本查询只返回业务元数据和文件用途，不返回 `storage_key`、NAS 相对路径、服务器路径、AI 参数、提示词或成本。
 - Shot Grid 版本文件只从项目/任务/版本/fileId 全链路专用接口访问；平台权限、实时项目访问、`sg_version_file` 与 `sys_file_reference` 归属及平台显式 deny 必须同时通过，并复用平台 Range 与审计流。
 - 版本意见使用纯文本；创建意见和状态处理仅限项目总监，活动项目成员可回复。意见必须重复携带并校验 `versionId`；时间点为整数毫秒，标注坐标归一化且保存自然尺寸，VO 限制点数和 64 KiB 标注载荷。
+
+## 审核动作已确认契约
+
+- 版本最终状态和任务审核状态只能由 `approve`、`reject`、`defer` 具名接口改变，普通任务分配和版本查询接口不得接受状态字段。
+- 三个动作固定按任务、任务全部版本的顺序加行锁，并校验项目归属、director 项目角色、平台权限、待审核状态和版本 `lockVersion`；冲突统一使用 HTTP 409 稳定领域错误。
+- `reject` 的非空意见直接绑定当前版本的不可变 `sg_review_action`，版本进入 `rejected`、任务进入 `revision`；后续提交生成新版本，不修改旧版本、旧审核单、意见、回复和动作。
+- `approve` 在同一事务中将其他历史 final 清为 rejected、当前版本设为唯一 final、任务设为 completed；`defer` 只递增锁并记录 pending_review → pending_review 动作。

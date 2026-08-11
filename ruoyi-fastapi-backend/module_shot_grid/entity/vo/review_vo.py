@@ -59,3 +59,17 @@ class NoteReplyCreateModel(ReviewModel):
 
 class NoteStatusUpdateModel(ReviewModel):
     status: Literal['open', 'resolved']
+
+
+class ReviewActionModel(ReviewModel):
+    lock_version: int = Field(ge=0)
+    reason: str | None = Field(default=None, max_length=1000)
+
+    @field_validator('reason')
+    @classmethod
+    def normalize_reason(cls, value: str | None) -> str | None:
+        return value or None
+
+
+class RejectReviewActionModel(ReviewActionModel):
+    reason: str = Field(min_length=1, max_length=1000)
