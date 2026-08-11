@@ -3,6 +3,7 @@ import { SwitchButton } from '@element-plus/icons-vue'
 import { useRouter } from 'vue-router'
 import { useUserStore } from '@/store/modules/user'
 import { useNavigationStore } from '@/store/modules/navigation'
+import GlobalSearch from '@/components/GlobalSearch.vue'
 
 const router = useRouter()
 const userStore = useUserStore()
@@ -25,6 +26,7 @@ async function handleLogout() {
     <div class="workspace">
       <header class="topbar">
         <div><span class="eyebrow">PRODUCTION WORKSPACE</span><strong>影视制作协作台</strong></div>
+        <GlobalSearch />
         <button class="quiet-button" type="button" @click="handleLogout"><el-icon><SwitchButton /></el-icon>退出</button>
       </header>
       <main><RouterView /></main>
