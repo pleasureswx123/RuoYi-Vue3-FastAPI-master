@@ -1,0 +1,45 @@
+name: Shot Grid Frontend
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "shot-grid-frontend/**"
+      - ".github/workflows/shot-grid-frontend.yml"
+  pull_request:
+    branches: [main, master]
+    paths:
+      - "shot-grid-frontend/**"
+      - ".github/workflows/shot-grid-frontend.yml"
+
+jobs:
+  quality-gate:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: shot-grid-frontend
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.20.2
+          cache: npm
+          cache-dependency-path: shot-grid-frontend/package-lock.json
+
+      - name: Set up npm
+        run: npm install --global npm@11.4.2
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm test
+
+      - name: Build production bundle
+        run: npm run build:prod
