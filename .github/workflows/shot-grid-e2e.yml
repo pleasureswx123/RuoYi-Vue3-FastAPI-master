@@ -1,0 +1,45 @@
+name: Shot Grid Release E2E
+
+on:
+  workflow_dispatch:
+  workflow_call:
+    secrets:
+      SHOT_GRID_E2E_ACCOUNTS:
+        required: true
+
+jobs:
+  real-infrastructure-gate:
+    runs-on: [self-hosted, shot-grid-nas]
+    environment: shot-grid-release
+    env:
+      SHOT_GRID_E2E_ENABLED: "1"
+      SHOT_GRID_FRONTEND_URL: ${{ vars.SHOT_GRID_FRONTEND_URL }}
+      SHOT_GRID_BACKEND_URL: ${{ vars.SHOT_GRID_BACKEND_URL }}
+      SHOT_GRID_E2E_NAS_ROOT_ID: ${{ vars.SHOT_GRID_E2E_NAS_ROOT_ID }}
+      SHOT_GRID_E2E_NAS_MOUNT_PATH: ${{ vars.SHOT_GRID_E2E_NAS_MOUNT_PATH }}
+      SHOT_GRID_E2E_SAMPLE_DIR: ${{ vars.SHOT_GRID_E2E_SAMPLE_DIR }}
+      SHOT_GRID_E2E_FAULT_CONTROLLER_URL: ${{ vars.SHOT_GRID_E2E_FAULT_CONTROLLER_URL }}
+      SHOT_GRID_E2E_ACCOUNTS: ${{ secrets.SHOT_GRID_E2E_ACCOUNTS }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+          cache-dependency-path: ruoyi-fastapi-test/requirements.txt
+      - name: 验证显式真实基础设施配置
+        run: |
+          test -n "$SHOT_GRID_FRONTEND_URL"
+          test -n "$SHOT_GRID_BACKEND_URL"
+          test -n "$SHOT_GRID_E2E_NAS_ROOT_ID"
+          test -d "$SHOT_GRID_E2E_NAS_MOUNT_PATH"
+          test -d "$SHOT_GRID_E2E_SAMPLE_DIR"
+          test -n "$SHOT_GRID_E2E_ACCOUNTS"
+      - name: 安装测试依赖与 Chromium
+        working-directory: ruoyi-fastapi-test
+        run: |
+          python -m pip install -r requirements.txt
+          python -m playwright install chromium
+      - name: 执行 Shot Grid 发布验收
+        working-directory: ruoyi-fastapi-test
+        run: python -m pytest -v -m shot_grid_e2e shot_grid
