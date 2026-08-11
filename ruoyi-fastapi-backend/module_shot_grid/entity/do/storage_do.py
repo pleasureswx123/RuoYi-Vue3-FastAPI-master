@@ -152,8 +152,9 @@ class ShotGridStorageOperation(Base):
     idempotency_key = Column(String(100), nullable=False, comment='服务端稳定幂等键')
     attempt_count = Column(Integer, nullable=False, server_default='0', comment='已执行次数')
     next_retry_time = Column(SHOT_GRID_DATETIME, nullable=True, comment='下次允许重试时间')
-    lease_owner = Column(String(100), nullable=True, comment='Worker租约持有者')
-    lease_until = Column(SHOT_GRID_DATETIME, nullable=True, comment='Worker租约到期时间')
+    # 数据库沿用首版字段名，Python 契约使用更明确的 locked_by/locked_until。
+    locked_by = Column('lease_owner', String(100), nullable=True, comment='Worker租约持有者')
+    locked_until = Column('lease_until', SHOT_GRID_DATETIME, nullable=True, comment='Worker租约到期时间')
     started_time = Column(SHOT_GRID_DATETIME, nullable=True, comment='开始时间')
     completed_time = Column(SHOT_GRID_DATETIME, nullable=True, comment='成功或最终失败时间')
     last_error_key = Column(String(100), nullable=True, comment='最近错误键')
