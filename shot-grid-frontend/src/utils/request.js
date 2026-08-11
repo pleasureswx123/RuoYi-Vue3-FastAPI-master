@@ -17,9 +17,58 @@ import {
 const SUCCESS_CODE = 200
 const REPEAT_SUBMIT_LIMIT = 5 * 1024 * 1024
 const REPEAT_SUBMIT_KEY = 'shot-grid:repeat-submit'
+const MAX_STRUCTURED_ERROR_BYTES = 64 * 1024
 
 let sessionExpiredHandler = null
 let sessionExpiryPromise = null
+
+function responseContentType(response) {
+  return String(
+    response?.headers?.get?.('content-type') ||
+    response?.headers?.['content-type'] ||
+    response?.data?.type ||
+    ''
+  ).toLowerCase()
+}
+
+function isJsonContentType(contentType) {
+  return contentType.includes('application/json') || contentType.includes('+json')
+}
+
+async function readBlobText(payload) {
+  if (typeof payload.text === 'function') return payload.text()
+  if (typeof FileReader === 'undefined') return null
+  return new Promise(resolve => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : null)
+    reader.onerror = () => resolve(null)
+    reader.readAsText(payload)
+  })
+}
+
+async function decodeStructuredErrorResponse(response) {
+  if (!response || !isJsonContentType(responseContentType(response))) return response
+  const payload = response.data
+  let text = null
+  try {
+    if (typeof Blob !== 'undefined' && payload instanceof Blob) {
+      if (payload.size > MAX_STRUCTURED_ERROR_BYTES) return response
+      text = await readBlobText(payload)
+    } else if (typeof ArrayBuffer !== 'undefined' && payload instanceof ArrayBuffer) {
+      if (payload.byteLength > MAX_STRUCTURED_ERROR_BYTES) return response
+      text = new TextDecoder().decode(payload)
+    }
+  } catch {
+    return response
+  }
+  if (text === null) return response
+  try {
+    const data = JSON.parse(text)
+    return data && typeof data === 'object' ? { ...response, data } : response
+  } catch {
+    return response
+  }
+}
 
 export function setSessionExpiredHandler(handler) {
   sessionExpiredHandler = typeof handler === 'function' ? handler : null
@@ -143,7 +192,7 @@ request.interceptors.response.use(
       return request.request(decryptedError.config)
     }
 
-    const response = decryptedError.response
+    const response = await decodeStructuredErrorResponse(decryptedError.response)
     const fallback = !response
       ? decryptedError.code === 'ECONNABORTED'
         ? '请求超时，请稍后重试'

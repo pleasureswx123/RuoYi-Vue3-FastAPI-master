@@ -19,11 +19,14 @@
 - 资产真实列表与项目/类型/聚合状态/制作人/关键字筛选、服务端分页、表格/卡片/类型看板和详情深链；
 - 资产与制作分项创建/编辑/归档、资产图片任务首次分配/改派、项目内资产制作人安全选项，以及后端 `allowedActions` 动作门禁；
 - 资产 Excel 上传预检、20/19/3/1 汇总、逐行问题、可提交行选择、幂等正式提交和自动匹配/待处理/冲突结果回显；
+- 工作台通过真实 `GET /shot-grid/tasks/mine` 展示跨项目“我的任务”，任务详情深链 `/tasks/:taskId` 接入真实详情、开始和编辑；
+- 任务详情中的版本工作区接入本地校验、只读 preflight、平台 private upload、create HTTP 202、current 恢复、原提交 retry 和有界状态查询；
+- 任务版本历史、`/versions/:versionId` 真实详情以及受保护 Range 下载，并按版本查询/重试/列表/下载权限分别门禁；
 - 通过统一鉴权请求获取受保护缩略图 Blob，并在取消、切换和卸载时释放 Object URL；
 - `package-lock.json`、lint、单元测试和生产构建脚本；
 - 多阶段 Dockerfile 和 Nginx 模板，生产页面路径为 `/shot-grid-app/`，API 入口为 `/prod-api/`。
 
-项目管理页、镜头管理页和资产管理页已经调用真实后端，不在失败时回退 Mock。工作台、版本审核、文件与 NAS 三个一级页面仍主要用于声明后续接入边界；资产需求人工处理、独立任务页、版本、审核和文件等业务页面尚未完成。项目管理、镜头管理/镜头 Excel 导入、资产管理/资产 Excel 导入三个子集均已在隔离真实 PostgreSQL、Redis、平台账号和生产 Nginx 下完成浏览器旅程；任何子集都不等于完整系统 E2E 或真实 NAS 验收。
+项目管理页、镜头管理页、资产管理页、工作台、任务详情和版本详情已经调用真实后端，不在失败时回退 Mock。版本审核和文件与 NAS 一级页面仍主要用于声明后续接入边界；资产需求人工处理、`manual_batch`、完整审核前端、媒体派生和文件页尚未完成。项目管理、镜头管理/镜头 Excel 导入、资产管理/资产 Excel 导入、任务工作台/版本上传四个子集均已在隔离真实 PostgreSQL、Redis、平台账号和生产 Nginx 下完成浏览器旅程；任务/版本旅程以显式 `allow_local_root=True` 的 TEMP 适配器验证发布算法和编排，不是真实 UNC/SMB/NAS 服务账号验收。任何子集都不等于完整系统 E2E 或真实 NAS 验收。
 
 ## 环境要求
 
@@ -49,7 +52,7 @@ npm.cmd run test
 npm.cmd run build:prod
 ```
 
-截至 2026-08-11，本批已执行通过 `npm.cmd run lint`、Vitest 3.2.7 的 23 个测试文件/91 个测试和 `npm.cmd run build:prod`，生产构建处理 1774 个模块，仅保留既有 `@vueuse/core` PURE annotation 两条警告。后端 Ruff check 扩大到 `module_shot_grid config middlewares tests/module_shot_grid` 并通过，Ruff format `--check` 报告 177 files already formatted；11 个定向测试文件为 90 passed，完整 `tests/module_shot_grid` 为 483 passed、2 skipped，两个跳过项均因当前环境不允许创建目录符号链接。项目、镜头和资产三个子集均已完成真实后端、隔离 PostgreSQL/Redis、平台账号、生产 Nginx 和 Chrome 浏览器旅程；这些证据不能外推为真实资产模板、真实版本缩略图、NAS 可用或完整系统 E2E。
+截至 2026-08-11，本批已执行通过 `npm.cmd run lint`、Vitest 3.2.7 的 32 个测试文件/148 个测试和 `npm.cmd run build:prod`，生产构建处理 1796 个模块，仅保留既有 `@vueuse/core` PURE annotation 两条警告。后端 `python -m ruff check module_shot_grid config middlewares tests/module_shot_grid` 通过，Ruff format `--check` 报告 161 files already formatted；版本 preflight 3 个定向测试文件为 43 passed，完整 `tests/module_shot_grid` 为 499 passed、2 skipped，两个跳过项均因当前 Windows 环境不允许创建目录符号链接。项目、镜头、资产和任务/版本四个子集均已完成真实后端、隔离 PostgreSQL/Redis、平台账号、生产 Nginx 和 Chrome 浏览器旅程；静态门禁与浏览器子集证据分别成立。这些证据不能外推为真实资产模板、真实版本缩略图、真实 UNC/SMB/NAS、完整审核前端或完整系统 E2E。
 
 ## 生产部署路径
 
@@ -121,6 +124,16 @@ docker compose -f docker-compose.pg.yml up -d shot-grid-frontend
 - 资产模板下载尚未交付。原样表必须先通过规定的 `artifact_tool` 安全匿名化、渲染和复核流程；工具链不可用时不得直接发布原样表，也不得用本地静态文件或失败回退伪装 `GET /shot-grid/imports/assets/template` 已可用。
 - `completed` 或 `archived` 项目下，资产/制作分项 CRUD 与资产 preview/commit 均由后端返回 HTTP 409 / `SG_INVALID_STATE_TRANSITION`，对应 `allowedActions` 为空。该门禁不能外推到成员、任务、版本、审核、文件和目录操作等尚未统一治理的路径。
 
+## 任务工作台与版本上传边界
+
+- `/workbench` 以 `GET /shot-grid/tasks/mine` 为唯一跨项目任务数据源，服务端负责当前用户范围、筛选、排序和分页；点击任务进入 `/tasks/:taskId`，读取真实任务详情，并按真实接口执行开始和编辑。动作按钮必须同时满足平台权限与后端 `allowedActions`，后端仍会复核项目访问、负责人/总监身份、目标和任务状态。
+- 版本提交严格按“本地校验 → `POST /shot-grid/tasks/{taskId}/version-submissions/preflight` → `POST /common/files/upload` 私有上传 → `POST /shot-grid/tasks/{taskId}/version-submissions` 创建并返回 HTTP 202”执行。preflight 请求体固定为 `fileName/fileSize/changelog/aiParams`，只读且无数据库、文件或引用副作用，只验证目标相对路径可生成和目录快照字段完整，不访问 NAS 或检查实际目标文件；正式 create 在锁内重新校验权限、项目/任务状态、负责人、业务上下文、源文件授权与摘要、未解决提交、目标相对路径生成和目录快照一致性。实际目标文件冲突由 Worker 无覆盖发布阶段处理。
+- 页面刷新通过 `GET /shot-grid/tasks/{taskId}/version-submissions/current` 恢复未解决提交。只有 `committed` 表示正式版本成功并触发任务和历史刷新；`failed` 保留并重试原提交行，不新建提交绕过占用约束。每轮自动查询最多 30 次，连续 3 次错误后暂停，指数退避有上限；401/403/404 立即停止，到达边界后提供人工刷新或合法 retry。
+- 创建提交要求平台 `shotgrid:version:add` 与详情 `version.add` 同时满足；current/status、失败 retry、历史、详情和下载分别受 `shotgrid:version:query`、`shotgrid:version:retry`、`shotgrid:version:list`、`shotgrid:version:query` 和 `shotgrid:file:download` 约束。任务历史和版本详情使用真实接口，`/versions/:versionId` 归属 `reviews` 路由域；下载走鉴权 Range 接口并区分 200/206/416，临时 Object URL 用后立即释放。
+- 稳定 create 幂等键、已上传 `fileId`、修改说明和 AI 参数只保存在当前页面内存。create 响应未知时，同一命令重放复用原 `fileId` 和幂等键，并跳过重复 preflight/upload；任务、操作和文件上下文使用 AbortController 与 generation 防止同 ID 往返的 ABA 迟到响应继续上传、创建或覆盖当前状态。
+- 统一请求层对 Blob/ArrayBuffer 错误体只在 JSON Content-Type 且不超过 64 KiB 时有界解析，保留 `httpStatus/code/errorKey/details`；401、403、404、409、413、416 和 5xx 不得被抹成同一中文提示，非 JSON 或超限二进制不得误解码。
+- 该交付不改变 Worker 边界：版本发布 Worker 默认关闭，显式 `allow_local_root=True` 的临时本地目录只用于算法和编排验证，不证明真实 UNC/SMB/NAS；JPEG/PNG 与 MP4/MOV 字节门禁仍不覆盖 codec、视频轨、可解码性或转码。`auto_single` 后端闭环存在，但版本审核一级页、完整审核交互和 `manual_batch` 仍未完成。任务工作台与版本上传的隔离浏览器子集证据见下文。
+
 ## 2026-08-11 项目管理子集验证
 
 本批使用由当前 PostgreSQL 初始化基线创建的隔离数据库（Alembic head `20260811_06`）、隔离 Redis DB 15、真实 FastAPI 后端、真实平台 `admin` 账号和生产 Nginx 镜像完成以下浏览器旅程：
@@ -189,6 +202,29 @@ localStorage 为空，sessionStorage 只保留传输配置与 repeat-submit 元�
 
 验收后已关闭 Playwright，停止后端 PID 29056/32996，删除唯一临时 Nginx 容器且未构建新镜像；18081/19099 空闲，隔离 PostgreSQL 库存在数/连接数为 0/0，Redis DB 15 `DBSIZE=0` 且 owner 键为 0，54 项 TEMP 精确删除。原 9099 PID 4820 仍监听，基础 PostgreSQL/Redis 保持 healthy。
 
+## 2026-08-11 任务工作台与版本上传子集验证
+
+本批使用 fresh PostgreSQL head `20260811_06`（22 张 `sg_` 表）、Redis DB 15、真实平台登录、生产 Nginx 和 Chrome 完成以下浏览器旅程：
+
+```text
+/workbench 展示 21 条任务，服务端分页 20+1，关键字筛选命中 1 条
+→ taskId=900001 start HTTP 200，lockVersion 0→1
+→ 选择 logo.png（5663 B）
+→ preflight HTTP 200
+→ private upload HTTP 200
+→ create HTTP 202
+→ pending 页面 reload，current HTTP 200 恢复原提交
+→ 本地 TEMP 适配器两阶段 published → committed，attempt=1
+→ V001 pending_review，任务 lockVersion=2，auto_single=1，正式文件引用=1
+→ 受保护版本详情与下载均 HTTP 200，下载 5663 B 且 SHA-256 与源文件一致
+→ 控制台 0 error/0 warning，localStorage/sessionStorage 无认证 Token、fileId、幂等键、修改说明或 AI 参数
+→ logout HTTP 200，任务与版本深链守卫生效
+```
+
+三步请求顺序由浏览器网络记录确认，pending reload/current 恢复和 committed 后版本历史/详情/下载均使用真实接口。登录期间认证 Token 只存在 `Admin-Token` Cookie，localStorage/sessionStorage 未保留认证 Token、幂等键、`fileId`、修改说明或 AI 参数；logout HTTP 200 后 Cookie 清除。验收目标已按清单精确清理。
+
+该结论只关闭隔离任务工作台/版本上传子集门禁。发布阶段显式使用 `allow_local_root=True` 的本地 TEMP 适配器，只验证发布算法和前后端编排；夹具目录补齐只是逻辑预览，未连接真实 UNC/SMB/NAS，也未使用正式 Windows/NAS 服务账号。版本审核一级页、完整审核交互、`manual_batch`、codec、媒体轨、可解码性和转码仍未验证，因此这不是完整系统 E2E 或生产 NAS 验收。
+
 ## 认证与导航契约
 
 - Token Cookie 名为 `Admin-Token`，`path=/`；请求通过统一 Axios 实例添加 Bearer Token。
@@ -208,7 +244,7 @@ localStorage 为空，sessionStorage 只保留传输配置与 repeat-submit 元�
 
 ## 错误边界
 
-统一 `ApiError` 保留 `httpStatus`、响应体 `code`、`errorKey` 和 `details`：
+统一 `ApiError` 保留 `httpStatus`、响应体 `code`、`errorKey` 和 `details`；Blob/ArrayBuffer 错误只在 JSON Content-Type 且不超过 64 KiB 时有界解码：
 
 - 401：清理本地会话并回登录；
 - 403：显示无权限，不伪装成 404；

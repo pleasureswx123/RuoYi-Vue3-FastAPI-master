@@ -235,6 +235,23 @@ class ShotGridVersionSubmissionDao:
         )
 
     @classmethod
+    async def has_unresolved_submission(cls, db: AsyncSession, task_id: int) -> bool:
+        """只读判断任务是否已有未解决提交，不为上传前预检持有行锁。"""
+
+        return bool(
+            await db.scalar(
+                select(
+                    exists(
+                        select(1).where(
+                            ShotGridVersionSubmission.task_id == task_id,
+                            ShotGridVersionSubmission.submission_status.in_(UNRESOLVED_SUBMISSION_STATUSES),
+                        )
+                    )
+                )
+            )
+        )
+
+    @classmethod
     async def next_reserved_version_no(cls, db: AsyncSession, task_id: int) -> int:
         value = await db.scalar(
             select(func.coalesce(func.max(ShotGridVersionSubmission.reserved_version_no), 0)).where(
@@ -278,44 +295,65 @@ class ShotGridVersionSubmissionDao:
         await db.flush()
         return submission
 
+    @staticmethod
+    def _submission_status_statement() -> Any:
+        return (
+            select(
+                ShotGridVersionSubmission.submission_id,
+                ShotGridVersionSubmission.project_id,
+                ShotGridVersionSubmission.task_id,
+                ShotGridVersionSubmission.source_file_id,
+                ShotGridVersionSubmission.submission_status,
+                ShotGridVersionSubmission.reserved_version_no,
+                ShotGridVersionSubmission.business_file_name,
+                ShotGridVersionSubmission.attempt_count,
+                ShotGridVersionSubmission.last_error_key,
+                ShotGridVersionSubmission.last_error_message,
+                ShotGridVersionSubmission.submitted_by,
+                ShotGridVersionSubmission.create_time,
+                ShotGridVersionSubmission.update_time,
+                ShotGridTask.assignee_user_id,
+                ShotGridTask.task_status,
+                ShotGridVersion.version_id,
+                ShotGridVersion.version_status,
+                ShotGridReviewList.review_list_id,
+            )
+            .join(ShotGridTask, ShotGridTask.task_id == ShotGridVersionSubmission.task_id)
+            .outerjoin(ShotGridVersion, ShotGridVersion.submission_id == ShotGridVersionSubmission.submission_id)
+            .outerjoin(
+                ShotGridReviewList,
+                and_(
+                    ShotGridReviewList.auto_version_id == ShotGridVersion.version_id,
+                    ShotGridReviewList.review_mode == 'auto_single',
+                    ShotGridReviewList.del_flag == '0',
+                ),
+            )
+        )
+
     @classmethod
     async def get_submission_status_row(cls, db: AsyncSession, submission_id: int) -> dict[str, Any] | None:
         row = (
             (
                 await db.execute(
-                    select(
-                        ShotGridVersionSubmission.submission_id,
-                        ShotGridVersionSubmission.project_id,
-                        ShotGridVersionSubmission.task_id,
-                        ShotGridVersionSubmission.source_file_id,
-                        ShotGridVersionSubmission.submission_status,
-                        ShotGridVersionSubmission.reserved_version_no,
-                        ShotGridVersionSubmission.business_file_name,
-                        ShotGridVersionSubmission.attempt_count,
-                        ShotGridVersionSubmission.last_error_key,
-                        ShotGridVersionSubmission.last_error_message,
-                        ShotGridVersionSubmission.submitted_by,
-                        ShotGridVersionSubmission.create_time,
-                        ShotGridVersionSubmission.update_time,
-                        ShotGridTask.assignee_user_id,
-                        ShotGridTask.task_status,
-                        ShotGridVersion.version_id,
-                        ShotGridVersion.version_status,
-                        ShotGridReviewList.review_list_id,
+                    cls._submission_status_statement().where(ShotGridVersionSubmission.submission_id == submission_id)
+                )
+            )
+            .mappings()
+            .first()
+        )
+        return dict(row) if row else None
+
+    @classmethod
+    async def get_current_submission_status_row(cls, db: AsyncSession, task_id: int) -> dict[str, Any] | None:
+        """读取任务唯一的未解决版本提交，用于刷新后恢复状态跟踪。"""
+
+        row = (
+            (
+                await db.execute(
+                    cls._submission_status_statement().where(
+                        ShotGridVersionSubmission.task_id == task_id,
+                        ShotGridVersionSubmission.submission_status.in_(UNRESOLVED_SUBMISSION_STATUSES),
                     )
-                    .join(ShotGridTask, ShotGridTask.task_id == ShotGridVersionSubmission.task_id)
-                    .outerjoin(
-                        ShotGridVersion, ShotGridVersion.submission_id == ShotGridVersionSubmission.submission_id
-                    )
-                    .outerjoin(
-                        ShotGridReviewList,
-                        and_(
-                            ShotGridReviewList.auto_version_id == ShotGridVersion.version_id,
-                            ShotGridReviewList.review_mode == 'auto_single',
-                            ShotGridReviewList.del_flag == '0',
-                        ),
-                    )
-                    .where(ShotGridVersionSubmission.submission_id == submission_id)
                 )
             )
             .mappings()

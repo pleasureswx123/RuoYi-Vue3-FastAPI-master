@@ -163,6 +163,17 @@ def test_task_detail_builds_target_version_and_permission_actions() -> None:
     assert detail.allowed_actions == ['version.add']
 
 
+def test_task_detail_hides_version_add_while_uncommitted_submission_exists() -> None:
+    detail = ShotGridTaskService._build_detail(
+        _task_row(has_uncommitted_submission=True),
+        _current_user(user_id=ASSIGNEE_USER_ID),
+        _access(user_id=ASSIGNEE_USER_ID, role='creator'),
+    )
+
+    assert detail.has_uncommitted_submission is True
+    assert 'version.add' not in detail.allowed_actions
+
+
 @pytest.mark.asyncio
 async def test_project_mine_scope_cannot_query_another_assignee() -> None:
     db = AsyncMock()

@@ -31,6 +31,18 @@ const routes = [
         meta: { title: '工作台', routeKey: 'workbench' }
       },
       {
+        path: 'tasks/:taskId',
+        name: 'task-detail',
+        component: () => import('@/views/task/TaskDetailView.vue'),
+        meta: { title: '任务详情', routeKey: 'workbench' }
+      },
+      {
+        path: 'versions/:versionId',
+        name: 'version-detail',
+        component: () => import('@/views/version/VersionDetailView.vue'),
+        meta: { title: '版本详情', routeKey: 'reviews' }
+      },
+      {
         path: 'projects',
         name: 'projects',
         component: () => import('@/views/project/ProjectListView.vue'),

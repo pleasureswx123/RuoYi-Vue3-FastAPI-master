@@ -628,6 +628,7 @@ class ShotGridTaskService:
         if (
             row['task_status'] in {'in_progress', 'revision'}
             and (director or owner)
+            and not row['has_uncommitted_submission']
             and cls._has_permission(current_user, 'shotgrid:version:add')
         ):
             actions.append('version.add')

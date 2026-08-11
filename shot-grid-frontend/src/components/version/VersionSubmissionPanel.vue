@@ -1,0 +1,647 @@
+<script setup>
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { Refresh, UploadFilled, WarningFilled } from '@element-plus/icons-vue'
+
+import {
+  createVersionSubmission,
+  getCurrentTaskVersionSubmission,
+  getVersionSubmissionStatus,
+  preflightVersionSubmission,
+  retryVersionSubmission,
+  uploadProtectedVersionFile
+} from '@/api/shot-grid/versions'
+import { createIdempotencyState } from '@/utils/idempotency'
+import VersionSubmissionStatus from './VersionSubmissionStatus.vue'
+import {
+  acceptedToSubmissionStatus,
+  isSubmissionTerminal,
+  versionErrorState
+} from './versionPresentation'
+
+const MAX_VERSION_FILE_SIZE = 100 * 1024 * 1024
+const MAX_AUTOMATIC_POLL_ATTEMPTS = 30
+const MAX_CONSECUTIVE_POLL_ERRORS = 3
+const MAX_POLL_BACKOFF_MS = 30_000
+
+const props = defineProps({
+  taskId: { type: Number, required: true },
+  taskKind: { type: String, required: true },
+  allowedActions: { type: Array, default: () => [] },
+  hasUncommittedSubmission: { type: Boolean, default: false },
+  hasAddPermission: { type: Boolean, default: false },
+  canQuery: { type: Boolean, default: false },
+  canRetry: { type: Boolean, default: false },
+  operationGeneration: { type: Number, default: 0 },
+  pollInterval: { type: Number, default: 2000 }
+})
+const emit = defineEmits(['committed', 'submission-change'])
+
+const selectedFile = ref(null)
+const changelog = ref('')
+const aiParamsText = ref('')
+const uploadResult = ref(null)
+const uploadProgress = ref(0)
+const submission = ref(null)
+const phase = ref('idle')
+const recovering = ref(false)
+const recoveryResolved = ref(false)
+const requestError = ref(null)
+const pollError = ref(null)
+const validationMessage = ref('')
+
+let disposed = false
+let contextGeneration = 0
+let fileGeneration = 0
+let recoveryController = null
+let workflowController = null
+let pollController = null
+let pollTimer = null
+let pollAttemptCount = 0
+let consecutivePollErrors = 0
+let idempotency = createIdempotencyState(`version-${props.taskId}`)
+
+const acceptedExtensions = computed(() => props.taskKind === 'asset_image' ? ['jpg', 'png'] : ['mp4', 'mov'])
+const acceptAttribute = computed(() => acceptedExtensions.value.map(item => `.${item}`).join(','))
+const canSubmit = computed(() => (
+  recoveryResolved.value &&
+  props.allowedActions.includes('version.add') &&
+  props.hasAddPermission
+))
+const hasActiveSubmission = computed(() => Boolean(submission.value && submission.value.submissionStatus !== 'committed'))
+const isBusy = computed(() => recovering.value || ['preflighting', 'uploading', 'submitting', 'retrying'].includes(phase.value))
+const uploadedOnly = computed(() => Boolean(uploadResult.value && !submission.value))
+const composerLocked = computed(() => isBusy.value || uploadedOnly.value)
+const canDiscardUploadedFile = computed(() => (
+  uploadedOnly.value && [413, 422].includes(Number(requestError.value?.httpStatus || requestError.value?.status || 0))
+))
+const operationContext = () => Object.freeze({
+  taskId: Number(props.taskId),
+  operationGeneration: Number(props.operationGeneration)
+})
+
+function isCanceled(error, controller) {
+  return error?.code === 'ERR_CANCELED' || controller?.signal.aborted
+}
+
+function stopPolling() {
+  if (pollTimer) clearTimeout(pollTimer)
+  pollTimer = null
+  pollController?.abort()
+  pollController = null
+}
+
+function resetPollingBudget() {
+  pollAttemptCount = 0
+  consecutivePollErrors = 0
+}
+
+function pauseAutomaticPolling(message) {
+  stopPolling()
+  pollError.value = {
+    title: '自动刷新已暂停',
+    message,
+    errorKey: null
+  }
+}
+
+function abortRequests() {
+  recoveryController?.abort()
+  recoveryController = null
+  workflowController?.abort()
+  workflowController = null
+  stopPolling()
+}
+
+function resetComposer() {
+  selectedFile.value = null
+  changelog.value = ''
+  aiParamsText.value = ''
+  uploadResult.value = null
+  uploadProgress.value = 0
+  phase.value = 'idle'
+  requestError.value = null
+  pollError.value = null
+  validationMessage.value = ''
+  resetPollingBudget()
+  fileGeneration += 1
+  idempotency.reset()
+}
+
+function resetContext() {
+  contextGeneration += 1
+  abortRequests()
+  recovering.value = false
+  recoveryResolved.value = false
+  resetComposer()
+  submission.value = null
+  idempotency = createIdempotencyState(`version-${props.taskId}`)
+}
+
+function stillCurrent(generation, targetTaskId, targetOperationGeneration) {
+  return !disposed &&
+    contextGeneration === generation &&
+    Number(props.taskId) === targetTaskId &&
+    Number(props.operationGeneration) === targetOperationGeneration
+}
+
+function updateSubmission(nextSubmission) {
+  if (!nextSubmission) return
+  submission.value = { ...(submission.value || {}), ...nextSubmission }
+  emit('submission-change', submission.value, operationContext())
+}
+
+function applyAcceptedSubmission(data, generation, targetTaskId, targetOperationGeneration) {
+  const nextSubmission = acceptedToSubmissionStatus(data)
+  if (!nextSubmission) return
+  updateSubmission(nextSubmission)
+  phase.value = nextSubmission.submissionStatus || 'pending'
+  resetPollingBudget()
+  if (nextSubmission.submissionStatus === 'committed') {
+    stopPolling()
+    emit('committed', nextSubmission, operationContext())
+    return
+  }
+  if (nextSubmission.submissionStatus === 'failed') {
+    stopPolling()
+    return
+  }
+  schedulePoll(generation, targetTaskId, targetOperationGeneration)
+}
+
+function schedulePoll(generation, targetTaskId, targetOperationGeneration, immediate = false, delayOverride = null) {
+  stopPolling()
+  if (!props.canQuery || !submission.value || isSubmissionTerminal(submission.value.submissionStatus)) return
+  if (pollAttemptCount >= MAX_AUTOMATIC_POLL_ATTEMPTS) {
+    pauseAutomaticPolling('已达到本轮自动刷新上限，提交本身仍保留；请稍后手动刷新。')
+    return
+  }
+  const delay = immediate
+    ? 0
+    : delayOverride ?? Math.max(250, Number(props.pollInterval) || 2000)
+  pollTimer = setTimeout(() => pollSubmission(generation, targetTaskId, targetOperationGeneration), delay)
+}
+
+async function pollSubmission(generation, targetTaskId, targetOperationGeneration) {
+  if (!stillCurrent(generation, targetTaskId, targetOperationGeneration) || !submission.value?.submissionId) return
+  const targetSubmissionId = Number(submission.value.submissionId)
+  const controller = new AbortController()
+  pollController = controller
+  pollAttemptCount += 1
+  try {
+    const response = await getVersionSubmissionStatus(targetSubmissionId, { signal: controller.signal })
+    if (
+      pollController !== controller ||
+      !stillCurrent(generation, targetTaskId, targetOperationGeneration) ||
+      Number(submission.value?.submissionId) !== targetSubmissionId
+    ) return
+    pollError.value = null
+    consecutivePollErrors = 0
+    updateSubmission(response.data)
+    if (response.data?.submissionStatus === 'committed') {
+      phase.value = 'committed'
+      stopPolling()
+      emit('committed', response.data, operationContext())
+      return
+    }
+    if (response.data?.submissionStatus === 'failed') {
+      phase.value = 'failed'
+      stopPolling()
+      return
+    }
+    schedulePoll(generation, targetTaskId, targetOperationGeneration)
+  } catch (error) {
+    if (isCanceled(error, controller) || !stillCurrent(generation, targetTaskId, targetOperationGeneration)) return
+    pollError.value = versionErrorState(error, '版本状态刷新失败')
+    const status = Number(error?.httpStatus || error?.status || 0)
+    if (status === 401 || status === 403 || status === 404) {
+      stopPolling()
+      return
+    }
+    consecutivePollErrors += 1
+    if (consecutivePollErrors >= MAX_CONSECUTIVE_POLL_ERRORS) {
+      pauseAutomaticPolling('连续 3 次刷新失败，为避免故障请求循环已暂停；提交不会因此被撤销。')
+      return
+    }
+    const baseDelay = Math.max(250, Number(props.pollInterval) || 2000)
+    const retryDelay = Math.min(MAX_POLL_BACKOFF_MS, baseDelay * (2 ** consecutivePollErrors))
+    schedulePoll(generation, targetTaskId, targetOperationGeneration, false, retryDelay)
+  } finally {
+    if (pollController === controller) pollController = null
+  }
+}
+
+async function recoverCurrentSubmission() {
+  const generation = contextGeneration
+  const targetTaskId = Number(props.taskId)
+  const targetOperationGeneration = Number(props.operationGeneration)
+  if (!Number.isSafeInteger(targetTaskId) || targetTaskId <= 0) return
+  if (!props.canQuery) {
+    recoveryResolved.value = !props.hasUncommittedSubmission
+    if (props.hasUncommittedSubmission) {
+      requestError.value = versionErrorState({
+        httpStatus: 403,
+        message: '任务存在未完成版本提交，但当前账号无权恢复其状态'
+      }, '无法确认当前版本提交')
+    }
+    return
+  }
+  const controller = new AbortController()
+  recoveryController = controller
+  recovering.value = true
+  recoveryResolved.value = false
+  requestError.value = null
+  try {
+    const response = await getCurrentTaskVersionSubmission(targetTaskId, { signal: controller.signal })
+    if (recoveryController !== controller || !stillCurrent(generation, targetTaskId, targetOperationGeneration)) return
+    recoveryResolved.value = true
+    if (!response.data) return
+    updateSubmission(response.data)
+    phase.value = response.data.submissionStatus
+    if (!isSubmissionTerminal(response.data.submissionStatus)) {
+      resetPollingBudget()
+      schedulePoll(generation, targetTaskId, targetOperationGeneration)
+    }
+  } catch (error) {
+    if (!isCanceled(error, controller) && stillCurrent(generation, targetTaskId, targetOperationGeneration)) {
+      recoveryResolved.value = false
+      requestError.value = versionErrorState(error, '未能恢复当前版本提交')
+    }
+  } finally {
+    if (recoveryController === controller) {
+      recoveryController = null
+      recovering.value = false
+    }
+  }
+}
+
+function discardUploadedFile() {
+  if (!canDiscardUploadedFile.value || isBusy.value) return
+  resetComposer()
+}
+
+function chooseFile(event) {
+  validationMessage.value = ''
+  requestError.value = null
+  const file = event.target.files?.[0] || null
+  if (!file) {
+    selectedFile.value = null
+    return
+  }
+  const extension = file.name.includes('.') ? file.name.split('.').pop().toLowerCase() : ''
+  if (!acceptedExtensions.value.includes(extension)) {
+    validationMessage.value = `当前任务只接受 ${acceptedExtensions.value.map(item => item.toUpperCase()).join('/')} 文件`
+    event.target.value = ''
+    selectedFile.value = null
+    return
+  }
+  if (file.size > MAX_VERSION_FILE_SIZE) {
+    validationMessage.value = '版本文件不能超过 100 MiB'
+    event.target.value = ''
+    selectedFile.value = null
+    return
+  }
+  if (file.size <= 0) {
+    validationMessage.value = '版本文件不能为空'
+    event.target.value = ''
+    selectedFile.value = null
+    return
+  }
+  workflowController?.abort()
+  fileGeneration += 1
+  selectedFile.value = file
+  uploadResult.value = null
+  uploadProgress.value = 0
+  phase.value = 'idle'
+  idempotency.reset()
+}
+
+function parseAiParams() {
+  const normalized = aiParamsText.value.trim()
+  if (!normalized) return null
+  let value
+  try {
+    value = JSON.parse(normalized)
+  } catch {
+    throw new TypeError('AI 参数必须是有效 JSON')
+  }
+  if ((typeof value !== 'object' || value === null) || new Blob([JSON.stringify(value)]).size > 64 * 1024) {
+    throw new TypeError('AI 参数必须是对象或数组，且不能超过 64 KiB')
+  }
+  return value
+}
+
+async function submitVersion() {
+  if (isBusy.value || hasActiveSubmission.value) return
+  validationMessage.value = ''
+  requestError.value = null
+  pollError.value = null
+  if (!canSubmit.value) {
+    validationMessage.value = '当前任务状态或账号权限不允许提交新版本'
+    return
+  }
+  if (!selectedFile.value) {
+    validationMessage.value = '请先选择版本文件'
+    return
+  }
+  const normalizedChangelog = changelog.value.trim()
+  if (!normalizedChangelog) {
+    validationMessage.value = '请填写本轮修改说明'
+    return
+  }
+  if (Array.from(normalizedChangelog).some(character => character !== ' ' && /[\p{C}\p{Z}]/u.test(character))) {
+    validationMessage.value = '修改说明不能包含换行、Tab 或其他控制字符'
+    return
+  }
+  let aiParams
+  try {
+    aiParams = parseAiParams()
+  } catch (error) {
+    validationMessage.value = error.message
+    return
+  }
+
+  const generation = contextGeneration
+  const targetTaskId = Number(props.taskId)
+  const targetOperationGeneration = Number(props.operationGeneration)
+  const targetFile = selectedFile.value
+  const targetFileGeneration = fileGeneration
+  const controller = new AbortController()
+  workflowController?.abort()
+  workflowController = controller
+  let failureTitle = '版本提交预检失败'
+
+  try {
+    if (!uploadResult.value) {
+      phase.value = 'preflighting'
+      const preflightPayload = {
+        fileName: targetFile.name,
+        fileSize: targetFile.size,
+        changelog: normalizedChangelog,
+        aiParams
+      }
+      const preflightResponse = await preflightVersionSubmission(
+        targetTaskId,
+        preflightPayload,
+        { signal: controller.signal }
+      )
+      if (
+        workflowController !== controller ||
+        !stillCurrent(generation, targetTaskId, targetOperationGeneration) ||
+        fileGeneration !== targetFileGeneration ||
+        selectedFile.value !== targetFile
+      ) return
+      if (!canSubmit.value) {
+        const permissionError = new Error('提交权限或任务动作已发生变化，未上传文件')
+        permissionError.httpStatus = 403
+        throw permissionError
+      }
+      const declaredExtension = targetFile.name.split('.').pop().toLowerCase()
+      if (
+        preflightResponse?.data?.ready !== true ||
+        Number(preflightResponse.data.taskId) !== targetTaskId ||
+        preflightResponse.data.taskKind !== props.taskKind ||
+        preflightResponse.data.fileExtension !== declaredExtension ||
+        !preflightResponse.data.allowedActions?.includes('version.add')
+      ) {
+        throw new Error('版本提交预检响应与当前任务不一致，未上传文件')
+      }
+
+      failureTitle = '受保护文件上传失败'
+      phase.value = 'uploading'
+      uploadProgress.value = 0
+      const response = await uploadProtectedVersionFile(targetFile, {
+        signal: controller.signal,
+        onUploadProgress: event => {
+          if (event.total && stillCurrent(generation, targetTaskId, targetOperationGeneration) && fileGeneration === targetFileGeneration) {
+            uploadProgress.value = Math.min(100, Math.round((event.loaded * 100) / event.total))
+          }
+        }
+      })
+      if (
+        workflowController !== controller ||
+        !stillCurrent(generation, targetTaskId, targetOperationGeneration) ||
+        fileGeneration !== targetFileGeneration ||
+        selectedFile.value !== targetFile
+      ) return
+      if (!response?.fileId || response?.accessType !== 'private') {
+        throw new Error('平台上传响应缺少私有文件 ID，未创建版本提交')
+      }
+      uploadResult.value = {
+        fileId: response.fileId,
+        originalFilename: response.originalFilename || targetFile.name,
+        downloadUrl: response.downloadUrl
+      }
+      uploadProgress.value = 100
+      phase.value = 'uploaded'
+    }
+
+    const payload = {
+      fileId: uploadResult.value.fileId,
+      changelog: normalizedChangelog,
+      aiParams
+    }
+    phase.value = 'submitting'
+    failureTitle = '版本提交创建失败'
+    const response = await createVersionSubmission(
+      targetTaskId,
+      payload,
+      idempotency.forPayload(payload),
+      { signal: controller.signal }
+    )
+    if (
+      workflowController !== controller ||
+      !stillCurrent(generation, targetTaskId, targetOperationGeneration) ||
+      fileGeneration !== targetFileGeneration
+    ) return
+    applyAcceptedSubmission(response.data, generation, targetTaskId, targetOperationGeneration)
+  } catch (error) {
+    if (!isCanceled(error, controller) && stillCurrent(generation, targetTaskId, targetOperationGeneration) && fileGeneration === targetFileGeneration) {
+      requestError.value = versionErrorState(error, failureTitle)
+      phase.value = uploadResult.value ? 'submission_failed' : 'idle'
+    }
+  } finally {
+    if (workflowController === controller) workflowController = null
+  }
+}
+
+async function retryFailedSubmission() {
+  if (!props.canRetry || submission.value?.submissionStatus !== 'failed' || isBusy.value) return
+  const generation = contextGeneration
+  const targetTaskId = Number(props.taskId)
+  const targetOperationGeneration = Number(props.operationGeneration)
+  const targetSubmissionId = Number(submission.value.submissionId)
+  const controller = new AbortController()
+  workflowController?.abort()
+  workflowController = controller
+  requestError.value = null
+  pollError.value = null
+  phase.value = 'retrying'
+  try {
+    const response = await retryVersionSubmission(targetSubmissionId, { signal: controller.signal })
+    if (
+      workflowController !== controller ||
+      !stillCurrent(generation, targetTaskId, targetOperationGeneration) ||
+      Number(submission.value?.submissionId) !== targetSubmissionId
+    ) return
+    applyAcceptedSubmission(response.data, generation, targetTaskId, targetOperationGeneration)
+  } catch (error) {
+    if (!isCanceled(error, controller) && stillCurrent(generation, targetTaskId, targetOperationGeneration)) {
+      requestError.value = versionErrorState(error, '版本提交重试失败')
+      phase.value = 'failed'
+    }
+  } finally {
+    if (workflowController === controller) workflowController = null
+  }
+}
+
+function refreshSubmissionStatus() {
+  if (!submission.value?.submissionId || isBusy.value) return
+  const generation = contextGeneration
+  stopPolling()
+  resetPollingBudget()
+  pollError.value = null
+  void pollSubmission(generation, Number(props.taskId), Number(props.operationGeneration))
+}
+
+watch(
+  () => [props.taskId, props.operationGeneration, props.canQuery, props.hasUncommittedSubmission],
+  () => {
+    resetContext()
+    recoverCurrentSubmission()
+  },
+  { immediate: true }
+)
+
+onBeforeUnmount(() => {
+  disposed = true
+  contextGeneration += 1
+  abortRequests()
+})
+</script>
+
+<template>
+  <section class="version-submission-panel">
+    <div class="panel-heading">
+      <div>
+        <p class="sg-eyebrow">UPLOAD &amp; PUBLISH</p>
+        <h3>提交新版本</h3>
+        <p>先上传到平台私有文件区，再由后台发布到 NAS 并创建不可覆盖版本。</p>
+      </div>
+      <el-button v-if="submission && canQuery" :icon="Refresh" :disabled="isBusy" @click="refreshSubmissionStatus">刷新状态</el-button>
+      <el-button v-else-if="!recoveryResolved && !recovering && canQuery" :icon="Refresh" @click="recoverCurrentSubmission">重试检查</el-button>
+    </div>
+
+    <div v-if="recovering" class="recovering-state">正在检查该任务是否存在未完成版本提交…</div>
+
+    <VersionSubmissionStatus v-else-if="submission" :submission="submission" :poll-error="pollError" />
+
+    <div v-if="requestError || validationMessage" class="version-error" role="alert">
+      <el-icon><WarningFilled /></el-icon>
+      <div>
+        <strong>{{ requestError?.title || '请检查提交内容' }}</strong>
+        <p>{{ requestError?.message || validationMessage }}</p>
+        <code v-if="requestError?.errorKey">{{ requestError.errorKey }}</code>
+      </div>
+    </div>
+
+    <div v-if="submission?.submissionStatus === 'failed'" class="submission-actions">
+      <p>失败提交会继续占用该任务的版本号和源文件引用；必须重试当前提交，不能另传文件绕过。</p>
+      <el-button type="primary" :loading="phase === 'retrying'" :disabled="!canRetry" @click="retryFailedSubmission">
+        {{ canRetry ? '人工重试当前提交' : '当前账号没有重试权限' }}
+      </el-button>
+    </div>
+
+    <form v-else-if="!submission" class="submission-form" @submit.prevent="submitVersion">
+      <label class="file-picker" :class="{ 'has-file': selectedFile }">
+        <input type="file" :accept="acceptAttribute" :disabled="composerLocked || !canSubmit" @change="chooseFile" />
+        <el-icon><UploadFilled /></el-icon>
+        <span>
+          <strong>{{ selectedFile?.name || '选择离线制作成果' }}</strong>
+          <small>{{ selectedFile ? `${(selectedFile.size / 1024 / 1024).toFixed(2)} MiB` : `仅接受 ${acceptedExtensions.map(item => item.toUpperCase()).join('/')}，最大 100 MiB` }}</small>
+        </span>
+        <b>{{ selectedFile ? '更换' : '选择文件' }}</b>
+      </label>
+
+      <label class="field-label">
+        <span>本轮修改说明 <em>*</em></span>
+        <textarea v-model="changelog" maxlength="5000" rows="4" :disabled="composerLocked || !canSubmit" placeholder="说明本版本完成内容、修改点或需要审核人关注的部分。" />
+      </label>
+
+      <details class="ai-params">
+        <summary>AI 生成参数（可选 JSON）</summary>
+        <textarea v-model="aiParamsText" rows="4" :disabled="composerLocked || !canSubmit" placeholder='例如：{"model":"...","seed":42}' />
+      </details>
+
+      <div v-if="phase === 'uploading'" class="upload-progress" role="status">
+        <span><i :style="{ width: `${uploadProgress}%` }" /></span>
+        <small>正在上传平台私有文件 {{ uploadProgress }}%</small>
+      </div>
+      <div v-if="uploadedOnly" class="uploaded-boundary" role="status">
+        平台私有文件已上传，但正式版本尚未形成。文件与说明已锁定，请用同一幂等请求重放，避免已受理的超时请求被误判为失败。
+        <el-button v-if="canDiscardUploadedFile" native-type="button" text @click="discardUploadedFile">放弃已上传文件并重新选择</el-button>
+      </div>
+
+      <footer>
+        <p v-if="!canSubmit">后端动作镜像与平台 <code>shotgrid:version:add</code> 权限需同时满足；任务还须处于制作中或退回修改。</p>
+        <p v-else>提交受理后会显示 pending → publishing → published → committing → committed 的真实状态。</p>
+        <el-button
+          native-type="submit"
+          type="primary"
+          :loading="isBusy"
+          :disabled="!canSubmit || !selectedFile"
+        >
+          {{ uploadResult ? '重试创建版本提交' : '上传并提交版本' }}
+        </el-button>
+      </footer>
+    </form>
+  </section>
+</template>
+
+<style scoped lang="scss">
+.version-submission-panel { padding: 24px; background: var(--sg-surface); border: 1px solid var(--sg-border); border-radius: var(--sg-radius-lg); }
+.panel-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
+.panel-heading h3 { margin: 3px 0 7px; font-size: 20px; }
+.panel-heading p:not(.sg-eyebrow) { margin: 0; color: var(--sg-text-muted); font-size: 12px; }
+.recovering-state { padding: 28px; margin-top: 20px; color: var(--sg-text-secondary); text-align: center; background: rgba(255, 255, 255, 0.025); border: 1px dashed var(--sg-border); border-radius: var(--sg-radius-md); }
+.submission-status { margin-top: 20px; }
+.version-error { display: flex; padding: 13px 15px; margin-top: 16px; color: #ffb5ad; background: rgba(244, 92, 92, 0.08); border: 1px solid rgba(244, 92, 92, 0.2); border-radius: 10px; gap: 10px; }
+.version-error strong,
+.version-error p { display: block; margin: 0; }
+.version-error p { margin-top: 4px; font-size: 12px; }
+.version-error code { display: inline-block; margin-top: 6px; color: inherit; font-size: 10px; }
+.submission-actions { display: flex; align-items: center; justify-content: space-between; padding-top: 16px; gap: 16px; }
+.submission-actions p { margin: 0; color: var(--sg-text-secondary); font-size: 11px; line-height: 1.6; }
+.submission-form { display: grid; margin-top: 20px; gap: 16px; }
+.file-picker { position: relative; display: grid; min-height: 84px; padding: 18px; cursor: pointer; background: rgba(255, 255, 255, 0.025); border: 1px dashed var(--sg-border-strong); border-radius: var(--sg-radius-md); grid-template-columns: auto minmax(0, 1fr) auto; gap: 14px; align-items: center; }
+.file-picker:hover,
+.file-picker.has-file { border-color: rgba(255, 182, 87, 0.5); }
+.file-picker input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.file-picker .el-icon { color: var(--sg-accent); font-size: 25px; }
+.file-picker strong,
+.file-picker small { display: block; }
+.file-picker small { margin-top: 6px; color: var(--sg-text-muted); font-size: 11px; }
+.file-picker b { color: var(--sg-accent); font-size: 12px; }
+.field-label { display: grid; gap: 8px; }
+.field-label > span { color: var(--sg-text-secondary); font-size: 12px; }
+.field-label em { color: #ff8e84; font-style: normal; }
+.field-label textarea,
+.ai-params textarea { box-sizing: border-box; width: 100%; padding: 12px 14px; color: var(--sg-text); resize: vertical; background: rgba(0, 0, 0, 0.16); border: 1px solid var(--sg-border); border-radius: 10px; outline: none; }
+.field-label textarea:focus,
+.ai-params textarea:focus { border-color: rgba(255, 182, 87, 0.5); }
+.ai-params { color: var(--sg-text-secondary); font-size: 12px; }
+.ai-params summary { margin-bottom: 10px; cursor: pointer; }
+.upload-progress { display: grid; gap: 7px; }
+.upload-progress > span { height: 5px; overflow: hidden; background: rgba(255, 255, 255, 0.07); border-radius: 999px; }
+.upload-progress i { display: block; height: 100%; background: var(--sg-accent); transition: width 150ms ease; }
+.upload-progress small { color: var(--sg-text-muted); }
+.uploaded-boundary { padding: 12px 14px; color: #f4c878; font-size: 11px; line-height: 1.6; background: rgba(255, 182, 87, 0.08); border-radius: 9px; }
+.submission-form footer { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+.submission-form footer p { max-width: 650px; margin: 0; color: var(--sg-text-muted); font-size: 11px; line-height: 1.6; }
+
+@media (max-width: 720px) {
+  .panel-heading,
+  .submission-actions,
+  .submission-form footer { align-items: stretch; flex-direction: column; }
+  .submission-form footer .el-button { width: 100%; }
+}
+</style>

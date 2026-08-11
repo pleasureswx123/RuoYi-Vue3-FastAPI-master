@@ -19,7 +19,7 @@
 - PostgreSQL Alembic 迁移链、初始化 SQL、菜单、权限按钮和字典种子；
 - 元数据、导航、项目权限、项目事务、两类真实样表解析、任务/版本/审核、目录状态/DAO/路径适配器/Worker/路由和内部 Scheduler 任务的针对性测试入口。
 
-当前批次仍不包含资产 Excel 模板下载、资产需求人工处理、`manual_batch` 人工批量审核单、媒体缩略图生成/代理/转码/元数据和完整系统 E2E；镜头模板下载已经交付，两类预检按仓库内冻结样表执行。独立业务前端已接入镜头和资产的真实列表多视图、详情、CRUD、任务分配及 Excel 预检/提交；镜头和资产两个子集均已完成隔离 PostgreSQL、Redis DB 15、真实平台账号、生产 Nginx 与 Chrome 浏览器旅程。平台私有上传当前单文件上限仍为 100 MiB，`mov` 已加入上传白名单；版本服务按真实字节校验 JPEG/PNG 与 MP4/MOV 容器签名/品牌，但尚未探测 codec、视频轨、可解码性或执行转码。已交付接口通过平台权限、项目角色、资源归属、项目/任务/版本行锁、乐观锁、业务归档、文件引用和同事务审计约束，不能使用通用代码生成 CRUD 绕过状态机。任何子集旅程都不是完整系统 E2E 或生产就绪证明。
+当前批次仍不包含资产 Excel 模板下载、资产需求人工处理、`manual_batch` 人工批量审核单、媒体缩略图生成/代理/转码/元数据、完整审核前端和完整系统 E2E；镜头模板下载已经交付，两类预检按仓库内冻结样表执行。独立业务前端已接入镜头和资产的真实列表多视图、详情、CRUD、任务分配及 Excel 预检/提交，并已接入跨项目“我的任务”工作台、任务详情/开始/编辑、三步版本提交、刷新恢复、历史/详情和受保护下载。项目、镜头、资产和任务/版本四个子集已完成隔离 PostgreSQL、Redis DB 15、真实平台账号、生产 Nginx 与 Chrome 浏览器旅程；任务/版本旅程以显式 `allow_local_root=True` 的 TEMP 适配器验证发布算法和编排，不是真实 UNC/SMB/NAS 服务账号验收。平台私有上传当前单文件上限仍为 100 MiB，`mov` 已加入上传白名单；版本服务按真实字节校验 JPEG/PNG 与 MP4/MOV 容器签名/品牌，但尚未探测 codec、视频轨、可解码性或执行转码。已交付接口通过平台权限、项目角色、资源归属、项目/任务/版本行锁、乐观锁、业务归档、文件引用和同事务审计约束，不能使用通用代码生成 CRUD 绕过状态机。任何子集旅程都不是完整系统 E2E 或生产就绪证明。
 
 资产类型、名称和完整目录身份在创建时一并冻结，普通 PUT 只修改描述、排序和备注；该 PUT 是三项非身份主数据的完整快照，省略描述或备注表示清空，省略排序表示归零。任何重命名、改类型或目录迁移都必须另建受控动作。制作分项在尚无版本时可补充或纠正主数据，已有正式版本后全部冻结，且资产图片版本提交前必须补齐制作分项。镜头号、集号和场次号也不提供普通改号。正式版本事务按 `project → task/submission → version → auto_single review list → note` 锁序执行，避免项目元数据、改派、提交和审核并发穿透。
 
@@ -58,12 +58,16 @@ POST /shot-grid/tasks/{taskId}/start
 
 - 首次分配时 `taskLockVersion` 必须为空；已有任务改派时必须携带当前 `taskLockVersion`，并更新同一任务。任务存在任何非 `committed` 的版本提交（包括 `failed`）时禁止改派。
 - `start` 请求必须携带 `lockVersion`。制作人员只能开始本人任务；项目总监或管理员代操作仍记录实际操作人。
-- 平台不执行图片或视频制作；任务负责人在线下制作后，先经 `POST /common/files/upload` 上传平台私有文件，再调用版本暂存接口。
+- 独立业务前端 `/workbench` 以 `GET /shot-grid/tasks/mine` 为真实数据源，`/tasks/:taskId` 读取真实详情并调用开始/编辑接口；写按钮必须同时满足平台权限和详情 `allowedActions`。后端仍会重新校验项目访问、负责人/总监身份、任务与目标状态并在写事务中加锁，前端显隐不能替代授权。
+- 平台不执行图片或视频制作；任务负责人在线下制作后，按“本地校验 → 只读预检 → 平台私有上传 → 创建版本提交”进入版本发布链。
 
 版本与审核主要接口：
 
 ```http
-POST /shot-grid/tasks/{taskId}/version-submissions
+POST /shot-grid/tasks/{taskId}/version-submissions/preflight
+POST /common/files/upload
+POST /shot-grid/tasks/{taskId}/version-submissions          # HTTP 202
+GET  /shot-grid/tasks/{taskId}/version-submissions/current
 GET  /shot-grid/version-submissions/{submissionId}
 POST /shot-grid/version-submissions/{submissionId}/retry
 GET  /shot-grid/tasks/{taskId}/versions
@@ -80,11 +84,15 @@ POST /shot-grid/versions/{versionId}/review-actions
 GET  /shot-grid/versions/{versionId}/files/{fileId}/download
 ```
 
+- 预检请求体固定为 `fileName/fileSize/changelog/aiParams`，只读取任务、项目、成员、状态、未解决提交和扩展名，并验证业务文件名、目标相对路径可生成及目录快照字段完整；它不写数据库、不创建引用、不上传文件、不访问 NAS，也不检查实际目标文件。正式创建仍会在锁定项目、任务与源文件后全量复核权限、项目/任务状态、资源归属、文件授权与摘要、业务上下文、未解决提交、目标相对路径生成和目录快照一致性，以关闭 TOCTOU 窗口；实际目标文件已存在的摘要冲突由 Worker 无覆盖发布阶段处理。
+- 创建提交要求 `shotgrid:version:add` 且任务详情包含 `version.add`；查询 current/status、失败重试、版本历史/详情和文件下载分别受 `shotgrid:version:query`、`shotgrid:version:retry`、`shotgrid:version:list` / `shotgrid:version:query`、`shotgrid:file:download` 约束。项目成员、负责人/总监、资源归属和状态仍由后端逐接口复核。
 - 暂存事务为源文件建立 `businessType=shotgrid_version_submission` 临时引用；正式版本短事务将引用切换为 `shotgrid_version`，同时创建不可变版本、主 `sg_version_file`、`auto_single` 审核单和关系，并把任务改为 `pending_review`。`committed` 状态下的 `versionId` 通过 `sg_version.submission_id` 反查，提交表不重复保存该列。
+- `current` 返回当前任务未解决提交，用于页面刷新后恢复；状态机中只有 `committed` 表示正式版本成功。`failed` 仍占用原提交行，只能经 retry 重置并重试原行，不能通过新建提交绕过唯一性和任务占用约束。前端每轮自动查询最多 30 次，连续 3 次查询错误后暂停，使用有上限的指数退避；401/403/404 立即停止，到达边界后保留人工刷新或合法重试。
+- 前端将稳定幂等键和已上传 `fileId` 只保存在当前内存上下文。创建响应未知时，同一命令重放复用原 `fileId` 与幂等键并跳过重复 preflight/upload；同键异命令由后端拒绝。任务、操作或文件切换通过 AbortController 和 generation 检查阻止 ABA 迟到响应继续上传、创建或覆盖当前页面。统一请求层只对 JSON Content-Type 且不超过 64 KiB 的 Blob/ArrayBuffer 错误体做有界解析，并保留 `httpStatus/code/errorKey/details`。
 - 每次发布 attempt 使用同目录唯一 `.sgtmp-{submissionId}-a{attempt}-{random}.part` 临时文件。发布校验源文件真实摘要和大小，目标已存在时只有摘要和大小完全相同才视为幂等成功；不同内容返回冲突，绝不覆盖目标。
 - 审核意见和回复不可覆盖，意见只通过 `resolve` 改为已解决。审核动作要求 `X-Idempotency-Key` 和版本 `lockVersion`，服务端持久化规范请求哈希与首次成功结果快照；同键同请求重放，同键异请求冲突。
 - `approve` 会阻止仍为 open 的 mandatory 意见；`reject` 必须填写原因或至少存在一条 open mandatory 意见；`defer` 只记录历史。当前审核单查询只覆盖自动单版本 `auto_single`，人工 `manual_batch` 尚未实现。
-- 专用下载同时验证版本文件关系、平台 `sys_file_reference`、版本到项目资源链和实时项目访问，再复用平台 Range 下载；显式 `deny` ACL 始终优先，并使用净化后的业务文件名。
+- `/versions/:versionId` 前端深链归属 `reviews` 路由域，读取真实版本详情；任务页历史列表与版本详情都不依赖 Mock。专用下载同时验证版本文件关系、平台 `sys_file_reference`、版本到项目资源链和实时项目访问，再复用平台 Range 下载，支持 200/206 并对无效 Range 保留 416；显式 `deny` ACL 始终优先，并使用净化后的业务文件名。
 
 ## Excel 导入配置
 
@@ -186,9 +194,12 @@ POST /shot-grid/storage-operations/{operationId}/retry
 
 ## 2026-08-11 本批验证
 
-- `python -m ruff check module_shot_grid config middlewares tests/module_shot_grid` 通过，`python -m ruff format module_shot_grid config middlewares tests/module_shot_grid --check` 报告 177 files already formatted。
-- 包含资产契约、制作人选项、终态 CRUD/导入门禁和既有镜头链的 11 个定向测试文件为 90 passed。
-- 完整 `tests/module_shot_grid` 为 483 passed、2 skipped；两个跳过项均因当前环境不允许创建目录符号链接。
+- `python -m ruff check module_shot_grid config middlewares tests/module_shot_grid` 通过，`python -m ruff format module_shot_grid config middlewares tests/module_shot_grid --check` 报告 161 files already formatted。
+- 版本预检 3 个定向测试文件为 43 passed。
+- 完整 `tests/module_shot_grid` 为 499 passed、2 skipped；两个跳过项均因当前 Windows 环境不允许创建目录符号链接。
+- 任务工作台/版本上传子集以 fresh PostgreSQL head `20260811_06`（22 张 `sg_` 表）、Redis DB 15、真实平台登录、生产 Nginx 和 Chrome 执行：`/workbench` 查询到 21 条任务，服务端分页为 20+1，关键字筛选命中 1 条；`taskId=900001` 开始接口 HTTP 200，`lockVersion` 0→1。
+- 选择 5663 B 的 `logo.png` 后，浏览器网络顺序严格为 preflight 200 → private upload 200 → create 202；pending 状态 reload 后由 current 200 恢复。显式 `allow_local_root=True` 的本地 TEMP 适配器随后按两阶段推进 `published → committed`，attempt=1，形成 V001 `pending_review`、任务 `lockVersion=2`、1 个 `auto_single` 审核单和 1 条正式文件引用；受保护版本详情与下载均为 200，下载 5663 B 且 SHA-256 与源文件一致。
+- 浏览器控制台为 0 error/0 warning；localStorage/sessionStorage 不含认证 Token、幂等键、`fileId`、修改说明或 AI 参数，登录期间认证 Token 只存在 `Admin-Token` Cookie；logout 200 后 Cookie 清除且任务/版本深链守卫生效，验收目标已精确清理。该证据只关闭隔离任务/版本子集门禁：TEMP 适配器仅验证算法和编排，夹具目录补齐仅为逻辑预览，未使用真实 UNC/SMB/NAS 服务账号，也未验证审核前端、`manual_batch`、codec、媒体轨、可解码性或转码，不是完整系统 E2E。
 - 镜头管理/镜头 Excel 导入子集已在隔离 PostgreSQL、Redis DB 15、真实 FastAPI/平台账号、生产 Nginx 和 Chrome 下执行：模板为 11883 bytes 且 SHA-256 命中冻结值；preview UI 显示 24/24、warningRows 0、errorRows 0、2 集/8 场/24 镜头，EP001/EP002 各 12 行并选中全部 24 行；commit HTTP 200，首次结果 `idempotentReplay=false`，创建 2 集、8 场、24 镜头、24 任务、24 待匹配需求和 26 条目录操作，复用集/场均为 0、资产关系为 0。
 - 数据库核验为 2 集、8 场、24 镜头、24 任务（三名制作人各 8）、24 待匹配需求、0 镜头资产关系、1 个 `committed` 导入批次、镜头时长合计 79000 ms；2 条集目录操作与 24 条镜头目录操作均为 `pending`。同事务审计为 1 条且 `status=0`，`method` 字符串长度 79，未超过字段上限；Redis 预检键提交后为 0。
 - 浏览器三视图均显示 24 条，EP002 筛选为 12 条，场次包含 `000/001/002/003`；详情深链及刷新显示 `EP002/000/S001` 和“晓亮/XL”任务；控制台 0 error/0 warning，退出后访问详情深链回带 redirect 的登录页。

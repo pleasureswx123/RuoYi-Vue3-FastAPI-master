@@ -15,6 +15,8 @@ from module_admin.entity.vo.user_vo import CurrentUserModel
 from module_shot_grid.entity.vo.version_submission_vo import (
     ShotGridVersionSubmissionAcceptedResponseModel,
     ShotGridVersionSubmissionCreateModel,
+    ShotGridVersionSubmissionPreflightModel,
+    ShotGridVersionSubmissionPreflightResultModel,
     ShotGridVersionSubmissionStatusModel,
 )
 from module_shot_grid.service.version_submission_service import ShotGridVersionSubmissionService
@@ -29,6 +31,28 @@ version_submission_controller = APIRouterPro(
     tags=['Shot Grid-版本提交与文件'],
     dependencies=[PreAuthDependency()],
 )
+
+
+@version_submission_controller.post(
+    '/tasks/{taskId}/version-submissions/preflight',
+    summary='私有文件上传前预检版本提交上下文',
+    response_model=DataResponseModel[ShotGridVersionSubmissionPreflightResultModel],
+    dependencies=[UserInterfaceAuthDependency('shotgrid:version:add')],
+)
+async def preflight_shot_grid_version_submission(
+    request: Request,
+    task_id: Annotated[int, Path(alias='taskId', gt=0, le=SQL_BIGINT_MAX)],
+    command: ShotGridVersionSubmissionPreflightModel,
+    query_db: Annotated[AsyncSession, DBSessionDependency()],
+    current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
+) -> Response:
+    result = await ShotGridVersionSubmissionService.preflight_submission(
+        query_db,
+        task_id,
+        command,
+        current_user,
+    )
+    return ResponseUtil.success(data=result)
 
 
 @version_submission_controller.post(
@@ -58,6 +82,27 @@ async def create_shot_grid_version_submission(
     )
     response = ShotGridVersionSubmissionAcceptedResponseModel(data=result)
     return JSONResponse(status_code=202, content=jsonable_encoder(response.model_dump(by_alias=True)))
+
+
+@version_submission_controller.get(
+    '/tasks/{taskId}/version-submissions/current',
+    summary='查询任务当前未解决版本提交',
+    response_model=DataResponseModel[ShotGridVersionSubmissionStatusModel | None],
+    dependencies=[UserInterfaceAuthDependency('shotgrid:version:query')],
+)
+async def get_shot_grid_task_current_version_submission(
+    request: Request,
+    task_id: Annotated[int, Path(alias='taskId', gt=0, le=SQL_BIGINT_MAX)],
+    query_db: Annotated[AsyncSession, DBSessionDependency()],
+    current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
+) -> Response:
+    result = await ShotGridVersionSubmissionService.get_current_submission_status(
+        query_db,
+        task_id,
+        current_user,
+    )
+    # 当前没有未解决提交时仍显式返回 data: null，避免前端把字段缺失误判为契约错误。
+    return ResponseUtil.success(dict_content={'data': result})
 
 
 @version_submission_controller.get(

@@ -45,12 +45,9 @@ def test_import_static_router_is_registered_before_dynamic_shot_id_router() -> N
             str(backend_root / 'module_shot_grid/controller/shot_import_controller.py'),
         ],
     )
-    paths = [
-        route.path
-        for included in app.routes
-        if hasattr(included, 'original_router')
-        for route in included.original_router.routes
-    ]
+    # FastAPI 新版本不再为已展开的 APIRoute 保留 original_router；
+    # 直接检查最终匹配顺序，也更接近生产路由语义。
+    paths = [route.path for route in app.routes]
 
     assert paths.index('/shot-grid/projects/{projectId}/shots/import/preview') < paths.index(
         '/shot-grid/projects/{projectId}/shots/{shotId}'

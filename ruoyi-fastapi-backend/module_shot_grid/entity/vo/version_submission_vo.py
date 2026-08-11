@@ -7,13 +7,16 @@ from pydantic import ConfigDict, Field, field_validator, model_validator
 from pydantic.alias_generators import to_camel
 
 from common.vo import ResponseBaseModel
+from config.env import UploadConfig
 from module_shot_grid.entity.vo.common_vo import ShotGridApiModel
 
 VersionSubmissionStatus = Literal['pending', 'publishing', 'published', 'committing', 'committed', 'failed']
+VersionSubmissionTaskKind = Literal['shot_video', 'asset_image']
+VersionSubmissionFileExtension = Literal['mp4', 'mov', 'jpg', 'png']
 
 
-class ShotGridVersionSubmissionCreateModel(ShotGridApiModel):
-    """创建版本暂存请求。"""
+class ShotGridVersionSubmissionMetadataModel(ShotGridApiModel):
+    """预检与正式提交共用的版本说明。"""
 
     model_config = ConfigDict(
         alias_generator=to_camel,
@@ -22,17 +25,8 @@ class ShotGridVersionSubmissionCreateModel(ShotGridApiModel):
         extra='forbid',
     )
 
-    file_id: str = Field(description='平台受保护源文件ID')
     changelog: str = Field(min_length=1, max_length=5000, description='本轮修改说明')
     ai_params: dict[str, Any] | list[Any] | None = Field(default=None, description='可选AI生成参数快照')
-
-    @field_validator('file_id', mode='before')
-    @classmethod
-    def normalize_file_id(cls, value: Any) -> str:
-        try:
-            return str(uuid.UUID(str(value)))
-        except (AttributeError, TypeError, ValueError) as exc:
-            raise ValueError('fileId 格式不正确') from exc
 
     @field_validator('changelog', mode='before')
     @classmethod
@@ -45,7 +39,7 @@ class ShotGridVersionSubmissionCreateModel(ShotGridApiModel):
         return normalized
 
     @model_validator(mode='after')
-    def validate_ai_params_size(self) -> 'ShotGridVersionSubmissionCreateModel':
+    def validate_ai_params_size(self) -> 'ShotGridVersionSubmissionMetadataModel':
         if self.ai_params is None:
             return self
         try:
@@ -55,6 +49,48 @@ class ShotGridVersionSubmissionCreateModel(ShotGridApiModel):
         if len(encoded.encode('utf-8')) > 64 * 1024:
             raise ValueError('aiParams 不能超过 64KiB')
         return self
+
+
+class ShotGridVersionSubmissionPreflightModel(ShotGridVersionSubmissionMetadataModel):
+    """私有文件上传前的无副作用版本提交预检。"""
+
+    file_name: str = Field(min_length=1, max_length=255, description='浏览器所选文件名，仅用于提前校验扩展名')
+    file_size: int = Field(gt=0, le=UploadConfig.MAX_FILE_SIZE, description='浏览器所选文件大小')
+
+    @field_validator('file_name', mode='before')
+    @classmethod
+    def normalize_file_name(cls, value: Any) -> str:
+        if not isinstance(value, str):
+            raise ValueError('fileName 必须是字符串')
+        normalized = value.strip()
+        if not normalized or not normalized.isprintable() or '/' in normalized or '\\' in normalized:
+            raise ValueError('fileName 必须是安全的纯文件名')
+        return normalized
+
+
+class ShotGridVersionSubmissionCreateModel(ShotGridVersionSubmissionMetadataModel):
+    """创建版本暂存请求。"""
+
+    file_id: str = Field(description='平台受保护源文件ID')
+
+    @field_validator('file_id', mode='before')
+    @classmethod
+    def normalize_file_id(cls, value: Any) -> str:
+        try:
+            return str(uuid.UUID(str(value)))
+        except (AttributeError, TypeError, ValueError) as exc:
+            raise ValueError('fileId 格式不正确') from exc
+
+
+class ShotGridVersionSubmissionPreflightResultModel(ShotGridApiModel):
+    """当前上下文允许进入私有上传步骤的稳定证明。"""
+
+    ready: Literal[True] = True
+    task_id: int
+    task_kind: VersionSubmissionTaskKind
+    task_status: Literal['in_progress', 'revision']
+    file_extension: VersionSubmissionFileExtension
+    allowed_actions: list[Literal['version.add']] = Field(default_factory=lambda: ['version.add'])
 
 
 class ShotGridVersionSubmissionAcceptedModel(ShotGridApiModel):

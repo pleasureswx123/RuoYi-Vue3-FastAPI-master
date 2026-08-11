@@ -1,12 +1,13 @@
 import { createApp } from 'vue'
 
-import { ElButton, ElForm, ElFormItem, ElIcon, ElInput } from 'element-plus'
+import { ElButton, ElForm, ElFormItem, ElIcon, ElInput, ElTag } from 'element-plus'
 import 'element-plus/es/components/base/style/css'
 import 'element-plus/es/components/button/style/css'
 import 'element-plus/es/components/form/style/css'
 import 'element-plus/es/components/form-item/style/css'
 import 'element-plus/es/components/icon/style/css'
 import 'element-plus/es/components/input/style/css'
+import 'element-plus/es/components/tag/style/css'
 import 'element-plus/es/components/message/style/css'
 import 'element-plus/es/components/message-box/style/css'
 import 'element-plus/theme-chalk/dark/css-vars.css'
@@ -18,7 +19,7 @@ import router from '@/router'
 import store from '@/store'
 
 const app = createApp(App)
-const globalComponents = [ElButton, ElForm, ElFormItem, ElIcon, ElInput]
+const globalComponents = [ElButton, ElForm, ElFormItem, ElIcon, ElInput, ElTag]
 
 app.use(store)
 app.use(router)

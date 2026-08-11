@@ -5,9 +5,13 @@ import pytest
 
 from module_admin.entity.vo.user_vo import CurrentUserModel, UserInfoModel
 from module_shot_grid.controller.version_submission_controller import version_submission_controller
+from module_shot_grid.dao.version_submission_dao import ShotGridVersionSubmissionDao
 from module_shot_grid.entity.do.version_do import ShotGridVersionSubmission
 from module_shot_grid.entity.vo.access_vo import ShotGridProjectAccessModel
-from module_shot_grid.entity.vo.version_submission_vo import ShotGridVersionSubmissionCreateModel
+from module_shot_grid.entity.vo.version_submission_vo import (
+    ShotGridVersionSubmissionCreateModel,
+    ShotGridVersionSubmissionPreflightModel,
+)
 from module_shot_grid.exceptions import ShotGridDomainException
 from module_shot_grid.service.version_publish_path_adapter import VersionPublishPathAdapterError
 from module_shot_grid.service.version_submission_service import ShotGridVersionSubmissionService
@@ -24,6 +28,8 @@ MAX_BUSINESS_FILENAME_LENGTH = 255
 MAX_PLATFORM_AUDIT_METHOD_LENGTH = 100
 PREFLIGHT_ROLLBACK_COUNT = 2
 HTTP_UNAUTHORIZED = 401
+HTTP_FORBIDDEN = 403
+HTTP_NOT_FOUND = 404
 HTTP_CONFLICT = 409
 HTTP_UNPROCESSABLE_ENTITY = 422
 HTTP_SERVICE_UNAVAILABLE = 503
@@ -39,6 +45,23 @@ def _shot_context() -> dict[str, object]:
         'shot_no': 1,
         'episode_storage_dir_name': 'EP01',
         'shot_storage_dir_name': 'S001',
+    }
+
+
+def _ready_shot_context() -> dict[str, object]:
+    return {
+        **_shot_context(),
+        'assignee_user_id': USER_ID,
+        'project_status': 'active',
+        'task_status': 'in_progress',
+        'storage_status': 'ready',
+        'directory_operation_status': 'succeeded',
+        'member_status': 'active',
+        'assignee_user_status': '0',
+        'assignee_user_del_flag': '0',
+        'episode_lifecycle_status': 'active',
+        'scene_lifecycle_status': 'active',
+        'shot_lifecycle_status': 'active',
     }
 
 
@@ -62,6 +85,22 @@ def _asset_context(*, production_item: str | None = '动力舱恐怖气氛主视
     }
 
 
+def _ready_asset_context(*, production_item: str | None = '动力舱恐怖气氛主视角') -> dict[str, object]:
+    return {
+        **_asset_context(production_item=production_item),
+        'assignee_user_id': USER_ID,
+        'project_status': 'active',
+        'task_status': 'in_progress',
+        'storage_status': 'ready',
+        'directory_operation_status': 'succeeded',
+        'member_status': 'active',
+        'assignee_user_status': '0',
+        'assignee_user_del_flag': '0',
+        'asset_lifecycle_status': 'active',
+        'asset_item_lifecycle_status': 'active',
+    }
+
+
 class _RollbackExpiringSource:
     """模拟 AsyncSession.rollback 后禁止同步读取的持久 ORM 文件对象。"""
 
@@ -74,6 +113,180 @@ class _RollbackExpiringSource:
         if self.expired:
             raise AssertionError('rollback 后不得再次读取预检 ORM 对象')
         return self._storage_key
+
+
+def _patch_submit_preflight(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    context: dict[str, object],
+    access: ShotGridProjectAccessModel | None = None,
+    unresolved: bool = False,
+) -> None:
+    monkeypatch.setattr(
+        'module_shot_grid.service.version_submission_service.ShotGridVersionSubmissionDao.get_task_project_id',
+        AsyncMock(return_value=PROJECT_ID),
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.version_submission_service.ShotGridProjectAccessService.resolve_access',
+        AsyncMock(
+            return_value=access
+            or ShotGridProjectAccessModel(
+                projectId=PROJECT_ID,
+                userId=USER_ID,
+                projectRole='creator',
+                hasAllScope=False,
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        ShotGridVersionSubmissionService,
+        '_require_task_context',
+        AsyncMock(return_value=context),
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.version_submission_service.ShotGridVersionSubmissionDao.has_unresolved_submission',
+        AsyncMock(return_value=unresolved),
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.version_submission_service.ShotGridVersionSubmissionDao.next_reserved_version_no',
+        AsyncMock(return_value=2),
+    )
+
+
+@pytest.mark.asyncio
+async def test_submit_preflight_returns_stable_ready_contract_without_writes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_submit_preflight(monkeypatch, context=_ready_shot_context())
+    db = AsyncMock()
+
+    result = await ShotGridVersionSubmissionService.preflight_submission(
+        db,
+        TASK_ID,
+        ShotGridVersionSubmissionPreflightModel(
+            fileName='result.MOV',
+            fileSize=8,
+            changelog='完成首版',
+        ),
+        _current_user(),
+    )
+
+    assert result.model_dump(by_alias=True) == {
+        'ready': True,
+        'taskId': TASK_ID,
+        'taskKind': 'shot_video',
+        'taskStatus': 'in_progress',
+        'fileExtension': 'mov',
+        'allowedActions': ['version.add'],
+    }
+    db.commit.assert_not_awaited()
+    db.rollback.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_submit_preflight_returns_404_before_access_resolution(monkeypatch: pytest.MonkeyPatch) -> None:
+    resolve_access = AsyncMock()
+    monkeypatch.setattr(
+        'module_shot_grid.service.version_submission_service.ShotGridVersionSubmissionDao.get_task_project_id',
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.version_submission_service.ShotGridProjectAccessService.resolve_access',
+        resolve_access,
+    )
+
+    with pytest.raises(ShotGridDomainException) as exc_info:
+        await ShotGridVersionSubmissionService.preflight_submission(
+            AsyncMock(),
+            TASK_ID,
+            ShotGridVersionSubmissionPreflightModel(fileName='result.mov', fileSize=8, changelog='完成首版'),
+            _current_user(),
+        )
+
+    assert exc_info.value.http_status == HTTP_NOT_FOUND
+    assert exc_info.value.error_key == 'SG_TASK_NOT_FOUND'
+    resolve_access.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_submit_preflight_rejects_non_assignee_creator_with_403(monkeypatch: pytest.MonkeyPatch) -> None:
+    context = {**_ready_shot_context(), 'assignee_user_id': USER_ID + 1}
+    _patch_submit_preflight(monkeypatch, context=context)
+
+    with pytest.raises(ShotGridDomainException) as exc_info:
+        await ShotGridVersionSubmissionService.preflight_submission(
+            AsyncMock(),
+            TASK_ID,
+            ShotGridVersionSubmissionPreflightModel(fileName='result.mov', fileSize=8, changelog='完成首版'),
+            _current_user(),
+        )
+
+    assert exc_info.value.http_status == HTTP_FORBIDDEN
+    assert exc_info.value.error_key == 'SG_PROJECT_ACCESS_DENIED'
+
+
+@pytest.mark.asyncio
+async def test_submit_preflight_rejects_unresolved_submission_with_409(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_submit_preflight(monkeypatch, context=_ready_shot_context(), unresolved=True)
+
+    with pytest.raises(ShotGridDomainException) as exc_info:
+        await ShotGridVersionSubmissionService.preflight_submission(
+            AsyncMock(),
+            TASK_ID,
+            ShotGridVersionSubmissionPreflightModel(fileName='result.mov', fileSize=8, changelog='完成首版'),
+            _current_user(),
+        )
+
+    assert exc_info.value.http_status == HTTP_CONFLICT
+    assert exc_info.value.error_key == 'SG_VERSION_SUBMISSION_ACTIVE'
+
+
+@pytest.mark.asyncio
+async def test_submit_preflight_reuses_context_422_and_does_not_check_unresolved(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_submit_preflight(monkeypatch, context=_ready_asset_context(production_item=None))
+
+    with pytest.raises(ShotGridDomainException) as exc_info:
+        await ShotGridVersionSubmissionService.preflight_submission(
+            AsyncMock(),
+            TASK_ID,
+            ShotGridVersionSubmissionPreflightModel(fileName='result.png', fileSize=8, changelog='完成首版'),
+            _current_user(),
+        )
+
+    assert exc_info.value.http_status == HTTP_UNPROCESSABLE_ENTITY
+    assert exc_info.value.error_key == 'SG_ASSET_PRODUCTION_ITEM_REQUIRED'
+    ShotGridVersionSubmissionDao.has_unresolved_submission.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('context_patch', 'file_name', 'http_status', 'error_key'),
+    [
+        ({}, 'result.png', HTTP_UNPROCESSABLE_ENTITY, 'SG_TASK_FILE_TYPE_INVALID'),
+        ({'shot_storage_dir_name': None}, 'result.mov', HTTP_CONFLICT, 'SG_VERSION_TARGET_PATH_CONFLICT'),
+    ],
+)
+async def test_submit_preflight_validates_declared_extension_and_target_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+    context_patch: dict[str, object],
+    file_name: str,
+    http_status: int,
+    error_key: str,
+) -> None:
+    _patch_submit_preflight(monkeypatch, context={**_ready_shot_context(), **context_patch})
+
+    with pytest.raises(ShotGridDomainException) as exc_info:
+        await ShotGridVersionSubmissionService.preflight_submission(
+            AsyncMock(),
+            TASK_ID,
+            ShotGridVersionSubmissionPreflightModel(fileName=file_name, fileSize=8, changelog='完成首版'),
+            _current_user(),
+        )
+
+    assert exc_info.value.http_status == http_status
+    assert exc_info.value.error_key == error_key
 
 
 def test_business_filename_uses_frozen_shot_rule() -> None:
@@ -363,6 +576,160 @@ async def test_version_audit_method_names_fit_platform_column(monkeypatch: pytes
         'ShotGridVersionSubmissionService.commit_published_submission()',
     ]
     assert all(len(method) <= MAX_PLATFORM_AUDIT_METHOD_LENGTH for method in methods)
+
+
+@pytest.mark.asyncio
+async def test_current_submission_status_restores_refreshable_unresolved_submission(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    access = ShotGridProjectAccessModel(
+        projectId=PROJECT_ID,
+        userId=USER_ID,
+        projectRole='creator',
+        hasAllScope=False,
+    )
+    row = {
+        'submission_id': SUBMISSION_ID,
+        'project_id': PROJECT_ID,
+        'task_id': TASK_ID,
+        'source_file_id': FILE_ID,
+        'submission_status': 'failed',
+        'reserved_version_no': 1,
+        'business_file_name': 'WGZR_EP001_001_S001_YJF_V001_1786094626499.mp4',
+        'attempt_count': 2,
+        'last_error_key': 'SG_VERSION_SUBMISSION_FAILED',
+        'last_error_message': '发布失败',
+        'submitted_by': USER_ID,
+        'create_time': ShotGridVersionSubmissionService._now(),
+        'update_time': ShotGridVersionSubmissionService._now(),
+        'assignee_user_id': USER_ID,
+        'task_status': 'in_progress',
+        'version_id': None,
+        'version_status': None,
+        'review_list_id': None,
+    }
+    monkeypatch.setattr(
+        'module_shot_grid.service.version_submission_service.ShotGridVersionSubmissionDao.get_task_project_id',
+        AsyncMock(return_value=PROJECT_ID),
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.version_submission_service.ShotGridProjectAccessService.resolve_access',
+        AsyncMock(return_value=access),
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.version_submission_service.ShotGridVersionSubmissionDao.get_current_submission_status_row',
+        AsyncMock(return_value=row),
+    )
+
+    result = await ShotGridVersionSubmissionService.get_current_submission_status(
+        AsyncMock(),
+        TASK_ID,
+        _current_user(),
+    )
+
+    assert result is not None
+    assert result.submission_id == SUBMISSION_ID
+    assert result.submission_status == 'failed'
+    assert result.last_error_key == 'SG_VERSION_SUBMISSION_FAILED'
+
+
+@pytest.mark.asyncio
+async def test_current_submission_status_returns_none_after_worker_commits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        'module_shot_grid.service.version_submission_service.ShotGridVersionSubmissionDao.get_task_project_id',
+        AsyncMock(return_value=PROJECT_ID),
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.version_submission_service.ShotGridProjectAccessService.resolve_access',
+        AsyncMock(
+            return_value=ShotGridProjectAccessModel(
+                projectId=PROJECT_ID,
+                userId=USER_ID,
+                projectRole='creator',
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.version_submission_service.ShotGridVersionSubmissionDao.get_current_submission_status_row',
+        AsyncMock(return_value=None),
+    )
+
+    result = await ShotGridVersionSubmissionService.get_current_submission_status(
+        AsyncMock(),
+        TASK_ID,
+        _current_user(),
+    )
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_current_submission_status_returns_task_not_found_before_access_resolution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    resolve_access = AsyncMock()
+    monkeypatch.setattr(
+        'module_shot_grid.service.version_submission_service.ShotGridVersionSubmissionDao.get_task_project_id',
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.version_submission_service.ShotGridProjectAccessService.resolve_access',
+        resolve_access,
+    )
+
+    with pytest.raises(ShotGridDomainException) as exc_info:
+        await ShotGridVersionSubmissionService.get_current_submission_status(
+            AsyncMock(),
+            TASK_ID,
+            _current_user(),
+        )
+
+    assert exc_info.value.http_status == HTTP_NOT_FOUND
+    assert exc_info.value.error_key == 'SG_TASK_NOT_FOUND'
+    resolve_access.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_current_submission_status_rejects_creator_who_is_not_submitter_and_assignee(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    row = {
+        'submission_id': SUBMISSION_ID,
+        'project_id': PROJECT_ID,
+        'task_id': TASK_ID,
+        'submitted_by': USER_ID + 1,
+        'assignee_user_id': USER_ID + 2,
+    }
+    monkeypatch.setattr(
+        'module_shot_grid.service.version_submission_service.ShotGridVersionSubmissionDao.get_task_project_id',
+        AsyncMock(return_value=PROJECT_ID),
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.version_submission_service.ShotGridProjectAccessService.resolve_access',
+        AsyncMock(
+            return_value=ShotGridProjectAccessModel(
+                projectId=PROJECT_ID,
+                userId=USER_ID,
+                projectRole='creator',
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.version_submission_service.ShotGridVersionSubmissionDao.get_current_submission_status_row',
+        AsyncMock(return_value=row),
+    )
+
+    with pytest.raises(ShotGridDomainException) as exc_info:
+        await ShotGridVersionSubmissionService.get_current_submission_status(
+            AsyncMock(),
+            TASK_ID,
+            _current_user(),
+        )
+
+    assert exc_info.value.http_status == HTTP_FORBIDDEN
+    assert exc_info.value.error_key == 'SG_PROJECT_ACCESS_DENIED'
 
 
 def test_inactive_existing_assignee_is_state_conflict() -> None:

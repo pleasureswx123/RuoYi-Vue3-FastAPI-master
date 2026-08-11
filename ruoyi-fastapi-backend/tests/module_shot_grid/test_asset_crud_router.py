@@ -80,12 +80,9 @@ def test_asset_import_static_router_is_registered_before_dynamic_asset_id_router
             str(backend_root / 'module_shot_grid/controller/asset_import_controller.py'),
         ],
     )
-    paths = [
-        route.path
-        for included in app.routes
-        if hasattr(included, 'original_router')
-        for route in included.original_router.routes
-    ]
+    # FastAPI 新版本不再为已展开的 APIRoute 保留 original_router；
+    # 直接检查最终匹配顺序，也更接近生产路由语义。
+    paths = [route.path for route in app.routes]
 
     assert paths.index('/shot-grid/projects/{projectId}/assets/import/preview') < paths.index(
         '/shot-grid/projects/{projectId}/assets/{assetId}'

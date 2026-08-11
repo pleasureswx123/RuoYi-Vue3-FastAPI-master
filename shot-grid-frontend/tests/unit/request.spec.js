@@ -95,4 +95,33 @@ describe('统一请求层', () => {
       errorKey: 'SG_CLIENT_REPEAT_SUBMIT'
     })
   })
+
+  it('二进制请求的 JSON Blob 错误仍保留 errorKey 与详情', async () => {
+    await expect(request.get('/shot-grid/versions/7/files/file-id/download', {
+      responseType: 'blob',
+      silentError: true,
+      adapter: async config => {
+        const error = new Error('Request failed with status code 416')
+        error.config = config
+        error.response = {
+          status: 416,
+          statusText: 'Range Not Satisfiable',
+          headers: { 'content-type': 'application/json; charset=utf-8' },
+          config,
+          data: new Blob([JSON.stringify({
+            code: 416,
+            msg: '媒体分段范围无效',
+            errorKey: 'SG_FILE_RANGE_NOT_SATISFIABLE',
+            details: { fileSize: 1024 }
+          })], { type: 'application/json' })
+        }
+        throw error
+      }
+    })).rejects.toMatchObject({
+      status: 416,
+      httpStatus: 416,
+      errorKey: 'SG_FILE_RANGE_NOT_SATISFIABLE',
+      details: { fileSize: 1024 }
+    })
+  })
 })

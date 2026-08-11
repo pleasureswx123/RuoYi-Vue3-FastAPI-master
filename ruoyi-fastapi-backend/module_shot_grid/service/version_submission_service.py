@@ -34,6 +34,8 @@ from module_shot_grid.entity.vo.access_vo import ShotGridProjectAccessModel
 from module_shot_grid.entity.vo.version_submission_vo import (
     ShotGridVersionSubmissionAcceptedModel,
     ShotGridVersionSubmissionCreateModel,
+    ShotGridVersionSubmissionPreflightModel,
+    ShotGridVersionSubmissionPreflightResultModel,
     ShotGridVersionSubmissionStatusModel,
 )
 from module_shot_grid.exceptions import ShotGridDomainException, shot_grid_error
@@ -63,6 +65,49 @@ class ShotGridVersionSubmissionService:
 
     TEMP_REFERENCE_TYPE = 'shotgrid_version_submission'
     VERSION_REFERENCE_TYPE = 'shotgrid_version'
+
+    @classmethod
+    async def preflight_submission(
+        cls,
+        db: AsyncSession,
+        task_id: int,
+        command: ShotGridVersionSubmissionPreflightModel,
+        current_user: CurrentUserModel,
+    ) -> ShotGridVersionSubmissionPreflightResultModel:
+        """在私有文件上传前只读校验所有无需读取文件即可确定的提交门禁。"""
+
+        actor_id, _ = cls._actor(current_user)
+        project_id = await ShotGridVersionSubmissionDao.get_task_project_id(db, task_id)
+        if project_id is None:
+            raise shot_grid_error(404, 'SG_TASK_NOT_FOUND', '任务不存在或不可见')
+        access = await ShotGridProjectAccessService.resolve_access(db, current_user, project_id)
+        task_context = await cls._require_task_context(db, task_id)
+        cls._require_submit_access(access, cls._task_access_view(task_context), actor_id)
+        cls._require_context_ready(task_context)
+        if await ShotGridVersionSubmissionDao.has_unresolved_submission(db, task_id):
+            raise shot_grid_error(
+                409,
+                'SG_VERSION_SUBMISSION_ACTIVE',
+                '任务已有正在处理或待处理失败的版本提交',
+            )
+
+        extension = cls._preflight_file_extension(task_context['task_kind'], command.file_name)
+        version_no = await ShotGridVersionSubmissionDao.next_reserved_version_no(db, task_id)
+        business_file_name = cls.build_business_file_name(
+            task_context,
+            version_no=version_no,
+            generated_at_ms=int(time.time_ns() // 1_000_000),
+            extension=extension,
+        )
+        cls.build_target_relative_path(task_context, business_file_name)
+        return ShotGridVersionSubmissionPreflightResultModel(
+            ready=True,
+            taskId=task_id,
+            taskKind=task_context['task_kind'],
+            taskStatus=task_context['task_status'],
+            fileExtension=extension,
+            allowedActions=['version.add'],
+        )
 
     @classmethod
     async def create_submission(  # noqa: PLR0912, PLR0915
@@ -262,6 +307,26 @@ class ShotGridVersionSubmissionService:
         if row is None:
             raise shot_grid_error(404, 'SG_VERSION_SUBMISSION_NOT_FOUND', '版本提交不存在或不可见')
         access = await ShotGridProjectAccessService.resolve_access(db, current_user, row['project_id'])
+        cls._require_submission_access(access, row, actor_id)
+        return cls._status_model(row)
+
+    @classmethod
+    async def get_current_submission_status(
+        cls,
+        db: AsyncSession,
+        task_id: int,
+        current_user: CurrentUserModel,
+    ) -> ShotGridVersionSubmissionStatusModel | None:
+        """读取任务当前未解决提交，供页面刷新后恢复轮询或人工重试。"""
+
+        actor_id, _ = cls._actor(current_user)
+        project_id = await ShotGridVersionSubmissionDao.get_task_project_id(db, task_id)
+        if project_id is None:
+            raise shot_grid_error(404, 'SG_TASK_NOT_FOUND', '任务不存在或不可见')
+        access = await ShotGridProjectAccessService.resolve_access(db, current_user, project_id)
+        row = await ShotGridVersionSubmissionDao.get_current_submission_status_row(db, task_id)
+        if row is None:
+            return None
         cls._require_submission_access(access, row, actor_id)
         return cls._status_model(row)
 
@@ -630,6 +695,15 @@ class ShotGridVersionSubmissionService:
         if any(not isinstance(part, str) or not part for part in parts):
             raise shot_grid_error(409, 'SG_VERSION_TARGET_PATH_CONFLICT', '任务目录快照不完整')
         return str(PureWindowsPath(*parts))
+
+    @staticmethod
+    def _preflight_file_extension(task_kind: str, file_name: str) -> str:
+        extension = file_name.rsplit('.', 1)[-1].casefold() if '.' in file_name else ''
+        allowed = {'mp4', 'mov'} if task_kind == 'shot_video' else {'jpg', 'png'}
+        if extension not in allowed:
+            message = '镜头任务只允许MP4或MOV' if task_kind == 'shot_video' else '资产任务只允许JPG或PNG'
+            raise shot_grid_error(422, 'SG_TASK_FILE_TYPE_INVALID', message)
+        return extension
 
     @classmethod
     def _require_context_ready(cls, context: dict[str, Any]) -> None:
