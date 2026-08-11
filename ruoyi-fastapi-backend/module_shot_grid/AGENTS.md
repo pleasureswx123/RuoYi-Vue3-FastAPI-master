@@ -26,6 +26,8 @@
 - 三个动作固定按任务、任务全部版本的顺序加行锁，并校验项目归属、director 项目角色、平台权限、待审核状态和版本 `lockVersion`；冲突统一使用 HTTP 409 稳定领域错误。
 - `reject` 的非空意见直接绑定当前版本的不可变 `sg_review_action`，版本进入 `rejected`、任务进入 `revision`；后续提交生成新版本，不修改旧版本、旧审核单、意见、回复和动作。
 - `approve` 在同一事务中将其他历史 final 清为 rejected、当前版本设为唯一 final、任务设为 completed；`defer` 只递增锁并记录 pending_review → pending_review 动作。
+- 正式版本入库必须在一次提交内写入版本、版本文件、`sys_file_reference`、自动审核单、任务状态和平台操作日志；任一写入失败先整体回滚，再把原 submission 恢复为 `published` 供安全重试。审核动作同步完成自动审核单并追加平台操作审计。
+- 任务—版本—审核 Service 事务测试通过后可标记“后端闭环完成”，但真实 PostgreSQL 并发、文件/NAS 集成和浏览器 E2E 必须继续分别标记为未验证。
 
 ## 17. 已确认的人工审核单契约
 

@@ -188,7 +188,9 @@ async def update_note_status(
     access: Annotated[ShotGridProjectAccessModel, ProjectRoleDependency('director')],
 ) -> Response:
     return ResponseUtil.success(
-        data=await ShotGridReviewService.update_status(db, project_id, version_id, note_id, body.status)
+        data=await ShotGridReviewService.update_status(
+            db, project_id, version_id, note_id, body.status, user_id=access.user_id
+        )
     )
 
 

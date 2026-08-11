@@ -1,9 +1,13 @@
+# ruff: noqa: ANN001, ANN201, ANN202
 import hashlib
+import os
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from module_admin.entity.do.file_do import SysFileReference
 from module_shot_grid.exceptions import ShotGridDomainException
 from module_shot_grid.service.version_submission_service import (
     ShotGridVersionSubmissionService,
@@ -51,13 +55,13 @@ def test_publish_uses_atomic_rename_after_hash_check(tmp_path: Path, monkeypatch
     payload = b'complete payload'
     source.write_bytes(payload)
     calls = []
-    original_rename = Path.rename
+    original_rename = os.rename
 
-    def record_rename(path: Path, destination: Path) -> Path:
+    def record_rename(path: Path, destination: Path) -> None:
         calls.append((path, destination))
-        return original_rename(path, destination)
+        original_rename(path, destination)
 
-    monkeypatch.setattr(Path, 'rename', record_rename)
+    monkeypatch.setattr(os, 'rename', record_rename)
     digest, size = ShotGridVersionSubmissionWorker._copy_hash_publish(
         source, temporary, target, hashlib.sha256(payload).hexdigest()
     )
@@ -130,3 +134,117 @@ async def test_forged_extension_is_rejected_by_signature(tmp_path: Path, monkeyp
             _file_info('fake.png', 'image/png', fake.stat().st_size, fake.name), 'asset_image', 7
         )
     assert error.value.error_key == 'SG_VERSION_FILE_SIGNATURE_INVALID'
+
+
+@pytest.mark.asyncio
+async def test_non_assignee_cannot_initialize_submission():
+    task = SimpleNamespace(assignee_user_id=8)
+    context = (task,) + (None,) * 12
+    with (
+        patch(
+            'module_shot_grid.service.version_submission_service.ShotGridVersionSubmissionDao.by_idempotency',
+            AsyncMock(return_value=None),
+        ),
+        patch(
+            'module_shot_grid.service.version_submission_service.ShotGridVersionSubmissionDao.lock_task_context',
+            AsyncMock(return_value=context),
+        ),
+        pytest.raises(ShotGridDomainException) as caught,
+    ):
+        await ShotGridVersionSubmissionService.initialize(
+            object(), 3, 8, SimpleNamespace(idempotency_key='key'), user_id=7, user_name='producer'
+        )
+    assert caught.value.error_key == 'SG_VERSION_SUBMIT_ASSIGNEE_REQUIRED'
+
+
+def _published_submission():
+    return SimpleNamespace(
+        submission_status='published',
+        reserved_version_no=2,
+        changelog='修订',
+        ai_params=None,
+        submitted_by=7,
+        generated_at_ms=1786094626499,
+        source_file_id='file-id',
+        business_file_name='demo_V002.png',
+        target_relative_path='ASSET/demo_V002.png',
+        source_sha256='a' * 64,
+        source_file_size=10,
+        last_error_key=None,
+        last_error_message=None,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('failure_point', ['commit', 'file_reference'])
+async def test_finalize_rolls_back_whole_business_transaction_on_failure(failure_point):
+    submission = _published_submission()
+    task = SimpleNamespace(task_status='revision', lock_version=1, update_by=None)
+    db = MagicMock()
+    db.flush = AsyncMock()
+    db.rollback = AsyncMock()
+    db.commit = AsyncMock(side_effect=[RuntimeError('database down'), None] if failure_point == 'commit' else None)
+
+    def add(row):
+        if row.__class__.__name__ == 'ShotGridVersion':
+            row.version_id = 22
+        elif row.__class__.__name__ == 'ShotGridReviewList':
+            row.review_list_id = 31
+        if failure_point == 'file_reference' and isinstance(row, SysFileReference):
+            raise RuntimeError('reference insert failed')
+
+    db.add.side_effect = add
+    with (
+        patch(
+            'module_shot_grid.service.version_submission_service.ShotGridVersionSubmissionDao.get',
+            AsyncMock(side_effect=[submission, submission]),
+        ),
+        patch(
+            'module_shot_grid.service.version_submission_service.ShotGridVersionSubmissionDao.lock_task_context',
+            AsyncMock(return_value=(task,)),
+        ),
+        patch(
+            'module_shot_grid.service.version_submission_service.ShotGridProjectAuditDao.add_success_log',
+            AsyncMock(),
+        ),
+    ):
+        await ShotGridVersionSubmissionWorker._finalize(db, 3, 8, 11)
+    db.rollback.assert_awaited_once()
+    assert submission.submission_status == 'published'
+    assert submission.last_error_key == 'SG_VERSION_DATABASE_COMMIT_FAILED'
+
+
+@pytest.mark.asyncio
+async def test_finalize_v002_adds_file_reference_review_and_audit_before_one_commit():
+    submission = _published_submission()
+    task = SimpleNamespace(task_status='revision', lock_version=1, update_by=None)
+    db = MagicMock(flush=AsyncMock(), commit=AsyncMock(), rollback=AsyncMock())
+
+    def add(row):
+        if row.__class__.__name__ == 'ShotGridVersion':
+            row.version_id = 22
+        elif row.__class__.__name__ == 'ShotGridReviewList':
+            row.review_list_id = 31
+
+    db.add.side_effect = add
+    with (
+        patch(
+            'module_shot_grid.service.version_submission_service.ShotGridVersionSubmissionDao.get',
+            AsyncMock(return_value=submission),
+        ),
+        patch(
+            'module_shot_grid.service.version_submission_service.ShotGridVersionSubmissionDao.lock_task_context',
+            AsyncMock(return_value=(task,)),
+        ),
+        patch(
+            'module_shot_grid.service.version_submission_service.ShotGridProjectAuditDao.add_success_log',
+            AsyncMock(),
+        ) as audit,
+    ):
+        await ShotGridVersionSubmissionWorker._finalize(db, 3, 8, 11)
+    added = [call.args[0].__class__.__name__ for call in db.add.call_args_list]
+    assert {'ShotGridVersion', 'ShotGridVersionFile', 'SysFileReference', 'ShotGridReviewList'} <= set(added)
+    assert task.task_status == 'pending_review'
+    assert submission.submission_status == 'committed'
+    audit.assert_awaited_once()
+    db.commit.assert_awaited_once()

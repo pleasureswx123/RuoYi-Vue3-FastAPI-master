@@ -1,8 +1,9 @@
-# ruff: noqa: ANN001, ANN201, PLR2004, SIM117
+# ruff: noqa: ANN001, ANN201, ANN202, PLR2004, SIM117
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 
 from module_shot_grid.exceptions import ShotGridDomainException
 from module_shot_grid.service.review_service import ShotGridReviewService
@@ -20,6 +21,18 @@ def row(**values):
     }
     defaults.update(values)
     return SimpleNamespace(**defaults)
+
+
+@pytest.fixture(autouse=True)
+def _review_transaction_dependencies():
+    with (
+        patch(
+            'module_shot_grid.service.review_service.ShotGridReviewDao.lock_auto_review_lists',
+            AsyncMock(return_value=[]),
+        ),
+        patch('module_shot_grid.service.review_service.ShotGridProjectAuditDao.add_success_log', AsyncMock()),
+    ):
+        yield
 
 
 @pytest.mark.asyncio
@@ -107,3 +120,44 @@ async def test_v001_rejected_then_v002_can_be_final_without_mutating_history():
         )
     assert (v1.version_status, v1.lock_version) == ('rejected', 5)
     assert v2.version_status == 'final'
+
+
+@pytest.mark.asyncio
+async def test_old_v001_cannot_be_approved_while_v002_is_pending():
+    task = row(version_id=None)
+    v1 = row(version_id=21, version_status='rejected', lock_version=5)
+    v2 = row(version_id=22, version_status='pending_review', lock_version=0)
+    with (
+        patch('module_shot_grid.service.review_service.ShotGridReviewDao.lock_task', AsyncMock(return_value=task)),
+        patch(
+            'module_shot_grid.service.review_service.ShotGridReviewDao.lock_versions',
+            AsyncMock(return_value=[v1, v2]),
+        ),
+        pytest.raises(ShotGridDomainException) as caught,
+    ):
+        await ShotGridReviewService.review_action(
+            SimpleNamespace(), 3, 8, 21, 99, 'approve', SimpleNamespace(lock_version=5, reason=None)
+        )
+    assert caught.value.error_key == 'SG_REVIEW_STATUS_CONFLICT'
+
+
+@pytest.mark.asyncio
+async def test_concurrent_approve_integrity_conflict_rolls_back():
+    task, version = row(version_id=None), row()
+    db = SimpleNamespace(
+        commit=AsyncMock(side_effect=IntegrityError('statement', {}, Exception())), rollback=AsyncMock()
+    )
+    with (
+        patch('module_shot_grid.service.review_service.ShotGridReviewDao.lock_task', AsyncMock(return_value=task)),
+        patch(
+            'module_shot_grid.service.review_service.ShotGridReviewDao.lock_versions',
+            AsyncMock(return_value=[version]),
+        ),
+        patch('module_shot_grid.service.review_service.ShotGridReviewDao.add'),
+        pytest.raises(ShotGridDomainException) as caught,
+    ):
+        await ShotGridReviewService.review_action(
+            db, 3, 8, 21, 99, 'approve', SimpleNamespace(lock_version=4, reason=None)
+        )
+    assert caught.value.error_key == 'SG_REVIEW_CONCURRENT_CONFLICT'
+    db.rollback.assert_awaited_once()
