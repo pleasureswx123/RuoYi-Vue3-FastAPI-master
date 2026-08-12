@@ -42,6 +42,31 @@ def test_annotations_accept_extensible_safe_type_and_camel_case_payload() -> Non
 
 
 @pytest.mark.parametrize(
+    ('annotation_type', 'points', 'text'),
+    [
+        ('arrow', [{'x': 0.1, 'y': 0.2}, {'x': 0.8, 'y': 0.7}], None),
+        ('text', [{'x': 0.4, 'y': 0.3}], '降低这里的高光'),
+    ],
+)
+def test_annotations_accept_arrow_and_text_payloads(
+    annotation_type: str,
+    points: list[dict[str, float]],
+    text: str | None,
+) -> None:
+    model = ShotGridAnnotationsModel.model_validate(
+        {
+            'schemaVersion': 1,
+            'sourceWidth': 1920,
+            'sourceHeight': 1080,
+            'items': [_annotation_item(type=annotation_type, points=points, text=text)],
+        }
+    )
+
+    assert model.items[0].annotation_type == annotation_type
+    assert model.items[0].text == text
+
+
+@pytest.mark.parametrize(
     ('field', 'value'),
     [
         ('type', '<script>bad</script>'),

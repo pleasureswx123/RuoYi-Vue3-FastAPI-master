@@ -140,8 +140,8 @@ onBeforeUnmount(() => sceneController?.abort())
   >
     <form class="shot-form" @submit.prevent="submit">
       <div class="shot-form__grid">
-        <label><span>所属集 *</span><select v-model="form.episodeId" :disabled="isEdit"><option value="">请选择集</option><option v-for="episode in episodes" :key="episode.episodeId" :value="String(episode.episodeId)">{{ episode.episodeCode }} {{ episode.episodeName || '' }}</option></select></label>
-        <label><span>所属场次 *</span><select v-model="form.sceneId" :disabled="scenesLoading"><option value="">{{ scenesLoading ? '正在加载…' : '请选择场次' }}</option><option v-for="scene in scenes" :key="scene.sceneId" :value="String(scene.sceneId)">{{ scene.sceneCode }} {{ scene.sceneName || '' }}</option></select></label>
+        <label><span>所属集 *</span><el-select v-model="form.episodeId" class="sg-select" placeholder="请选择集" :disabled="isEdit"><el-option label="请选择集" value="" /><el-option v-for="episode in episodes" :key="episode.episodeId" :label="`${episode.episodeCode} ${episode.episodeName || ''}`" :value="String(episode.episodeId)" /></el-select></label>
+        <label><span>所属场次 *</span><el-select v-model="form.sceneId" class="sg-select" :placeholder="scenesLoading ? '正在加载…' : '请选择场次'" :disabled="scenesLoading"><el-option :label="scenesLoading ? '正在加载…' : '请选择场次'" value="" /><el-option v-for="scene in scenes" :key="scene.sceneId" :label="`${scene.sceneCode} ${scene.sceneName || ''}`" :value="String(scene.sceneId)" /></el-select></label>
         <label><span>镜头号 *</span><input v-model="form.shotNo" type="number" min="1" step="1" :disabled="isEdit" /></label>
         <label><span>成片顺序 *</span><input v-model="form.sortOrder" type="number" min="0" step="1" /></label>
         <label><span>时长（秒）</span><input v-model="form.durationSeconds" type="number" min="0" step="0.001" /></label>
@@ -149,7 +149,7 @@ onBeforeUnmount(() => sceneController?.abort())
         <label><span>机位</span><input v-model="form.cameraPosition" maxlength="100" /></label>
         <label><span>镜头运动</span><input v-model="form.cameraMovement" maxlength="100" /></label>
         <label><span>焦段</span><input v-model="form.focalLength" maxlength="50" placeholder="支持 35/25 等文本" /></label>
-        <label v-if="!isEdit"><span>首次分配制作人</span><select v-model="form.assigneeUserId"><option value="">暂不分配</option><option v-for="member in assignableMembers" :key="member.userId" :value="String(member.userId)">{{ member.nickName }}（{{ member.producerCode }}）</option></select></label>
+        <label v-if="!isEdit"><span>首次分配制作人</span><el-select v-model="form.assigneeUserId" class="sg-select" placeholder="暂不分配"><el-option label="暂不分配" value="" /><el-option v-for="member in assignableMembers" :key="member.userId" :label="`${member.nickName}（${member.producerCode}）`" :value="String(member.userId)" /></el-select></label>
       </div>
       <label class="shot-form__full"><span>制作内容描述 *</span><textarea v-model="form.description" rows="4" /></label>
       <div class="shot-form__grid shot-form__grid--text">

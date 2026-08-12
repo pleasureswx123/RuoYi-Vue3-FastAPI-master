@@ -82,7 +82,7 @@ async function submit() {
       <label><span>排序</span><input v-model.number="form.sortOrder" type="number" min="0" step="1" :disabled="saving" /></label>
       <label><span>备注</span><textarea v-model="form.remark" rows="2" maxlength="500" :disabled="saving" /></label>
       <template v-if="!item?.task">
-        <label><span>首次分配制作人</span><select v-model="form.assigneeUserId" :disabled="saving"><option value="">暂不分配</option><option v-for="member in members" :key="member.userId" :value="String(member.userId)">{{ memberLabel(member) }}</option></select></label>
+        <label><span>首次分配制作人</span><el-select v-model="form.assigneeUserId" class="sg-select" placeholder="暂不分配" :disabled="saving"><el-option label="暂不分配" value="" /><el-option v-for="member in members" :key="member.userId" :label="memberLabel(member)" :value="String(member.userId)" /></el-select></label>
         <label v-if="form.assigneeUserId"><span>首次任务要求</span><textarea v-model="form.taskDescription" rows="2" :disabled="saving" /></label>
       </template>
       <p v-else class="item-form__task-note">该分项已有任务；负责人变更必须使用“改派任务”，不会通过主数据编辑静默改派。</p>

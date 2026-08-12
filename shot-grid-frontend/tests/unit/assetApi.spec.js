@@ -14,8 +14,12 @@ import {
   getAssetDetail,
   getAssetItems,
   getAssetPage,
+  getAssetRequirementPage,
+  ignoreAssetRequirement,
   listAssetAssignees,
   previewAssetImport,
+  rematchAssetRequirements,
+  resolveAssetRequirement,
   updateAsset,
   updateAssetItem
 } from '@/api/shot-grid/assets'
@@ -90,6 +94,23 @@ describe('资产 API 契约', () => {
     expect(request).toHaveBeenCalledWith({ url, method: 'get', responseType: 'blob', signal, silentError: true })
     expect(() => assertProtectedAssetThumbnailUrl('https://example.com/private.png')).toThrow('受保护版本文件路径')
     expect(() => assertProtectedAssetThumbnailUrl('/shot-grid/versions/1/files/../download')).toThrow('受保护版本文件路径')
+  })
+
+  it('资产需求列表、解决、忽略和重新匹配使用冻结路径与幂等请求头', () => {
+    const signal = new AbortController().signal
+    getAssetRequirementPage(8, { resolutionStatus: 'pending' }, { signal })
+    resolveAssetRequirement(8, 91, { assetId: 31, reason: '同一设定' }, 'resolve-key')
+    ignoreAssetRequirement(8, 92, { reason: '镜头文本误填' }, 'ignore-key')
+    rematchAssetRequirements(8)
+
+    expect(request.mock.calls.map(([config]) => [config.method, config.url])).toEqual([
+      ['get', '/shot-grid/projects/8/asset-requirements'],
+      ['post', '/shot-grid/projects/8/asset-requirements/91/resolve'],
+      ['post', '/shot-grid/projects/8/asset-requirements/92/ignore'],
+      ['post', '/shot-grid/projects/8/asset-requirements/rematch']
+    ])
+    expect(request.mock.calls[1][0].headers).toEqual({ 'X-Idempotency-Key': 'resolve-key', repeatSubmit: false })
+    expect(request.mock.calls[2][0].headers).toEqual({ 'X-Idempotency-Key': 'ignore-key', repeatSubmit: false })
   })
 
   it('正式导入保留跨 Sheet 选择并携带内存幂等键', () => {

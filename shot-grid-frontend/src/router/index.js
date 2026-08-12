@@ -85,6 +85,12 @@ const routes = [
         meta: { title: '版本审核', routeKey: 'reviews' }
       },
       {
+        path: 'reviews/:reviewListId',
+        name: 'review-detail',
+        component: () => import('@/views/review/ReviewDetailView.vue'),
+        meta: { title: '审核单详情', routeKey: 'reviews' }
+      },
+      {
         path: 'files',
         name: 'files',
         component: () => import('@/views/file/FileCenterView.vue'),
@@ -104,7 +110,7 @@ export function createShotGridRouter() {
   return createRouter({
     history: createWebHistory(import.meta.env.BASE_URL),
     routes,
-    scrollBehavior: () => ({ top: 0 })
+    scrollBehavior: to => to.hash ? { el: to.hash, top: 16 } : { top: 0 }
   })
 }
 

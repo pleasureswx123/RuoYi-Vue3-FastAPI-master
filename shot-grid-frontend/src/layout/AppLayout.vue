@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessageBox } from 'element-plus'
 import {
@@ -10,16 +10,19 @@ import {
   Film,
   FolderOpened,
   Grid,
+  Search,
   SwitchButton,
   Tickets
 } from '@element-plus/icons-vue'
 
 import { useSessionStore } from '@/store/modules/session'
+import GlobalSearchDialog from '@/components/search/GlobalSearchDialog.vue'
 
 const route = useRoute()
 const router = useRouter()
 const sessionStore = useSessionStore()
 const collapsed = ref(false)
+const searchVisible = ref(false)
 
 const localNavigation = Object.freeze({
   workbench: { title: '工作台', path: '/workbench', icon: Grid },
@@ -54,6 +57,15 @@ const userDisplayName = computed(
 )
 
 const pageTitle = computed(() => route.meta?.title || 'Shot Grid')
+const canUseSearch = computed(() => {
+  const permissions = sessionStore.permissions || []
+  if (permissions.includes('*:*:*')) return true
+  return [
+    ['shotgrid:shot:list', 'shotgrid:shot:query'],
+    ['shotgrid:asset:list', 'shotgrid:asset:query'],
+    ['shotgrid:storage:path', 'shotgrid:version:query']
+  ].some(required => required.every(permission => permissions.includes(permission)))
+})
 const passwordNotice = computed(() => {
   if (sessionStore.passwordNotice === 'expired') return '当前密码已过期，请尽快在管理平台修改密码。'
   if (sessionStore.passwordNotice === 'default') return '当前仍为初始密码，请尽快在管理平台修改密码。'
@@ -73,6 +85,16 @@ async function handleSignOut() {
     if (error !== 'cancel' && error !== 'close') throw error
   }
 }
+
+function handleSearchShortcut(event) {
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k' && canUseSearch.value) {
+    event.preventDefault()
+    searchVisible.value = true
+  }
+}
+
+onMounted(() => window.addEventListener('keydown', handleSearchShortcut))
+onBeforeUnmount(() => window.removeEventListener('keydown', handleSearchShortcut))
 </script>
 
 <template>
@@ -127,6 +149,15 @@ async function handleSignOut() {
           <h1>{{ pageTitle }}</h1>
         </div>
         <div class="app-account">
+          <el-button
+            v-if="canUseSearch"
+            class="app-search-trigger"
+            :icon="Search"
+            aria-label="打开全局搜索"
+            @click="searchVisible = true"
+          >
+            搜索 <kbd>Ctrl K</kbd>
+          </el-button>
           <span class="app-account__avatar" aria-hidden="true">{{ userDisplayName.slice(0, 1) }}</span>
           <span class="app-account__name">{{ userDisplayName }}</span>
           <el-button text :icon="SwitchButton" aria-label="退出登录" @click="handleSignOut">
@@ -141,6 +172,7 @@ async function handleSignOut() {
         <router-view />
       </main>
     </section>
+    <GlobalSearchDialog v-model="searchVisible" :permissions="sessionStore.permissions" />
   </div>
 </template>
 
@@ -333,6 +365,17 @@ async function handleSignOut() {
   align-items: center;
 }
 
+.app-search-trigger kbd {
+  margin-left: 8px;
+  padding: 1px 5px;
+  color: var(--sg-text-muted);
+  font-family: inherit;
+  font-size: 10px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--sg-border);
+  border-radius: 4px;
+}
+
 .app-account__avatar {
   display: grid;
   width: 32px;
@@ -382,6 +425,8 @@ async function handleSignOut() {
     display: none;
   }
 
+  .app-search-trigger kbd { display: none; }
+
   .app-navigation__item {
     justify-content: center;
     padding: 0;
@@ -400,7 +445,8 @@ async function handleSignOut() {
   }
 
   .app-header__context,
-  .app-account .el-button span {
+  .app-account .el-button:not(.app-search-trigger) span,
+  .app-search-trigger span {
     display: none;
   }
 

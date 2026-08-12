@@ -143,15 +143,26 @@ describe('资产 Excel 导入对话框', () => {
     wrapper.unmount()
   })
 
-  it('安全匿名模板未发布前禁用下载入口且不请求不存在端点', async () => {
+  it('下载已通过匿名化和摘要门禁的官方资产模板', async () => {
+    const createObjectURL = vi.fn(() => 'blob:asset-template')
+    const revokeObjectURL = vi.fn()
+    Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: createObjectURL })
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: revokeObjectURL })
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
     const wrapper = mount(AssetImportDialog, {
       props: { projectId: 8, operationGeneration: 1 },
       global: { components: { ElButton, ElIcon }, stubs: { teleport: true } }
     })
-    const button = wrapper.findAll('button').find(item => item.text().includes('安全模板待发布'))
-    expect(button.attributes('disabled')).toBeDefined()
-    expect(wrapper.text()).toContain('官方模板经匿名化和摘要门禁通过后才会开放下载')
-    expect(downloadAssetImportTemplate).not.toHaveBeenCalled()
+    const button = wrapper.findAll('button').find(item => item.text().includes('下载官方模板'))
+    await button.trigger('click')
+    await flushPromises()
+    expect(downloadAssetImportTemplate).toHaveBeenCalledWith({ signal: expect.any(AbortSignal) })
+    expect(createObjectURL).toHaveBeenCalled()
+    expect(click).toHaveBeenCalled()
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:asset-template')
     wrapper.unmount()
+    delete URL.createObjectURL
+    delete URL.revokeObjectURL
+    click.mockRestore()
   })
 })

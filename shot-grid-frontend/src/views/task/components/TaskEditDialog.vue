@@ -52,12 +52,12 @@ async function submit() {
     <form class="task-edit-form" aria-label="编辑任务" @submit.prevent="submit">
       <label>
         <span>优先级</span>
-        <select v-model="form.priority" :disabled="saving">
-          <option value="low">低</option>
-          <option value="normal">普通</option>
-          <option value="high">高</option>
-          <option value="urgent">紧急</option>
-        </select>
+        <el-select v-model="form.priority" class="sg-select" :disabled="saving">
+          <el-option label="低" value="low" />
+          <el-option label="普通" value="normal" />
+          <el-option label="高" value="high" />
+          <el-option label="紧急" value="urgent" />
+        </el-select>
       </label>
       <label>
         <span>截止日期</span>

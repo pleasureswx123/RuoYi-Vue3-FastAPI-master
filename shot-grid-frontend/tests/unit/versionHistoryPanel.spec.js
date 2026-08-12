@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { getTaskVersions, getVersionDetail } from '@/api/shot-grid/versions'
 import VersionHistoryPanel from '@/components/version/VersionHistoryPanel.vue'
+import { setElSelectValue } from '../helpers/elementPlus'
 
 vi.mock('@/api/shot-grid/versions', () => ({
   downloadProtectedVersionFile: vi.fn(),
@@ -79,7 +80,7 @@ describe('版本历史面板', () => {
       props: { taskId: 31, canList: true, canQuery: true }
     })
     await flushPromises()
-    await wrapper.find('select').setValue('rejected')
+    await setElSelectValue(wrapper.findComponent({ name: 'ElSelect' }), 'rejected')
     await flushPromises()
     expect(getTaskVersions).toHaveBeenLastCalledWith(31, expect.objectContaining({
       pageNum: 1,

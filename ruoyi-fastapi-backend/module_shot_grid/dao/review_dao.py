@@ -1,11 +1,11 @@
 from typing import Any
 
-from sqlalchemy import asc, desc, exists, func, select
+from sqlalchemy import asc, delete, desc, exists, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from module_admin.entity.do.file_do import SysFileInfo
 from module_admin.entity.do.user_do import SysUser
-from module_shot_grid.entity.do.project_do import ShotGridShot
+from module_shot_grid.entity.do.project_do import ShotGridProject, ShotGridProjectMember, ShotGridShot
 from module_shot_grid.entity.do.review_do import (
     ShotGridNote,
     ShotGridNoteReply,
@@ -14,7 +14,7 @@ from module_shot_grid.entity.do.review_do import (
     ShotGridReviewListVersion,
 )
 from module_shot_grid.entity.do.task_do import ShotGridTask
-from module_shot_grid.entity.do.version_do import ShotGridVersion, ShotGridVersionFile
+from module_shot_grid.entity.do.version_do import ShotGridMediaDerivation, ShotGridVersion, ShotGridVersionFile
 from module_shot_grid.entity.vo.review_vo import (
     ShotGridNoteListQueryModel,
     ShotGridNoteReplyListQueryModel,
@@ -26,6 +26,27 @@ from module_shot_grid.entity.vo.review_vo import (
 
 class ShotGridReviewDao:
     """版本读取、意见和自动审核单数据访问。"""
+
+    @staticmethod
+    def _review_media_projection() -> tuple[Any, Any]:
+        thumbnail_file_id = (
+            select(ShotGridVersionFile.file_id)
+            .where(
+                ShotGridVersionFile.version_id == ShotGridVersion.version_id,
+                ShotGridVersionFile.file_role == 'thumbnail',
+            )
+            .order_by(ShotGridVersionFile.sort_order, ShotGridVersionFile.file_id)
+            .limit(1)
+            .correlate(ShotGridVersion)
+            .scalar_subquery()
+        )
+        derivation_status = (
+            select(ShotGridMediaDerivation.derivation_status)
+            .where(ShotGridMediaDerivation.version_id == ShotGridVersion.version_id)
+            .correlate(ShotGridVersion)
+            .scalar_subquery()
+        )
+        return thumbnail_file_id, derivation_status
 
     @classmethod
     async def get_task_context(cls, db: AsyncSession, task_id: int) -> dict[str, Any] | None:
@@ -48,6 +69,111 @@ class ShotGridReviewDao:
             .one_or_none()
         )
         return dict(row) if row is not None else None
+
+    @classmethod
+    async def get_mine_review_lists(
+        cls, db: AsyncSession, user_id: int, query: ShotGridReviewListQueryModel, has_all_scope: bool
+    ) -> tuple[list[dict[str, Any]], int]:
+        thumbnail_file_id, derivation_status = cls._review_media_projection()
+        relation_count = (
+            select(func.count(ShotGridReviewListVersion.version_id))
+            .where(ShotGridReviewListVersion.review_list_id == ShotGridReviewList.review_list_id)
+            .correlate(ShotGridReviewList)
+            .scalar_subquery()
+        )
+        statement = (
+            select(
+                ShotGridReviewList.review_list_id,
+                ShotGridReviewList.project_id,
+                ShotGridProject.project_code,
+                ShotGridProject.project_name,
+                ShotGridReviewList.review_list_name,
+                ShotGridReviewList.description,
+                ShotGridReviewList.review_date,
+                ShotGridReviewList.review_mode,
+                ShotGridReviewList.review_status,
+                ShotGridReviewList.auto_version_id,
+                ShotGridVersion.task_id,
+                ShotGridVersion.version_no,
+                ShotGridVersion.version_status,
+                relation_count.label('version_count'),
+                ShotGridReviewList.lock_version,
+                thumbnail_file_id.label('thumbnail_file_id'),
+                derivation_status.label('media_derivation_status'),
+                ShotGridReviewList.create_time,
+            )
+            .join(ShotGridProject, ShotGridProject.project_id == ShotGridReviewList.project_id)
+            .outerjoin(ShotGridVersion, ShotGridVersion.version_id == ShotGridReviewList.auto_version_id)
+            .where(
+                ShotGridReviewList.del_flag == '0',
+                ShotGridReviewList.review_status == 'active',
+                ShotGridProject.del_flag == '0',
+                ShotGridProject.project_status != 'archived',
+            )
+        )
+        if not has_all_scope:
+            statement = statement.join(
+                ShotGridProjectMember,
+                (ShotGridProjectMember.project_id == ShotGridReviewList.project_id)
+                & (ShotGridProjectMember.user_id == user_id)
+                & (ShotGridProjectMember.project_role == 'director')
+                & (ShotGridProjectMember.member_status == 'active'),
+            )
+        if query.review_mode:
+            statement = statement.where(ShotGridReviewList.review_mode == query.review_mode)
+        if query.keyword:
+            statement = statement.where(ShotGridReviewList.review_list_name.ilike(f'%{query.keyword.strip()}%'))
+        statement = statement.order_by(ShotGridReviewList.create_time.desc(), ShotGridReviewList.review_list_id.desc())
+        total = int(
+            (await db.execute(select(func.count()).select_from(statement.order_by(None).subquery()))).scalar_one()
+        )
+        rows = (
+            await db.execute(statement.offset((query.page_num - 1) * query.page_size).limit(query.page_size))
+        ).mappings()
+        return [dict(row) for row in rows], total
+
+    @classmethod
+    async def get_recent_mine_versions(
+        cls, db: AsyncSession, user_id: int, query: ShotGridVersionListQueryModel
+    ) -> tuple[list[dict[str, Any]], int]:
+        statement = (
+            select(
+                ShotGridVersion.version_id,
+                ShotGridVersion.project_id,
+                ShotGridVersion.task_id,
+                ShotGridVersion.version_no,
+                ShotGridVersion.version_status,
+                ShotGridVersion.changelog,
+                ShotGridVersion.submitted_by,
+                SysUser.nick_name.label('submitter_name'),
+                ShotGridVersion.submitted_time,
+                ShotGridVersion.generated_at_ms,
+                ShotGridVersion.lock_version,
+            )
+            .join(ShotGridProject, ShotGridProject.project_id == ShotGridVersion.project_id)
+            .join(
+                ShotGridProjectMember,
+                (ShotGridProjectMember.project_id == ShotGridVersion.project_id)
+                & (ShotGridProjectMember.user_id == user_id)
+                & (ShotGridProjectMember.member_status == 'active'),
+            )
+            .outerjoin(SysUser, SysUser.user_id == ShotGridVersion.submitted_by)
+            .where(
+                ShotGridVersion.submitted_by == user_id,
+                ShotGridProject.del_flag == '0',
+                ShotGridProject.project_status != 'archived',
+            )
+        )
+        if query.version_status:
+            statement = statement.where(ShotGridVersion.version_status == query.version_status)
+        statement = statement.order_by(ShotGridVersion.submitted_time.desc(), ShotGridVersion.version_id.desc())
+        total = int(
+            (await db.execute(select(func.count()).select_from(statement.order_by(None).subquery()))).scalar_one()
+        )
+        rows = (
+            await db.execute(statement.offset((query.page_num - 1) * query.page_size).limit(query.page_size))
+        ).mappings()
+        return [dict(row) for row in rows], total
 
     @classmethod
     async def get_version_context(cls, db: AsyncSession, version_id: int) -> dict[str, Any] | None:
@@ -173,6 +299,12 @@ class ShotGridReviewDao:
 
     @classmethod
     async def get_version_row(cls, db: AsyncSession, project_id: int, version_id: int) -> dict[str, Any] | None:
+        media_derivation_status = (
+            select(ShotGridMediaDerivation.derivation_status)
+            .where(ShotGridMediaDerivation.version_id == ShotGridVersion.version_id)
+            .correlate(ShotGridVersion)
+            .scalar_subquery()
+        )
         row = (
             (
                 await db.execute(
@@ -189,6 +321,7 @@ class ShotGridReviewDao:
                         ShotGridVersion.submitted_time,
                         ShotGridVersion.generated_at_ms,
                         ShotGridVersion.lock_version,
+                        media_derivation_status.label('media_derivation_status'),
                     )
                     .outerjoin(SysUser, SysUser.user_id == ShotGridVersion.submitted_by)
                     .where(ShotGridVersion.project_id == project_id, ShotGridVersion.version_id == version_id)
@@ -253,6 +386,7 @@ class ShotGridReviewDao:
         project_id: int,
         query: ShotGridReviewListQueryModel,
     ) -> tuple[list[dict[str, Any]], int]:
+        thumbnail_file_id, derivation_status = cls._review_media_projection()
         statement = (
             select(
                 ShotGridReviewList.review_list_id,
@@ -266,6 +400,8 @@ class ShotGridReviewDao:
                 ShotGridVersion.task_id,
                 ShotGridVersion.version_no,
                 ShotGridVersion.version_status,
+                thumbnail_file_id.label('thumbnail_file_id'),
+                derivation_status.label('media_derivation_status'),
                 ShotGridReviewList.lock_version,
                 ShotGridReviewList.create_time,
             )
@@ -298,6 +434,227 @@ class ShotGridReviewDao:
             await db.execute(statement.offset((query.page_num - 1) * query.page_size).limit(query.page_size))
         ).mappings()
         return [dict(row) for row in rows], total
+
+    @classmethod
+    async def get_review_lists(
+        cls,
+        db: AsyncSession,
+        project_id: int,
+        query: ShotGridReviewListQueryModel,
+    ) -> tuple[list[dict[str, Any]], int]:
+        thumbnail_file_id, derivation_status = cls._review_media_projection()
+        relation_count = (
+            select(func.count(ShotGridReviewListVersion.version_id))
+            .where(ShotGridReviewListVersion.review_list_id == ShotGridReviewList.review_list_id)
+            .correlate(ShotGridReviewList)
+            .scalar_subquery()
+        )
+        statement = (
+            select(
+                ShotGridReviewList.review_list_id,
+                ShotGridReviewList.project_id,
+                ShotGridReviewList.review_list_name,
+                ShotGridReviewList.description,
+                ShotGridReviewList.review_date,
+                ShotGridReviewList.review_mode,
+                ShotGridReviewList.review_status,
+                ShotGridReviewList.auto_version_id,
+                ShotGridVersion.task_id,
+                ShotGridVersion.version_no,
+                ShotGridVersion.version_status,
+                relation_count.label('version_count'),
+                thumbnail_file_id.label('thumbnail_file_id'),
+                derivation_status.label('media_derivation_status'),
+                ShotGridReviewList.lock_version,
+                ShotGridReviewList.create_time,
+            )
+            .outerjoin(ShotGridVersion, ShotGridVersion.version_id == ShotGridReviewList.auto_version_id)
+            .where(ShotGridReviewList.project_id == project_id, ShotGridReviewList.del_flag == '0')
+        )
+        if query.review_mode:
+            statement = statement.where(ShotGridReviewList.review_mode == query.review_mode)
+        if query.review_status:
+            statement = statement.where(ShotGridReviewList.review_status == query.review_status)
+        if query.task_id:
+            statement = statement.where(ShotGridVersion.task_id == query.task_id)
+        if query.version_id:
+            statement = statement.where(ShotGridVersion.version_id == query.version_id)
+        if query.keyword:
+            statement = statement.where(ShotGridReviewList.review_list_name.ilike(f'%{query.keyword.strip()}%'))
+        order_column = (
+            ShotGridReviewList.create_time if query.order_by_column == 'createTime' else ShotGridReviewList.review_date
+        )
+        statement = statement.order_by(
+            asc(order_column) if query.is_asc == 'ascending' else desc(order_column),
+            ShotGridReviewList.review_list_id.desc(),
+        )
+        total = int(
+            (await db.execute(select(func.count()).select_from(statement.order_by(None).subquery()))).scalar_one()
+        )
+        rows = (
+            await db.execute(statement.offset((query.page_num - 1) * query.page_size).limit(query.page_size))
+        ).mappings()
+        return [dict(row) for row in rows], total
+
+    @classmethod
+    async def get_review_list_row(
+        cls,
+        db: AsyncSession,
+        project_id: int,
+        review_list_id: int,
+    ) -> dict[str, Any] | None:
+        thumbnail_file_id, derivation_status = cls._review_media_projection()
+        relation_count = (
+            select(func.count(ShotGridReviewListVersion.version_id))
+            .where(ShotGridReviewListVersion.review_list_id == ShotGridReviewList.review_list_id)
+            .correlate(ShotGridReviewList)
+            .scalar_subquery()
+        )
+        row = (
+            (
+                await db.execute(
+                    select(
+                        ShotGridReviewList.review_list_id,
+                        ShotGridReviewList.project_id,
+                        ShotGridReviewList.review_list_name,
+                        ShotGridReviewList.description,
+                        ShotGridReviewList.review_date,
+                        ShotGridReviewList.review_mode,
+                        ShotGridReviewList.review_status,
+                        ShotGridReviewList.auto_version_id,
+                        ShotGridVersion.task_id,
+                        ShotGridVersion.version_no,
+                        ShotGridVersion.version_status,
+                        relation_count.label('version_count'),
+                        thumbnail_file_id.label('thumbnail_file_id'),
+                        derivation_status.label('media_derivation_status'),
+                        ShotGridReviewList.lock_version,
+                        ShotGridReviewList.create_time,
+                    )
+                    .outerjoin(ShotGridVersion, ShotGridVersion.version_id == ShotGridReviewList.auto_version_id)
+                    .where(
+                        ShotGridReviewList.review_list_id == review_list_id,
+                        ShotGridReviewList.project_id == project_id,
+                        ShotGridReviewList.del_flag == '0',
+                    )
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        return dict(row) if row is not None else None
+
+    @classmethod
+    async def get_manual_review_versions(
+        cls, db: AsyncSession, project_id: int, review_list_id: int
+    ) -> list[dict[str, Any]]:
+        rows = (
+            await db.execute(
+                select(
+                    ShotGridVersion.version_id,
+                    ShotGridVersion.project_id,
+                    ShotGridVersion.task_id,
+                    ShotGridVersion.version_no,
+                    ShotGridVersion.version_status,
+                    ShotGridVersion.changelog,
+                    ShotGridVersion.submitted_by,
+                    SysUser.nick_name.label('submitter_name'),
+                    ShotGridVersion.submitted_time,
+                    ShotGridVersion.generated_at_ms,
+                    ShotGridVersion.lock_version,
+                )
+                .join(ShotGridReviewListVersion, ShotGridReviewListVersion.version_id == ShotGridVersion.version_id)
+                .outerjoin(SysUser, SysUser.user_id == ShotGridVersion.submitted_by)
+                .where(
+                    ShotGridReviewListVersion.review_list_id == review_list_id,
+                    ShotGridVersion.project_id == project_id,
+                )
+                .order_by(ShotGridReviewListVersion.sort_order, ShotGridVersion.version_id)
+            )
+        ).mappings()
+        return [dict(row) for row in rows]
+
+    @classmethod
+    async def get_versions_for_manual_review(
+        cls, db: AsyncSession, project_id: int, version_ids: list[int]
+    ) -> list[ShotGridVersion]:
+        return list(
+            (
+                await db.execute(
+                    select(ShotGridVersion)
+                    .where(
+                        ShotGridVersion.project_id == project_id,
+                        ShotGridVersion.version_id.in_(version_ids),
+                        ShotGridVersion.version_status == 'pending_review',
+                    )
+                    .with_for_update()
+                )
+            ).scalars()
+        )
+
+    @classmethod
+    async def get_review_list_for_update(
+        cls, db: AsyncSession, project_id: int, review_list_id: int
+    ) -> ShotGridReviewList | None:
+        return (
+            await db.execute(
+                select(ShotGridReviewList)
+                .where(
+                    ShotGridReviewList.project_id == project_id,
+                    ShotGridReviewList.review_list_id == review_list_id,
+                    ShotGridReviewList.del_flag == '0',
+                )
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
+
+    @classmethod
+    async def add_manual_review_list(cls, db: AsyncSession, review_list: ShotGridReviewList) -> ShotGridReviewList:
+        db.add(review_list)
+        await db.flush()
+        return review_list
+
+    @classmethod
+    async def add_manual_review_versions(cls, db: AsyncSession, relations: list[ShotGridReviewListVersion]) -> None:
+        db.add_all(relations)
+        await db.flush()
+
+    @classmethod
+    async def remove_manual_review_version(cls, db: AsyncSession, review_list_id: int, version_id: int) -> int:
+        result = await db.execute(
+            delete(ShotGridReviewListVersion).where(
+                ShotGridReviewListVersion.review_list_id == review_list_id,
+                ShotGridReviewListVersion.version_id == version_id,
+            )
+        )
+        return int(result.rowcount or 0)
+
+    @classmethod
+    async def reorder_manual_review_versions(
+        cls, db: AsyncSession, review_list_id: int, orders: list[tuple[int, int]]
+    ) -> None:
+        # 契约要求最终顺序为 0..n-1；先移到 n..2n-1，避免交换时唯一索引瞬时冲突。
+        temporary_offset = len(orders)
+        for index, (version_id, _) in enumerate(orders):
+            await db.execute(
+                update(ShotGridReviewListVersion)
+                .where(
+                    ShotGridReviewListVersion.review_list_id == review_list_id,
+                    ShotGridReviewListVersion.version_id == version_id,
+                )
+                .values(sort_order=temporary_offset + index)
+            )
+        await db.flush()
+        for version_id, sort_order in orders:
+            await db.execute(
+                update(ShotGridReviewListVersion)
+                .where(
+                    ShotGridReviewListVersion.review_list_id == review_list_id,
+                    ShotGridReviewListVersion.version_id == version_id,
+                )
+                .values(sort_order=sort_order)
+            )
+        await db.flush()
 
     @classmethod
     async def get_auto_review_list_detail(

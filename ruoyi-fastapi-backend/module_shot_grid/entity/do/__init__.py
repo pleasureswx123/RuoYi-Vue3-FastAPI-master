@@ -31,6 +31,7 @@ from module_shot_grid.entity.do.storage_do import (
 )
 from module_shot_grid.entity.do.task_do import ShotGridTask
 from module_shot_grid.entity.do.version_do import (
+    ShotGridMediaDerivation,
     ShotGridVersion,
     ShotGridVersionFile,
     ShotGridVersionSubmission,
@@ -41,6 +42,7 @@ __all__ = [
     'ShotGridAssetItem',
     'ShotGridEpisode',
     'ShotGridImportBatch',
+    'ShotGridMediaDerivation',
     'ShotGridNote',
     'ShotGridNoteReply',
     'ShotGridProject',

@@ -114,27 +114,27 @@ onBeforeUnmount(() => activeController?.abort())
         <el-icon><Search /></el-icon>
         <input v-model="query.keyword" maxlength="200" placeholder="搜索项目名称或代号" />
       </label>
-      <select v-model="query.projectStatus" aria-label="项目状态">
-        <option value="">全部状态</option>
-        <option value="preparing">准备中</option>
-        <option value="active">进行中</option>
-        <option value="completed">已完成</option>
-        <option value="archived">已归档</option>
-      </select>
-      <select v-if="canViewAll" v-model="query.scope" aria-label="项目范围">
-        <option value="">我的项目</option>
-        <option value="all">全部项目</option>
-      </select>
-      <select v-model="query.orderByColumn" aria-label="排序字段">
-        <option value="createTime">创建时间</option>
-        <option value="projectCode">项目代号</option>
-        <option value="projectName">项目名称</option>
-        <option value="deliveryDate">交付日期</option>
-      </select>
-      <select v-model="query.isAsc" aria-label="排序方向">
-        <option value="descending">降序</option>
-        <option value="ascending">升序</option>
-      </select>
+      <el-select v-model="query.projectStatus" class="sg-select" placeholder="全部状态" aria-label="项目状态">
+        <el-option label="全部状态" value="" />
+        <el-option label="准备中" value="preparing" />
+        <el-option label="进行中" value="active" />
+        <el-option label="已完成" value="completed" />
+        <el-option label="已归档" value="archived" />
+      </el-select>
+      <el-select v-if="canViewAll" v-model="query.scope" class="sg-select" placeholder="我的项目" aria-label="项目范围">
+        <el-option label="我的项目" value="" />
+        <el-option label="全部项目" value="all" />
+      </el-select>
+      <el-select v-model="query.orderByColumn" class="sg-select" aria-label="排序字段">
+        <el-option label="创建时间" value="createTime" />
+        <el-option label="项目代号" value="projectCode" />
+        <el-option label="项目名称" value="projectName" />
+        <el-option label="交付日期" value="deliveryDate" />
+      </el-select>
+      <el-select v-model="query.isAsc" class="sg-select" aria-label="排序方向">
+        <el-option label="降序" value="descending" />
+        <el-option label="升序" value="ascending" />
+      </el-select>
       <el-button native-type="submit" :loading="loading">查询</el-button>
       <el-button :icon="Refresh" circle aria-label="刷新项目列表" :disabled="loading" @click="loadProjects" />
     </form>
@@ -255,16 +255,6 @@ onBeforeUnmount(() => activeController?.abort())
   background: transparent;
   border: 0;
   outline: 0;
-}
-
-select {
-  min-width: 0;
-  height: 40px;
-  padding: 0 10px;
-  color: var(--sg-text-secondary);
-  background: var(--sg-surface-soft);
-  border: 1px solid var(--sg-border);
-  border-radius: 9px;
 }
 
 .project-summary {

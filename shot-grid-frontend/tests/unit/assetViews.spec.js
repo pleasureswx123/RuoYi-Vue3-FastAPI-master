@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { getAssetDetail, getAssetPage, listAssetAssignees } from '@/api/shot-grid/assets'
 import { getProjectDetail, getProjectPage } from '@/api/shot-grid/projects'
 import { useSessionStore } from '@/store/modules/session'
+import { setElSelectValue } from '../helpers/elementPlus'
 import AssetDetailView from '@/views/asset/AssetDetailView.vue'
 import AssetListView from '@/views/asset/AssetListView.vue'
 import AssetAssignDialog from '@/views/asset/components/AssetAssignDialog.vue'
@@ -154,9 +155,10 @@ describe('资产管理真实列表页', () => {
     expect(wrapper.text()).toContain('导入 Excel')
     expect(wrapper.text()).toContain('新建资产')
 
-    await wrapper.find('select[aria-label="按资产类型筛选"]').setValue('Environment')
-    await wrapper.find('select[aria-label="按资产状态筛选"]').setValue('in_progress')
-    await wrapper.find('select[aria-label="按制作人筛选"]').setValue('7')
+    const filterSelects = wrapper.find('.asset-filters').findAllComponents({ name: 'ElSelect' })
+    await setElSelectValue(filterSelects[0], 'Environment')
+    await setElSelectValue(filterSelects[1], 'in_progress')
+    await setElSelectValue(filterSelects[2], '7')
     await wrapper.find('form[aria-label="资产筛选"]').trigger('submit')
     await flushPromises()
     expect(getAssetPage).toHaveBeenLastCalledWith(8, expect.objectContaining({
@@ -212,10 +214,10 @@ describe('资产管理真实列表页', () => {
       'shotgrid:asset:add',
       'shotgrid:asset:import'
     ])
-    const scopeSelect = wrapper.findAll('.project-context select')[1]
+    const scopeSelect = wrapper.find('.project-context').findAllComponents({ name: 'ElSelect' })[1]
 
-    await scopeSelect.setValue('all')
-    await scopeSelect.setValue('')
+    await setElSelectValue(scopeSelect, 'all')
+    await setElSelectValue(scopeSelect, '')
     await flushPromises()
     expect(wrapper.text()).toContain('LCFR · 罗刹夫人')
 
@@ -240,7 +242,7 @@ describe('资产管理真实列表页', () => {
     } }))
     const { wrapper } = await mountList()
     const switchProject = async id => {
-      await wrapper.find('.project-context select').setValue(String(id))
+      await setElSelectValue(wrapper.find('.project-context').findComponent({ name: 'ElSelect' }), String(id))
       await flushPromises()
     }
 

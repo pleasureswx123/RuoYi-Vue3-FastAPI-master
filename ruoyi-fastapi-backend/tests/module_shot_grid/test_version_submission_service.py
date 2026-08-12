@@ -1,5 +1,5 @@
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import ANY, AsyncMock
 
 import pytest
 
@@ -860,6 +860,7 @@ async def test_formal_commit_switches_temp_reference_and_commits_whole_review_ch
         access_type='private',
         file_hash=FILE_HASH,
         file_size=123,
+        content_type='video/mp4',
     )
 
     monkeypatch.setattr(
@@ -901,6 +902,11 @@ async def test_formal_commit_switches_temp_reference_and_commits_whole_review_ch
     monkeypatch.setattr(
         'module_shot_grid.service.version_submission_service.ShotGridVersionSubmissionDao.add_version_file',
         add_version_file,
+    )
+    add_media_task = AsyncMock()
+    monkeypatch.setattr(
+        'module_shot_grid.service.version_submission_service.ShotGridMediaDerivationDao.add_task',
+        add_media_task,
     )
     replace_reference = AsyncMock()
     remove_reference = AsyncMock()
@@ -945,6 +951,13 @@ async def test_formal_commit_switches_temp_reference_and_commits_whole_review_ch
         str(SUBMISSION_ID),
     )
     add_version_file.assert_awaited_once()
+    add_media_task.assert_awaited_once_with(
+        db,
+        version_id=VERSION_ID,
+        source_file_id=FILE_ID,
+        media_kind='video',
+        now=ANY,
+    )
     audit.assert_awaited_once()
     db.commit.assert_awaited_once()
     db.rollback.assert_not_awaited()

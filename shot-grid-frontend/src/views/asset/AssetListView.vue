@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Box, Collection, Grid, List, Plus, Refresh, Search, Upload } from '@element-plus/icons-vue'
+import { Box, Collection, Grid, List, Link, Plus, Refresh, Search, Upload } from '@element-plus/icons-vue'
 
 import { getAssetPage, listAssetAssignees } from '@/api/shot-grid/assets'
 import { assertPositiveId, getProjectDetail, getProjectPage } from '@/api/shot-grid/projects'
@@ -10,6 +10,7 @@ import { useSessionStore } from '@/store/modules/session'
 import ProjectStatePanel from '@/views/project/components/ProjectStatePanel.vue'
 import AssetFormDialog from '@/views/asset/components/AssetFormDialog.vue'
 import AssetImportDialog from '@/views/asset/components/AssetImportDialog.vue'
+import AssetRequirementDialog from '@/views/asset/components/AssetRequirementDialog.vue'
 import ProtectedAssetThumbnail from '@/views/asset/components/ProtectedAssetThumbnail.vue'
 import { assetAssigneeSummary, assetDirectoryStatusMeta, assetErrorState, assetStatusMeta, assetTypeMeta, memberLabel, resolveAssetThumbnail } from '@/views/asset/assetPresentation'
 
@@ -30,6 +31,7 @@ const scope = ref('')
 const viewMode = ref('table')
 const showCreate = ref(false)
 const showImport = ref(false)
+const showRequirements = ref(false)
 const createContext = ref(null)
 const importContext = ref(null)
 const query = reactive({
@@ -53,6 +55,10 @@ const canViewAll = computed(() => hasPermission('shotgrid:project:all'))
 const projectAllowedActions = computed(() => new Set(project.value?.allowedActions || []))
 const canCreate = computed(() => projectAllowedActions.value.has('asset.create') && hasPermission('shotgrid:asset:add'))
 const canImport = computed(() => projectAllowedActions.value.has('asset.import') && hasPermission('shotgrid:asset:import'))
+const canListRequirements = computed(() => hasPermission('shotgrid:assetRequirement:list'))
+const canResolveRequirements = computed(() => hasPermission('shotgrid:assetRequirement:resolve'))
+const canIgnoreRequirements = computed(() => hasPermission('shotgrid:assetRequirement:ignore'))
+const canRematchRequirements = computed(() => hasPermission('shotgrid:assetRequirement:rematch'))
 const pageCount = computed(() => Math.max(1, Math.ceil(total.value / query.pageSize)))
 const currentProjectId = computed(() => {
   try {
@@ -201,6 +207,11 @@ function openImportDialog() {
   showImport.value = true
 }
 
+function openRequirementDialog() {
+  if (!currentProjectId.value) return
+  showRequirements.value = true
+}
+
 function closeCreateDialog() {
   showCreate.value = false
   createContext.value = null
@@ -209,6 +220,10 @@ function closeCreateDialog() {
 function closeImportDialog() {
   showImport.value = false
   importContext.value = null
+}
+
+function closeRequirementDialog() {
+  showRequirements.value = false
 }
 
 function contextMatches(active, operationContext) {
@@ -256,6 +271,7 @@ watch(selectedProjectId, (next, previous) => {
   if (next === previous) return
   closeCreateDialog()
   closeImportDialog()
+  closeRequirementDialog()
   query.pageNum = 1
   query.assigneeUserId = ''
   loadProjectContext()
@@ -278,14 +294,14 @@ onBeforeUnmount(() => {
   <section class="sg-page asset-page">
     <header class="sg-page-heading asset-heading">
       <div><p class="sg-eyebrow">ASSETS</p><h2 class="sg-page-title">资产库管理</h2><p class="sg-page-description">在项目范围内管理角色、场景、道具及其制作分项；状态、制作人和缩略图均来自后端聚合。</p></div>
-      <div class="asset-heading__actions"><el-button v-if="canImport" :icon="Upload" @click="openImportDialog">导入 Excel</el-button><el-button v-if="canCreate" type="primary" :icon="Plus" @click="openCreateDialog">新建资产</el-button></div>
+      <div class="asset-heading__actions"><el-button v-if="canListRequirements" :icon="Link" @click="openRequirementDialog">待匹配需求</el-button><el-button v-if="canImport" :icon="Upload" @click="openImportDialog">导入 Excel</el-button><el-button v-if="canCreate" type="primary" :icon="Plus" @click="openCreateDialog">新建资产</el-button></div>
     </header>
 
     <ProjectStatePanel v-if="projectsError" :title="projectsError.title" :message="projectsError.message" :retryable="projectsError.retryable" @retry="loadProjects" />
     <template v-else>
       <section class="project-context">
-        <label><span>当前项目</span><select v-model="selectedProjectId" :disabled="projectsLoading"><option value="">{{ projectsLoading ? '正在加载项目…' : '请选择项目' }}</option><option v-for="item in projects" :key="item.projectId" :value="String(item.projectId)">{{ item.projectCode }} · {{ item.projectName }}</option></select></label>
-        <label v-if="canViewAll"><span>项目范围</span><select v-model="scope"><option value="">我的项目</option><option value="all">全部项目</option></select></label>
+        <label><span>当前项目</span><el-select v-model="selectedProjectId" class="sg-select" :placeholder="projectsLoading ? '正在加载项目…' : '请选择项目'" :disabled="projectsLoading"><el-option :label="projectsLoading ? '正在加载项目…' : '请选择项目'" value="" /><el-option v-for="item in projects" :key="item.projectId" :label="`${item.projectCode} · ${item.projectName}`" :value="String(item.projectId)" /></el-select></label>
+        <label v-if="canViewAll"><span>项目范围</span><el-select v-model="scope" class="sg-select" placeholder="我的项目"><el-option label="我的项目" value="" /><el-option label="全部项目" value="all" /></el-select></label>
         <div v-if="project" class="project-context__meta"><span>{{ project.projectTypeName }}</span><span>{{ project.aspectRatio }}</span><span>{{ project.myProjectRole === 'director' ? '项目总监' : project.myProjectRole === 'creator' ? '制作人员' : '跨项目管理员' }}</span><span :data-ready="project.storageStatus === 'ready'">存储：{{ project.storageStatus === 'ready' ? '就绪' : project.storageStatus === 'failed' ? '失败' : '初始化中' }}</span></div>
       </section>
 
@@ -294,9 +310,9 @@ onBeforeUnmount(() => {
       <template v-else-if="selectedProjectId">
         <form class="asset-filters" aria-label="资产筛选" @submit.prevent="submitFilters">
           <label class="asset-search"><el-icon><Search /></el-icon><input v-model="query.keyword" maxlength="200" placeholder="资产名称或描述" /></label>
-          <select v-model="query.assetType" aria-label="按资产类型筛选"><option value="">全部类型</option><option value="Character">角色</option><option value="Environment">场景</option><option value="Prop">道具</option></select>
-          <select v-model="query.assetStatus" aria-label="按资产状态筛选"><option value="">全部状态</option><option value="unassigned">未分配</option><option value="not_started">未开始</option><option value="in_progress">制作中</option><option value="reviewing">待审核</option><option value="revision">修改中</option><option value="completed">已完成</option></select>
-          <select v-model="query.assigneeUserId" aria-label="按制作人筛选"><option value="">全部制作人</option><option v-for="member in members" :key="member.userId" :value="String(member.userId)">{{ memberLabel(member) }}</option></select>
+          <el-select v-model="query.assetType" class="sg-select" placeholder="全部类型" aria-label="按资产类型筛选"><el-option label="全部类型" value="" /><el-option label="角色" value="Character" /><el-option label="场景" value="Environment" /><el-option label="道具" value="Prop" /></el-select>
+          <el-select v-model="query.assetStatus" class="sg-select" placeholder="全部状态" aria-label="按资产状态筛选"><el-option label="全部状态" value="" /><el-option label="未分配" value="unassigned" /><el-option label="未开始" value="not_started" /><el-option label="制作中" value="in_progress" /><el-option label="待审核" value="reviewing" /><el-option label="修改中" value="revision" /><el-option label="已完成" value="completed" /></el-select>
+          <el-select v-model="query.assigneeUserId" class="sg-select" placeholder="全部制作人" aria-label="按制作人筛选"><el-option label="全部制作人" value="" /><el-option v-for="member in members" :key="member.userId" :label="memberLabel(member)" :value="String(member.userId)" /></el-select>
           <el-button native-type="submit" :icon="Search" :loading="assetsLoading">查询</el-button>
           <el-button :icon="Refresh" :disabled="assetsLoading" @click="loadProjectContext">刷新</el-button>
         </form>
@@ -318,6 +334,7 @@ onBeforeUnmount(() => {
 
     <AssetFormDialog v-if="showCreate && createContext" :project-id="createContext.projectId" :operation-generation="createContext.operationGeneration" :members="members" @close="closeCreateDialog" @saved="handleSaved" @refresh="loadProjectContext" />
     <AssetImportDialog v-if="showImport && importContext" :project-id="importContext.projectId" :operation-generation="importContext.operationGeneration" :project-name="project?.projectName" @close="closeImportDialog" @imported="handleImported" />
+    <AssetRequirementDialog v-if="showRequirements && currentProjectId" :project-id="currentProjectId" :can-resolve="canResolveRequirements" :can-ignore="canIgnoreRequirements" :can-rematch="canRematchRequirements" @close="closeRequirementDialog" @updated="loadProjectContext" />
   </section>
 </template>
 

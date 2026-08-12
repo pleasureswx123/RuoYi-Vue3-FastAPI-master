@@ -31,6 +31,18 @@ class ShotGridImportConfig(BaseSettings):
 SHOT_GRID_IMPORT_CONFIG = ShotGridImportConfig()
 
 
+class ShotGridPlaybackConfig(BaseSettings):
+    """原生媒体播放器短期访问票据配置。"""
+
+    model_config = SettingsConfigDict(env_prefix='SHOT_GRID_PLAYBACK_', extra='ignore')
+
+    ticket_ttl_seconds: int = Field(default=30 * 60, ge=60, le=60 * 60)
+    redis_key_prefix: str = Field(default='shotgrid:playback:ticket', min_length=1, max_length=100)
+
+
+SHOT_GRID_PLAYBACK_CONFIG = ShotGridPlaybackConfig()
+
+
 class ShotGridStorageWorkerConfig(BaseSettings):
     """Shot Grid NAS 目录 Outbox Worker 安全与重试边界。"""
 
@@ -93,3 +105,40 @@ class ShotGridVersionWorkerConfig(BaseSettings):
 
 
 SHOT_GRID_VERSION_WORKER_CONFIG = ShotGridVersionWorkerConfig()
+
+
+class ShotGridMediaWorkerConfig(BaseSettings):
+    """Shot Grid 缩略图与网页代理媒体 Worker 配置。"""
+
+    model_config = SettingsConfigDict(env_prefix='SHOT_GRID_MEDIA_WORKER_', extra='ignore')
+
+    enabled: bool = Field(default=False, description='是否显式启用媒体派生 Worker')
+    poll_interval_seconds: float = Field(default=3, gt=0, le=60)
+    batch_size: int = Field(default=2, gt=0, le=10)
+    lease_seconds: int = Field(default=900, ge=60, le=7200)
+    heartbeat_seconds: int = Field(default=30, ge=5, le=600)
+    operation_timeout_seconds: int = Field(default=600, ge=10, le=3600)
+    max_attempts: int = Field(default=5, ge=1, le=20)
+    retry_delays_seconds: tuple[int, ...] = Field(default=(10, 30, 120, 600), min_length=1, max_length=19)
+    ffmpeg_path: str = Field(default='ffmpeg', min_length=1, max_length=500)
+    thumbnail_max_edge: int = Field(default=480, ge=128, le=2048)
+    image_proxy_max_edge: int = Field(default=1920, ge=480, le=8192)
+    video_proxy_max_width: int = Field(default=1280, ge=480, le=3840)
+    jpeg_quality: int = Field(default=84, ge=40, le=95)
+
+    @model_validator(mode='after')
+    def validate_worker_boundaries(self) -> 'ShotGridMediaWorkerConfig':
+        if self.heartbeat_seconds >= self.lease_seconds:
+            raise ValueError('媒体派生 Worker 心跳间隔必须小于租约时间')
+        if self.operation_timeout_seconds >= self.lease_seconds:
+            raise ValueError('媒体派生 Worker 软超时必须小于租约时间')
+        if len(self.retry_delays_seconds) < max(self.max_attempts - 1, 1):
+            raise ValueError('媒体派生 Worker 退避序列不足以覆盖自动重试次数')
+        if any(delay <= 0 for delay in self.retry_delays_seconds):
+            raise ValueError('媒体派生 Worker 退避秒数必须为正整数')
+        if tuple(sorted(self.retry_delays_seconds)) != self.retry_delays_seconds:
+            raise ValueError('媒体派生 Worker 退避秒数必须按非递减顺序配置')
+        return self
+
+
+SHOT_GRID_MEDIA_WORKER_CONFIG = ShotGridMediaWorkerConfig()

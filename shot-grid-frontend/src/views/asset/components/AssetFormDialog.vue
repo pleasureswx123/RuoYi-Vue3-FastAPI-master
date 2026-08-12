@@ -117,7 +117,7 @@ async function submit() {
       <div v-if="validationMessage || requestError" class="asset-form__error" role="alert"><el-icon><WarningFilled /></el-icon><div><strong>{{ requestError?.title || '请检查表单' }}</strong><p>{{ requestError?.message || validationMessage }}</p><code v-if="requestError?.errorKey">{{ requestError.errorKey }}</code><button v-if="requestError?.status === 409" type="button" @click="emit('refresh')">刷新后重试</button></div></div>
 
       <section class="asset-form__grid">
-        <label><span>资产类型</span><select v-model="form.assetType" :disabled="isEdit || saving"><option value="Character">角色</option><option value="Environment">场景</option><option value="Prop">道具</option></select></label>
+        <label><span>资产类型</span><el-select v-model="form.assetType" class="sg-select" :disabled="isEdit || saving"><el-option label="角色" value="Character" /><el-option label="场景" value="Environment" /><el-option label="道具" value="Prop" /></el-select></label>
         <label><span>资产名称</span><input v-model="form.assetName" maxlength="200" :disabled="isEdit || saving" placeholder="例如：动力舱室内" /></label>
         <label><span>项目内排序</span><input v-model.number="form.sortOrder" type="number" min="0" step="1" :disabled="saving" /></label>
         <label class="asset-form__wide"><span>资产说明</span><textarea v-model="form.description" rows="3" :disabled="saving" placeholder="资产的稳定业务说明" /></label>
@@ -131,7 +131,7 @@ async function submit() {
           <div class="asset-items-editor__grid">
             <label><span>制作分项</span><input v-model="item.productionItem" maxlength="240" :disabled="saving" placeholder="允许稍后补齐" /></label>
             <label><span>排序</span><input v-model.number="item.sortOrder" type="number" min="0" step="1" :disabled="saving" /></label>
-            <label><span>主制作人</span><select v-model="item.assigneeUserId" :disabled="saving"><option value="">暂不分配</option><option v-for="member in members" :key="member.userId" :value="String(member.userId)">{{ memberLabel(member) }}</option></select></label>
+            <label><span>主制作人</span><el-select v-model="item.assigneeUserId" class="sg-select" placeholder="暂不分配" :disabled="saving"><el-option label="暂不分配" value="" /><el-option v-for="member in members" :key="member.userId" :label="memberLabel(member)" :value="String(member.userId)" /></el-select></label>
             <label class="asset-items-editor__wide"><span>分项说明</span><textarea v-model="item.description" rows="2" :disabled="saving" /></label>
             <label class="asset-items-editor__wide"><span>首次任务要求</span><textarea v-model="item.taskDescription" rows="2" :disabled="saving || !item.assigneeUserId" /></label>
             <label class="asset-items-editor__wide"><span>备注</span><input v-model="item.remark" maxlength="500" :disabled="saving" /></label>

@@ -1,14 +1,163 @@
 <script setup>
-import { Tickets } from '@element-plus/icons-vue'
-import BusinessBoundaryView from '@/views/_shared/BusinessBoundaryView.vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
+import { Plus, Refresh, Search, Tickets } from '@element-plus/icons-vue'
+
+import { getProjectPage } from '@/api/shot-grid/projects'
+import { getReviewListPage } from '@/api/shot-grid/reviews'
+import { useSessionStore } from '@/store/modules/session'
+import ProjectStatePanel from '@/views/project/components/ProjectStatePanel.vue'
+import ProtectedThumbnail from '@/views/shot/components/ProtectedThumbnail.vue'
+import ManualReviewDialog from '@/views/review/components/ManualReviewDialog.vue'
+import { formatReviewDateTime, reviewErrorState, reviewStatusMeta } from './reviewPresentation'
+
+const router = useRouter()
+const sessionStore = useSessionStore()
+const projects = ref([])
+const selectedProjectId = ref('')
+const reviews = ref([])
+const total = ref(0)
+const projectsLoading = ref(false)
+const reviewsLoading = ref(false)
+const projectsError = ref(null)
+const reviewsError = ref(null)
+const manualDialogVisible = ref(false)
+const query = reactive({ reviewStatus: 'active', pageNum: 1, pageSize: 20 })
+let projectsController = null
+let reviewsController = null
+
+const canViewAll = computed(() => sessionStore.permissions.includes('*:*:*') || sessionStore.permissions.includes('shotgrid:project:all'))
+const canListReviews = computed(() => sessionStore.permissions.includes('*:*:*') || sessionStore.permissions.includes('shotgrid:reviewList:list'))
+const canCreateManual = computed(() => sessionStore.permissions.includes('*:*:*') || sessionStore.permissions.includes('shotgrid:reviewList:add'))
+const manualCandidates = computed(() => reviews.value.filter(item => item.reviewMode === 'auto_single' && item.versionStatus === 'pending_review'))
+const totalPages = computed(() => Math.max(1, Math.ceil(total.value / query.pageSize)))
+const derivationMeta = status => ({
+  pending: { label: '媒体排队中', tone: 'warning' },
+  processing: { label: '正在生成预览', tone: 'warning' },
+  completed: { label: '预览已优化', tone: 'success' },
+  failed: { label: '使用原始媒体', tone: 'danger' }
+}[status] || null)
+
+async function loadProjects() {
+  projectsController?.abort()
+  const controller = new AbortController()
+  projectsController = controller
+  projectsLoading.value = true
+  projectsError.value = null
+  try {
+    const response = await getProjectPage({ pageNum: 1, pageSize: 100, scope: canViewAll.value ? 'all' : undefined }, { signal: controller.signal })
+    if (projectsController !== controller) return
+    projects.value = response.rows || []
+    if (!projects.value.some(item => String(item.projectId) === selectedProjectId.value)) {
+      selectedProjectId.value = projects.value[0] ? String(projects.value[0].projectId) : ''
+    }
+  } catch (error) {
+    if (error?.code !== 'ERR_CANCELED') projectsError.value = reviewErrorState(error, '项目范围加载失败')
+  } finally {
+    if (projectsController === controller) projectsLoading.value = false
+  }
+}
+
+async function loadReviews() {
+  if (!canListReviews.value) {
+    reviews.value = []
+    total.value = 0
+    reviewsError.value = reviewErrorState({ httpStatus: 403, message: '当前账号没有审核单列表权限' })
+    return
+  }
+  if (!selectedProjectId.value) {
+    reviews.value = []
+    total.value = 0
+    return
+  }
+  reviewsController?.abort()
+  const controller = new AbortController()
+  reviewsController = controller
+  reviewsLoading.value = true
+  reviewsError.value = null
+  try {
+    const response = await getReviewListPage(selectedProjectId.value, {
+      reviewStatus: query.reviewStatus || undefined,
+      pageNum: query.pageNum,
+      pageSize: query.pageSize,
+      orderByColumn: 'createTime',
+      isAsc: 'descending'
+    }, { signal: controller.signal })
+    if (reviewsController !== controller) return
+    reviews.value = response.rows || []
+    total.value = Number(response.total || 0)
+  } catch (error) {
+    if (error?.code !== 'ERR_CANCELED') reviewsError.value = reviewErrorState(error, '审核单加载失败')
+  } finally {
+    if (reviewsController === controller) reviewsLoading.value = false
+  }
+}
+
+async function refreshAll() {
+  const previousProjectId = selectedProjectId.value
+  await loadProjects()
+  if (selectedProjectId.value === previousProjectId) await loadReviews()
+}
+
+function changePage(next) {
+  query.pageNum = next
+  loadReviews()
+}
+
+function openCreatedManual(detail) {
+  router.push(`/reviews/${detail.reviewListId}`)
+}
+
+watch(selectedProjectId, () => {
+  query.pageNum = 1
+  loadReviews()
+})
+watch(() => query.reviewStatus, () => {
+  query.pageNum = 1
+  loadReviews()
+})
+onMounted(loadProjects)
+onBeforeUnmount(() => {
+  projectsController?.abort()
+  reviewsController?.abort()
+})
 </script>
 
 <template>
-  <BusinessBoundaryView
-    eyebrow="REVIEWS"
-    title="版本审核"
-    description="审核单、不可覆盖版本、意见与审核动作在同一条生产链路中保持可追溯。"
-    :icon="Tickets"
-    boundary-text="待审核版本、媒体查看、意见回复和通过/退回/稍后决定动作将在下一批接入现有真实审核 API；当前页面不展示虚构待办。"
-  />
+  <section class="sg-page review-page">
+    <header class="sg-page-heading">
+      <div><p class="sg-eyebrow">REVIEWS</p><h2 class="sg-page-title">版本审核</h2><p class="sg-page-description">处理自动单版本审核单，意见与审核动作始终绑定不可覆盖的具体版本。</p></div>
+      <div class="heading-actions"><el-button v-if="canCreateManual && selectedProjectId" type="primary" :icon="Plus" @click="manualDialogVisible = true">创建批量审核单</el-button><el-button :icon="Refresh" :loading="projectsLoading || reviewsLoading" @click="refreshAll">刷新</el-button></div>
+    </header>
+
+    <ProjectStatePanel v-if="projectsError" :title="projectsError.title" :message="projectsError.message" :retryable="projectsError.retryable" @retry="loadProjects" />
+    <template v-else>
+      <section class="review-toolbar">
+        <label><span>当前项目</span><el-select v-model="selectedProjectId" class="sg-select" :placeholder="projectsLoading ? '正在加载项目…' : '请选择项目'" :disabled="projectsLoading"><el-option v-for="project in projects" :key="project.projectId" :label="`${project.projectCode} · ${project.projectName}`" :value="String(project.projectId)" /></el-select></label>
+        <label><span>审核状态</span><el-select v-model="query.reviewStatus" class="sg-select" placeholder="全部状态"><el-option label="全部状态" value="" /><el-option label="草稿" value="draft" /><el-option label="待审核" value="active" /><el-option label="已完成" value="completed" /><el-option label="已归档" value="archived" /></el-select></label>
+        <div class="review-toolbar__summary"><el-icon><Search /></el-icon><span>当前筛选 {{ total }} 条审核单</span></div>
+      </section>
+
+      <ProjectStatePanel v-if="reviewsError" :title="reviewsError.title" :message="reviewsError.message" :retryable="reviewsError.retryable" @retry="loadReviews" />
+      <div v-else-if="reviewsLoading && !reviews.length" class="review-loading" role="status">正在加载审核单…</div>
+      <section v-else-if="reviews.length" class="review-list" :class="{ 'is-refreshing': reviewsLoading }">
+        <button v-for="item in reviews" :key="item.reviewListId" class="review-card" type="button" @click="router.push(`/reviews/${item.reviewListId}`)">
+          <span class="review-card__preview"><ProtectedThumbnail v-if="item.thumbnail" :thumbnail="item.thumbnail" :alt="`${item.reviewListName} 缩略图`" /><span v-else class="review-card__icon"><el-icon><Tickets /></el-icon></span></span>
+          <div class="review-card__main"><div><strong>{{ item.reviewListName }}</strong><span class="review-chip">{{ item.reviewMode === 'manual_batch' ? '人工批量' : '自动单版' }}</span><span class="review-chip" :data-tone="reviewStatusMeta(item.reviewStatus).tone">{{ reviewStatusMeta(item.reviewStatus).label }}</span><span v-if="derivationMeta(item.mediaDerivationStatus)" class="review-chip" :data-tone="derivationMeta(item.mediaDerivationStatus).tone">{{ derivationMeta(item.mediaDerivationStatus).label }}</span></div><p>{{ item.description || (item.reviewMode === 'manual_batch' ? '人工集中审核单' : '单版本自动审核单') }}</p><small>{{ item.reviewMode === 'manual_batch' ? `${item.versionCount} 个版本` : `版本 ${item.versionNumber}` }} · 创建于 {{ formatReviewDateTime(item.createTime) }}</small></div>
+          <div class="review-card__meta"><span>{{ item.taskId ? `任务 #${item.taskId}` : '集中审核' }}</span><strong>{{ item.reviewMode === 'manual_batch' ? `${item.versionCount} 项` : item.versionStatus === 'pending_review' ? '等待决定' : item.versionStatus === 'final' ? '已通过' : '已退回' }}</strong></div>
+        </button>
+      </section>
+      <section v-else class="review-empty"><el-icon><Tickets /></el-icon><h3>{{ selectedProjectId ? '当前筛选没有审核单' : '当前范围暂无项目' }}</h3><p>{{ selectedProjectId ? '版本提交成功后，系统会自动创建一张单版本审核单。' : '请先创建或加入项目。' }}</p></section>
+
+      <footer v-if="totalPages > 1" class="review-pagination"><el-button :disabled="query.pageNum <= 1" @click="changePage(query.pageNum - 1)">上一页</el-button><span>第 {{ query.pageNum }} / {{ totalPages }} 页</span><el-button :disabled="query.pageNum >= totalPages" @click="changePage(query.pageNum + 1)">下一页</el-button></footer>
+    </template>
+    <ManualReviewDialog v-if="manualDialogVisible && selectedProjectId" v-model="manualDialogVisible" :project-id="selectedProjectId" :candidates="manualCandidates" @created="openCreatedManual" />
+  </section>
 </template>
+
+<style scoped>
+.heading-actions{display:flex;gap:10px}
+.review-page{display:grid;gap:18px}.review-toolbar{display:grid;grid-template-columns:minmax(260px,1fr) 180px auto;gap:12px;align-items:end;padding:16px;background:var(--sg-surface);border:1px solid var(--sg-border);border-radius:var(--sg-radius-md)}.review-toolbar label{display:grid;gap:6px}.review-toolbar label>span{color:var(--sg-text-muted);font-size:10px}.review-toolbar__summary{display:flex;height:42px;gap:8px;align-items:center;padding:0 13px;color:var(--sg-text-muted);font-size:11px;background:rgba(255,255,255,.025);border-radius:10px}.review-list{display:grid;gap:10px}.review-list.is-refreshing{opacity:.55;pointer-events:none}.review-card{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:15px;align-items:center;padding:17px 19px;color:var(--sg-text);text-align:left;cursor:pointer;background:var(--sg-surface);border:1px solid var(--sg-border);border-radius:var(--sg-radius-md);transition:.15s}.review-card:hover{border-color:rgba(255,182,87,.35);transform:translateY(-1px)}.review-card__icon{display:grid;width:42px;height:42px;color:var(--sg-accent);background:var(--sg-accent-soft);border-radius:11px;place-items:center}.review-card__main>div{display:flex;gap:9px;align-items:center}.review-card__main p{margin:6px 0;color:var(--sg-text-secondary);font-size:12px}.review-card__main small,.review-card__meta span{color:var(--sg-text-muted);font-size:10px}.review-card__meta{display:grid;gap:6px;text-align:right}.review-card__meta strong{color:var(--sg-accent);font-size:12px}.review-chip{padding:4px 7px;font-size:9px;background:rgba(255,255,255,.05);border-radius:999px}.review-chip[data-tone=warning]{color:var(--sg-accent);background:var(--sg-accent-soft)}.review-chip[data-tone=success]{color:var(--sg-success);background:rgba(98,212,155,.1)}.review-loading,.review-empty{display:grid;min-height:280px;padding:30px;color:var(--sg-text-muted);text-align:center;background:var(--sg-surface);border:1px dashed var(--sg-border-strong);border-radius:var(--sg-radius-lg);place-content:center}.review-empty>.el-icon{margin:auto;color:var(--sg-accent);font-size:36px}.review-empty h3,.review-empty p{margin:10px 0 0}.review-empty p{font-size:12px}.review-pagination{display:flex;gap:12px;align-items:center;justify-content:center;color:var(--sg-text-muted);font-size:11px}@media(max-width:760px){.review-toolbar{grid-template-columns:1fr}.review-card{grid-template-columns:auto 1fr}.review-card__meta{grid-column:2;text-align:left}}
+.review-card__preview{display:grid;width:112px;height:68px;overflow:hidden;background:var(--sg-accent-soft);border-radius:10px;place-items:center}.review-card__main>div{flex-wrap:wrap}.review-chip[data-tone=danger]{color:var(--sg-danger);background:rgba(255,107,107,.1)}
+@media(max-width:760px){.review-card__preview{width:84px;height:56px}}
+</style>

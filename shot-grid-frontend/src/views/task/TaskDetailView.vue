@@ -295,7 +295,7 @@ onBeforeUnmount(() => {
           <p v-if="task.finalVersion" class="final-version">最终版本：{{ task.finalVersion.versionNumber }}</p>
         </article>
 
-        <article class="task-card task-card--wide version-workspace-anchor" data-testid="version-workspace-anchor">
+        <article id="version-workspace" class="task-card task-card--wide version-workspace-anchor" data-testid="version-workspace-anchor">
           <p class="sg-eyebrow">DELIVERY</p>
           <h3>版本提交与历史</h3>
           <VersionWorkspace

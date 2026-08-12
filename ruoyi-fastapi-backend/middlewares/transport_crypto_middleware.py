@@ -36,6 +36,12 @@ class TransportCryptoMiddleware:
         r'^/shot-grid/versions/([1-9][0-9]*)/files/'
         r'([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})/download$'
     )
+    _SHOT_GRID_PLAYBACK_PATTERN = re.compile(
+        r'^/shot-grid/playback/'
+        r'([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})/'
+        r'versions/([1-9][0-9]*)/files/'
+        r'([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$'
+    )
     _SQL_BIGINT_MAX = 9_223_372_036_854_775_807
 
     def __init__(self, app: ASGIApp) -> None:
@@ -67,6 +73,7 @@ class TransportCryptoMiddleware:
             self._is_excluded_path(path)
             or self._is_shot_grid_template_download(method, path)
             or self._is_shot_grid_version_file_download(method, path)
+            or self._is_shot_grid_playback(method, path)
             or TransportCryptoConfig.transport_crypto_mode == 'off'
             or not self._is_enabled_path(path)
         ):
@@ -724,9 +731,12 @@ class TransportCryptoMiddleware:
 
     @classmethod
     def _is_shot_grid_template_download(cls, method: str, path: str) -> bool:
-        """仅精确排除镜头模板 GET，避免同前缀 JSON 路由降级为明文。"""
+        """仅精确排除两类 Excel 模板 GET，避免同前缀 JSON 路由降级为明文。"""
 
-        return method == 'GET' and path == '/shot-grid/imports/shots/template'
+        return method == 'GET' and path in {
+            '/shot-grid/imports/shots/template',
+            '/shot-grid/imports/assets/template',
+        }
 
     @classmethod
     def _is_shot_grid_version_file_download(cls, method: str, path: str) -> bool:
@@ -741,6 +751,20 @@ class TransportCryptoMiddleware:
             return False
         try:
             return str(UUID(match.group(2))) == match.group(2).lower()
+        except ValueError:
+            return False
+
+    @classmethod
+    def _is_shot_grid_playback(cls, method: str, path: str) -> bool:
+        """仅精确排除短期票据媒体 GET，保证原生播放器能发起明文 Range 请求。"""
+
+        if method != 'GET':
+            return False
+        match = cls._SHOT_GRID_PLAYBACK_PATTERN.fullmatch(path)
+        if match is None or int(match.group(2)) > cls._SQL_BIGINT_MAX:
+            return False
+        try:
+            return all(str(UUID(match.group(index))) == match.group(index).lower() for index in (1, 3))
         except ValueError:
             return False
 

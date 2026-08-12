@@ -195,12 +195,12 @@ onBeforeUnmount(() => {
     <header class="history-heading">
       <div><p class="sg-eyebrow">IMMUTABLE HISTORY</p><h3>版本历史</h3><p>版本号由后端分配；修订只新增版本，不覆盖历史文件。</p></div>
       <div class="history-tools">
-        <select v-model="statusFilter" aria-label="筛选版本状态" @change="applyStatusFilter">
-          <option value="">全部状态</option>
-          <option value="pending_review">待审核</option>
-          <option value="rejected">已退回</option>
-          <option value="final">最终版本</option>
-        </select>
+        <el-select v-model="statusFilter" class="sg-select" placeholder="全部状态" aria-label="筛选版本状态" @change="applyStatusFilter">
+          <el-option label="全部状态" value="" />
+          <el-option label="待审核" value="pending_review" />
+          <el-option label="已退回" value="rejected" />
+          <el-option label="最终版本" value="final" />
+        </el-select>
         <el-button v-if="canList" :icon="Refresh" :loading="loading" @click="loadVersions()">刷新</el-button>
       </div>
     </header>
@@ -254,7 +254,7 @@ onBeforeUnmount(() => {
 .history-heading h3 { margin: 3px 0 7px; font-size: 20px; }
 .history-heading p:not(.sg-eyebrow) { margin: 0; color: var(--sg-text-muted); font-size: 12px; }
 .history-tools { display: flex; gap: 9px; }
-.history-tools select { padding: 8px 28px 8px 10px; color: var(--sg-text-secondary); background: var(--sg-surface-raised); border: 1px solid var(--sg-border); border-radius: 8px; }
+.history-tools .sg-select { width: 160px; }
 .history-error { display: flex; padding: 13px 15px; margin-top: 16px; color: #ffb5ad; background: rgba(244, 92, 92, 0.08); border-radius: 9px; gap: 10px; }
 .history-error strong,
 .history-error p { display: block; margin: 0; }

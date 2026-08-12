@@ -142,3 +142,20 @@ class ShotGridVersionFileAccessModel(ShotGridApiModel):
     version_id: int
     file_id: str
     business_file_name: str
+
+
+class ShotGridPlaybackTicketModel(ShotGridApiModel):
+    """浏览器原生媒体元素使用的短期资源绑定票据。"""
+
+    playback_url: str
+    expires_in_seconds: int = Field(gt=0)
+
+
+class ShotGridPlaybackTicketPayloadModel(ShotGridApiModel):
+    """仅保存于 Redis 的播放票据载荷。"""
+
+    version_id: int = Field(gt=0)
+    file_id: str
+    user_id: int = Field(gt=0)
+    session_id: str = Field(min_length=1, max_length=200)
+    access_token_hash: str = Field(pattern=r'^[0-9a-f]{64}$')

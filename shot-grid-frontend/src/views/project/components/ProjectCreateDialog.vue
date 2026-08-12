@@ -170,16 +170,16 @@ onBeforeUnmount(() => { storageController?.abort(); previewController?.abort() }
       <div class="project-form__grid">
         <label><span>项目名称 *</span><input v-model="form.projectName" maxlength="200" placeholder="如：罗刹夫人" @input="invalidatePathPreview" /></label>
         <label><span>项目代号 *</span><input v-model="form.projectCode" maxlength="12" placeholder="如：LCFR" @input="form.projectCode = form.projectCode.toUpperCase()" /></label>
-        <label><span>画幅 *</span><select v-model="form.aspectRatio"><option v-for="ratio in ['16:9','21:9','2.39:1','9:16','1:1']" :key="ratio">{{ ratio }}</option></select></label>
+        <label><span>画幅 *</span><el-select v-model="form.aspectRatio" class="sg-select"><el-option v-for="ratio in ['16:9','21:9','2.39:1','9:16','1:1']" :key="ratio" :label="ratio" :value="ratio" /></el-select></label>
         <label><span>项目类型</span><input value="AI 影视短片" disabled /></label>
         <label><span>计划总时长（分钟）</span><input v-model="form.plannedDurationMinutes" type="number" min="0" step="0.1" placeholder="可选" /></label>
         <label><span>交付日期</span><input v-model="form.deliveryDate" type="date" /></label>
         <label>
           <span>NAS 根目录 *</span>
-          <select v-model="form.storageRootId" :disabled="storageLoading || !!storageError" @change="invalidatePathPreview">
-            <option value="">{{ storageLoading ? '正在加载健康根目录…' : '请选择健康根目录' }}</option>
-            <option v-for="root in storageRoots" :key="root.storageRootId" :value="String(root.storageRootId)">{{ root.rootName }}（{{ root.rootCode }}）</option>
-          </select>
+          <el-select v-model="form.storageRootId" class="sg-select" :placeholder="storageLoading ? '正在加载健康根目录…' : '请选择健康根目录'" :disabled="storageLoading || !!storageError" @change="invalidatePathPreview">
+            <el-option :label="storageLoading ? '正在加载健康根目录…' : '请选择健康根目录'" value="" />
+            <el-option v-for="root in storageRoots" :key="root.storageRootId" :label="`${root.rootName}（${root.rootCode}）`" :value="String(root.storageRootId)" />
+          </el-select>
           <small v-if="!storageError && !storageLoading && storageRoots.length === 0">当前没有已启用且探测健康的 NAS 根目录，请联系管理员。</small>
           <small v-if="storageError" class="field-error">
             {{ storageError.message }}
@@ -211,7 +211,7 @@ onBeforeUnmount(() => { storageController?.abort(); previewController?.abort() }
         <div v-if="members.length" class="member-rows">
           <div v-for="(member,index) in members" :key="member.userId" class="member-row">
             <div><strong>{{ member.nickName || member.userName }}</strong><small>{{ member.userName }} · {{ member.deptName || '未分配部门' }}</small></div>
-            <select v-model="member.projectRole"><option value="creator">制作人员</option><option value="director">项目总监</option></select>
+            <el-select v-model="member.projectRole" class="sg-select"><el-option label="制作人员" value="creator" /><el-option label="项目总监" value="director" /></el-select>
             <input v-model="member.producerCode" maxlength="12" placeholder="制作人缩写（可空）" @input="member.producerCode = member.producerCode.toUpperCase()" />
             <button type="button" @click="members.splice(index,1)">移除</button>
           </div>
@@ -232,11 +232,11 @@ onBeforeUnmount(() => { storageController?.abort(); previewController?.abort() }
 .project-form { gap: 22px; }
 .project-form__grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 18px; }
 label > span, .people-section strong, .path-preview strong { font-size: 13px; font-weight: 600; }
-input, select, textarea { width: 100%; color: var(--sg-text); background: rgba(255,255,255,.035); border: 1px solid var(--sg-border-strong); border-radius: 10px; }
-input, select { height: 42px; padding: 0 12px; }
+input, textarea { width: 100%; color: var(--sg-text); background: rgba(255,255,255,.035); border: 1px solid var(--sg-border-strong); border-radius: 10px; }
+input { height: 42px; padding: 0 12px; }
 textarea { padding: 11px 12px; resize: vertical; }
-input:focus, select:focus, textarea:focus { border-color: var(--sg-accent); outline: 0; }
-input:disabled, select:disabled { color: var(--sg-text-muted); cursor: not-allowed; }
+input:focus, textarea:focus { border-color: var(--sg-accent); outline: 0; }
+input:disabled { color: var(--sg-text-muted); cursor: not-allowed; }
 small, .people-section p, .path-preview p { margin: 0; color: var(--sg-text-muted); font-size: 11px; line-height: 1.55; }
 .field-error { color: #ffb4b4; }
 .field-error button { color: var(--sg-accent); cursor: pointer; background: transparent; border: 0; }

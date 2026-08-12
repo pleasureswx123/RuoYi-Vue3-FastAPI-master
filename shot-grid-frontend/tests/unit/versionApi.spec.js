@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import request from '@/utils/request'
 import {
   createVersionSubmission,
+  createVersionPlaybackTicket,
   downloadProtectedVersionFile,
   getCurrentTaskVersionSubmission,
   getTaskVersions,
@@ -10,6 +11,7 @@ import {
   getVersionSubmissionStatus,
   preflightVersionSubmission,
   retryVersionSubmission,
+  resolvePlaybackUrl,
   uploadProtectedVersionFile
 } from '@/api/shot-grid/versions'
 
@@ -115,5 +117,22 @@ describe('版本 API 真实契约', () => {
     })
     expect(() => getTaskVersions('../31')).toThrow('任务 ID 必须为正整数')
     expect(() => downloadProtectedVersionFile(7, '../secret')).toThrow('文件 ID 必须是有效 UUID')
+  })
+
+  it('原生媒体播放先领取资源绑定票据并只接受站内播放地址', () => {
+    const signal = new AbortController().signal
+    createVersionPlaybackTicket(7, '550e8400-e29b-41d4-a716-446655440000', { signal })
+
+    expect(request).toHaveBeenCalledWith({
+      url: '/shot-grid/versions/7/files/550e8400-e29b-41d4-a716-446655440000/playback-ticket',
+      method: 'post',
+      headers: { repeatSubmit: false },
+      signal,
+      silentError: true
+    })
+    expect(resolvePlaybackUrl('/shot-grid/playback/ticket/versions/7/files/file')).toMatch(
+      /\/shot-grid\/playback\/ticket\/versions\/7\/files\/file$/
+    )
+    expect(() => resolvePlaybackUrl('https://evil.example/video')).toThrow('播放地址不合法')
   })
 })

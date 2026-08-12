@@ -19,6 +19,7 @@ ACCEPTED_STATUS = 202
 NEW_OPERATION_ID = 7002
 
 EXPECTED_ROUTES = {
+    ('GET', '/shot-grid/projects/{projectId}/files'): 'shotgrid:storage:path',
     ('GET', '/shot-grid/projects/{projectId}/storage/operations'): 'shotgrid:storage:path',
     ('GET', '/shot-grid/projects/{projectId}/storage/operations/{operationId}'): 'shotgrid:storage:path',
     ('POST', '/shot-grid/projects/{projectId}/storage/retry'): 'shotgrid:storage:retry',

@@ -146,6 +146,7 @@ class SchedulerUtil:
     _event_listener_scheduler: AsyncIOScheduler | None = None
     _shot_grid_storage_job_id: str = '_shot_grid_storage_outbox'
     _shot_grid_version_job_id: str = '_shot_grid_version_publisher'
+    _shot_grid_media_job_id: str = '_shot_grid_media_derivation'
 
     @staticmethod
     def _parse_job_args(job_args: str | None) -> list[Any] | None:
@@ -303,6 +304,29 @@ class SchedulerUtil:
         )
 
     @classmethod
+    def _register_shot_grid_media_job(cls) -> None:
+        """为 Application Leader 注册媒体派生内部任务。"""
+
+        if DataBaseConfig.db_type != 'postgresql':
+            return
+        try:
+            config = importlib.import_module('module_shot_grid.config').SHOT_GRID_MEDIA_WORKER_CONFIG
+        except (AttributeError, ImportError):
+            return
+        if not config.enabled:
+            return
+        scheduler.add_job(
+            func=module_task.shot_grid_media_task.run_shot_grid_media_derivation,
+            trigger='interval',
+            seconds=config.poll_interval_seconds,
+            id=cls._shot_grid_media_job_id,
+            name='Shot Grid媒体派生',
+            coalesce=True,
+            max_instances=1,
+            replace_existing=True,
+        )
+
+    @classmethod
     def _ensure_scheduler_event_listener(cls) -> None:
         """确保同一个 Scheduler 实例只注册一次事件监听器。"""
         if cls._event_listener_scheduler is scheduler:
@@ -421,6 +445,7 @@ class SchedulerUtil:
         cls._ensure_scheduler_event_listener()
         cls._register_shot_grid_storage_job()
         cls._register_shot_grid_version_job()
+        cls._register_shot_grid_media_job()
 
         if cls._should_enable_scheduler_sync():
             # 添加任务状态同步任务（每30秒从数据库同步一次任务状态）
@@ -504,6 +529,7 @@ class SchedulerUtil:
             scheduler.shutdown()
         await module_task.shot_grid_storage_task.wait_for_shot_grid_storage_outbox_shutdown()
         await module_task.shot_grid_version_task.wait_for_shot_grid_version_publisher_shutdown()
+        await module_task.shot_grid_media_task.wait_for_shot_grid_media_derivation_shutdown()
         await cls._dispose_sync_async_engine()
         cls._dispose_sync_engines()
         cls._ensure_reacquire_task()
@@ -1023,8 +1049,7 @@ class SchedulerUtil:
             logger.info('✅️ 关闭定时任务成功')
         # AsyncIOExecutor.shutdown(wait=True) 只会取消并立即返回；显式等待 NAS Job
         # 收敛当前不可强杀的 SMB I/O 和租约后，应用才能继续关闭数据库。
-        await module_task.shot_grid_storage_task.wait_for_shot_grid_storage_outbox_shutdown()
-        await module_task.shot_grid_version_task.wait_for_shot_grid_version_publisher_shutdown()
+        await cls._wait_for_shot_grid_internal_jobs()
         # 必须在Redis连接池关闭前，原子释放当前进程持有的Application leader租约
         redis = cls._redis
         cls._redis = None
@@ -1039,6 +1064,14 @@ class SchedulerUtil:
                     logger.info(f'🔓 Worker {cls._worker_id} 释放 Application 锁')
         finally:
             cls._is_leader = False
+
+    @staticmethod
+    async def _wait_for_shot_grid_internal_jobs() -> None:
+        """在数据库引擎关闭前等待不可强杀的内部文件任务。"""
+
+        await module_task.shot_grid_storage_task.wait_for_shot_grid_storage_outbox_shutdown()
+        await module_task.shot_grid_version_task.wait_for_shot_grid_version_publisher_shutdown()
+        await module_task.shot_grid_media_task.wait_for_shot_grid_media_derivation_shutdown()
 
     @classmethod
     def _import_function(cls, func_path: str) -> Callable[..., Any]:

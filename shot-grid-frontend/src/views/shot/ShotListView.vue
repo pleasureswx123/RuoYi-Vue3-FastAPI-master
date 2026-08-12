@@ -333,8 +333,8 @@ onBeforeUnmount(() => { disposed = true; projectController?.abort(); shotControl
     <ProjectStatePanel v-if="projectsError" :title="projectsError.title" :message="projectsError.message" :retryable="projectsError.retryable" @retry="loadProjects" />
     <template v-else>
       <section class="project-context">
-        <label><span>当前项目</span><select v-model="selectedProjectId" :disabled="projectsLoading"><option value="">{{ projectsLoading ? '正在加载项目…' : '请选择项目' }}</option><option v-for="item in projects" :key="item.projectId" :value="String(item.projectId)">{{ item.projectCode }} · {{ item.projectName }}</option></select></label>
-        <label v-if="canViewAll"><span>项目范围</span><select v-model="scope"><option value="">我的项目</option><option value="all">全部项目</option></select></label>
+        <label><span>当前项目</span><el-select v-model="selectedProjectId" class="sg-select" :placeholder="projectsLoading ? '正在加载项目…' : '请选择项目'" :disabled="projectsLoading"><el-option :label="projectsLoading ? '正在加载项目…' : '请选择项目'" value="" /><el-option v-for="item in projects" :key="item.projectId" :label="`${item.projectCode} · ${item.projectName}`" :value="String(item.projectId)" /></el-select></label>
+        <label v-if="canViewAll"><span>项目范围</span><el-select v-model="scope" class="sg-select" placeholder="我的项目"><el-option label="我的项目" value="" /><el-option label="全部项目" value="all" /></el-select></label>
         <div v-if="project" class="project-context__meta"><span>{{ project.projectTypeName }}</span><span>{{ project.aspectRatio }}</span><span>{{ project.myProjectRole === 'director' ? '项目总监' : project.myProjectRole === 'creator' ? '制作人员' : '跨项目管理员' }}</span><span :data-ready="project.storageStatus === 'ready'">存储：{{ project.storageStatus === 'ready' ? '就绪' : project.storageStatus === 'failed' ? '失败' : '初始化中' }}</span></div>
       </section>
 
@@ -343,10 +343,10 @@ onBeforeUnmount(() => { disposed = true; projectController?.abort(); shotControl
       <template v-else-if="selectedProjectId">
         <form class="shot-filters" aria-label="镜头筛选" @submit.prevent="submitFilters">
           <label class="shot-search"><el-icon><Search /></el-icon><input v-model="query.keyword" maxlength="200" placeholder="镜头号、目录、内容、台词或场次名称" /></label>
-          <select v-model="query.episodeId" aria-label="按集筛选"><option value="">全部集</option><option v-for="episode in episodes" :key="episode.episodeId" :value="String(episode.episodeId)">{{ episode.episodeCode }} {{ episode.episodeName || '' }}</option></select>
-          <select v-model="query.sceneId" aria-label="按场次筛选" :disabled="!query.episodeId || scenesLoading"><option value="">{{ scenesLoading ? '加载场次中…' : '全部场次' }}</option><option v-for="scene in scenes" :key="scene.sceneId" :value="String(scene.sceneId)">{{ scene.sceneCode }} {{ scene.sceneName || '' }}</option></select>
-          <select v-model="query.shotStatus" aria-label="按状态筛选"><option value="">全部状态</option><option v-for="status in ['unassigned','not_started','in_progress','reviewing','revision','completed']" :key="status" :value="status">{{ shotStatusMeta(status).label }}</option></select>
-          <select v-model="query.assigneeUserId" aria-label="按制作人筛选"><option value="">全部制作人</option><option v-for="member in creatorMembers" :key="member.userId" :value="String(member.userId)">{{ member.nickName }}（{{ member.producerCode }}）</option></select>
+          <el-select v-model="query.episodeId" class="sg-select" placeholder="全部集" aria-label="按集筛选"><el-option label="全部集" value="" /><el-option v-for="episode in episodes" :key="episode.episodeId" :label="`${episode.episodeCode} ${episode.episodeName || ''}`" :value="String(episode.episodeId)" /></el-select>
+          <el-select v-model="query.sceneId" class="sg-select" :placeholder="scenesLoading ? '加载场次中…' : '全部场次'" aria-label="按场次筛选" :disabled="!query.episodeId || scenesLoading"><el-option :label="scenesLoading ? '加载场次中…' : '全部场次'" value="" /><el-option v-for="scene in scenes" :key="scene.sceneId" :label="`${scene.sceneCode} ${scene.sceneName || ''}`" :value="String(scene.sceneId)" /></el-select>
+          <el-select v-model="query.shotStatus" class="sg-select" placeholder="全部状态" aria-label="按状态筛选"><el-option label="全部状态" value="" /><el-option v-for="status in ['unassigned','not_started','in_progress','reviewing','revision','completed']" :key="status" :label="shotStatusMeta(status).label" :value="status" /></el-select>
+          <el-select v-model="query.assigneeUserId" class="sg-select" placeholder="全部制作人" aria-label="按制作人筛选"><el-option label="全部制作人" value="" /><el-option v-for="member in creatorMembers" :key="member.userId" :label="`${member.nickName}（${member.producerCode}）`" :value="String(member.userId)" /></el-select>
           <el-button native-type="submit" :loading="shotsLoading">查询</el-button><el-button :icon="Refresh" circle aria-label="刷新镜头" :disabled="shotsLoading" @click="loadShots" />
         </form>
 

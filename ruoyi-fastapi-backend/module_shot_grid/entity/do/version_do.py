@@ -251,3 +251,60 @@ class ShotGridVersionFile(ShotGridCreateAuditMixin, Base):
         Index('idx_sg_version_file_file', 'file_id'),
         {'comment': 'Shot Grid版本文件用途关系表'},
     )
+
+
+class ShotGridMediaDerivation(Base):
+    """每个不可覆盖版本唯一的媒体派生任务。"""
+
+    __tablename__ = 'sg_media_derivation'
+
+    version_id = Column(
+        BigInteger,
+        ForeignKey('sg_version.version_id', ondelete='RESTRICT'),
+        primary_key=True,
+        nullable=False,
+        comment='版本ID',
+    )
+    source_file_id = Column(
+        String(36),
+        ForeignKey('sys_file_info.file_id', ondelete='RESTRICT'),
+        nullable=False,
+        comment='主审核源文件ID',
+    )
+    media_kind = Column(String(10), nullable=False, comment='媒体类型')
+    derivation_status = Column(String(20), nullable=False, server_default='pending', comment='派生状态')
+    attempt_count = Column(Integer, nullable=False, server_default='0', comment='尝试次数')
+    lease_owner = Column(String(100), nullable=True, comment='Worker租约持有者')
+    lease_until = Column(SHOT_GRID_DATETIME, nullable=True, comment='Worker租约到期时间')
+    next_retry_time = Column(SHOT_GRID_DATETIME, nullable=True, comment='下次重试时间')
+    last_error_key = Column(String(100), nullable=True, comment='最近错误键')
+    last_error_message = Column(String(500), nullable=True, comment='已净化错误摘要')
+    create_time = Column(SHOT_GRID_DATETIME, nullable=False, default=datetime.now, comment='创建时间')
+    update_time = Column(
+        SHOT_GRID_DATETIME,
+        nullable=False,
+        default=datetime.now,
+        onupdate=datetime.now,
+        comment='更新时间',
+    )
+
+    __table_args__ = (
+        CheckConstraint("media_kind in ('image', 'video')", name='ck_sg_media_derivation_kind'),
+        CheckConstraint(
+            "derivation_status in ('pending', 'processing', 'completed', 'failed')",
+            name='ck_sg_media_derivation_status',
+        ),
+        CheckConstraint('attempt_count >= 0', name='ck_sg_media_derivation_attempt_count'),
+        CheckConstraint(
+            "(derivation_status = 'processing' and lease_owner is not null and lease_until is not null) or "
+            "(derivation_status <> 'processing' and lease_owner is null and lease_until is null)",
+            name='ck_sg_media_derivation_lease',
+        ),
+        CheckConstraint(
+            "(derivation_status = 'failed' and last_error_key is not null and last_error_message is not null) or "
+            "(derivation_status <> 'failed' and last_error_key is null and last_error_message is null)",
+            name='ck_sg_media_derivation_error',
+        ),
+        Index('idx_sg_media_derivation_due', 'derivation_status', 'next_retry_time', 'update_time'),
+        {'comment': 'Shot Grid媒体派生任务'},
+    )

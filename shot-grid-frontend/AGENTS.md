@@ -8,7 +8,7 @@
 - 基础后端：`../ruoyi-fastapi-backend/`。
 - 后台管理端参考实现：`../ruoyi-fastapi-frontend/`。
 - 当前主数据库：PostgreSQL。
-- 当前目录已建立可独立构建的 Vue 3/Vite/Pinia/Vue Router/Axios/Element Plus 应用基座，包含自有登录页、真实验证码/登录/用户信息/退出/范围导航调用、六项本地白名单路由、业务 Layout、统一请求与传输加密、401 会话清理，以及 403/404/5xx 分流。项目页已接入真实范围列表、创建、详情/概览、编辑、归档、成员维护、存储状态和目录诊断；镜头页已接入真实筛选/分页、三视图、详情、CRUD/分配、受保护缩略图和镜头 Excel 模板/预检/提交；资产页已接入真实筛选/分页、表格/卡片/类型看板、详情、资产与制作分项 CRUD、分配/改派、受保护缩略图和资产 Excel 预检/提交；工作台已接入跨项目真实“我的任务”，`/tasks/:taskId` 已接入详情/开始/编辑和版本提交工作区，`/versions/:versionId` 已接入版本详情与受保护下载，均不回退 Mock。资产模板下载仍因规定的 `artifact_tool` 安全匿名化、渲染和复核流程不可用而保持未交付。版本审核和文件与 NAS 一级页仍主要是后续真实数据接入边界。后端已建立 PostgreSQL 领域表、`20260810_01 → 20260811_06` 迁移链、导航、项目/成员/范围查询、集/场次/镜头/资产/制作分项普通管理、两类 Excel 预检与正式提交、独立任务管理、默认关闭的版本发布 Worker、不可覆盖版本、`auto_single` 自动审核单、意见/回复/解决及 `approve/reject/defer` 审核闭环，以及默认关闭的 NAS 目录 Outbox Worker、目录操作诊断和人工重试。生产 Dockerfile 与 Nginx 模板固定 `/shot-grid-app/` 和 `/prod-api/`；项目管理、镜头管理/镜头 Excel 导入、资产管理/资产 Excel 导入、任务工作台/版本上传四个子集均已使用隔离真实 PostgreSQL、Redis、平台账号和生产 Nginx 完成浏览器旅程。任务/版本旅程以显式 `allow_local_root=True` 的 TEMP 适配器验证发布算法和编排，不是真实 UNC/SMB/NAS 服务账号验收。资产需求人工处理、`manual_batch`、完整审核前端、媒体派生、文件页和真实 UNC 仍未完成。任何子集旅程都不是完整系统 E2E，不得把逻辑 `healthy` 或 `storageStatus=ready` 测试记录、夹具目录补齐、临时本地目录、项目创建 HTTP 202、静态检查、构建或 Worker 关闭的页面旅程描述成 NAS 生产验收通过。
+- 当前目录已建立可独立构建的 Vue 3/Vite/Pinia/Vue Router/Axios/Element Plus 应用基座及真实业务页面。`manual_batch`、资产需求人工处理、模板下载、统一搜索和点/矩形/箭头/文字批注均已接入。视频先用 Bearer 鉴权领取 Redis 短期播放票据，再由原生 `<video>` 发起 Range；票据绑定登录会话和单一版本文件，每次请求重查账号权限、项目成员及文件 ACL。项目、镜头、资产及任务/版本四个子集已完成隔离浏览器旅程；真实 MP4/MOV 206/416、审核、文件、搜索、资产需求和新模板尚无隔离浏览器旅程。媒体派生和真实 UNC 仍未完成。任何子集旅程都不是完整系统 E2E。
 
 需求文档定义产品意图，本文件补充工程边界和必须保持的数据不变量。若需求文档与已确认的后端契约不一致，应先记录差异，再修改实现；不得在页面组件中用临时兼容掩盖数据模型冲突。
 
@@ -249,6 +249,14 @@ ruoyi-fastapi-frontend
 
 除非用户明确批准技术迁移，不引入 React、Nuxt、另一套组件库或另一种包管理器。新工程必须提交 `package-lock.json`，保证依赖安装可复现。
 
+### 6.1 依赖优先与禁止重复造轮子
+
+- 开始实现页面、交互、状态管理、网络请求、工具函数或工程能力前，必须先检查本工程 `package.json`、现有源码和后台管理端基座，形成全局复用判断，不能只针对当前截图或单个组件做局部实现。
+- `package.json` 中已经引入且能满足需求的成熟依赖必须优先使用；本项目的表单、选择器、弹窗、表格、分页、提示和反馈等通用交互默认使用 Element Plus，禁止用原生控件加自制交互或另写同类组件替代。
+- 复用现有依赖时应遵循其公开 API、主题变量、可访问性和测试方式；业务样式只负责品牌主题和布局适配，不复制组件库内部交互逻辑。
+- 只有在现有技术栈确实不覆盖需求时才能新增依赖或自研通用能力，并且必须先说明缺口、复用评估、维护成本、包体影响、边界和验证方式；不得因不熟悉现有依赖而重复造轮子。
+- 发现同类问题时应检索整个 `shot-grid-frontend` 的相同实现并统一治理，同时检查测试、全局注册、主题和文档，避免只修一个页面造成交互与视觉继续漂移。
+
 优先复用或适配后台管理端的以下能力：
 
 - 登录、Token 获取和退出逻辑；
@@ -285,13 +293,13 @@ ruoyi-fastapi-frontend
 - 资产制作人使用分页 `GET /shot-grid/projects/{projectId}/asset-assignee-options`，只展示后端返回的活动项目成员安全摘要；候选响应不能替代写事务中的项目状态、角色、成员和制作人缩写复核。
 - 资产缩略图使用受保护版本文件 URL，经统一请求层获取 Blob；403/404 显示占位，切换/卸载时中止请求并释放 Object URL。前端严格使用后端返回的制作分项缩略图和父资产代表图，不自行回退旧版本或重新选图。
 - 资产导入弹窗使用现有 `asset-v1` preview/commit 接口展示 total 20、valid 19、warningRows 3、errorRows 1 的正式原样表结果，并使用 `selectedRows[{sheetName,rowNumber}]`、内存 Token 和稳定幂等键提交。原样表结构为 12 个父资产、20 个制作分项；错误行不可选，警告行仍可按用户选择提交。
-- 资产模板下载尚未交付。原样表必须先通过规定的 `artifact_tool` 安全匿名化、渲染和复核流程，工具链不可用时不得直接打包或透传原样表，也不得把规划中的 `GET /shot-grid/imports/assets/template` 当作可用接口。页面应明确说明该边界，不能用失败回退或本地静态文件伪装官方模板。
+- 资产模板下载已交付：`GET /shot-grid/imports/assets/template` 返回经 `artifact_tool` 生成、渲染和复核的匿名 `asset-v1` 固定资源，并以 SHA-256 摘要失败关闭；模板沿用 `docs/资产-样表.xlsx` 的 `Sheet1!A:G`、黑底白字表头和合并父级结构，禁止重新打包或透传含真实人名/项目内容的原样表。资产页“待匹配需求”使用 Element Plus 表格、筛选和选择组件调用冻结的 list/resolve/ignore/rematch API；解决与忽略必须提交原因，重新匹配不得覆盖 `ignored`。
 - 项目 `completed` 或 `archived` 时，前端隐藏集、场次、镜头、资产、资产制作分项及两类导入的写入口，详情 `allowedActions` 也不得自行合成。当前后端终态门禁明确覆盖项目自身、集、场次、镜头、资产、资产制作分项及两类 Excel 导入；不能推断成员、任务、版本、审核、文件或目录操作已经完成其余全域治理。
 - `/workbench` 使用真实 `GET /shot-grid/tasks/mine`，筛选、排序和分页都以服务端结果为准；任务详情深链为 `/tasks/:taskId`，归属 `workbench` 路由域，读取真实详情并调用开始/编辑接口。开始、编辑和提交版本动作必须满足平台权限与后端 `allowedActions` 的交集，后端仍是最终门禁。
 - 任务版本工作区按本地校验、只读 preflight、平台 private upload、create HTTP 202 顺序执行；create 会锁内复检，刷新通过 current 恢复。每轮自动查询最多 30 次，连续 3 次查询错误后暂停，指数退避有上限，401/403/404 停止；`committed` 才触发成功和历史刷新，`failed` 只重试原提交行。
 - 版本历史和详情使用真实接口；版本深链固定为 `/versions/:versionId` 并归属 `reviews` 路由域。版本查询、失败重试、历史列表和下载分别要求 `shotgrid:version:query`、`shotgrid:version:retry`、`shotgrid:version:list` 和 `shotgrid:file:download`，下载走受保护 Range 接口并释放临时 Object URL。
 - create 的稳定幂等状态、已上传文件和敏感提交字段只保存在组件内存；未知 create 结果重放复用原 `fileId` 和幂等键，跳过 preflight/upload。任务、操作和文件上下文都使用 abort + generation 防止同 ID 往返的 ABA 迟到响应；统一请求层仅对 JSON Content-Type 且不超过 64 KiB 的 Blob/ArrayBuffer 错误做有界解析，保留 `httpStatus/code/errorKey/details`。
-- 版本审核一级页、完整审核交互和文件与 NAS 一级页仍主要是边界占位；`manual_batch` 仍未实现。任务工作台/版本上传已有独立隔离浏览器子集证据，但不得仅因页面接入或该子集通过，就宣称审核前端、完整系统 E2E 或全部业务页面已经完成。
+- 版本审核一级页和详情已接真实 `auto_single` 与 `manual_batch` 审核 API，支持审核单状态机、意见/回复/解决、三种审核决定、鉴权图片 Blob、短期票据视频 Range、视频毫秒时间捕获、四类归一化批注、A/B 对比和退回再提交入口。代码接通不能替代真实 MP4/MOV 的 206/416 浏览器旅程；审核和文件前端仍只有定向检查证据。
 
 ## 7. 推荐目录与依赖方向
 
@@ -422,6 +430,7 @@ shot-grid-frontend/
 - 评论、文件名、提示词和项目描述均按不可信输入处理；渲染富文本时必须经过白名单清洗。
 - 文件预览和下载必须使用受保护接口，不泄露 `storage_key`、服务器绝对路径或对象存储凭据。
 - 项目搜索和文件搜索必须受项目成员关系与数据权限约束。
+- 统一搜索入口复用 `shotgrid:navigation:list`；镜头、资产和文件结果分别要求列表权限与目标详情权限同时成立，防止返回用户无法打开的结果。
 - 审核动作、最终版本变更、文件下载和权限变更应由后端记录审计。
 - 前端不得根据隐藏字段、路由来源或本地缓存推断授权。
 
@@ -440,6 +449,19 @@ shot-grid-frontend/
 每一步都应先定义 API 与状态契约，再实现页面；不要以大量硬编码 Mock 页面倒逼后端迁就临时字段。
 
 ## 14. 验证与验收
+
+### 14.1 当前快速迭代验证策略
+
+在 Shot Grid 功能尚未补齐期间，默认采用“随改随做最小定向检查、阶段节点集中跑全量门禁”的策略：
+
+- 单个页面的文案、样式或组件替换：检查改动文件，并在必要时只打开该页面验证一次；不默认运行全部 148 个测试和生产构建。
+- 单个组件或业务函数：只运行直接相关的 spec；没有相关测试且风险较低时，可用一次局部 lint 或核心交互检查代替，并明确未运行全量测试。
+- API 调用、状态流转或路由上下文：运行对应模块测试和一条关键成功/失败路径，不扩展到无关模块。
+- 依赖、Vite 配置、全局注册、公共请求层、路由守卫或共享组件变更：按影响范围增加 lint、相关测试或构建，但仍避免重复执行已经在相同代码状态下通过的门禁。
+- 一批相关功能完成后再统一运行全量 `npm.cmd run lint`、`npm.cmd test` 和 `npm.cmd run build:prod`；完整产品功能完成后再执行严格浏览器旅程和最终 E2E。
+- 默认只汇报命令、通过/失败数量和关键错误，不粘贴完整模块转换列表、全部测试名称或重复日志。
+
+若用户明确要求“快速实现”“先补功能”或“简单检查”，以上策略优先；若用户明确要求发布验收、完整检查或 E2E，则切换到严格门禁。任何阶段都不得把最小定向检查夸大为完整验收。
 
 工程至少提供以下 npm scripts：
 
@@ -497,7 +519,7 @@ MVP 不能只以页面数量验收，至少需要真实走通：
 
 资产管理/资产 Excel 导入子集已在隔离 PostgreSQL、Redis DB 15、真实 FastAPI/平台账号、生产 Nginx 和 Chrome 下完成浏览器旅程：preview 20/19/3/1，19 个可导入行一次提交形成 11 个活动资产、19 个分项/任务和 1 个显式隔离夹具自动匹配；三视图、Environment=2、蒋浩筛选=8、详情深链/刷新、临时资产/分项 CRUD 与业务归档、任务改派、7 条成功审计、控制台 0 error/0 warning、浏览器存储敏感信息边界、退出保护及 Redis Token 清理均通过。目录 Worker 关闭且 12 条 Outbox 均为 `pending`；资产模板未交付/未测试，真实版本缩略图只验证空态，逻辑 `storageStatus=ready` 夹具不证明 UNC/NAS。验收后隔离容器、18081/19099、隔离数据库、Redis DB 15 和 TEMP 均为零残留，原 9099 服务及基础 PostgreSQL/Redis 未动。
 
-任务工作台/版本上传子集已在 fresh PostgreSQL head `20260811_06`（22 张 `sg_` 表）、Redis DB 15、真实平台登录、生产 Nginx 和 Chrome 下完成浏览器旅程：`/workbench` 展示 21 条任务并验证服务端分页 20+1、关键字筛选 1 条；`taskId=900001` start HTTP 200，`lockVersion` 0→1；5663 B `logo.png` 严格按 preflight 200 → private upload 200 → create 202 提交，pending reload 后 current 200 恢复。显式 `allow_local_root=True` 的本地 TEMP 适配器按两阶段推进 `published → committed`、attempt=1，形成 V001 `pending_review`、任务 `lockVersion=2`、1 个 `auto_single` 和 1 条正式文件引用；受保护详情/下载均为 200，下载 5663 B 且 SHA-256 一致。控制台 0 error/0 warning；localStorage/sessionStorage 不含认证 Token、幂等键、`fileId`、修改说明或 AI 参数，登录期间认证 Token 只存在 `Admin-Token` Cookie；logout 200 后 Cookie 清除且任务/版本深链守卫生效，验收目标已精确清理。该结果仅为隔离任务/版本子集 E2E PASS：TEMP 适配器是算法与编排验证，夹具目录补齐仅为逻辑预览，未验证真实 UNC/SMB/NAS 服务账号、审核前端、`manual_batch`、codec、媒体轨、可解码性或转码，也不是完整系统 E2E。
+任务工作台/版本上传子集已在 fresh PostgreSQL head `20260811_06`（22 张 `sg_` 表）、Redis DB 15、真实平台登录、生产 Nginx 和 Chrome 下完成浏览器旅程：`/workbench` 展示 21 条任务并验证服务端分页 20+1、关键字筛选 1 条；`taskId=900001` start HTTP 200，`lockVersion` 0→1；5663 B `logo.png` 严格按 preflight 200 → private upload 200 → create 202 提交，pending reload 后 current 200 恢复。显式 `allow_local_root=True` 的本地 TEMP 适配器按两阶段推进 `published → committed`、attempt=1，形成 V001 `pending_review`、任务 `lockVersion=2`、1 个 `auto_single` 和 1 条正式文件引用；受保护详情/下载均为 200，下载 5663 B 且 SHA-256 一致。控制台 0 error/0 warning；localStorage/sessionStorage 不含认证 Token、幂等键、`fileId`、修改说明或 AI 参数，登录期间认证 Token 只存在 `Admin-Token` Cookie；logout 200 后 Cookie 清除且任务/版本深链守卫生效，验收目标已精确清理。该结果仅为隔离任务/版本子集 E2E PASS：TEMP 适配器是算法与编排验证，夹具目录补齐仅为逻辑预览；后续新增的审核前端尚未纳入该旅程，且真实 UNC/SMB/NAS 服务账号、`manual_batch`、codec、媒体轨、可解码性或转码也未验证，不是完整系统 E2E。
 
 ## 15. 变更纪律
 

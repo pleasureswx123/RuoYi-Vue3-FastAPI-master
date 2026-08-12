@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, ref } from 'vue'
 import { Document, UploadFilled, WarningFilled } from '@element-plus/icons-vue'
 
-import { commitAssetImport, previewAssetImport } from '@/api/shot-grid/assets'
+import { commitAssetImport, downloadAssetImportTemplate, previewAssetImport } from '@/api/shot-grid/assets'
 import { createIdempotencyState } from '@/utils/idempotency'
 import { assetErrorState, assetTypeMeta, groupAssetPreviewRows, selectableAssetPreviewRows } from '@/views/asset/assetPresentation'
 import ProjectModal from '@/views/project/components/ProjectModal.vue'
@@ -23,10 +23,12 @@ const preview = ref(null)
 const selectedKeys = ref(new Set())
 const previewing = ref(false)
 const committing = ref(false)
+const downloading = ref(false)
 const validationMessage = ref('')
 const requestError = ref(null)
 const commitResult = ref(null)
 let previewController = null
+let downloadController = null
 let fileGeneration = 0
 
 const groupedRows = computed(() => groupAssetPreviewRows(preview.value?.rows || []))
@@ -105,6 +107,33 @@ async function runPreview() {
   }
 }
 
+async function downloadTemplate() {
+  requestError.value = null
+  downloadController?.abort()
+  const controller = new AbortController()
+  downloadController = controller
+  downloading.value = true
+  let objectUrl = null
+  try {
+    const blob = await downloadAssetImportTemplate({ signal: controller.signal })
+    if (downloadController !== controller || controller.signal.aborted) return
+    objectUrl = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = objectUrl
+    link.download = '资产导入模板-asset-v1.xlsx'
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+  } catch (error) {
+    if (error?.code !== 'ERR_CANCELED' && !controller.signal.aborted) {
+      requestError.value = assetErrorState(error, '资产导入模板下载失败')
+    }
+  } finally {
+    if (objectUrl) URL.revokeObjectURL(objectUrl)
+    if (downloadController === controller) downloading.value = false
+  }
+}
+
 function toggleRow(row) {
   if (!row.canImport) return
   const next = new Set(selectedKeys.value)
@@ -167,6 +196,7 @@ function detailsText(details) {
 
 onBeforeUnmount(() => {
   previewController?.abort()
+  downloadController?.abort()
 })
 </script>
 
@@ -176,11 +206,11 @@ onBeforeUnmount(() => {
       <section class="file-picker" :class="{ 'has-file': file }">
         <el-icon><UploadFilled /></el-icon>
         <div><strong>{{ file?.name || '选择资产 Excel 工作簿' }}</strong><p>{{ file ? `${(file.size / 1024).toFixed(1)} KiB` : '仅支持 .xlsx，最大 10 MiB；正式模板主数据区为 A:G。' }}</p></div>
-        <el-button text disabled title="安全匿名模板尚未发布">安全模板待发布</el-button>
+        <el-button text :loading="downloading" :disabled="isBusy" @click="downloadTemplate">下载官方模板</el-button>
         <label><input type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" :disabled="isBusy" @change="chooseFile" /><span>{{ file ? '更换文件' : '选择文件' }}</span></label>
         <el-button type="primary" :loading="previewing" :disabled="!file || committing" @click="runPreview">{{ preview ? '重新预检' : '开始预检' }}</el-button>
       </section>
-      <p class="template-boundary">当前可上传符合资产 A:G 契约的现有 `.xlsx` 文件进行真实预检与提交；官方模板经匿名化和摘要门禁通过后才会开放下载。</p>
+      <p class="template-boundary">官方模板沿用 docs/ 资产样表的 A:G 结构与合并分项方式，示例内容已经匿名化；下载后请先替换所有“示例”数据再预检。</p>
 
       <div v-if="validationMessage || requestError" class="import-error" role="alert"><el-icon><WarningFilled /></el-icon><div><strong>{{ requestError?.title || '请检查导入条件' }}</strong><p>{{ requestError?.message || validationMessage }}</p><code v-if="requestError?.errorKey">{{ requestError.errorKey }}</code><p v-if="requestError?.details">{{ detailsText(requestError.details) }}</p></div></div>
 

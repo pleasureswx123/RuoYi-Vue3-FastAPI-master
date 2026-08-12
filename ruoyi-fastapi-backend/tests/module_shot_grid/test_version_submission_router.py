@@ -9,6 +9,7 @@ from config.env import UploadConfig
 from module_admin.entity.vo.user_vo import CurrentUserModel, UserInfoModel
 from module_shot_grid.controller.version_submission_controller import (
     get_shot_grid_task_current_version_submission,
+    playback_controller,
     preflight_shot_grid_version_submission,
     version_submission_controller,
 )
@@ -28,6 +29,7 @@ EXPECTED_ROUTES = {
     ('GET', '/shot-grid/version-submissions/{submissionId}'): 'shotgrid:version:query',
     ('POST', '/shot-grid/version-submissions/{submissionId}/retry'): 'shotgrid:version:retry',
     ('GET', '/shot-grid/versions/{versionId}/files/{fileId}/download'): 'shotgrid:file:download',
+    ('POST', '/shot-grid/versions/{versionId}/files/{fileId}/playback-ticket'): 'shotgrid:file:download',
 }
 
 
@@ -53,6 +55,10 @@ def test_version_submission_routes_and_permissions_match_contract() -> None:
     assert paths.index('/shot-grid/tasks/{taskId}/version-submissions/preflight') < paths.index(
         '/shot-grid/version-submissions/{submissionId}'
     )
+
+    playback_route = next(route for route in playback_controller.routes if '/playback/' in route.path)
+    assert playback_route.methods == {'GET'}
+    assert playback_route.dependencies == []
 
 
 def test_version_submission_openapi_documents_business_required_header_and_bigint_bound() -> None:

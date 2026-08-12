@@ -14,10 +14,21 @@ from module_shot_grid.dao.project_audit_dao import ShotGridProjectAuditDao
 from module_shot_grid.dao.project_dao import ShotGridProjectDao
 from module_shot_grid.dao.project_member_dao import ShotGridProjectMemberDao
 from module_shot_grid.dao.review_dao import ShotGridReviewDao
-from module_shot_grid.entity.do.review_do import ShotGridNote, ShotGridNoteReply, ShotGridReviewAction
+from module_shot_grid.entity.do.review_do import (
+    ShotGridNote,
+    ShotGridNoteReply,
+    ShotGridReviewAction,
+    ShotGridReviewList,
+    ShotGridReviewListVersion,
+)
 from module_shot_grid.entity.vo.access_vo import ShotGridProjectAccessModel
+from module_shot_grid.entity.vo.common_vo import ShotGridLockVersionModel
 from module_shot_grid.entity.vo.review_vo import (
     ShotGridAutoReviewListSummaryModel,
+    ShotGridManualReviewListCreateModel,
+    ShotGridManualReviewListOrderModel,
+    ShotGridManualReviewListUpdateModel,
+    ShotGridManualReviewListVersionsModel,
     ShotGridNoteCreateModel,
     ShotGridNoteListQueryModel,
     ShotGridNoteModel,
@@ -56,6 +67,36 @@ class ShotGridReviewService:
     ) -> PageModel[ShotGridVersionListItemModel]:
         context, _ = await cls._resolve_task_access(db, task_id, current_user)
         rows, total = await ShotGridReviewDao.get_task_versions(db, int(context['project_id']), task_id, query)
+        return PageModel[ShotGridVersionListItemModel](
+            rows=[cls._version_list_item(row) for row in rows],
+            pageNum=query.page_num,
+            pageSize=query.page_size,
+            total=total,
+            hasNext=(query.page_num * query.page_size) < total,
+        )
+
+    @classmethod
+    async def get_mine_review_lists(
+        cls, db: AsyncSession, query: ShotGridReviewListQueryModel, current_user: CurrentUserModel
+    ) -> PageModel[ShotGridReviewListItemModel]:
+        user_id, _, _, _ = cls._actor(current_user)
+        user = current_user.user
+        has_all_scope = bool(user and (user.admin or '*:*:*' in current_user.permissions))
+        rows, total = await ShotGridReviewDao.get_mine_review_lists(db, user_id, query, has_all_scope)
+        return PageModel[ShotGridReviewListItemModel](
+            rows=[cls._review_list_item(row) for row in rows],
+            pageNum=query.page_num,
+            pageSize=query.page_size,
+            total=total,
+            hasNext=(query.page_num * query.page_size) < total,
+        )
+
+    @classmethod
+    async def get_recent_mine_versions(
+        cls, db: AsyncSession, query: ShotGridVersionListQueryModel, current_user: CurrentUserModel
+    ) -> PageModel[ShotGridVersionListItemModel]:
+        user_id, _, _, _ = cls._actor(current_user)
+        rows, total = await ShotGridReviewDao.get_recent_mine_versions(db, user_id, query)
         return PageModel[ShotGridVersionListItemModel](
             rows=[cls._version_list_item(row) for row in rows],
             pageNum=query.page_num,
@@ -116,6 +157,24 @@ class ShotGridReviewService:
         )
 
     @classmethod
+    async def get_review_lists(
+        cls,
+        db: AsyncSession,
+        project_id: int,
+        query: ShotGridReviewListQueryModel,
+        access: ShotGridProjectAccessModel,
+    ) -> PageModel[ShotGridReviewListItemModel]:
+        cls._require_access_context(access, project_id)
+        rows, total = await ShotGridReviewDao.get_review_lists(db, project_id, query)
+        return PageModel[ShotGridReviewListItemModel](
+            rows=[cls._review_list_item(row) for row in rows],
+            pageNum=query.page_num,
+            pageSize=query.page_size,
+            total=total,
+            hasNext=(query.page_num * query.page_size) < total,
+        )
+
+    @classmethod
     async def get_auto_review_list_detail(
         cls,
         db: AsyncSession,
@@ -138,6 +197,304 @@ class ShotGridReviewService:
         values = cls._review_list_values(row)
         values['version'] = cls._version_list_item(version_row)
         return ShotGridReviewListDetailModel.model_validate(values)
+
+    @classmethod
+    async def get_review_list_detail(
+        cls, db: AsyncSession, review_list_id: int, current_user: CurrentUserModel
+    ) -> ShotGridReviewListDetailModel:
+        context = await ShotGridReviewDao.get_review_list_context(db, review_list_id)
+        if context is None:
+            raise shot_grid_error(404, 'SG_REVIEW_LIST_NOT_FOUND', '审核单不存在或不可见')
+        project_id = int(context['project_id'])
+        await ShotGridProjectAccessService.resolve_access(db, current_user, project_id)
+        row = await ShotGridReviewDao.get_review_list_row(db, project_id, review_list_id)
+        if row is None:
+            raise shot_grid_error(404, 'SG_REVIEW_LIST_NOT_FOUND', '审核单不存在或不可见')
+        values = cls._review_list_values(row)
+        if row['review_mode'] == 'auto_single':
+            auto_version_id = int(row['auto_version_id'])
+            await cls._ensure_auto_review_relation(db, review_list_id, auto_version_id)
+            version_row = await ShotGridReviewDao.get_version_row(db, project_id, auto_version_id)
+            if version_row is None:
+                raise cls._auto_review_integrity_error()
+            values['version'] = cls._version_list_item(version_row)
+            values['versions'] = [values['version']]
+        else:
+            version_rows = await ShotGridReviewDao.get_manual_review_versions(db, project_id, review_list_id)
+            values['versions'] = [cls._version_list_item(item) for item in version_rows]
+        return ShotGridReviewListDetailModel.model_validate(values)
+
+    @classmethod
+    async def create_manual_review_list(
+        cls,
+        db: AsyncSession,
+        project_id: int,
+        command: ShotGridManualReviewListCreateModel,
+        current_user: CurrentUserModel,
+        access: ShotGridProjectAccessModel,
+    ) -> ShotGridReviewListDetailModel:
+        _, actor_name, _, dept_name = cls._actor(current_user)
+        try:
+            project = await ShotGridProjectDao.get_project_by_id(db, project_id, for_update=True)
+            if project is None:
+                raise shot_grid_error(404, 'SG_PROJECT_NOT_FOUND', '项目不存在或不可见')
+            access = await cls._refresh_write_access(db, current_user, access, project_id)
+            cls._require_director(access)
+            if project.project_status == 'archived':
+                raise cls._invalid_transition('归档项目不能创建审核单')
+            review_list = await ShotGridReviewDao.add_manual_review_list(
+                db,
+                ShotGridReviewList(
+                    project_id=project_id,
+                    auto_version_id=None,
+                    review_list_name=command.review_list_name,
+                    description=command.description,
+                    review_date=command.review_date,
+                    review_mode='manual_batch',
+                    review_status='draft',
+                    create_by=actor_name,
+                    update_by=actor_name,
+                ),
+            )
+            if command.version_ids:
+                versions = await ShotGridReviewDao.get_versions_for_manual_review(db, project_id, command.version_ids)
+                if len(versions) != len(command.version_ids):
+                    raise shot_grid_error(422, 'SG_REVIEW_VERSION_INVALID', '只能加入同项目的待审核版本')
+                await ShotGridReviewDao.add_manual_review_versions(
+                    db,
+                    [
+                        ShotGridReviewListVersion(
+                            review_list_id=review_list.review_list_id,
+                            version_id=version_id,
+                            sort_order=index,
+                            create_by=actor_name,
+                        )
+                        for index, version_id in enumerate(command.version_ids)
+                    ],
+                )
+            await cls._audit(
+                db,
+                actor_name=actor_name,
+                dept_name=dept_name,
+                business_type=BusinessType.INSERT.value,
+                method='create_manual_review_list',
+                oper_url=f'/shot-grid/projects/{project_id}/review-lists',
+                payload=command.model_dump(mode='json', by_alias=True),
+                result={'reviewListId': review_list.review_list_id, 'reviewStatus': 'draft'},
+            )
+            await db.commit()
+            return await cls.get_review_list_detail(db, int(review_list.review_list_id), current_user)
+        except Exception:
+            await db.rollback()
+            raise
+
+    @classmethod
+    async def update_manual_review_list(
+        cls,
+        db: AsyncSession,
+        review_list_id: int,
+        command: ShotGridManualReviewListUpdateModel,
+        current_user: CurrentUserModel,
+    ) -> ShotGridReviewListDetailModel:
+        review_list, _, actor_name, dept_name = await cls._lock_manual_review_list(db, review_list_id, current_user)
+        try:
+            cls._require_manual_draft(review_list)
+            cls._ensure_lock_version(int(review_list.lock_version), command.lock_version)
+            review_list.review_list_name = command.review_list_name
+            review_list.description = command.description
+            review_list.review_date = command.review_date
+            cls._touch_review_list(review_list, actor_name)
+            await cls._audit(
+                db,
+                actor_name=actor_name,
+                dept_name=dept_name,
+                business_type=BusinessType.UPDATE.value,
+                method='update_manual_review_list',
+                oper_url=f'/shot-grid/review-lists/{review_list_id}',
+                payload=command.model_dump(mode='json', by_alias=True),
+                result={'reviewListId': review_list_id, 'lockVersion': review_list.lock_version},
+            )
+            await db.commit()
+            return await cls.get_review_list_detail(db, review_list_id, current_user)
+        except Exception:
+            await db.rollback()
+            raise
+
+    @classmethod
+    async def add_manual_review_versions(
+        cls,
+        db: AsyncSession,
+        review_list_id: int,
+        command: ShotGridManualReviewListVersionsModel,
+        current_user: CurrentUserModel,
+    ) -> ShotGridReviewListDetailModel:
+        review_list, project_id, actor_name, dept_name = await cls._lock_manual_review_list(
+            db, review_list_id, current_user
+        )
+        try:
+            cls._require_manual_draft(review_list)
+            cls._ensure_lock_version(int(review_list.lock_version), command.lock_version)
+            existing_ids = await ShotGridReviewDao.get_auto_review_relation_version_ids(db, review_list_id)
+            if set(existing_ids).intersection(command.version_ids):
+                raise shot_grid_error(409, 'SG_REVIEW_VERSION_DUPLICATE', '审核单已包含所选版本')
+            versions = await ShotGridReviewDao.get_versions_for_manual_review(db, project_id, command.version_ids)
+            if len(versions) != len(command.version_ids):
+                raise shot_grid_error(422, 'SG_REVIEW_VERSION_INVALID', '只能加入同项目的待审核版本')
+            await ShotGridReviewDao.add_manual_review_versions(
+                db,
+                [
+                    ShotGridReviewListVersion(
+                        review_list_id=review_list_id,
+                        version_id=version_id,
+                        sort_order=len(existing_ids) + index,
+                        create_by=actor_name,
+                    )
+                    for index, version_id in enumerate(command.version_ids)
+                ],
+            )
+            cls._touch_review_list(review_list, actor_name)
+            await cls._audit(
+                db,
+                actor_name=actor_name,
+                dept_name=dept_name,
+                business_type=BusinessType.UPDATE.value,
+                method='add_manual_review_versions',
+                oper_url=f'/shot-grid/review-lists/{review_list_id}/versions',
+                payload=command.model_dump(mode='json', by_alias=True),
+                result={'reviewListId': review_list_id, 'versionCount': len(existing_ids) + len(command.version_ids)},
+            )
+            await db.commit()
+            return await cls.get_review_list_detail(db, review_list_id, current_user)
+        except Exception:
+            await db.rollback()
+            raise
+
+    @classmethod
+    async def remove_manual_review_version(
+        cls,
+        db: AsyncSession,
+        review_list_id: int,
+        version_id: int,
+        command: ShotGridLockVersionModel,
+        current_user: CurrentUserModel,
+    ) -> ShotGridReviewListDetailModel:
+        review_list, _, actor_name, dept_name = await cls._lock_manual_review_list(db, review_list_id, current_user)
+        try:
+            cls._require_manual_draft(review_list)
+            cls._ensure_lock_version(int(review_list.lock_version), command.lock_version)
+            if not await ShotGridReviewDao.remove_manual_review_version(db, review_list_id, version_id):
+                raise shot_grid_error(404, 'SG_REVIEW_VERSION_NOT_FOUND', '审核单中不存在该版本')
+            remaining = await ShotGridReviewDao.get_auto_review_relation_version_ids(db, review_list_id)
+            if remaining:
+                await ShotGridReviewDao.reorder_manual_review_versions(
+                    db, review_list_id, [(item, index) for index, item in enumerate(remaining)]
+                )
+            cls._touch_review_list(review_list, actor_name)
+            await cls._audit(
+                db,
+                actor_name=actor_name,
+                dept_name=dept_name,
+                business_type=BusinessType.DELETE.value,
+                method='remove_manual_review_version',
+                oper_url=f'/shot-grid/review-lists/{review_list_id}/versions/{version_id}',
+                payload=command.model_dump(mode='json', by_alias=True),
+                result={'reviewListId': review_list_id, 'versionCount': len(remaining)},
+            )
+            await db.commit()
+            return await cls.get_review_list_detail(db, review_list_id, current_user)
+        except Exception:
+            await db.rollback()
+            raise
+
+    @classmethod
+    async def reorder_manual_review_versions(
+        cls,
+        db: AsyncSession,
+        review_list_id: int,
+        command: ShotGridManualReviewListOrderModel,
+        current_user: CurrentUserModel,
+    ) -> ShotGridReviewListDetailModel:
+        review_list, _, actor_name, dept_name = await cls._lock_manual_review_list(db, review_list_id, current_user)
+        try:
+            cls._require_manual_draft(review_list)
+            cls._ensure_lock_version(int(review_list.lock_version), command.lock_version)
+            existing_ids = await ShotGridReviewDao.get_auto_review_relation_version_ids(db, review_list_id)
+            requested_ids = [item.version_id for item in command.versions]
+            if set(existing_ids) != set(requested_ids) or len(existing_ids) != len(requested_ids):
+                raise shot_grid_error(422, 'SG_REVIEW_VERSION_ORDER_INVALID', '必须提交审核单完整版本集合')
+            await ShotGridReviewDao.reorder_manual_review_versions(
+                db, review_list_id, [(item.version_id, item.sort_order) for item in command.versions]
+            )
+            cls._touch_review_list(review_list, actor_name)
+            await cls._audit(
+                db,
+                actor_name=actor_name,
+                dept_name=dept_name,
+                business_type=BusinessType.UPDATE.value,
+                method='reorder_manual_review_versions',
+                oper_url=f'/shot-grid/review-lists/{review_list_id}/versions/order',
+                payload=command.model_dump(mode='json', by_alias=True),
+                result={'reviewListId': review_list_id, 'versionCount': len(existing_ids)},
+            )
+            await db.commit()
+            return await cls.get_review_list_detail(db, review_list_id, current_user)
+        except Exception:
+            await db.rollback()
+            raise
+
+    @classmethod
+    async def transition_manual_review_list(
+        cls,
+        db: AsyncSession,
+        review_list_id: int,
+        target_status: str,
+        command: ShotGridLockVersionModel,
+        current_user: CurrentUserModel,
+    ) -> ShotGridReviewListDetailModel:
+        review_list, _, actor_name, dept_name = await cls._lock_manual_review_list(db, review_list_id, current_user)
+        try:
+            cls._ensure_lock_version(int(review_list.lock_version), command.lock_version)
+            current_status = review_list.review_status
+            allowed = {
+                'active': {'draft'},
+                'completed': {'active'},
+                'archived': {'draft', 'active', 'completed'},
+            }
+            if target_status not in allowed or current_status not in allowed[target_status]:
+                raise cls._invalid_transition(f'人工审核单不能从 {current_status} 变更为 {target_status}')
+            version_ids = await ShotGridReviewDao.get_auto_review_relation_version_ids(db, review_list_id)
+            if target_status in {'active', 'completed'} and not version_ids:
+                raise cls._invalid_transition('人工审核单至少包含一个版本才能激活或完成')
+            version_rows = await ShotGridReviewDao.get_manual_review_versions(
+                db, int(review_list.project_id), review_list_id
+            )
+            if target_status == 'active' and any(item['version_status'] != 'pending_review' for item in version_rows):
+                raise cls._invalid_transition('激活前所有版本都必须仍处于待审核状态')
+            if target_status == 'completed' and any(
+                item['version_status'] == 'pending_review' for item in version_rows
+            ):
+                raise cls._invalid_transition('仍有版本尚未完成审核，不能完成批量审核单')
+            review_list.review_status = target_status
+            cls._touch_review_list(review_list, actor_name)
+            await cls._audit(
+                db,
+                actor_name=actor_name,
+                dept_name=dept_name,
+                business_type=BusinessType.UPDATE.value,
+                method=f'{target_status}_manual_review_list',
+                oper_url=f'/shot-grid/review-lists/{review_list_id}/{target_status}',
+                payload=command.model_dump(mode='json', by_alias=True),
+                result={
+                    'reviewListId': review_list_id,
+                    'reviewStatus': target_status,
+                    'lockVersion': review_list.lock_version,
+                },
+            )
+            await db.commit()
+            return await cls.get_review_list_detail(db, review_list_id, current_user)
+        except Exception:
+            await db.rollback()
+            raise
 
     @classmethod
     async def get_notes(
@@ -737,12 +1094,55 @@ class ShotGridReviewService:
     @staticmethod
     def _review_list_values(row: dict[str, Any]) -> dict[str, Any]:
         values = dict(row)
-        values['version_number'] = f'V{int(values["version_no"]):03d}'
+        values['version_count'] = int(values.get('version_count') or (1 if values.get('auto_version_id') else 0))
+        values['version_number'] = f'V{int(values["version_no"]):03d}' if values.get('version_no') is not None else None
+        thumbnail_file_id = values.pop('thumbnail_file_id', None)
+        values['thumbnail'] = (
+            {
+                'fileId': str(thumbnail_file_id),
+                'url': f'/shot-grid/versions/{values["auto_version_id"]}/files/{thumbnail_file_id}/download',
+            }
+            if thumbnail_file_id is not None and values.get('auto_version_id') is not None
+            else None
+        )
         return values
 
     @classmethod
     def _review_list_item(cls, row: dict[str, Any]) -> ShotGridReviewListItemModel:
         return ShotGridReviewListItemModel.model_validate(cls._review_list_values(row))
+
+    @classmethod
+    async def _lock_manual_review_list(
+        cls, db: AsyncSession, review_list_id: int, current_user: CurrentUserModel
+    ) -> tuple[ShotGridReviewList, int, str, str | None]:
+        _, actor_name, _, dept_name = cls._actor(current_user)
+        context = await ShotGridReviewDao.get_review_list_context(db, review_list_id)
+        if context is None:
+            raise shot_grid_error(404, 'SG_REVIEW_LIST_NOT_FOUND', '人工审核单不存在或不可见')
+        project_id = int(context['project_id'])
+        access = await ShotGridProjectAccessService.resolve_access(db, current_user, project_id)
+        project = await ShotGridProjectDao.get_project_by_id(db, project_id, for_update=True)
+        if project is None:
+            raise shot_grid_error(404, 'SG_PROJECT_NOT_FOUND', '项目不存在或不可见')
+        if project.project_status == 'archived':
+            raise cls._invalid_transition('归档项目只允许读取')
+        access = await cls._refresh_write_access(db, current_user, access, project_id)
+        cls._require_director(access)
+        review_list = await ShotGridReviewDao.get_review_list_for_update(db, project_id, review_list_id)
+        if review_list is None or review_list.review_mode != 'manual_batch':
+            raise shot_grid_error(404, 'SG_REVIEW_LIST_NOT_FOUND', '人工审核单不存在或不可见')
+        return review_list, project_id, actor_name, dept_name
+
+    @classmethod
+    def _require_manual_draft(cls, review_list: ShotGridReviewList) -> None:
+        if review_list.review_status != 'draft':
+            raise cls._invalid_transition('只有草稿人工审核单可以修改版本集合或基本信息')
+
+    @staticmethod
+    def _touch_review_list(review_list: ShotGridReviewList, actor_name: str) -> None:
+        review_list.lock_version += 1
+        review_list.update_by = actor_name
+        review_list.update_time = datetime.now()
 
     @staticmethod
     def _note_model(row: dict[str, Any]) -> ShotGridNoteModel:

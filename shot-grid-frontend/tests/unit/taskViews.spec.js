@@ -5,7 +5,9 @@ import { createMemoryHistory, createRouter } from 'vue-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { getMineTaskPage, getTaskDetail, startTask } from '@/api/shot-grid/tasks'
+import { getMineReviewListPage, getRecentMineVersions } from '@/api/shot-grid/reviews'
 import { useSessionStore } from '@/store/modules/session'
+import { setElSelectValue } from '../helpers/elementPlus'
 import TaskDetailView from '@/views/task/TaskDetailView.vue'
 import TaskEditDialog from '@/views/task/components/TaskEditDialog.vue'
 import WorkbenchView from '@/views/workbench/WorkbenchView.vue'
@@ -16,6 +18,10 @@ vi.mock('@/api/shot-grid/tasks', () => ({
   getTaskDetail: vi.fn(),
   startTask: vi.fn(),
   updateTask: vi.fn()
+}))
+vi.mock('@/api/shot-grid/reviews', () => ({
+  getMineReviewListPage: vi.fn(),
+  getRecentMineVersions: vi.fn()
 }))
 
 function taskFixture(taskId = 31, overrides = {}) {
@@ -118,6 +124,8 @@ async function mountDetail(path = '/tasks/31', permissions = ['shotgrid:task:que
 describe('真实任务工作台', () => {
   beforeEach(() => {
     getMineTaskPage.mockResolvedValue({ rows: [taskFixture()], total: 1, hasNext: false })
+    getMineReviewListPage.mockResolvedValue({ rows: [], total: 0 })
+    getRecentMineVersions.mockResolvedValue({ rows: [], total: 0 })
   })
 
   it('展示跨项目真实任务，并提交服务端分页筛选', async () => {
@@ -128,10 +136,10 @@ describe('真实任务工作台', () => {
 
     const form = wrapper.find('form[aria-label="我的任务筛选"]')
     await form.find('input[placeholder="任务、项目、镜头或资产"]').setValue('动力舱')
-    const selects = form.findAll('select')
-    await selects[0].setValue('shot_video')
-    await selects[1].setValue('revision')
-    await selects[2].setValue('urgent')
+    const selects = form.findAllComponents({ name: 'ElSelect' })
+    await setElSelectValue(selects[0], 'shot_video')
+    await setElSelectValue(selects[1], 'revision')
+    await setElSelectValue(selects[2], 'urgent')
     await form.trigger('submit')
     await flushPromises()
 

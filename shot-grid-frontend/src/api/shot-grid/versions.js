@@ -130,4 +130,24 @@ export function downloadProtectedVersionFile(versionId, fileId, options = {}) {
   })
 }
 
+export function createVersionPlaybackTicket(versionId, fileId, options = {}) {
+  return request({
+    url: `/shot-grid/versions/${assertPositiveId(versionId, '版本')}/files/${assertFileId(fileId)}/playback-ticket`,
+    method: 'post',
+    headers: { repeatSubmit: false },
+    signal: options.signal,
+    silentError: true
+  })
+}
+
+export function resolvePlaybackUrl(playbackUrl) {
+  const normalized = typeof playbackUrl === 'string' ? playbackUrl.trim() : ''
+  const expectedPrefix = '/shot-grid/playback/'
+  if (!normalized.startsWith(expectedPrefix) || normalized.includes('://') || normalized.includes('..')) {
+    throw new TypeError('播放地址不合法')
+  }
+  const baseApi = String(import.meta.env.VITE_APP_BASE_API || '').replace(/\/$/, '')
+  return `${baseApi}${normalized}`
+}
+
 export { assertFileId }

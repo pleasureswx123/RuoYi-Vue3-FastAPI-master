@@ -172,12 +172,12 @@ onBeforeUnmount(() => { storageController?.abort(); operationsController?.abort(
     <template v-if="canDiagnose">
       <div class="operation-toolbar">
         <strong>目录操作记录</strong>
-        <select v-model="filters.operationStatus" aria-label="目录操作状态" @change="filters.pageNum = 1; loadOperations()">
-          <option value="">全部状态</option><option value="pending">等待执行</option><option value="processing">执行中</option><option value="succeeded">成功</option><option value="retry_wait">等待重试</option><option value="failed">失败</option><option value="compensation_pending">等待补偿</option><option value="compensated">已补偿</option><option value="compensation_failed">补偿失败</option>
-        </select>
-        <select v-model="filters.operationType" aria-label="目录操作类型" @change="filters.pageNum = 1; loadOperations()">
-          <option value="">全部类型</option><option value="initialize_project">项目初始化</option><option value="ensure_episode_directory">集目录</option><option value="ensure_shot_directory">镜头目录</option><option value="ensure_asset_directory">资产目录</option><option value="reconcile_directory">目录对账</option>
-        </select>
+        <el-select v-model="filters.operationStatus" class="sg-select" placeholder="全部状态" aria-label="目录操作状态" @change="filters.pageNum = 1; loadOperations()">
+          <el-option label="全部状态" value="" /><el-option label="等待执行" value="pending" /><el-option label="执行中" value="processing" /><el-option label="成功" value="succeeded" /><el-option label="等待重试" value="retry_wait" /><el-option label="失败" value="failed" /><el-option label="等待补偿" value="compensation_pending" /><el-option label="已补偿" value="compensated" /><el-option label="补偿失败" value="compensation_failed" />
+        </el-select>
+        <el-select v-model="filters.operationType" class="sg-select" placeholder="全部类型" aria-label="目录操作类型" @change="filters.pageNum = 1; loadOperations()">
+          <el-option label="全部类型" value="" /><el-option label="项目初始化" value="initialize_project" /><el-option label="集目录" value="ensure_episode_directory" /><el-option label="镜头目录" value="ensure_shot_directory" /><el-option label="资产目录" value="ensure_asset_directory" /><el-option label="目录对账" value="reconcile_directory" />
+        </el-select>
       </div>
       <ProjectStatePanel v-if="operationsError" compact :title="operationsError.title" :message="operationsError.message" :retryable="operationsError.retryable" @retry="loadOperations" />
       <p v-else-if="operationsLoading && !operations.length" class="panel-muted">正在加载目录操作…</p>
@@ -218,7 +218,7 @@ onBeforeUnmount(() => { storageController?.abort(); operationsController?.abort(
 .storage-dot { width:8px; height:8px; background:var(--sg-text-muted); border-radius:50%; }.storage-dot[data-tone='success']{background:var(--sg-success)}.storage-dot[data-tone='warning']{background:var(--sg-accent)}.storage-dot[data-tone='danger']{background:var(--sg-danger)}
 .storage-path { display:flex; gap:12px; align-items:center; justify-content:space-between; padding:10px 12px; background:rgba(0,0,0,.2); border-radius:9px; }.storage-path code{overflow-wrap:anywhere;color:var(--sg-text-secondary);font-size:12px}
 .storage-error,.inline-error { display:grid;gap:5px;padding:12px;color:#ffb4b4;font-size:12px;background:rgba(255,107,107,.08);border-radius:9px }
-.operation-toolbar { display:flex; gap:10px; align-items:center; margin:24px 0 12px; }.operation-toolbar strong{margin-right:auto}.operation-toolbar select{height:36px;padding:0 9px;color:var(--sg-text-secondary);background:var(--sg-surface-soft);border:1px solid var(--sg-border);border-radius:8px}
+.operation-toolbar { display:flex; gap:10px; align-items:center; margin:24px 0 12px; }.operation-toolbar strong{margin-right:auto}.operation-toolbar .sg-select{width:180px}
 .operation-list { display:grid; gap:8px; }.operation-list article{display:flex;gap:10px;align-items:center;padding:9px 12px;background:rgba(255,255,255,.02);border:1px solid var(--sg-border);border-radius:10px}
 .operation-main{display:flex;min-width:0;flex:1;gap:20px;align-items:center;justify-content:space-between;color:var(--sg-text);text-align:left;cursor:pointer;background:transparent;border:0}.operation-main span{min-width:0}.operation-main strong,.operation-main small{display:block}.operation-main strong{font-size:12px}.operation-main small{margin-top:4px;overflow:hidden;color:var(--sg-text-muted);font-size:11px;text-overflow:ellipsis;white-space:nowrap}
 .operation-pagination{display:flex;gap:12px;align-items:center;justify-content:center;margin-top:14px;color:var(--sg-text-muted);font-size:11px}.panel-muted,.diagnostic-note{padding:24px;color:var(--sg-text-muted);font-size:12px;text-align:center}.diagnostic-note{margin:18px 0 0;padding:12px;background:rgba(255,255,255,.02);border-radius:8px}

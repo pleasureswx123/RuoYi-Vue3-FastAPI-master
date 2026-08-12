@@ -20,6 +20,8 @@ from module_admin.entity.do.user_do import SysUser
 from module_admin.entity.vo.user_vo import CurrentUserModel
 from module_admin.service.common_service import CommonService
 from module_admin.service.file_business_service import FileReferenceService
+from module_shot_grid.config import SHOT_GRID_PLAYBACK_CONFIG
+from module_shot_grid.dao.media_derivation_dao import ShotGridMediaDerivationDao
 from module_shot_grid.dao.project_audit_dao import ShotGridProjectAuditDao
 from module_shot_grid.dao.review_dao import ShotGridReviewDao
 from module_shot_grid.dao.version_submission_dao import ShotGridVersionSubmissionDao
@@ -32,6 +34,7 @@ from module_shot_grid.entity.do.version_do import (
 )
 from module_shot_grid.entity.vo.access_vo import ShotGridProjectAccessModel
 from module_shot_grid.entity.vo.version_submission_vo import (
+    ShotGridPlaybackTicketModel,
     ShotGridVersionSubmissionAcceptedModel,
     ShotGridVersionSubmissionCreateModel,
     ShotGridVersionSubmissionPreflightModel,
@@ -39,6 +42,7 @@ from module_shot_grid.entity.vo.version_submission_vo import (
     ShotGridVersionSubmissionStatusModel,
 )
 from module_shot_grid.exceptions import ShotGridDomainException, shot_grid_error
+from module_shot_grid.service.playback_ticket_service import ShotGridPlaybackTicketService
 from module_shot_grid.service.project_access_service import ShotGridProjectAccessService
 from module_shot_grid.service.version_publish_path_adapter import (
     ShotGridVersionPublishPathAdapter,
@@ -523,6 +527,15 @@ class ShotGridVersionSubmissionService:
                     create_time=now,
                 ),
             )
+            media_kind = {'shot_video': 'video', 'asset_image': 'image'}.get(str(task_context['task_kind']))
+            if media_kind is not None:
+                await ShotGridMediaDerivationDao.add_task(
+                    db,
+                    version_id=version.version_id,
+                    source_file_id=submission.source_file_id,
+                    media_kind=media_kind,
+                    now=now,
+                )
             await FileReferenceService.replace_business_file_references_services(
                 db,
                 cls.VERSION_REFERENCE_TYPE,
@@ -620,6 +633,46 @@ class ShotGridVersionSubmissionService:
             )
         except ServiceException as exc:
             raise shot_grid_error(403, 'SG_FILE_ACCESS_DENIED', '文件不存在或无权访问') from exc
+
+    @classmethod
+    async def create_playback_ticket(
+        cls,
+        request: Request,
+        db: AsyncSession,
+        current_user: CurrentUserModel,
+        *,
+        version_id: int,
+        file_id: str,
+    ) -> ShotGridPlaybackTicketModel:
+        """在完整文件授权通过后签发资源绑定的短期播放票据。"""
+
+        row = await ShotGridVersionSubmissionDao.get_version_file_access(db, version_id=version_id, file_id=file_id)
+        if row is None:
+            raise shot_grid_error(403, 'SG_FILE_ACCESS_DENIED', '文件不存在或无权访问')
+        await ShotGridProjectAccessService.resolve_access(db, current_user, row['project_id'])
+        file_info = await FileInfoDao.get_file_info_by_id(db, file_id)
+        if file_info is None or file_info.status != 'active' or file_info.del_flag != '0':
+            raise shot_grid_error(403, 'SG_FILE_ACCESS_DENIED', '文件不存在或无权访问')
+        allowed = await CommonService.check_private_file_download_permission_services(
+            db,
+            current_user,
+            file_info,
+            file_id,
+            business_access_granted=True,
+        )
+        if not allowed:
+            raise shot_grid_error(403, 'SG_FILE_ACCESS_DENIED', '文件不存在或无权访问')
+        token = await ShotGridPlaybackTicketService.create(
+            request.app.state.redis,
+            request,
+            version_id=version_id,
+            file_id=file_id,
+            current_user=current_user,
+        )
+        return ShotGridPlaybackTicketModel(
+            playbackUrl=f'/shot-grid/playback/{token}/versions/{version_id}/files/{file_id}',
+            expiresInSeconds=SHOT_GRID_PLAYBACK_CONFIG.ticket_ttl_seconds,
+        )
 
     @classmethod
     def build_business_file_name(

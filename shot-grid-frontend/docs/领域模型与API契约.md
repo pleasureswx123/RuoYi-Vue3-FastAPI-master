@@ -5,9 +5,9 @@
 | 项目 | 内容 |
 | --- | --- |
 | 版本 | v2.0 |
-| 状态 | 普通管理、Excel 导入、独立任务、版本发布与 `auto_single` 审核后端已落地；独立业务前端项目、镜头、资产、真实任务工作台/详情及单任务版本上传/历史/详情/下载已接 API，项目/镜头/资产及任务工作台/版本上传四个隔离子集完成浏览器旅程；目录/版本 Worker 默认关闭，资产需求人工处理、资产模板下载、审核前端、`manual_batch`、媒体派生、文件与 NAS 页面及真实 UNC/完整 E2E 仍待实现 |
+| 状态 | 普通管理、Excel 导入、资产需求人工处理、两类匿名模板、独立任务、版本发布与审核后端已落地；独立业务前端已接项目、镜头、资产、任务/版本、审核和文件 API，审核列表/详情已接受保护缩略图、网页代理优先、原始媒体降级、视频时间点、四类批注、A/B 对比和退回再提交入口；目录/版本/媒体 Worker 默认关闭，真实 FFmpeg 视频派生、Range 真分段及真实 UNC/完整 E2E 仍待验证 |
 | 建立日期 | 2026-08-07 |
-| 最近修订 | 2026-08-11 |
+| 最近修订 | 2026-08-12 |
 | 数据库 | PostgreSQL |
 | 业务前端 | 独立 `shot-grid-frontend`，工程配置参考 `ruoyi-fastapi-frontend` |
 | 管理后台 | `ruoyi-fastapi-frontend` |
@@ -41,7 +41,7 @@
 - PostgreSQL 初始基线中的审计时间使用 `timestamp(0)`；Shot Grid SQLAlchemy DO 使用 PostgreSQL 方言下编译为 `TIMESTAMP(0) WITHOUT TIME ZONE` 的统一类型。
 - 常规业务异常默认由统一响应工具以 HTTP 200 返回；Shot Grid 的真实 HTTP 409 等语义属于本模块需要显式实现的扩展契约。
 - RuoYi 平台基座本身没有通用 NAS 根目录配置、项目目录初始化、版本文件发布到 UNC 路径或跨数据库与文件系统补偿能力。Shot Grid 已新增项目目录 Outbox Worker、目录诊断/人工重试和独立版本发布 Worker，但两个 Worker 均默认关闭，物理补偿仍未实现；不得把 Shot Grid 领域扩展描述为平台通用能力，也不得以本地临时目录测试冒充真实 UNC 验收。
-- 独立业务前端已实现 Vue 3/Vite/Pinia/Vue Router/Axios/Element Plus 应用基座、自有登录页、六项本地路由白名单、统一请求与错误分流；项目、镜头和资产页已接入真实 API，并分别完成生产 Nginx 形态下的隔离子集旅程。真实工作台使用 `/shot-grid/tasks/mine`，任务详情深链 `/tasks/:taskId` 支持详情、开始、编辑和版本工作区；版本工作区接入 private preflight → 私有上传 → create 202、`current` 恢复、失败重试、版本历史/详情和受保护下载，版本深链 `/versions/:versionId` 归属 `reviews` 路由范围。任务工作台/版本上传也已在 fresh PostgreSQL、Redis DB 15、真实平台登录和生产前端形态下完成隔离子集浏览器旅程，版本发布阶段使用显式 `allow_local_root=True` 的本地 TEMP 适配器。资产模板仍未交付，真实版本缩略图文件未造夹具；审核交互和文件与 NAS 页面尚未接入完整真实业务闭环。任何子集都不等于真实 UNC/NAS 或完整系统 E2E。
+- 独立业务前端已实现 Vue 3/Vite/Pinia/Vue Router/Axios/Element Plus 应用基座、自有登录页、六项本地路由白名单、统一请求与错误分流；项目、镜头和资产页已接入真实 API，并分别完成生产 Nginx 形态下的隔离子集旅程。真实工作台使用 `/shot-grid/tasks/mine`，任务详情深链 `/tasks/:taskId` 支持详情、开始、编辑和版本工作区；版本工作区接入 private preflight → 私有上传 → create 202、`current` 恢复、失败重试、版本历史/详情和受保护下载，版本深链 `/versions/:versionId` 归属 `reviews` 路由范围。任务工作台/版本上传也已在 fresh PostgreSQL、Redis DB 15、真实平台登录和生产前端形态下完成隔离子集浏览器旅程，版本发布阶段使用显式 `allow_local_root=True` 的本地 TEMP 适配器。资产模板与资产需求人工处理均已交付；审核详情已接鉴权 Blob 图片/视频预览、视频时间点、点/矩形批注、同任务版本 A/B 对比和退回后版本工作区入口，文件与 NAS 页面也已接真实业务 API，但二者尚无隔离浏览器旅程。真实版本缩略图文件未造夹具，任何子集都不等于真实 UNC/NAS、Range 真分段或完整系统 E2E。
 
 ## 3. 领域边界
 
@@ -198,7 +198,9 @@ sg_project / sg_shot / sg_asset / sg_version / sg_note
 
 只新增 DO、只修改初始化 SQL 或只写设计文档，都不算数据库交付完成。JSONB、部分唯一索引等 PostgreSQL 专用实现必须明确限制在 PostgreSQL 路径，不得无意影响仓库保留的 MySQL 兼容模块。
 
-当前 Shot Grid Alembic head 为 `20260811_06`。06 在执行任何 DDL 前检查：`source_file_id` 是否重复、同一任务是否存在多条 `pending/publishing/published/committing/failed` 未解决提交，以及提交状态、租约和错误字段是否一致；冲突分别以 `SG_VERSION_FILE_ALREADY_BOUND`、`SG_VERSION_SUBMISSION_ACTIVE` 或 `SG_VERSION_SUBMISSION_EXECUTION_STATE_CONFLICT` 整体失败，不自动修复业务数据。通过后增加 `idx_sg_task_assignee_status_due`、源文件唯一索引、包含 `failed` 的未解决提交部分唯一索引、执行/错误状态 `CHECK`，并为审核动作增加持久化幂等键、请求哈希、首次成功响应快照及唯一约束。降级精确移除 06 对象并恢复 05 的活动提交索引语义，不回写业务数据。该增量链仍不是完整 RuoYi 空库 Alembic baseline。
+当前 Shot Grid Alembic head 为 `20260812_07`。06 增加任务/版本/审核完整性约束；07 增加 `sg_media_derivation`、领取租约/重试状态，以及每版本唯一 `thumbnail`/`proxy_media` 部分索引，并为已有主审核媒体回填待派生任务。媒体 Worker 默认关闭：图片使用 Pillow 生成 JPEG 缩略图和网页代理，视频使用显式配置的 FFmpeg 生成 JPEG 缩略图和 H.264/AAC faststart MP4；工具缺失或解码失败必须持久化安全错误并让前端降级原媒体，不得将原文件登记为代理。生成物继续进入 `sys_file_info`、`sys_file_reference` 和 `sg_version_file`，成功提交前清理半成品。该增量链仍不是完整 RuoYi 空库 Alembic baseline。
+
+媒体派生配置使用 `SHOT_GRID_MEDIA_WORKER_` 前缀；至少需要显式设置 `ENABLED=true` 才注册 Application Leader 内部任务，视频环境还需通过 `FFMPEG_PATH` 提供可执行文件。默认缩略图最长边 480、图片代理最长边 1920、视频代理最大宽度 1280；转换期间按 `HEARTBEAT_SECONDS` 续租，数据库回写继续使用 version + owner + attempt fencing。审核列表返回 `thumbnail` 和 `mediaDerivationStatus`，版本详情返回完整派生文件角色及同名状态；前端只能优先使用真实 `proxy_media`，代理加载失败时回退主 `review_media`。
 
 ## 6. 数据表契约
 
@@ -884,7 +886,7 @@ ASSET\{asset.asset_type}\{asset.storage_dir_name}\{business_file_name}
 - 每次成功提交版本时自动创建一个 `auto_single` 审核单，并加入且只加入当前版本。
 - `auto_single` 必须保存 `auto_version_id`，`manual_batch` 的该字段必须为空；数据库使用模式/字段一致性 `CHECK` 兜底。
 - 自动审核单创建失败时，版本、版本文件关系、业务文件引用和任务状态全部回滚。
-- 表结构为人工 `manual_batch` 审核单预留有序多版本关系，但其创建、编辑、激活和完成 API 当前尚未实现；后续实现后才能用于集中审核。
+- 人工 `manual_batch` 审核单使用有序多版本关系，创建、编辑、增删/排序版本、激活、完成和归档 API 已实现；激活后版本集合冻结。
 - `auto_version_id` 使用非空部分唯一索引，保证同一版本只能有一个自动审核单；该版本仍可按权限加入人工批量审核单。
 
 ### 6.14 `sg_review_list_version`
@@ -2716,7 +2718,7 @@ GET /shot-grid/imports/assets/template
 Permission: shotgrid:asset:import
 ```
 
-该资产模板下载路径仍是冻结设计，当前代码尚未实现。仓库原样表不能直接成为部署资源，必须先通过规定的 `artifact_tool` 安全匿名化、渲染和复核流程；工具链不可用时保持失败关闭，不复制或透传原样表，也不得因镜头模板端点已交付而推断资产模板可下载。
+该路径已交付固定 `asset-v1` 资源。模板由 `artifact_tool` 按 `docs/资产-样表.xlsx` 的 `Sheet1!A:G`、黑底白字表头和合并父级结构重建，示例内容全部使用虚构名称且“类型”列带下拉约束；服务端校验冻结 SHA-256 后才返回，资源缺失或摘要变化时以 `SG_IMPORT_TEMPLATE_UNAVAILABLE` 失败关闭。原样表仍不得直接打包或透传。
 
 当前正式样表 `docs/资产-样表.xlsx` 的主数据区为 `Sheet1!A:G`，表头依次为“类型、名称、描述、制作分项、备注、状态、制作人”。导入器只读取从 A1 开始的首段连续非空表头；H:I 虽在筛选范围内但表头为空，不参与解析。
 
@@ -3108,7 +3110,7 @@ Permissions:
 
 ### 15.9 人工批量审核单 API
 
-本节是后续冻结设计，当前后端只实现自动单版本 `auto_single` 审核单的列表和详情；下列 `manual_batch` 写接口尚未交付，前端不得调用或以 Mock 冒充可用。
+本节接口已转化为代码。`manual_batch` 使用现有主表与有序多版本关系，不新增重复事实表；写接口由平台权限、项目总监角色、项目归属、状态机、乐观锁和同事务审计共同约束。
 
 ```http
 GET  /shot-grid/projects/{projectId}/review-lists
@@ -3130,10 +3132,13 @@ Permissions:
 - 加入的版本必须属于同一项目且为可审核版本，不能跨项目关联。
 - 激活、完成、归档和排序请求均携带 `lockVersion`；排序提交完整 `{versionId, sortOrder}` 集合并在一个事务内校验唯一性。
 - 完成人工审核单不批量修改版本状态；版本仍通过 `/versions/{versionId}/review-actions` 独立审核。
+- 创建接口可在同一事务携带初始 `versionIds`，避免前端两步创建产生无版本孤立草稿；后续增删和排序仍只允许草稿。
+- 激活时所有版本必须仍为 `pending_review`；完成时不得存在 `pending_review` 版本。
 
 ### 15.10 Shot Grid 文件下载与 NAS 路径 API
 
 ```http
+GET /shot-grid/projects/{projectId}/files
 GET /shot-grid/versions/{versionId}/files/{fileId}/download
 GET /shot-grid/shots/{shotId}/nas-path
 GET /shot-grid/assets/{assetId}/nas-path
@@ -3142,7 +3147,10 @@ Permission:
   shotgrid:storage:path
 ```
 
+- 项目文件分页使用 `shotgrid:storage:path` 与项目访问双门禁，只查询活动 `sg_version_file → sg_version → sg_task → sys_file_info` 正式关系。支持 `keyword`、`fileRole`、`versionStatus`、`taskKind`、分页及 `submittedTime|businessFileName|fileSize` 白名单排序；关键字只匹配业务文件名、原文件名和任务名。
+- 文件项返回 `fileId/projectId/versionId/taskId/taskName/taskKind/versionNo/versionNumber/versionStatus/originalName/businessFileName/role/isPrimary/contentType/fileSize/nasRelativePath/publishedTime/submittedTime/downloadUrl`。不得返回 `storedName`、`storageKey`、平台物理路径、文件哈希、NAS 凭据或内部路径键；镜头/资产归属继续通过任务详情推导，不在文件关系重复维护。
 - 下载接口先执行版本、任务、项目角色、`sg_version_file` 与 `sys_file_reference(businessType=shotgrid_version)` 双重文件关系校验，再复用平台流式下载与 HTTP Range 能力，并以净化后的 `business_file_name` 设置安全下载名；平台显式 `deny` ACL 始终优先于业务成员授权。
+- 原生视频播放器使用 `POST /shot-grid/versions/{versionId}/files/{fileId}/playback-ticket` 领取短期票据，再访问 `GET /shot-grid/playback/{ticket}/versions/{versionId}/files/{fileId}`。Redis 只保存票据哈希、用户/会话哈希和资源绑定，不保存明文登录 Token；播放请求每次校验登录会话仍有效，并从数据库重建用户权限后重新执行项目范围、文件关系与 ACL 决策。Redis 不可用时失败关闭，不回退为公开文件 URL。
 - 路径接口只返回经权限校验的目录/文件路径快照和复制文本，不返回 NAS 凭据或平台 `storageKey`。
 - 浏览器端未确认桌面协议处理器前，接口和页面都不承诺直接打开 UNC 路径。
 - 用户通过 SMB 直接访问 NAS 时不经过平台权限；部署必须额外配置 NAS/AD/Windows 共享 ACL。
@@ -3181,6 +3189,7 @@ Permission:
 - 视频批注时间使用非负整数 `mediaTimeMs`，并且不能超过镜头时长；资产图片意见禁止携带该字段。
 - 文本经过长度限制和安全转义。
 - 不接受图片 Data URL、Blob URL 或任意 HTML。
+- 当前前端工具约定：`point` 使用 1 个坐标，`rectangle` 和 `arrow` 使用 2 个起止坐标，`text` 使用 1 个锚点和非空 `text`；箭头渲染按媒体画幅换算线段角度，文字只通过 Vue 文本插值渲染。
 
 ## 17. 文件访问与媒体设计
 
@@ -3577,8 +3586,8 @@ commit 结果中的复用集/场均为 0、资产关系为 0。数据库终态�
 4. 确认公司是否存在统一 UNC 桌面协议处理器；未确认前只提供查看和复制路径。
 5. 冻结 NAS/AD/Windows 共享 ACL 部署方案，明确网页权限之外的直接 SMB 访问边界。
 6. 决定已完成任务是否需要“重新打开”；MVP 当前禁止，未来动作必须有原因和审计。
-7. 两类样表、模板版本、默认最大行数、文件大小、预览 TTL 和资产名称规范化已冻结；镜头下载模板已使用冻结 SHA-256 的匿名包内副本。资产模板必须先通过规定的 `artifact_tool` 安全匿名化、渲染和复核流程，当前工具链不可用，因此下载端点保持未实现。上传原文件仅临时解析、不长期留存，确需留存时必须另走受保护文件引用。
+7. 两类样表、模板版本、默认最大行数、文件大小、预览 TTL 和资产名称规范化已冻结；镜头与资产下载模板均使用冻结 SHA-256 的匿名包内副本，资产模板已按规定通过 `artifact_tool` 匿名化重建、渲染和复核。上传原文件仅临时解析、不长期留存，确需留存时必须另走受保护文件引用。
 8. 决定资产模板是否增加跨重新保存仍保留的稳定 `sourceRowId/rowUid`；未引入前需冻结人工去重治理流程。
-9. 22 张基础表、`20260810_01 → 20260811_06` 迁移链、种子、项目/成员/集/场次/镜头/资产/制作分项普通管理、两类导入 API、镜头匿名模板、项目内镜头/资产制作人选项、资产/分项动作与缩略图聚合、独立任务管理、默认关闭的版本发布 Worker、正式版本/主文件引用/`auto_single` 审核闭环，以及默认关闭的 NAS 目录 Outbox Worker、目录诊断和人工重试已转化为代码；独立业务前端应用基座、项目/镜头/资产真实页面、真实任务工作台/详情和单任务版本上传/current/历史/详情/下载也已实现。项目、镜头、资产及任务工作台/版本上传四个子集均已完成隔离浏览器旅程；任务/版本发布使用本地 TEMP 适配器，不代表真实 UNC/NAS。资产模板下载、真实版本缩略图浏览器链、资产需求人工处理、审核前端、`manual_batch`、媒体派生、文件与 NAS 页面、UNC/NAS 部署验收和完整系统 E2E 继续按本契约分批实现。
+9. 23 张基础表、`20260810_01 → 20260812_07` 迁移链、种子、项目/成员/集/场次/镜头/资产/制作分项普通管理、两类导入 API/匿名模板、资产需求人工处理、项目内镜头/资产制作人选项、资产/分项动作与缩略图聚合、独立任务管理、默认关闭的版本发布 Worker、正式版本/主文件引用/审核闭环，以及默认关闭的 NAS 目录和媒体派生 Worker 已转化为代码；独立业务前端也已实现审核缩略图、网页代理优先和原媒体降级。四个既有子集浏览器旅程不覆盖本批媒体派生；真实 FFmpeg 视频派生、Range 真分段、审核/文件浏览器旅程、UNC/NAS 部署验收和完整系统 E2E 继续按本契约分批实现。
 
 上述 1—8 是评审、部署或数据治理参数，不得由页面开发临时猜测。第 9 项只说明当前第一批实现边界，未落地的契约章节仍是设计，不是已实现能力。

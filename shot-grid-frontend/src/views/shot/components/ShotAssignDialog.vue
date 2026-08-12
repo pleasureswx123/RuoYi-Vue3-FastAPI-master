@@ -58,9 +58,9 @@ async function submit() {
 <template>
   <ProjectModal :title="isReassign ? `改派 ${shot.shotCode}` : `分配 ${shot.shotCode}`" description="首次分配会创建唯一镜头视频任务；改派更新同一任务，不创建第二条任务。" :busy="busy" @close="emit('close')">
     <form class="assign-form" @submit.prevent="submit">
-      <label><span>主制作人 *</span><select v-model="form.assigneeUserId"><option value="">请选择项目成员</option><option v-for="member in candidates" :key="member.userId" :value="String(member.userId)">{{ member.nickName }}（{{ member.producerCode }}）</option></select><small v-if="!candidates.length">暂无已配置制作人缩写的有效项目成员。</small></label>
+      <label><span>主制作人 *</span><el-select v-model="form.assigneeUserId" class="sg-select" placeholder="请选择项目成员"><el-option label="请选择项目成员" value="" /><el-option v-for="member in candidates" :key="member.userId" :label="`${member.nickName}（${member.producerCode}）`" :value="String(member.userId)" /></el-select><small v-if="!candidates.length">暂无已配置制作人缩写的有效项目成员。</small></label>
       <template v-if="!isReassign">
-        <label><span>任务优先级</span><select v-model="form.priority"><option value="low">低</option><option value="normal">普通</option><option value="high">高</option><option value="urgent">紧急</option></select></label>
+        <label><span>任务优先级</span><el-select v-model="form.priority" class="sg-select"><el-option label="低" value="low" /><el-option label="普通" value="normal" /><el-option label="高" value="high" /><el-option label="紧急" value="urgent" /></el-select></label>
         <label><span>截止日期</span><input v-model="form.dueDate" type="date" /></label>
         <label><span>制作要求</span><textarea v-model="form.taskDescription" rows="5" /></label>
       </template>

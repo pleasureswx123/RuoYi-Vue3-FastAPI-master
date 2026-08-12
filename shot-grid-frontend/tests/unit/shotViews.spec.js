@@ -15,6 +15,7 @@ import {
   previewShotImport
 } from '@/api/shot-grid/shots'
 import { useSessionStore } from '@/store/modules/session'
+import { setElSelectValue } from '../helpers/elementPlus'
 import ShotDetailView from '@/views/shot/ShotDetailView.vue'
 import ShotListView from '@/views/shot/ShotListView.vue'
 import ShotAssignDialog from '@/views/shot/components/ShotAssignDialog.vue'
@@ -197,14 +198,14 @@ describe('镜头管理真实列表页', () => {
     })
     await flushPromises()
 
-    await wrapper.find('.project-context select').setValue('9')
+    await setElSelectValue(wrapper.find('.project-context').findComponent({ name: 'ElSelect' }), '9')
     await flushPromises()
     resolveStaleRefresh({ rows: [{ episodeId: 999, episodeCode: 'EP999' }], total: 1, hasNext: false })
     await flushPromises()
 
-    const episodeSelect = wrapper.find('select[aria-label="按集筛选"]')
-    expect(episodeSelect.text()).toContain('EP002')
-    expect(episodeSelect.text()).not.toContain('EP999')
+    const episodeLabels = wrapper.find('.shot-filters').findComponent({ name: 'ElSelect' }).findAllComponents({ name: 'ElOption' }).map(option => option.props('label'))
+    expect(episodeLabels).toContain('EP002 ')
+    expect(episodeLabels).not.toContain('EP999 ')
     wrapper.unmount()
   })
 
@@ -232,14 +233,14 @@ describe('镜头管理真实列表页', () => {
       })
     })
 
-    await wrapper.find('.project-context select').setValue('9')
+    await setElSelectValue(wrapper.find('.project-context').findComponent({ name: 'ElSelect' }), '9')
     await flushPromises()
     releaseProject8Navigation()
     await flushPromises()
 
     expect(getProjectDetail).not.toHaveBeenCalledWith(8, expect.anything())
     expect(getProjectDetail).toHaveBeenCalledWith(9, expect.anything())
-    expect(wrapper.find('select[aria-label="按集筛选"]').text()).toContain('EP002')
+    expect(wrapper.find('.shot-filters').findComponent({ name: 'ElSelect' }).findAllComponents({ name: 'ElOption' }).map(option => option.props('label'))).toContain('EP002 ')
     wrapper.unmount()
   })
 
@@ -265,7 +266,7 @@ describe('镜头管理真实列表页', () => {
     const oldCreateDialog = wrapper.findComponent(ShotFormDialog).vm
     const oldCreateGeneration = oldCreateDialog.$props.operationGeneration
     expect(document.body.querySelector('.shot-form')).not.toBeNull()
-    await wrapper.find('.project-context select').setValue('9')
+    await setElSelectValue(wrapper.find('.project-context').findComponent({ name: 'ElSelect' }), '9')
     await flushPromises()
     expect(document.body.querySelector('.shot-form')).toBeNull()
     const callsAfterCreateSwitch = getShotPage.mock.calls.length
@@ -293,7 +294,7 @@ describe('镜头管理真实列表页', () => {
     expect(document.body.textContent).toContain('旧项目镜头')
     expect(document.body.textContent).toContain('正式导入 1 行')
 
-    await wrapper.find('.project-context select').setValue('8')
+    await setElSelectValue(wrapper.find('.project-context').findComponent({ name: 'ElSelect' }), '8')
     await flushPromises()
     expect(document.body.querySelector('.import-flow')).toBeNull()
     expect(document.body.textContent).not.toContain('旧项目镜头')
@@ -319,7 +320,7 @@ describe('镜头管理真实列表页', () => {
     } }))
     const { wrapper } = await mountView()
     const switchProject = async projectId => {
-      await wrapper.find('.project-context select').setValue(String(projectId))
+      await setElSelectValue(wrapper.find('.project-context').findComponent({ name: 'ElSelect' }), String(projectId))
       await flushPromises()
     }
 

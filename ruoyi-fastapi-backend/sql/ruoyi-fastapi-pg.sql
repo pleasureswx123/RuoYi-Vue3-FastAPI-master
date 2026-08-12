@@ -3,6 +3,7 @@
 -- ----------------------------
 drop table if exists sg_review_list_version;
 drop table if exists sg_note_reply;
+drop table if exists sg_media_derivation;
 drop table if exists sg_version_file;
 drop table if exists sg_review_list;
 drop table if exists sg_review_action;
@@ -2526,6 +2527,8 @@ CREATE TABLE sg_version_file (
 CREATE INDEX idx_sg_version_file_file ON sg_version_file (file_id);
 CREATE UNIQUE INDEX uk_sg_version_file_business_name ON sg_version_file (business_file_name) WHERE file_role = 'review_media' AND is_primary = '1';
 CREATE UNIQUE INDEX uk_sg_version_file_primary_review ON sg_version_file (version_id) WHERE file_role = 'review_media' AND is_primary = '1';
+CREATE UNIQUE INDEX uk_sg_version_file_thumbnail ON sg_version_file (version_id) WHERE file_role = 'thumbnail';
+CREATE UNIQUE INDEX uk_sg_version_file_proxy_media ON sg_version_file (version_id) WHERE file_role = 'proxy_media';
 COMMENT ON TABLE sg_version_file IS 'Shot Grid版本文件用途关系表';
 COMMENT ON COLUMN sg_version_file.version_id IS '版本ID';
 COMMENT ON COLUMN sg_version_file.file_id IS '平台文件ID';
@@ -2539,6 +2542,31 @@ COMMENT ON COLUMN sg_version_file.is_primary IS '是否主文件';
 COMMENT ON COLUMN sg_version_file.sort_order IS '展示顺序';
 COMMENT ON COLUMN sg_version_file.create_by IS '创建者';
 COMMENT ON COLUMN sg_version_file.create_time IS '创建时间';
+
+-- sg_media_derivation
+CREATE TABLE sg_media_derivation (
+	version_id BIGINT NOT NULL PRIMARY KEY,
+	source_file_id VARCHAR(36) NOT NULL,
+	media_kind VARCHAR(10) NOT NULL,
+	derivation_status VARCHAR(20) DEFAULT 'pending' NOT NULL,
+	attempt_count INTEGER DEFAULT 0 NOT NULL,
+	lease_owner VARCHAR(100),
+	lease_until TIMESTAMP(0) WITHOUT TIME ZONE,
+	next_retry_time TIMESTAMP(0) WITHOUT TIME ZONE,
+	last_error_key VARCHAR(100),
+	last_error_message VARCHAR(500),
+	create_time TIMESTAMP(0) WITHOUT TIME ZONE NOT NULL,
+	update_time TIMESTAMP(0) WITHOUT TIME ZONE NOT NULL,
+	CONSTRAINT ck_sg_media_derivation_kind CHECK (media_kind in ('image', 'video')),
+	CONSTRAINT ck_sg_media_derivation_status CHECK (derivation_status in ('pending', 'processing', 'completed', 'failed')),
+	CONSTRAINT ck_sg_media_derivation_attempt_count CHECK (attempt_count >= 0),
+	CONSTRAINT ck_sg_media_derivation_lease CHECK ((derivation_status = 'processing' and lease_owner is not null and lease_until is not null) or (derivation_status <> 'processing' and lease_owner is null and lease_until is null)),
+	CONSTRAINT ck_sg_media_derivation_error CHECK ((derivation_status = 'failed' and last_error_key is not null and last_error_message is not null) or (derivation_status <> 'failed' and last_error_key is null and last_error_message is null)),
+	FOREIGN KEY(version_id) REFERENCES sg_version (version_id) ON DELETE RESTRICT,
+	FOREIGN KEY(source_file_id) REFERENCES sys_file_info (file_id) ON DELETE RESTRICT
+);
+CREATE INDEX idx_sg_media_derivation_due ON sg_media_derivation (derivation_status, next_retry_time, update_time);
+COMMENT ON TABLE sg_media_derivation IS 'Shot Grid媒体派生任务';
 
 -- sg_note_reply
 CREATE TABLE sg_note_reply (
@@ -2799,7 +2827,7 @@ create table if not exists alembic_version (
     constraint alembic_version_pkc primary key (version_num)
 );
 delete from alembic_version;
-insert into alembic_version(version_num) values ('20260811_06');
+insert into alembic_version(version_num) values ('20260812_07');
 
 
 CREATE OR REPLACE FUNCTION "find_in_set"(int8, varchar)

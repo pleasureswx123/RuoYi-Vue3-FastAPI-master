@@ -13,6 +13,7 @@ from common.vo import DataResponseModel, PageResponseModel
 from module_admin.entity.vo.user_vo import CurrentUserModel
 from module_shot_grid.dependencies.project_access import ProjectRoleDependency
 from module_shot_grid.entity.vo.access_vo import ShotGridProjectAccessModel
+from module_shot_grid.entity.vo.file_center_vo import ShotGridProjectFileModel, ShotGridProjectFileQueryModel
 from module_shot_grid.entity.vo.storage_operation_vo import (
     ShotGridProjectStorageRetryModel,
     ShotGridStorageOperationModel,
@@ -20,6 +21,7 @@ from module_shot_grid.entity.vo.storage_operation_vo import (
     ShotGridStorageOperationRetryModel,
     ShotGridStorageRetryAcceptedResponseModel,
 )
+from module_shot_grid.service.file_center_service import ShotGridFileCenterService
 from module_shot_grid.service.storage_management_service import ShotGridStorageManagementService
 from utils.response_util import ResponseUtil
 
@@ -48,6 +50,23 @@ storage_controller = APIRouterPro(
     tags=['Shot Grid-文件与NAS'],
     dependencies=[PreAuthDependency()],
 )
+
+
+@storage_controller.get(
+    '/projects/{projectId}/files',
+    summary='分页查询项目正式版本文件',
+    response_model=PageResponseModel[ShotGridProjectFileModel],
+    dependencies=[UserInterfaceAuthDependency('shotgrid:storage:path')],
+)
+async def get_shot_grid_project_file_page(
+    request: Request,
+    project_id: Annotated[int, Path(alias='projectId', gt=0)],
+    file_query: Annotated[ShotGridProjectFileQueryModel, Query()],
+    query_db: Annotated[AsyncSession, DBSessionDependency()],
+    access: Annotated[ShotGridProjectAccessModel, ProjectRoleDependency('director', 'creator')],
+) -> Response:
+    result = await ShotGridFileCenterService.get_project_files(query_db, project_id, file_query)
+    return ResponseUtil.success(msg='查询成功', model_content=result)
 
 
 @storage_controller.get(

@@ -13,12 +13,14 @@ from common.router import APIRouterPro
 from common.vo import DataResponseModel
 from module_admin.entity.vo.user_vo import CurrentUserModel
 from module_shot_grid.entity.vo.version_submission_vo import (
+    ShotGridPlaybackTicketModel,
     ShotGridVersionSubmissionAcceptedResponseModel,
     ShotGridVersionSubmissionCreateModel,
     ShotGridVersionSubmissionPreflightModel,
     ShotGridVersionSubmissionPreflightResultModel,
     ShotGridVersionSubmissionStatusModel,
 )
+from module_shot_grid.service.playback_ticket_service import ShotGridPlaybackTicketService
 from module_shot_grid.service.version_submission_service import ShotGridVersionSubmissionService
 from utils.response_util import ResponseUtil
 from utils.upload_util import UploadUtil
@@ -188,6 +190,86 @@ async def download_shot_grid_version_file(
             download_result.byte_range,
             download_result.accept_ranges,
         ),
+        media_type=media_type,
+        status_code=206 if download_result.byte_range.is_partial else 200,
+    )
+
+
+@version_submission_controller.post(
+    '/versions/{versionId}/files/{fileId}/playback-ticket',
+    summary='签发原生媒体播放器短期访问票据',
+    response_model=DataResponseModel[ShotGridPlaybackTicketModel],
+    dependencies=[UserInterfaceAuthDependency('shotgrid:file:download')],
+)
+async def create_shot_grid_playback_ticket(
+    request: Request,
+    version_id: Annotated[int, Path(alias='versionId', gt=0, le=SQL_BIGINT_MAX)],
+    file_id: Annotated[UUID, Path(alias='fileId')],
+    query_db: Annotated[AsyncSession, DBSessionDependency()],
+    current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
+) -> Response:
+    ticket = await ShotGridVersionSubmissionService.create_playback_ticket(
+        request,
+        query_db,
+        current_user,
+        version_id=version_id,
+        file_id=str(file_id),
+    )
+    return ResponseUtil.success(data=ticket)
+
+
+playback_controller = APIRouterPro(
+    prefix='/shot-grid',
+    order_num=49,
+    tags=['Shot Grid-媒体分段播放'],
+)
+
+
+@playback_controller.get(
+    '/playback/{ticket}/versions/{versionId}/files/{fileId}',
+    summary='使用短期票据分段播放版本媒体',
+    response_class=StreamingResponse,
+    responses={
+        200: {'description': '流式返回完整媒体'},
+        206: {'description': '分段返回媒体'},
+        416: {'description': '请求的字节范围不可满足'},
+    },
+)
+async def stream_shot_grid_version_file(
+    request: Request,
+    ticket: Annotated[UUID, Path()],
+    version_id: Annotated[int, Path(alias='versionId', gt=0, le=SQL_BIGINT_MAX)],
+    file_id: Annotated[UUID, Path(alias='fileId')],
+    query_db: Annotated[AsyncSession, DBSessionDependency()],
+) -> Response:
+    payload = await ShotGridPlaybackTicketService.get(
+        request.app.state.redis,
+        str(ticket),
+        version_id=version_id,
+        file_id=str(file_id),
+    )
+    current_user = await ShotGridPlaybackTicketService.load_current_user(query_db, payload.user_id)
+    download_result = await ShotGridVersionSubmissionService.download_version_file(
+        request,
+        query_db,
+        current_user,
+        version_id=version_id,
+        file_id=str(file_id),
+        range_header=request.headers.get('Range'),
+    )
+    extension = download_result.filename.rsplit('.', 1)[-1].casefold()
+    media_type = {'mp4': 'video/mp4', 'mov': 'video/quicktime'}.get(extension, 'application/octet-stream')
+    headers = UploadUtil.build_download_headers(
+        download_result.filename,
+        download_result.byte_range,
+        download_result.accept_ranges,
+    )
+    headers['Content-Disposition'] = headers['Content-Disposition'].replace('attachment;', 'inline;', 1)
+    headers['Cache-Control'] = 'private, no-store'
+    headers['Referrer-Policy'] = 'no-referrer'
+    return ResponseUtil.streaming(
+        data=download_result.data,
+        headers=headers,
         media_type=media_type,
         status_code=206 if download_result.byte_range.is_partial else 200,
     )

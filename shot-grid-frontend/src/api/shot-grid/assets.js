@@ -183,3 +183,41 @@ export function commitAssetImport(projectId, data, idempotencyKey) {
     silentError: true
   })
 }
+
+export function getAssetRequirementPage(projectId, params, options = {}) {
+  return request({
+    url: projectUrl(projectId, '/asset-requirements'),
+    method: 'get',
+    params,
+    signal: options.signal,
+    silentError: true
+  })
+}
+
+export function resolveAssetRequirement(projectId, requirementId, data, idempotencyKey) {
+  return request({
+    url: `${projectUrl(projectId, '/asset-requirements')}/${assertPositiveId(requirementId, '资产需求')}/resolve`,
+    method: 'post',
+    data,
+    headers: idempotencyHeaders(idempotencyKey),
+    silentError: true
+  })
+}
+
+export function ignoreAssetRequirement(projectId, requirementId, data, idempotencyKey) {
+  return request({
+    url: `${projectUrl(projectId, '/asset-requirements')}/${assertPositiveId(requirementId, '资产需求')}/ignore`,
+    method: 'post',
+    data,
+    headers: idempotencyHeaders(idempotencyKey),
+    silentError: true
+  })
+}
+
+export function rematchAssetRequirements(projectId) {
+  return request({
+    url: projectUrl(projectId, '/asset-requirements/rematch'),
+    method: 'post',
+    silentError: true
+  })
+}
