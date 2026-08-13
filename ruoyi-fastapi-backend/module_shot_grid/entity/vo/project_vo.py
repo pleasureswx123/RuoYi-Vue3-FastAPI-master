@@ -27,6 +27,8 @@ class ShotGridProjectListQueryModel(ShotGridPageQueryModel):
 class ShotGridProjectCreateModel(ShotGridApiModel):
     """创建项目请求。"""
 
+    model_config = ConfigDict(extra='forbid')
+
     project_code: str = Field(min_length=2, max_length=12, description='项目代号及文件名前缀')
     project_name: str = Field(min_length=1, max_length=200, description='项目名称')
     project_type: Literal['ai_short_film'] = Field(default='ai_short_film', description='项目类型')
@@ -40,7 +42,6 @@ class ShotGridProjectCreateModel(ShotGridApiModel):
     )
     delivery_date: date | None = Field(default=None, description='交付日期')
     storage_root_id: int = Field(gt=0, le=SQL_BIGINT_MAX, description='NAS 根目录ID')
-    project_directory_name: str = Field(min_length=1, max_length=240, description='项目目录名称')
     director_user_ids: list[int] = Field(min_length=1, description='初始项目总监用户ID')
     members: list[ShotGridInitialMemberModel] = Field(default_factory=list, description='初始项目成员')
     remark: str | None = Field(default=None, max_length=500, description='备注')
@@ -55,11 +56,11 @@ class ShotGridProjectCreateModel(ShotGridApiModel):
             raise ValueError('项目代号必须为 2—12 位大写英文字母或数字')
         return normalized
 
-    @field_validator('project_name', 'project_directory_name', mode='before')
+    @field_validator('project_name', mode='before')
     @classmethod
     def strip_required_text(cls, value: Any) -> str:
         if not isinstance(value, str):
-            raise ValueError('项目名称和目录名称必须是字符串')
+            raise ValueError('项目名称必须是字符串')
         return value.strip()
 
     @field_validator('project_description', 'remark', mode='before')

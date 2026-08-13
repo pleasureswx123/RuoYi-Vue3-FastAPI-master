@@ -163,7 +163,7 @@ class ShotGridProjectService:
             path = ShotGridProjectPathService.build_snapshot(
                 root_path=storage_root.unc_root_path,
                 project_type=command.project_type,
-                project_directory_name=command.project_directory_name,
+                project_directory_name=command.project_name,
             )
             if (
                 await ShotGridProjectStorageDao.get_storage_by_path_key(db, storage_root.storage_root_id, path.path_key)
@@ -574,7 +574,7 @@ class ShotGridProjectService:
         stable_idempotency_key: str,
         command: ShotGridProjectCreateModel,
     ) -> ShotGridProjectCreationAcceptedModel:
-        expected_directory = ShotGridProjectPathService.normalize_segment(command.project_directory_name)
+        expected_directory = ShotGridProjectPathService.normalize_segment(command.project_name)
         expected = {
             'project_code': command.project_code,
             'project_name': command.project_name,

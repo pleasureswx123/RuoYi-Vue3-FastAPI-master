@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onBeforeUnmount, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { Search } from '@element-plus/icons-vue'
 
 import { getMemberCandidatePage, getProjectMemberCandidatePage } from '@/api/shot-grid/projects'
@@ -7,6 +7,7 @@ import { projectErrorState } from '@/views/project/projectPresentation'
 
 const props = defineProps({
   projectId: { type: Number, default: null },
+  departmentId: { type: Number, default: null },
   excludeIds: { type: Array, default: () => [] },
   placeholder: { type: String, default: '按账号或姓名搜索平台用户' }
 })
@@ -16,6 +17,7 @@ const candidates = ref([])
 const loading = ref(false)
 const searched = ref(false)
 const errorState = ref(null)
+const root = ref(null)
 let controller = null
 let timer = null
 
@@ -33,7 +35,12 @@ async function search() {
   searched.value = true
   errorState.value = null
   try {
-    const params = { pageNum: 1, pageSize: 20, keyword: keyword.value.trim() || undefined }
+    const params = {
+      pageNum: 1,
+      pageSize: 20,
+      keyword: keyword.value.trim() || undefined,
+      deptId: props.departmentId || undefined
+    }
     const options = { signal: requestController.signal }
     const response = props.projectId
       ? await getProjectMemberCandidatePage(props.projectId, params, options)
@@ -62,14 +69,21 @@ function choose(candidate) {
   errorState.value = null
 }
 
+function closeOnOutsidePointer(event) {
+  if (root.value && !root.value.contains(event.target)) searched.value = false
+}
+
+onMounted(() => document.addEventListener('pointerdown', closeOnOutsidePointer))
+
 onBeforeUnmount(() => {
   clearTimeout(timer)
   controller?.abort()
+  document.removeEventListener('pointerdown', closeOnOutsidePointer)
 })
 </script>
 
 <template>
-  <div class="candidate-select">
+  <div ref="root" class="candidate-select">
     <label>
       <el-icon><Search /></el-icon>
       <input

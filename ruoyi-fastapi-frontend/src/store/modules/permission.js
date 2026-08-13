@@ -6,6 +6,23 @@ import ParentView from '@/components/ParentView'
 import InnerLink from '@/layout/components/InnerLink'
 import { resolvePluginViewPath } from '@/utils/pluginViewResolver'
 
+// Shot Grid 是由 5174 独立承载的业务前端。数据库菜单仍用于角色授权和业务导航，
+// 这里只阻止它被注册成 5173 平台管理端的页面路由，避免侧栏入口全部落到 404。
+const independentAppRoutePaths = new Set(['/shot-grid'])
+
+function excludeIndependentAppRoutes(routes) {
+  if (!Array.isArray(routes)) return []
+
+  return routes
+    .filter(route => !independentAppRoutePaths.has(route?.path))
+    .map(route => ({
+      ...route,
+      children: Array.isArray(route.children)
+        ? excludeIndependentAppRoutes(route.children)
+        : route.children
+    }))
+}
+
 // 匹配内置 views 和插件 views 里面所有的 .vue 文件
 const builtinModules = import.meta.glob('./../../views/**/*.vue')
 const pluginModules = import.meta.glob('./../../../plugins/*/views/**/*.vue')
@@ -39,9 +56,10 @@ const usePermissionStore = defineStore(
         return new Promise(resolve => {
           // 向后端请求路由数据
           getRouters().then(res => {
-            const sdata = JSON.parse(JSON.stringify(res.data))
-            const rdata = JSON.parse(JSON.stringify(res.data))
-            const defaultData = JSON.parse(JSON.stringify(res.data))
+            const platformRoutes = excludeIndependentAppRoutes(res.data)
+            const sdata = JSON.parse(JSON.stringify(platformRoutes))
+            const rdata = JSON.parse(JSON.stringify(platformRoutes))
+            const defaultData = JSON.parse(JSON.stringify(platformRoutes))
             const sidebarRoutes = filterAsyncRouter(sdata)
             const rewriteRoutes = filterAsyncRouter(rdata, false, true)
             const defaultRoutes = filterAsyncRouter(defaultData)

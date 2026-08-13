@@ -70,7 +70,6 @@ async def test_project_create_returns_real_http_and_body_202(monkeypatch: pytest
             projectCode='LCFR',
             projectName='罗刹夫人',
             storageRootId=10,
-            projectDirectoryName='罗刹夫人',
             directorUserIds=[1],
         ),
         idempotency_key='request-1',

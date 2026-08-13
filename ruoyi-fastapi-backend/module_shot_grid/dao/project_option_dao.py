@@ -26,6 +26,7 @@ class ShotGridProjectOptionDao:
                     ShotGridStorageRoot.root_code,
                     ShotGridStorageRoot.root_name,
                     ShotGridStorageRoot.protocol,
+                    ShotGridStorageRoot.unc_root_path,
                     ShotGridStorageRoot.last_probe_status,
                     ShotGridStorageRoot.last_probe_time,
                 )
@@ -85,6 +86,8 @@ class ShotGridProjectOptionDao:
             .where(SysUser.status == '0', SysUser.del_flag == '0', data_scope_sql)
         )
         keyword = query.keyword.strip() if query.keyword else None
+        if query.dept_id is not None:
+            statement = statement.where(SysUser.dept_id == query.dept_id)
         if keyword:
             statement = statement.where(
                 or_(

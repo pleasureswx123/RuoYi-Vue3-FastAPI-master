@@ -27,6 +27,7 @@ async def test_storage_root_options_return_only_safe_projection(monkeypatch: pyt
                 'root_code': 'PLAN',
                 'root_name': '策划部',
                 'protocol': 'smb_unc',
+                'unc_root_path': r'\\192.168.10.64\策划部',
                 'last_probe_status': 'healthy',
                 'last_probe_time': datetime(2026, 8, 11, 10, 0),
             }
@@ -44,10 +45,10 @@ async def test_storage_root_options_return_only_safe_projection(monkeypatch: pyt
         'rootCode': 'PLAN',
         'rootName': '策划部',
         'protocol': 'smb_unc',
+        'uncRootPath': r'\\192.168.10.64\策划部',
         'lastProbeStatus': 'healthy',
         'lastProbeTime': datetime(2026, 8, 11, 10, 0),
     }
-    assert 'uncRootPath' not in result[0].model_dump(by_alias=True)
 
 
 @pytest.mark.asyncio
@@ -74,7 +75,6 @@ async def test_path_preview_uses_frozen_path_rules_and_reports_conflict(monkeypa
         10,
         ShotGridProjectPathPreviewRequestModel(
             projectName='罗刹夫人',
-            projectDirectoryName='罗刹夫人',
         ),
     )
 
@@ -104,7 +104,6 @@ async def test_path_preview_rejects_unhealthy_root(monkeypatch: pytest.MonkeyPat
             10,
             ShotGridProjectPathPreviewRequestModel(
                 projectName='罗刹夫人',
-                projectDirectoryName='罗刹夫人',
             ),
         )
 

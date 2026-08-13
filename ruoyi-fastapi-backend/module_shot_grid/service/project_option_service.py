@@ -44,7 +44,7 @@ class ShotGridProjectOptionService:
         snapshot = ShotGridProjectPathService.build_snapshot(
             root_path=storage_root.unc_root_path,
             project_type=command.project_type,
-            project_directory_name=command.project_directory_name,
+            project_directory_name=command.project_name,
         )
         conflict = await ShotGridProjectOptionDao.storage_path_exists(
             db,

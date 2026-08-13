@@ -17,11 +17,6 @@ const form = reactive({
   projectDescription: props.project.projectDescription || '',
   projectType: props.project.projectType || 'ai_short_film',
   aspectRatio: props.project.aspectRatio || '16:9',
-  plannedDurationMinutes:
-    props.project.plannedDurationMs === null || props.project.plannedDurationMs === undefined
-      ? ''
-      : String(props.project.plannedDurationMs / 60000),
-  deliveryDate: props.project.deliveryDate || '',
   currentPhase: props.project.currentPhase || 'planning',
   remark: props.project.remark || ''
 })
@@ -29,17 +24,11 @@ const form = reactive({
 function buildPayload() {
   const projectName = form.projectName.trim()
   if (!projectName) throw new Error('项目名称不能为空')
-  const minutes = form.plannedDurationMinutes === '' ? null : Number(form.plannedDurationMinutes)
-  if (minutes !== null && (!Number.isFinite(minutes) || minutes < 0)) {
-    throw new Error('计划总时长不能为负数')
-  }
   return {
     projectName,
     projectDescription: form.projectDescription.trim() || null,
     projectType: form.projectType,
     aspectRatio: form.aspectRatio,
-    plannedDurationMs: minutes === null ? null : Math.round(minutes * 60000),
-    deliveryDate: form.deliveryDate || null,
     currentPhase: form.currentPhase,
     remark: form.remark.trim() || null,
     lockVersion: props.project.lockVersion
@@ -90,8 +79,6 @@ async function submit() {
             <el-option v-for="ratio in ['16:9', '21:9', '2.39:1', '9:16', '1:1']" :key="ratio" :label="ratio" :value="ratio" />
           </el-select>
         </label>
-        <label><span>计划总时长（分钟）</span><input v-model="form.plannedDurationMinutes" type="number" min="0" step="0.1" /></label>
-        <label><span>交付日期</span><input v-model="form.deliveryDate" type="date" /></label>
       </div>
       <label><span>项目描述</span><textarea v-model="form.projectDescription" rows="4" /></label>
       <label><span>备注</span><textarea v-model="form.remark" rows="2" maxlength="500" /></label>

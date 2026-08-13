@@ -19,7 +19,6 @@ def _command(project_name: str = '罗刹夫人') -> ShotGridProjectCreateModel:
         plannedDurationMs=510000,
         deliveryDate='2026-09-15',
         storageRootId=10,
-        projectDirectoryName='罗刹夫人',
         directorUserIds=[1],
         members=[{'userId': 2, 'projectRole': 'creator', 'producerCode': 'YJF'}],
         remark='',
@@ -40,7 +39,7 @@ def _existing(command: ShotGridProjectCreateModel, key: str) -> dict:
         'remark': command.remark,
         'storage_status': 'initializing',
         'storage_root_id': command.storage_root_id,
-        'project_dir_name_snapshot': command.project_directory_name,
+        'project_dir_name_snapshot': command.project_name,
         'idempotency_key': key,
     }
 

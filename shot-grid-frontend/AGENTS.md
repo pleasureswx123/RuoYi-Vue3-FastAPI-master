@@ -278,7 +278,8 @@ ruoyi-fastapi-frontend
 - `/shot-grid/navigation` 的 `routeKey` 只接受 `workbench`、`projects`、`shots`、`assets`、`reviews`、`files`。前端同时校验本地路径，拒绝未知键、重复键和路径不匹配项，不接受后端注入组件路径。
 - 统一 `ApiError` 保留 `status`、`httpStatus`、`code`、`errorKey`、`data`、`details` 和原始响应；401 清理本地会话并回登录，403 进入无权限页，404 与 5xx 分别展示不存在和服务异常，服务异常不得伪装成空数据。
 - 项目列表调用 `GET /shot-grid/projects`，普通用户保持成员范围；只有具备 `shotgrid:project:all` 时才显示并提交显式 `scope=all`。列表包含搜索、状态、范围、排序和服务端分页，加载失败不能伪装为空数据。
-- 创建项目只从 `GET /shot-grid/storage-roots/options` 选择后端判定为 `enabled + healthy` 的根目录，通过 `POST /shot-grid/storage-roots/{storageRootId}/project-path-preview` 获取无副作用路径预览，并从 `GET /shot-grid/member-candidates` 选择创建时的有效平台用户。已创建项目的成员维护改用 `GET /shot-grid/projects/{projectId}/member-candidates`，由后端同时校验 `shotgrid:member:add`、项目总监角色和 `DataScope(SysUser)`。候选响应只允许安全身份摘要，前端不得要求后端返回密码、联系方式或完整用户实体。
+- 创建项目只从 `GET /shot-grid/storage-roots/options` 选择后端判定为 `enabled + healthy` 的根目录；选项包含已授权项目创建人可见的规范化 UNC 根路径，选中后直接显示。项目目录名称由项目名称唯一生成；根目录或项目名称变化时，前端防抖调用 `POST /shot-grid/storage-roots/{storageRootId}/project-path-preview`，自动展示后端计算的完整项目路径和占用状态，不设置额外“预览路径”按钮。创建成员从 `GET /shot-grid/member-candidates` 选择有效平台用户。创建表单不采集非主流程必需的计划总时长和交付日期；项目管理者与其他初始成员候选固定携带当前登录账号的 `deptId`，只展示同部门账号。已创建项目的成员维护改用 `GET /shot-grid/projects/{projectId}/member-candidates`，由后端同时校验 `shotgrid:member:add`、项目总监角色和 `DataScope(SysUser)`。候选响应只允许安全身份摘要，前端不得要求后端返回密码、联系方式或完整用户实体。
+- NAS 根目录由 5173 平台管理端的“系统管理 → NAS 根目录”维护，独立业务端不允许录入或修改 UNC 根路径。管理端新增配置后必须调用后端真实读写删除探测；只有探测结果为 `healthy` 且配置已启用时，5174 创建项目下拉框才显示该根目录。
 - 创建项目必须携带稳定 `X-Idempotency-Key`。后端 HTTP 202 只表示项目、成员、存储绑定和初始化 Outbox 已受理；页面必须显示“正在初始化”，不能在 `storageStatus=ready` 前把物理 NAS 初始化描述为成功。逻辑 `healthy` 根目录选项或测试夹具也不等于真实 UNC 可访问、可写或 Worker 已验收。
 - 项目详情页使用真实详情与概览聚合，并按后端 `allowedActions`、平台权限和项目角色控制编辑、归档、成员维护、路径查看与目录重试。普通编辑提交完整可编辑字段和当前 `lockVersion`；项目代号、NAS 绑定与状态不在普通 PUT 中修改，归档走独立动作。
 - 项目成员候选与成员列表是不同资源；添加、角色/制作人缩写修改和移除分别走项目成员接口。前端按钮显隐不能代替后端在项目行锁内重新校验操作者仍为项目总监。

@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import ConfigDict, Field, field_validator
 
 from module_shot_grid.entity.vo.common_vo import ShotGridApiModel
 
@@ -15,6 +15,7 @@ class ShotGridStorageRootOptionModel(ShotGridApiModel):
     root_code: str
     root_name: str
     protocol: Literal['smb_unc']
+    unc_root_path: str
     last_probe_status: Literal['healthy']
     last_probe_time: datetime | None = None
 
@@ -22,15 +23,16 @@ class ShotGridStorageRootOptionModel(ShotGridApiModel):
 class ShotGridProjectPathPreviewRequestModel(ShotGridApiModel):
     """项目路径预览请求；预览不会写库或创建目录。"""
 
+    model_config = ConfigDict(extra='forbid')
+
     project_type: Literal['ai_short_film'] = 'ai_short_film'
     project_name: str = Field(min_length=1, max_length=200)
-    project_directory_name: str = Field(min_length=1, max_length=240)
 
-    @field_validator('project_name', 'project_directory_name', mode='before')
+    @field_validator('project_name', mode='before')
     @classmethod
     def normalize_required_text(cls, value: object) -> str:
         if not isinstance(value, str):
-            raise ValueError('项目名称和目录名称必须是字符串')
+            raise ValueError('项目名称必须是字符串')
         return value.strip()
 
 
@@ -51,6 +53,7 @@ class ShotGridMemberCandidateQueryModel(ShotGridApiModel):
     page_num: int = Field(default=1, ge=1)
     page_size: int = Field(default=20, ge=1, le=100)
     keyword: str | None = Field(default=None, max_length=100)
+    dept_id: int | None = Field(default=None, gt=0, le=SQL_BIGINT_MAX)
 
 
 class ShotGridMemberCandidateModel(ShotGridApiModel):

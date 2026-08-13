@@ -40,6 +40,26 @@ async def test_member_candidate_count_and_rows_apply_user_data_scope() -> None:
 
 
 @pytest.mark.asyncio
+async def test_member_candidates_can_be_limited_to_one_department() -> None:
+    page_result = MagicMock()
+    page_result.mappings.return_value = []
+    db = AsyncMock()
+    db.scalar.return_value = 0
+    db.execute.return_value = page_result
+
+    await ShotGridProjectOptionDao.get_member_candidate_page(
+        db,
+        ShotGridMemberCandidateQueryModel(pageNum=1, pageSize=20, deptId=100),
+        SysUser.user_id > 0,
+    )
+
+    count_sql = _postgresql_sql(db.scalar.await_args.args[0])
+    rows_sql = _postgresql_sql(db.execute.await_args.args[0])
+    assert 'sys_user.dept_id = 100' in count_sql
+    assert 'sys_user.dept_id = 100' in rows_sql
+
+
+@pytest.mark.asyncio
 async def test_shot_assignee_options_apply_membership_account_and_producer_guards() -> None:
     page_result = MagicMock()
     page_result.mappings.return_value = []

@@ -67,8 +67,7 @@ describe('项目 API 契约', () => {
     getStorageRootOptions()
     previewProjectPath(5, {
       projectType: 'ai_short_film',
-      projectName: '罗刹夫人',
-      projectDirectoryName: '罗刹夫人'
+      projectName: '罗刹夫人'
     })
     getMemberCandidatePage({ pageNum: 1, pageSize: 20, keyword: '杨' })
     getProjectMemberCandidatePage(9, { pageNum: 1, pageSize: 20, keyword: '杨' })

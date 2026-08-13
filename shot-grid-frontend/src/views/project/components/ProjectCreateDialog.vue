@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 
 import {
   createProject,
@@ -23,28 +23,32 @@ const storageError = ref(null)
 const pathPreview = ref(null)
 const previewLoading = ref(false)
 const previewError = ref(null)
-const directors = ref([
+const members = ref([
   {
     userId: Number(props.currentUser.userId),
     userName: props.currentUser.userName,
     nickName: props.currentUser.nickName,
-    deptName: props.currentUser.dept?.deptName || null
+    deptName: props.currentUser.dept?.deptName || null,
+    projectRole: 'director',
+    producerCode: '',
+    isCurrentUser: true
   }
 ])
-const members = ref([])
 const form = reactive({
   projectCode: '', projectName: '', projectDescription: '', aspectRatio: '16:9',
-  plannedDurationMinutes: '', deliveryDate: '', storageRootId: '', projectDirectoryName: '', remark: ''
+  storageRootId: '', remark: ''
 })
 let storageController = null
 let previewController = null
+let previewTimer = null
+let previewGeneration = 0
 
-const selectedUserIds = computed(() => [
-  ...directors.value.map(item => item.userId),
-  ...members.value.map(item => item.userId)
-])
+const selectedUserIds = computed(() => members.value.map(item => item.userId))
+const selectedStorageRoot = computed(() =>
+  storageRoots.value.find(root => String(root.storageRootId) === String(form.storageRootId)) || null
+)
 const canSubmit = computed(() =>
-  !busy.value && form.projectCode.trim() && form.projectName.trim() && form.storageRootId && directors.value.length
+  !busy.value && form.projectCode.trim() && form.projectName.trim() && form.storageRootId
 )
 
 async function loadStorageRoots() {
@@ -69,16 +73,20 @@ async function loadStorageRoots() {
 }
 
 function invalidatePathPreview() {
+  previewGeneration += 1
+  if (previewTimer) clearTimeout(previewTimer)
+  previewTimer = null
   pathPreview.value = null
   previewError.value = null
+  previewLoading.value = false
   previewController?.abort()
+  return previewGeneration
 }
 
 async function loadPathPreview() {
-  invalidatePathPreview()
+  const generation = invalidatePathPreview()
   const storageRootId = Number(form.storageRootId)
-  if (!storageRootId || !form.projectName.trim() || !form.projectDirectoryName.trim()) {
-    previewError.value = { title: '路径预览条件不足', message: '请先选择 NAS 根目录并填写项目名称和目录名称。' }
+  if (!storageRootId || !form.projectName.trim()) {
     return null
   }
   previewController = new AbortController()
@@ -88,58 +96,66 @@ async function loadPathPreview() {
       storageRootId,
       {
         projectType: 'ai_short_film',
-        projectName: form.projectName.trim(),
-        projectDirectoryName: form.projectDirectoryName.trim()
+        projectName: form.projectName.trim()
       },
       { signal: previewController.signal }
     )
+    if (generation !== previewGeneration) return null
     pathPreview.value = response.data
     if (response.data.pathConflict) {
-      previewError.value = { title: '项目目录已被占用', message: '请修改项目目录名称后重新预览。' }
+      previewError.value = { title: '项目目录已被占用', message: '请修改项目名称，系统会自动重新校验。' }
     }
     return response.data
   } catch (error) {
-    if (error?.code !== 'ERR_CANCELED') previewError.value = projectErrorState(error, 'NAS 路径预览失败')
+    if (generation === previewGeneration && error?.code !== 'ERR_CANCELED') {
+      previewError.value = projectErrorState(error, 'NAS 路径计算失败')
+    }
     return null
   } finally {
-    previewLoading.value = false
+    if (generation === previewGeneration) previewLoading.value = false
   }
 }
 
-function addDirector(candidate) {
-  directors.value.push(candidate)
+function schedulePathPreview() {
+  invalidatePathPreview()
+  if (!form.storageRootId || !form.projectName.trim()) return
+  previewTimer = setTimeout(loadPathPreview, 350)
 }
 
 function addMember(candidate) {
   members.value.push({ ...candidate, projectRole: 'creator', producerCode: '' })
 }
 
+function changeMemberRole(member) {
+  if (member.projectRole === 'director') member.producerCode = ''
+}
+
 function buildPayload() {
   const projectCode = form.projectCode.trim().toUpperCase()
   if (!/^[A-Z0-9]{2,12}$/.test(projectCode)) throw new Error('项目代号必须为 2—12 位大写英文字母或数字')
   const projectName = form.projectName.trim()
-  const directoryName = form.projectDirectoryName.trim()
-  if (!projectName || !directoryName) throw new Error('项目名称和项目目录名称不能为空')
+  if (!projectName) throw new Error('项目名称不能为空')
   const storageRootId = Number(form.storageRootId)
   if (!Number.isSafeInteger(storageRootId) || storageRootId <= 0) throw new Error('请选择有效的 NAS 根目录')
-  if (!directors.value.length) throw new Error('项目必须至少有一名项目总监')
   const normalizedMembers = members.value.map((member, index) => {
-    const producerCode = member.producerCode.trim().toUpperCase()
+    const producerCode = member.projectRole === 'creator' ? member.producerCode.trim().toUpperCase() : ''
     if (producerCode && !/^[A-Z0-9]{2,12}$/.test(producerCode)) {
       throw new Error(`第 ${index + 1} 位成员的制作人缩写必须为 2—12 位英文字母或数字`)
     }
     return { userId: member.userId, projectRole: member.projectRole, producerCode: producerCode || null }
   })
-  const producerCodes = normalizedMembers.map(member => member.producerCode).filter(Boolean)
+  const directorUserIds = normalizedMembers
+    .filter(member => member.projectRole === 'director')
+    .map(member => member.userId)
+  if (!directorUserIds.length) throw new Error('项目必须至少有一名项目管理者')
+  const initialMembers = normalizedMembers.filter(member => member.projectRole !== 'director')
+  const producerCodes = initialMembers.map(member => member.producerCode).filter(Boolean)
   if (new Set(producerCodes).size !== producerCodes.length) throw new Error('同一项目内制作人缩写不能重复')
-  const minutes = form.plannedDurationMinutes === '' ? null : Number(form.plannedDurationMinutes)
-  if (minutes !== null && (!Number.isFinite(minutes) || minutes < 0)) throw new Error('计划总时长不能为负数')
   return {
     projectCode, projectName, projectType: 'ai_short_film',
     projectDescription: form.projectDescription.trim() || null, aspectRatio: form.aspectRatio,
-    plannedDurationMs: minutes === null ? null : Math.round(minutes * 60000),
-    deliveryDate: form.deliveryDate || null, storageRootId, projectDirectoryName: directoryName,
-    directorUserIds: directors.value.map(item => item.userId), members: normalizedMembers,
+    storageRootId,
+    directorUserIds, members: initialMembers,
     remark: form.remark.trim() || null
   }
 }
@@ -160,23 +176,30 @@ async function submit() {
   } finally { busy.value = false }
 }
 
+watch(
+  () => [form.storageRootId, form.projectName],
+  schedulePathPreview
+)
+
 onMounted(loadStorageRoots)
-onBeforeUnmount(() => { storageController?.abort(); previewController?.abort() })
+onBeforeUnmount(() => {
+  if (previewTimer) clearTimeout(previewTimer)
+  storageController?.abort()
+  previewController?.abort()
+})
 </script>
 
 <template>
-  <ProjectModal title="创建项目" description="先由后端预览并校验 NAS 路径，再以同一幂等键受理项目和目录初始化。" :busy="busy" wide @close="emit('close')">
+  <ProjectModal title="创建项目" description="项目名称同时作为 NAS 项目目录名称，系统自动计算并校验保存路径。" :busy="busy" wide @close="emit('close')">
     <form class="project-form" @submit.prevent="submit">
       <div class="project-form__grid">
-        <label><span>项目名称 *</span><input v-model="form.projectName" maxlength="200" placeholder="如：罗刹夫人" @input="invalidatePathPreview" /></label>
+        <label><span>项目名称 *</span><input v-model="form.projectName" maxlength="200" placeholder="如：罗刹夫人" /></label>
         <label><span>项目代号 *</span><input v-model="form.projectCode" maxlength="12" placeholder="如：LCFR" @input="form.projectCode = form.projectCode.toUpperCase()" /></label>
         <label><span>画幅 *</span><el-select v-model="form.aspectRatio" class="sg-select"><el-option v-for="ratio in ['16:9','21:9','2.39:1','9:16','1:1']" :key="ratio" :label="ratio" :value="ratio" /></el-select></label>
         <label><span>项目类型</span><input value="AI 影视短片" disabled /></label>
-        <label><span>计划总时长（分钟）</span><input v-model="form.plannedDurationMinutes" type="number" min="0" step="0.1" placeholder="可选" /></label>
-        <label><span>交付日期</span><input v-model="form.deliveryDate" type="date" /></label>
         <label>
           <span>NAS 根目录 *</span>
-          <el-select v-model="form.storageRootId" class="sg-select" :placeholder="storageLoading ? '正在加载健康根目录…' : '请选择健康根目录'" :disabled="storageLoading || !!storageError" @change="invalidatePathPreview">
+          <el-select v-model="form.storageRootId" class="sg-select" :placeholder="storageLoading ? '正在加载健康根目录…' : '请选择健康根目录'" :disabled="storageLoading || !!storageError">
             <el-option :label="storageLoading ? '正在加载健康根目录…' : '请选择健康根目录'" value="" />
             <el-option v-for="root in storageRoots" :key="root.storageRootId" :label="`${root.rootName}（${root.rootCode}）`" :value="String(root.storageRootId)" />
           </el-select>
@@ -186,34 +209,30 @@ onBeforeUnmount(() => { storageController?.abort(); previewController?.abort() }
             <button v-if="storageError.retryable" type="button" @click="loadStorageRoots">重试</button>
           </small>
         </label>
-        <label><span>项目目录名称 *</span><input v-model="form.projectDirectoryName" maxlength="240" placeholder="如：罗刹夫人" @input="invalidatePathPreview" /></label>
       </div>
 
       <section class="path-preview">
         <div>
-          <strong>NAS 项目路径预览</strong>
-          <p v-if="pathPreview" :class="{ conflict: pathPreview.pathConflict }">{{ pathPreview.projectPathPreview }}</p>
-          <p v-else>路径只由后端白名单根目录和规范化规则计算，不接受浏览器提交 UNC 根路径。</p>
+          <strong>项目保存路径</strong>
+          <p v-if="selectedStorageRoot" class="path-line"><span>NAS 根目录</span><code>{{ selectedStorageRoot.uncRootPath }}</code></p>
+          <p v-else>请选择 NAS 根目录。</p>
+          <p v-if="previewLoading">正在自动计算完整项目路径…</p>
+          <p v-else-if="pathPreview" class="path-line" :class="{ conflict: pathPreview.pathConflict }"><span>完整路径</span><code>{{ pathPreview.projectPathPreview }}</code></p>
+          <p v-else-if="selectedStorageRoot">填写项目名称后，这里会自动显示完整路径。</p>
           <small v-if="previewError" class="field-error">{{ previewError.message }}</small>
         </div>
-        <el-button plain :loading="previewLoading" @click="loadPathPreview">预览路径</el-button>
       </section>
 
       <section class="people-section">
-        <div class="people-section__heading"><div><strong>初始项目总监 *</strong><p>至少一名，默认包含当前账号。</p></div></div>
-        <div class="people-pills"><span v-for="(director,index) in directors" :key="director.userId">{{ director.nickName || director.userName }}<button v-if="directors.length > 1" type="button" @click="directors.splice(index,1)">×</button></span></div>
-        <MemberCandidateSelect :exclude-ids="selectedUserIds" placeholder="搜索并添加项目总监" @select="addDirector" />
-      </section>
-
-      <section class="people-section">
-        <div class="people-section__heading"><div><strong>其他初始成员</strong><p>候选仅来自有效平台账号；也可以创建后再维护。</p></div></div>
-        <MemberCandidateSelect :exclude-ids="selectedUserIds" @select="addMember" />
-        <div v-if="members.length" class="member-rows">
+        <div class="people-section__heading"><div><strong>项目成员</strong><p>当前账号默认加入项目；所有成员均可设置为项目管理者或制作人员，且至少需要一名项目管理者。</p></div></div>
+        <MemberCandidateSelect :department-id="currentUser.dept?.deptId" :exclude-ids="selectedUserIds" @select="addMember" />
+        <div class="member-rows">
           <div v-for="(member,index) in members" :key="member.userId" class="member-row">
-            <div><strong>{{ member.nickName || member.userName }}</strong><small>{{ member.userName }} · {{ member.deptName || '未分配部门' }}</small></div>
-            <el-select v-model="member.projectRole" class="sg-select"><el-option label="制作人员" value="creator" /><el-option label="项目总监" value="director" /></el-select>
-            <input v-model="member.producerCode" maxlength="12" placeholder="制作人缩写（可空）" @input="member.producerCode = member.producerCode.toUpperCase()" />
-            <button type="button" @click="members.splice(index,1)">移除</button>
+            <div><strong>{{ member.nickName || member.userName }}</strong><small>{{ member.userName }} · {{ member.deptName || '未分配部门' }}<template v-if="member.isCurrentUser"> · 当前登录账号</template></small></div>
+            <el-select v-model="member.projectRole" class="sg-select" @change="changeMemberRole(member)"><el-option label="制作人员" value="creator" /><el-option label="项目管理者" value="director" /></el-select>
+            <input v-model="member.producerCode" maxlength="12" :disabled="member.projectRole === 'director'" :placeholder="member.projectRole === 'director' ? '管理者无需填写' : '制作人缩写（可空）'" @input="member.producerCode = member.producerCode.toUpperCase()" />
+            <button v-if="!member.isCurrentUser" type="button" @click="members.splice(index,1)">移除</button>
+            <span v-else></span>
           </div>
         </div>
       </section>
@@ -244,6 +263,9 @@ small, .people-section p, .path-preview p { margin: 0; color: var(--sg-text-mute
 .path-preview { display: flex; gap: 18px; align-items: center; justify-content: space-between; }
 .path-preview p { margin-top: 6px; overflow-wrap: anywhere; }
 .path-preview p.conflict { color: var(--sg-danger); }
+.path-line { display: grid; grid-template-columns: 72px minmax(0,1fr); gap: 10px; align-items: start; }
+.path-line span { color: var(--sg-text-muted); }
+.path-line code { color: var(--sg-text-secondary); font-family: Consolas, 'Courier New', monospace; white-space: normal; overflow-wrap: anywhere; }
 .people-section { display: grid; gap: 13px; }
 .people-section__heading { display: flex; justify-content: space-between; }
 .people-pills { display: flex; flex-wrap: wrap; gap: 8px; }

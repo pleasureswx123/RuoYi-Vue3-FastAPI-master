@@ -41,15 +41,7 @@ class ShotGridProjectPathService:
         project_type: str,
         project_directory_name: str,
     ) -> ShotGridProjectPathSnapshot:
-        normalized_root = unicodedata.normalize('NFC', root_path.strip()).rstrip('\\')
-        if (
-            not normalized_root.startswith('\\\\')
-            or '/' in normalized_root
-            or '..' in normalized_root.split('\\')
-            or len([part for part in normalized_root.split('\\') if part]) < MIN_UNC_COMPONENTS
-        ):
-            raise shot_grid_error(422, 'SG_STORAGE_PATH_INVALID', 'NAS 根目录不是合法的 UNC 路径')
-
+        normalized_root = cls.normalize_root_path(root_path)
         normalized_directory = cls.normalize_segment(project_directory_name)
         project_type_directory = cls.PROJECT_TYPE_DIRECTORIES.get(project_type)
         if project_type_directory is None:
@@ -67,6 +59,24 @@ class ShotGridProjectPathService:
         )
 
     @staticmethod
+    def normalize_root_path(root_path: str) -> str:
+        """规范化并校验管理员维护的 Windows UNC 根目录。"""
+
+        normalized_root = unicodedata.normalize('NFC', root_path.strip()).rstrip('\\')
+        path_components = normalized_root[2:].split('\\') if normalized_root.startswith('\\\\') else []
+        if (
+            not normalized_root.startswith('\\\\')
+            or '/' in normalized_root
+            or '*' in normalized_root
+            or '?' in normalized_root
+            or '://' in normalized_root
+            or len(path_components) < MIN_UNC_COMPONENTS
+            or any(not part or part in {'.', '..'} for part in path_components)
+        ):
+            raise shot_grid_error(422, 'SG_STORAGE_PATH_INVALID', 'NAS 根目录不是合法的 UNC 路径')
+        return normalized_root
+
+    @staticmethod
     def normalize_segment(value: str) -> str:
         normalized = unicodedata.normalize('NFC', value.strip())
         if (
@@ -76,5 +86,5 @@ class ShotGridProjectPathService:
             or WINDOWS_FORBIDDEN_PATTERN.search(normalized)
             or normalized.split('.', 1)[0].upper() in WINDOWS_RESERVED_NAMES
         ):
-            raise shot_grid_error(422, 'SG_STORAGE_PATH_INVALID', '项目目录名称包含 Windows 非法字符或保留名称')
+            raise shot_grid_error(422, 'SG_STORAGE_PATH_INVALID', '项目名称包含 Windows 目录非法字符或保留名称')
         return normalized

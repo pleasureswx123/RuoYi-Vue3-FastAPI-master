@@ -13,7 +13,6 @@ import ProjectStatePanel from '@/views/project/components/ProjectStatePanel.vue'
 import ProjectStoragePanel from '@/views/project/components/ProjectStoragePanel.vue'
 import {
   formatDateTime,
-  formatDuration,
   phaseLabel,
   projectErrorState,
   statusMeta,
@@ -139,8 +138,6 @@ onBeforeUnmount(() => controller?.abort())
           <div><dt>画幅</dt><dd>{{ project.aspectRatio }}</dd></div>
           <div><dt>当前阶段</dt><dd>{{ phaseLabel(project.currentPhase) }}</dd></div>
           <div><dt>我的角色</dt><dd>{{ project.myProjectRole === 'director' ? '项目总监' : project.myProjectRole === 'creator' ? '制作人员' : '跨项目管理员' }}</dd></div>
-          <div><dt>计划时长</dt><dd>{{ formatDuration(project.plannedDurationMs) }}</dd></div>
-          <div><dt>交付日期</dt><dd>{{ project.deliveryDate || '未设置' }}</dd></div>
           <div><dt>存储状态</dt><dd :data-tone="storageMeta(project.storageStatus).tone">{{ storageMeta(project.storageStatus).label }}</dd></div>
           <div><dt>最后更新</dt><dd>{{ formatDateTime(project.updateTime) }}</dd></div>
         </dl>

@@ -1797,6 +1797,18 @@ ShotGridDomainException
 
 ### 10.0 NAS 根目录选择与路径预览
 
+平台管理端维护接口：
+
+```http
+GET  /shot-grid/admin/storage-roots
+GET  /shot-grid/admin/storage-roots/{storageRootId}
+POST /shot-grid/admin/storage-roots
+PUT  /shot-grid/admin/storage-roots/{storageRootId}
+POST /shot-grid/admin/storage-roots/{storageRootId}/probe
+```
+
+管理端只保存规范化 UNC 白名单，不保存用户名、密码或明文凭据。新增、路径变更或停用后重新启用时，健康状态必须回到 `unknown`；探测由 9099 后端服务账号在事务外创建、回读并删除随机临时文件，15 秒软超时后记录不可达。浏览器所在账号能打开共享目录不能替代后端探测。只有 `rootStatus=enabled` 且 `lastProbeStatus=healthy` 的根目录才能进入以下项目创建选项。
+
 ```http
 GET  /shot-grid/storage-roots/options
 POST /shot-grid/storage-roots/{storageRootId}/project-path-preview
@@ -1805,7 +1817,7 @@ Permissions:
   shotgrid:project:add
 ```
 
-普通项目创建人只能看到 `enabled` 且最近探测可用的根目录选项，不返回 `credentialRef`、`rootPathKey` 或错误堆栈。路径预览请求：
+普通项目创建人只能看到 `enabled` 且最近探测可用的根目录选项；响应包含规范化 `uncRootPath`，用于创建表单直接确认保存位置，但不返回 `credentialRef`、`rootPathKey` 或错误堆栈。
 
 根目录选项响应只包含安全摘要：
 
@@ -1817,6 +1829,7 @@ Permissions:
       "rootCode": "PLAN_SMB",
       "rootName": "策划部",
       "protocol": "smb_unc",
+      "uncRootPath": "\\\\192.168.10.64\\策划部",
       "lastProbeStatus": "healthy",
       "lastProbeTime": "2026-08-11T10:00:00"
     }
@@ -1826,13 +1839,12 @@ Permissions:
 
 `lastProbeStatus=healthy` 是后端根目录配置与最近探测状态的筛选条件。仅在隔离数据库中写入该值的逻辑夹具不证明真实 SMB/UNC 已由正式 Windows Worker 账号访问或写入，不能作为 NAS/AD/共享 ACL 验收证据。
 
-路径预览请求：
+项目目录名称不单独采集，由项目名称唯一生成。前端在根目录或项目名称变化后自动防抖发起路径预览，不设置额外按钮。路径预览请求：
 
 ```json
 {
   "projectType": "ai_short_film",
-  "projectName": "罗刹夫人",
-  "projectDirectoryName": "罗刹夫人"
+  "projectName": "罗刹夫人"
 }
 ```
 
@@ -1947,7 +1959,6 @@ Header: X-Idempotency-Key
   "plannedDurationMs": 510000,
   "deliveryDate": "2026-09-15",
   "storageRootId": 10,
-  "projectDirectoryName": "罗刹夫人",
   "directorUserIds": [1],
   "members": [
     {"userId": 2, "projectRole": "creator", "producerCode": "YJF"}
@@ -1959,7 +1970,7 @@ Header: X-Idempotency-Key
 数据库事务：
 
 1. 校验创建人平台权限。
-2. 规范化并校验项目代号、类型、画幅和项目目录名。
+2. 规范化并校验项目代号、类型、画幅，并使用项目名称生成目录名。
 3. 锁定并重新校验 NAS 根目录已启用、路径未冲突。
 4. 校验项目总监和成员账号有效。
 5. 创建 `sg_project`、项目成员、`sg_project_storage(initializing)`。
@@ -2133,12 +2144,12 @@ Permissions:
 GET /shot-grid/member-candidates?pageNum=1&pageSize=20&keyword=杨景锋
 Permission: shotgrid:project:add
 
-GET /shot-grid/projects/{projectId}/member-candidates?pageNum=1&pageSize=20&keyword=杨景锋
+GET /shot-grid/projects/{projectId}/member-candidates?pageNum=1&pageSize=20&keyword=杨景锋&deptId=100
 Permission: shotgrid:member:add
 Project role: director
 ```
 
-第一条用于创建项目选择初始总监和成员；第二条用于已创建项目的成员维护，并额外执行项目总监角色校验。二者都不等于某个项目的活动成员列表，均通过 `DataScopeDependency(SysUser)` 约束候选范围，只返回未删除、未停用且当前操作者有权选择的 `sys_user` 安全投影。分页响应 `rows` 中单项为：
+第一条用于创建项目选择项目管理者和初始成员；第二条用于已创建项目的成员维护，并额外执行项目总监角色校验。二者都不等于某个项目的活动成员列表，均通过 `DataScopeDependency(SysUser)` 约束候选范围，并支持可选的精确 `deptId` 过滤。创建项目页面必须提交当前登录账号的部门 ID，只展示同部门候选；计划总时长和交付日期不属于创建主流程输入。接口只返回未删除、未停用且当前操作者有权选择的 `sys_user` 安全投影。分页响应 `rows` 中单项为：
 
 ```json
 {

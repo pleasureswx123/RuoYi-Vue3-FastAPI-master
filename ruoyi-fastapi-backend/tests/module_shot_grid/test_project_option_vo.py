@@ -11,11 +11,9 @@ from module_shot_grid.entity.vo.project_option_vo import (
 def test_project_path_preview_request_normalizes_text() -> None:
     command = ShotGridProjectPathPreviewRequestModel(
         projectName=' 罗刹夫人 ',
-        projectDirectoryName=' 罗刹夫人 ',
     )
 
     assert command.project_name == '罗刹夫人'
-    assert command.project_directory_name == '罗刹夫人'
 
 
 def test_project_option_query_rejects_oversized_page() -> None:

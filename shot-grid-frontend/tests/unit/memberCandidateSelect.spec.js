@@ -21,7 +21,10 @@ describe('成员候选搜索范围', () => {
     await wrapper.find('input').trigger('focus')
     await flushPromises()
 
-    expect(getMemberCandidatePage).toHaveBeenCalledOnce()
+    expect(getMemberCandidatePage).toHaveBeenCalledWith(
+      { pageNum: 1, pageSize: 20, keyword: undefined, deptId: undefined },
+      expect.objectContaining({ signal: expect.any(AbortSignal) })
+    )
     expect(getProjectMemberCandidatePage).not.toHaveBeenCalled()
     wrapper.unmount()
   })
@@ -36,10 +39,34 @@ describe('成员候选搜索范围', () => {
 
     expect(getProjectMemberCandidatePage).toHaveBeenCalledWith(
       19,
-      { pageNum: 1, pageSize: 20, keyword: undefined },
+      { pageNum: 1, pageSize: 20, keyword: undefined, deptId: undefined },
       expect.objectContaining({ signal: expect.any(AbortSignal) })
     )
     expect(getMemberCandidatePage).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('创建项目时把当前部门传给候选接口，并在点击组件外部后收起结果', async () => {
+    getMemberCandidatePage.mockResolvedValue({
+      rows: [{ userId: 7, userName: 'creator', nickName: '制作人员', deptId: 100, deptName: '策划营销部门' }]
+    })
+    const wrapper = mount(MemberCandidateSelect, {
+      props: { departmentId: 100 },
+      attachTo: document.body,
+      global: { components: { ElIcon } }
+    })
+    await wrapper.find('input').trigger('focus')
+    await flushPromises()
+
+    expect(getMemberCandidatePage).toHaveBeenCalledWith(
+      { pageNum: 1, pageSize: 20, keyword: undefined, deptId: 100 },
+      expect.objectContaining({ signal: expect.any(AbortSignal) })
+    )
+    expect(wrapper.find('.candidate-select__results').exists()).toBe(true)
+
+    document.body.dispatchEvent(new Event('pointerdown', { bubbles: true }))
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('.candidate-select__results').exists()).toBe(false)
     wrapper.unmount()
   })
 })

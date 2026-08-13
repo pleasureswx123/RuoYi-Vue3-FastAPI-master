@@ -160,7 +160,7 @@ onBeforeUnmount(() => controller?.abort())
           <tbody>
             <tr v-for="member in members" :key="member.userId">
               <td><strong>{{ member.nickName || member.userName }}</strong><small>{{ member.userName }}</small></td>
-              <td>{{ member.projectRole === 'director' ? '项目总监' : '制作人员' }}</td>
+              <td>{{ member.projectRole === 'director' ? '项目管理人员' : '制作人员' }}</td>
               <td><code>{{ member.producerCode || '—' }}</code></td>
               <td>{{ member.deptName || '—' }}</td>
               <td>{{ formatDateTime(member.joinedTime) }}</td>
@@ -180,7 +180,7 @@ onBeforeUnmount(() => controller?.abort())
     <ProjectModal v-if="selectedCandidate" title="添加项目成员" :busy="mutationBusy" @close="selectedCandidate = null">
       <form class="member-form" @submit.prevent="submitAdd">
         <div class="member-identity"><strong>{{ selectedCandidate.nickName || selectedCandidate.userName }}</strong><span>{{ selectedCandidate.userName }} · {{ selectedCandidate.deptName || '未分配部门' }}</span></div>
-        <label><span>项目角色</span><el-select v-model="addForm.projectRole" class="sg-select"><el-option label="制作人员" value="creator" /><el-option label="项目总监" value="director" /></el-select></label>
+        <label><span>项目角色</span><el-select v-model="addForm.projectRole" class="sg-select"><el-option label="制作人员" value="creator" /><el-option label="项目管理人员" value="director" /></el-select></label>
         <label><span>制作人缩写</span><input v-model="addForm.producerCode" maxlength="12" placeholder="可空；承担任务前需补齐" @input="addForm.producerCode = addForm.producerCode.toUpperCase()" /></label>
         <div v-if="mutationError" class="inline-error" role="alert"><strong>{{ mutationError.title }}</strong><span>{{ mutationError.message }}</span></div>
         <footer><el-button :disabled="mutationBusy" @click="selectedCandidate = null">取消</el-button><el-button type="primary" native-type="submit" :loading="mutationBusy">添加</el-button></footer>
@@ -190,7 +190,7 @@ onBeforeUnmount(() => controller?.abort())
     <ProjectModal v-if="editingMember" title="编辑项目成员" :busy="mutationBusy" @close="editingMember = null">
       <form class="member-form" @submit.prevent="submitEdit">
         <div class="member-identity"><strong>{{ editingMember.nickName || editingMember.userName }}</strong><span>{{ editingMember.userName }}</span></div>
-        <label><span>项目角色</span><el-select v-model="editForm.projectRole" class="sg-select"><el-option label="制作人员" value="creator" /><el-option label="项目总监" value="director" /></el-select></label>
+        <label><span>项目角色</span><el-select v-model="editForm.projectRole" class="sg-select"><el-option label="制作人员" value="creator" /><el-option label="项目管理人员" value="director" /></el-select></label>
         <label><span>制作人缩写</span><input v-model="editForm.producerCode" maxlength="12" placeholder="显式留空将清除缩写" @input="editForm.producerCode = editForm.producerCode.toUpperCase()" /></label>
         <div v-if="mutationError" class="inline-error" role="alert"><strong>{{ mutationError.title }}</strong><span>{{ mutationError.message }}</span></div>
         <footer><el-button :disabled="mutationBusy" @click="editingMember = null">取消</el-button><el-button type="primary" native-type="submit" :loading="mutationBusy">保存</el-button></footer>

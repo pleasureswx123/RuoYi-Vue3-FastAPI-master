@@ -9,7 +9,6 @@ import { useSessionStore } from '@/store/modules/session'
 import ProjectCreateDialog from '@/views/project/components/ProjectCreateDialog.vue'
 import ProjectStatePanel from '@/views/project/components/ProjectStatePanel.vue'
 import {
-  formatDuration,
   phaseLabel,
   projectErrorState,
   statusMeta,
@@ -129,7 +128,6 @@ onBeforeUnmount(() => activeController?.abort())
         <el-option label="创建时间" value="createTime" />
         <el-option label="项目代号" value="projectCode" />
         <el-option label="项目名称" value="projectName" />
-        <el-option label="交付日期" value="deliveryDate" />
       </el-select>
       <el-select v-model="query.isAsc" class="sg-select" aria-label="排序方向">
         <el-option label="降序" value="descending" />
@@ -193,7 +191,6 @@ onBeforeUnmount(() => activeController?.abort())
             <div><dt>阶段</dt><dd>{{ phaseLabel(project.currentPhase) }}</dd></div>
             <div><dt>镜头</dt><dd>{{ project.completedShots }}/{{ project.totalShots }}</dd></div>
             <div><dt>资产</dt><dd>{{ project.completedAssets }}/{{ project.totalAssets }}</dd></div>
-            <div><dt>计划时长</dt><dd>{{ formatDuration(project.plannedDurationMs) }}</dd></div>
           </dl>
           <div class="project-card__progress">
             <span><i :style="{ width: `${project.overallProgress || 0}%` }"></i></span>

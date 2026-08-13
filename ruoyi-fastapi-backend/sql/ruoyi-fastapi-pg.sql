@@ -2820,6 +2820,55 @@ where not exists (
 );
 
 -- ----------------------------
+-- Shot Grid 平台端 NAS 根目录管理菜单
+-- ----------------------------
+insert into sys_menu (
+    menu_name, parent_id, order_num, path, component, query, route_name,
+    is_frame, is_cache, menu_type, visible, status, perms, icon,
+    create_by, create_time, update_by, update_time, remark
+)
+select
+    'NAS 根目录', parent.menu_id, 12, 'nas', 'system/nas/index', '', 'ShotGridNasRoot',
+    1, 0, 'C', '0', '0', 'shotgrid:storageRoot:query', 'folder-opened',
+    'shotgrid_migration_20260812_08', current_timestamp, '', null, 'Shot Grid NAS 根目录白名单管理'
+from (
+    select menu_id from sys_menu
+    where parent_id = 0 and path = 'system' and menu_type = 'M'
+    order by menu_id limit 1
+) parent
+where not exists (
+    select 1 from sys_menu where route_name = 'ShotGridNasRoot' and menu_type = 'C'
+);
+
+with parent as (
+    select menu_id from sys_menu
+    where route_name = 'ShotGridNasRoot' and menu_type = 'C'
+    order by menu_id limit 1
+),
+seed(menu_name, order_num, perms) as (
+values
+    ('新增 NAS 根目录', 1, 'shotgrid:storageRoot:add'),
+    ('修改或启停 NAS 根目录', 2, 'shotgrid:storageRoot:edit'),
+    ('探测 NAS 根目录', 3, 'shotgrid:storageRoot:probe')
+)
+insert into sys_menu (
+    menu_name, parent_id, order_num, path, component, query, route_name,
+    is_frame, is_cache, menu_type, visible, status, perms, icon,
+    create_by, create_time, update_by, update_time, remark
+)
+select
+    seed.menu_name, parent.menu_id, seed.order_num, '#', '', '', '',
+    1, 0, 'F', '0', '0', seed.perms, '#',
+    'shotgrid_migration_20260812_08', current_timestamp, '', null, 'Shot Grid NAS 根目录管理权限'
+from seed cross join parent
+where not exists (
+    select 1 from sys_menu existing
+    where existing.parent_id = parent.menu_id
+      and existing.perms = seed.perms
+      and existing.menu_type = 'F'
+);
+
+-- ----------------------------
 -- Alembic 基线版本
 -- ----------------------------
 create table if not exists alembic_version (
@@ -2827,7 +2876,7 @@ create table if not exists alembic_version (
     constraint alembic_version_pkc primary key (version_num)
 );
 delete from alembic_version;
-insert into alembic_version(version_num) values ('20260812_07');
+insert into alembic_version(version_num) values ('20260812_08');
 
 
 CREATE OR REPLACE FUNCTION "find_in_set"(int8, varchar)

@@ -10,7 +10,6 @@ def _project(**changes) -> ShotGridProjectCreateModel:
         'projectCode': 'lcfr',
         'projectName': ' 罗刹夫人 ',
         'storageRootId': 10,
-        'projectDirectoryName': ' 罗刹夫人 ',
         'directorUserIds': [1],
         'members': [{'userId': 2, 'projectRole': 'creator', 'producerCode': 'yjf'}],
     }
@@ -23,7 +22,6 @@ def test_project_create_normalizes_codes_and_required_text() -> None:
 
     assert command.project_code == 'LCFR'
     assert command.project_name == '罗刹夫人'
-    assert command.project_directory_name == '罗刹夫人'
     assert command.members[0].producer_code == 'YJF'
 
 
@@ -61,7 +59,6 @@ def test_member_update_rejects_explicit_null_role_but_allows_null_producer_code(
         ('projectCode', None),
         ('projectCode', 123),
         ('projectName', None),
-        ('projectDirectoryName', 123),
         ('projectDescription', {}),
     ],
 )

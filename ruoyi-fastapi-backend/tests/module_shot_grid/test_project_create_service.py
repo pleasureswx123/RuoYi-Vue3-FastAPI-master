@@ -30,7 +30,6 @@ def _command(project_name: str = '罗刹夫人') -> ShotGridProjectCreateModel:
         projectCode='LCFR',
         projectName=project_name,
         storageRootId=10,
-        projectDirectoryName='罗刹夫人',
         directorUserIds=[1],
         members=[{'userId': 2, 'projectRole': 'creator', 'producerCode': 'YJF'}],
     )
@@ -176,7 +175,7 @@ async def test_same_idempotency_key_with_different_command_stops_before_domain_w
         'remark': original.remark,
         'storage_status': 'initializing',
         'storage_root_id': original.storage_root_id,
-        'project_dir_name_snapshot': original.project_directory_name,
+        'project_dir_name_snapshot': original.project_name,
         'idempotency_key': original_key,
     }
     monkeypatch.setattr(
@@ -225,7 +224,7 @@ async def test_concurrent_unique_conflict_recheck_rejects_different_command(
             'remark': original.remark,
             'storage_status': 'initializing',
             'storage_root_id': original.storage_root_id,
-            'project_dir_name_snapshot': original.project_directory_name,
+            'project_dir_name_snapshot': original.project_name,
             'idempotency_key': original_key,
         },
     ]

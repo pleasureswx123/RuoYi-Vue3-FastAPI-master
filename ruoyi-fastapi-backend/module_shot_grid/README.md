@@ -233,12 +233,13 @@ controller → service → dao → entity/do
 
 ## 数据库交付路径
 
-- 已有 RuoYi PostgreSQL 基线库：执行 Alembic `upgrade head`；当前 Shot Grid head 为 `20260811_06`。
+- 已有 RuoYi PostgreSQL 基线库：执行 Alembic `upgrade head`；当前 Shot Grid head 为 `20260812_08`。
 - 新数据库：执行同步后的 `sql/ruoyi-fastapi-pg.sql`，脚本会直接建立最新结构并写入当前 Alembic 版本。
 - 历史上已经落地 22 张 `sg_` 表但没有 `alembic_version` 的库，必须先备份并在克隆库核对为 01 结构，才能 `stamp 20260810_01` 后执行 `upgrade head`；不得直接对未核验的正式库 stamp。
 - `20260810_04` 是无版本历史库的采用/修复 revision，会把时间精度、审计人默认值、序场次/资产制作分项/主文件约束和集场次编号唯一性收敛为仓库从 01 起就声明的当前契约。时间精度收敛到秒会舍弃历史秒以下精度，升级前必须保留可恢复备份。
 - `20260810_05` 为 NAS Worker 补充存储操作执行状态一致性约束和两个非唯一的项目维度查询索引。升级会先检查历史 `sg_storage_operation`；若状态、租约、重试时间或完成时间互相矛盾，会以 `SG_STORAGE_OPERATION_EXECUTION_STATE_CONFLICT` 整体失败，必须先治理冲突数据再重试，迁移不会自动改写业务状态。两个新索引不引入数据唯一性冲突；降级会恢复 04 版 `target_relative_path` 列注释，并精确移除 05 新增的一个约束和两个索引，不回写或删除存储操作数据。
 - `20260811_06` 在任何 DDL 前检查：同一 `source_file_id` 不得被多条提交占用；每个任务在 `pending/publishing/published/committing/failed` 中最多一条未解决提交；提交状态、租约与错误字段组合必须一致。冲突分别以 `SG_VERSION_FILE_ALREADY_BOUND`、`SG_VERSION_SUBMISSION_ACTIVE` 或 `SG_VERSION_SUBMISSION_EXECUTION_STATE_CONFLICT` 整体失败，迁移不猜测修复业务数据。通过后安装“我的任务”索引、源文件唯一索引、包含 `failed` 的未解决提交部分唯一索引、提交执行/错误状态约束，以及审核动作幂等键、SHA-256 请求哈希、首次成功响应快照和唯一约束。downgrade 只移除 06 对象并恢复 05 的活动提交索引语义，不回写业务数据。
+- `20260812_07` 增加媒体派生任务表及每版本唯一缩略图、代理媒体索引；`20260812_08` 增加 5173“系统管理 → NAS 根目录”菜单与管理权限入口，不硬编码任何具体环境的 UNC 地址。根目录新增后必须由后端服务账号执行随机临时文件创建、回读和删除探测，只有 `enabled + healthy` 才能供 5174 创建项目选择。
 - 04 在任何 `ALTER` 或时间精度收敛前先预检历史数据；若存在序场次命名不一致、资产制作分项名称/键不成对、非审核媒体被标为主文件，或未删除的集号/场次号（含归档行）重复，会以稳定的 `SG_SHOT_GRID_REPAIR_*` PostgreSQL 异常整体回滚。必须先治理冲突数据再重试，迁移不会猜测或静默改写业务数据。
 - 04 的 downgrade 只回退 Alembic 版本号，不把数据库重新污染为从未被正式 revision 声明的旧弱结构，也不能恢复已舍弃的秒以下精度；灾难恢复应使用升级前备份。
 - 04 只修复有业务语义的差异；`selection_hash`、`result_summary`、成员生命周期字段的物理列顺序，以及 PostgreSQL 对等价 `CHECK`/部分索引的 cast 文本差异，不通过重建表处理。
