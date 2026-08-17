@@ -2,6 +2,7 @@ from typing import Any
 
 from sqlalchemy import asc, desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from module_admin.entity.do.file_do import SysFileInfo
 from module_shot_grid.entity.do.task_do import ShotGridTask
@@ -19,6 +20,38 @@ class ShotGridFileCenterDao:
         project_id: int,
         query: ShotGridProjectFileQueryModel,
     ) -> tuple[list[dict[str, Any]], int]:
+        thumbnail_version_file = aliased(ShotGridVersionFile, name='thumbnail_version_file')
+        thumbnail_file_info = aliased(SysFileInfo, name='thumbnail_file_info')
+        proxy_version_file = aliased(ShotGridVersionFile, name='proxy_version_file')
+        proxy_file_info = aliased(SysFileInfo, name='proxy_file_info')
+        thumbnail_file_id = (
+            select(thumbnail_version_file.file_id)
+            .join(thumbnail_file_info, thumbnail_file_info.file_id == thumbnail_version_file.file_id)
+            .where(
+                thumbnail_version_file.version_id == ShotGridVersion.version_id,
+                thumbnail_version_file.file_role == 'thumbnail',
+                thumbnail_file_info.status == 'active',
+                thumbnail_file_info.del_flag == '0',
+            )
+            .order_by(thumbnail_version_file.sort_order, thumbnail_version_file.file_id)
+            .limit(1)
+            .correlate(ShotGridVersion)
+            .scalar_subquery()
+        )
+        proxy_media_file_id = (
+            select(proxy_version_file.file_id)
+            .join(proxy_file_info, proxy_file_info.file_id == proxy_version_file.file_id)
+            .where(
+                proxy_version_file.version_id == ShotGridVersion.version_id,
+                proxy_version_file.file_role == 'proxy_media',
+                proxy_file_info.status == 'active',
+                proxy_file_info.del_flag == '0',
+            )
+            .order_by(proxy_version_file.sort_order, proxy_version_file.file_id)
+            .limit(1)
+            .correlate(ShotGridVersion)
+            .scalar_subquery()
+        )
         statement = (
             select(
                 ShotGridVersionFile.file_id,
@@ -38,6 +71,8 @@ class ShotGridFileCenterDao:
                 ShotGridVersionFile.nas_relative_path,
                 ShotGridVersionFile.published_time,
                 ShotGridVersion.submitted_time,
+                thumbnail_file_id.label('thumbnail_file_id'),
+                proxy_media_file_id.label('proxy_media_file_id'),
             )
             .join(ShotGridVersion, ShotGridVersion.version_id == ShotGridVersionFile.version_id)
             .join(ShotGridTask, ShotGridTask.task_id == ShotGridVersion.task_id)

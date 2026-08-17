@@ -32,6 +32,20 @@ class ShotGridProjectFileQueryModel(ShotGridPageQueryModel):
     )
 
 
+class ShotGridProjectFileThumbnailModel(ShotGridApiModel):
+    """同版本受保护缩略图投影。"""
+
+    file_id: str
+    url: str
+
+
+class ShotGridProjectFileProxyMediaModel(ShotGridApiModel):
+    """同版本受保护代理媒体投影。"""
+
+    file_id: str
+    url: str
+
+
 class ShotGridProjectFileModel(ShotGridApiModel):
     """文件中心安全读取模型；不暴露平台物理存储位置。"""
 
@@ -54,3 +68,5 @@ class ShotGridProjectFileModel(ShotGridApiModel):
     published_time: datetime | None = None
     submitted_time: datetime
     download_url: str
+    thumbnail: ShotGridProjectFileThumbnailModel | None = None
+    proxy_media: ShotGridProjectFileProxyMediaModel | None = None

@@ -23,6 +23,26 @@ class ShotGridFileCenterService:
                     'version_number': f'V{int(row["version_no"]):03d}',
                     'is_primary': row['is_primary'] == '1',
                     'download_url': (f'/shot-grid/versions/{row["version_id"]}/files/{row["file_id"]}/download'),
+                    'thumbnail': (
+                        {
+                            'file_id': str(row['thumbnail_file_id']),
+                            'url': (
+                                f'/shot-grid/versions/{row["version_id"]}/files/{row["thumbnail_file_id"]}/download'
+                            ),
+                        }
+                        if row.get('thumbnail_file_id') is not None
+                        else None
+                    ),
+                    'proxy_media': (
+                        {
+                            'file_id': str(row['proxy_media_file_id']),
+                            'url': (
+                                f'/shot-grid/versions/{row["version_id"]}/files/{row["proxy_media_file_id"]}/download'
+                            ),
+                        }
+                        if row.get('proxy_media_file_id') is not None
+                        else None
+                    ),
                 }
             )
             for row in rows
