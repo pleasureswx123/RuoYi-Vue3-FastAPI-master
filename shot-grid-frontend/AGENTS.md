@@ -265,8 +265,12 @@ ruoyi-fastapi-frontend
 
 - 开始实现页面、交互、状态管理、网络请求、工具函数或工程能力前，必须先检查本工程 `package.json`、现有源码和后台管理端基座，形成全局复用判断，不能只针对当前截图或单个组件做局部实现。
 - `package.json` 中已经引入且能满足需求的成熟依赖必须优先使用。Element Plus 是本项目通用 UI 的默认且强制优先实现：业务表单、筛选栏、输入框、选择器、复选框、单选框、按钮、表格、分页、弹窗、抽屉、卡片、标签、空态、加载、提示和确认等已有对应组件时，必须使用 Element Plus，禁止用原生控件加自制交互或另写同类组件替代。
+- 状态、类型、优先级、角色、审核模式、媒体类型、主文件标记及关联对象等“标记”语义统一使用 `ElTag`，并按业务色调映射到其合法 `type`，结合密度选择 `size`、`effect` 和 `round`；禁止用 `span/div + chip/pill/tag CSS` 模拟标签。可切换的标签筛选使用 `ElCheckTag` 的 `checked/change/disabled` 契约，附着在其他元素上的计数使用 `ElBadge`。纯标题、正文、代码、时间和布局容器不应机械改成标签。
 - 业务表单和筛选表单默认使用 `ElForm` / `ElFormItem`；原生 `<input>`、`<select>`、`<button>`、`<table>`、分页按钮组和仅承担提交作用的 `<form>` 不得作为常规实现。`section`、`header`、`nav`、`article` 等语义容器不是 UI 框架替代目标；受保护图片最终仍使用 `<img>`，媒体播放仍使用 `<video>`，标注画布仍使用 `<canvas>`，但必须封装在现有领域组件中并遵守鉴权、释放资源和可访问性规则。
 - Element Plus 重构必须使用组件的完整结构与行为协议，禁止“只换标签”的伪重构。`ElForm` 必须绑定当前表单 `model`，每个字段由 `ElFormItem` 承载并关联正确 `prop`，按业务需要处理 `rules`、提交、重置、加载、错误提示、布局和可访问性；表格、分页、弹窗等组件同样必须迁移其数据、事件和状态契约。
+- Shot Grid 的业务表单、筛选表单、登录表单、弹窗表单和确认操作一律不得依赖浏览器原生 `submit`。禁止使用 `<form @submit...>`、`<el-form @submit...>`、`@submit.prevent` 或 `ElButton native-type="submit"` 作为业务执行链路；现存同类实现均属于待治理技术债，不能作为复制或新增代码的先例。
+- 提交入口统一使用 `ElButton @click` 调用组件处理函数；处理函数必须使用 `ElForm` 实例的 `validate()` / `validateField()` 完成校验，通过后才能发起业务请求，重置使用 `resetFields()` / `clearValidate()`。需要 Enter 操作时，由对应 `ElInput` 等 Element Plus 组件显式调用同一处理函数，不得转回原生表单提交；同时必须保持 loading、disabled、错误展示、防重复提交、请求取消和迟到响应隔离。
+- 修改表单页面时，验收必须包含本次作用域的原生提交依赖检索，以及按钮点击、校验失败、校验成功和重置行为的直接测试或页面交互。源码中仅出现 `ElForm` / `ElButton`、仅删除原生标签或页面能够打开，都不能证明框架契约已经落实。
 - 完整迁移规则覆盖所有 Element Plus 组件族，不只覆盖 Form：`ElTable` 必须使用 `data`、列组件、稳定 `row-key`、选择/排序事件、`v-loading` 和 `empty`；`ElPagination` 必须绑定当前页、页大小、总数及变更事件；`ElDialog` / `ElDrawer` 必须绑定显隐状态并处理关闭、销毁/重置、提交加载和焦点；`ElInput` / `ElSelect` / `ElUpload` / `ElImage` / `ElButton` 等必须落实对应的 `v-model`、状态、事件、预览、上传、禁用和加载协议；消息与确认统一使用 `ElMessage` / `ElMessageBox`，不得退回 `alert` / `confirm` 或自制替代品。
 - Element Plus 改造验收必须同时满足：最终 Vue 组件树正确；props、emits、slots、数据模型和状态契约正确；加载、禁用、错误、空态、关闭、销毁、可访问性和响应式行为正确；直接相关单元测试或浏览器交互验证通过。源码中出现 `el-` 前缀不能作为完成证据，只换标签、空壳包装、保留自制核心交互或用 CSS 模仿组件均视为不合格。
 - Vue 页面和组件默认使用当前 Composition API 及现有组件边界；共享身份、权限、项目上下文和跨页面状态进入 Pinia，组件局部表单与瞬时交互留在组件内，禁止重复创建平行 Store 或把共享状态散落为模块全局变量。

@@ -145,10 +145,7 @@ onBeforeUnmount(cancelPending)
       :image-size="72"
       description="没有找到匹配的镜头、资产或文件"
     />
-    <div v-else-if="!searched" class="search-placeholder">
-      <el-icon><Search /></el-icon>
-      <span>快速定位跨项目业务对象</span>
-    </div>
+    <el-empty v-else-if="!searched" class="search-placeholder" :image-size="64" description="输入关键词，快速定位跨项目业务对象" />
     <el-scrollbar v-else max-height="56vh" class="search-results">
       <section
         v-for="definition in groupDefinitions"
@@ -167,11 +164,15 @@ onBeforeUnmount(cancelPending)
           class="search-result"
           @click="openResult(item)"
         >
-          <span class="search-result__main">
-            <strong>{{ item.title }}</strong>
-            <small v-if="item.subtitle">{{ item.subtitle }}</small>
+          <span class="search-result__content">
+            <span class="search-result__main">
+              <strong>{{ item.title }}</strong>
+              <small v-if="item.subtitle">{{ item.subtitle }}</small>
+            </span>
+            <el-tag class="search-result__project" size="small" effect="plain" type="info" round>
+              {{ item.projectCode }} · {{ item.projectName }}
+            </el-tag>
           </span>
-          <span class="search-result__project">{{ item.projectCode }} · {{ item.projectName }}</span>
         </el-button>
       </section>
     </el-scrollbar>
@@ -188,15 +189,8 @@ onBeforeUnmount(cancelPending)
 .search-loading { padding: 12px 4px; }
 
 .search-placeholder {
-  display: grid;
   min-height: 220px;
-  color: var(--sg-text-muted);
-  place-content: center;
-  place-items: center;
-  gap: 12px;
 }
-
-.search-placeholder .el-icon { font-size: 32px; }
 
 .search-group + .search-group { margin-top: 20px; }
 
@@ -220,15 +214,22 @@ onBeforeUnmount(cancelPending)
 .search-group header small { color: var(--sg-text-muted); }
 
 .search-result.el-button {
-  display: flex;
+  display: grid;
   width: 100%;
   height: auto;
   min-height: 58px;
-  justify-content: space-between;
   margin: 2px 0;
   padding: 9px 12px;
   color: var(--sg-text);
   text-align: left;
+}
+
+.search-result__content {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
 }
 
 .search-result__main {
@@ -244,13 +245,12 @@ onBeforeUnmount(cancelPending)
   white-space: nowrap;
 }
 
-.search-result__main small,
-.search-result__project {
+.search-result__main small {
   color: var(--sg-text-muted);
   font-size: 12px;
 }
 
-.search-result__project {
+.search-result__project.el-tag {
   flex: 0 0 auto;
   margin-left: 16px;
 }

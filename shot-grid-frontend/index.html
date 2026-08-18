@@ -4,7 +4,23 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" type="image/svg+xml" href="%BASE_URL%favicon.svg" />
-    <meta name="theme-color" content="#0b0d12" />
+    <meta name="theme-color" content="#f4f6f8" />
+    <script>
+      (() => {
+        const storageKey = 'shot-grid.theme-mode'
+        let mode = window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+        try {
+          const savedMode = window.localStorage.getItem(storageKey)
+          if (savedMode === 'light' || savedMode === 'dark') mode = savedMode
+        } catch {
+          // 本地存储不可用时直接采用系统主题，避免阻断应用启动。
+        }
+        document.documentElement.classList.toggle('dark', mode === 'dark')
+        document.documentElement.dataset.theme = mode
+        document.documentElement.style.colorScheme = mode
+        document.querySelector('meta[name="theme-color"]').content = mode === 'dark' ? '#090b0f' : '#f4f6f8'
+      })()
+    </script>
     <meta name="description" content="Shot Grid AI 影视制作协作平台" />
     <title>%VITE_APP_TITLE%</title>
   </head>

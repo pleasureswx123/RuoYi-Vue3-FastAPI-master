@@ -1,6 +1,6 @@
 <script setup>
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import { Refresh, UploadFilled, WarningFilled } from '@element-plus/icons-vue'
+import { Refresh, UploadFilled } from '@element-plus/icons-vue'
 
 import {
   createVersionSubmission,
@@ -42,6 +42,10 @@ const selectedFile = ref(null)
 const changelog = ref('')
 const aiParamsText = ref('')
 const issueResponseTexts = ref({})
+const submissionFormRef = ref(null)
+const fileUploadRef = ref(null)
+const formValidating = ref(false)
+const activeComposerSections = ref([])
 const openIssueSnapshotHash = ref('')
 const uploadResult = ref(null)
 const uploadProgress = ref(0)
@@ -77,13 +81,23 @@ const issueResponses = computed(() => props.taskStatus === 'revision'
       responseText: String(issueResponseTexts.value[issue.issueId] || '').trim()
     }))
   : [])
-const issueResponsesComplete = computed(() => (
-  props.taskStatus !== 'revision' || (
-    props.openIssues.length > 0 && issueResponses.value.every(item => item.responseText)
-  )
-))
+const submissionFormModel = computed(() => ({
+  selectedFile: selectedFile.value,
+  changelog: changelog.value,
+  aiParamsText: aiParamsText.value,
+  issueResponseTexts: issueResponseTexts.value
+}))
+const submissionFormRules = {
+  selectedFile: [{ validator: validateSelectedFile, trigger: 'change' }],
+  changelog: [{ validator: validateChangelog, trigger: 'blur' }],
+  aiParamsText: [{ validator: validateAiParams, trigger: 'blur' }]
+}
+const issueResponseRules = [
+  { required: true, whitespace: true, message: '请填写该问题的本轮处理说明', trigger: ['blur', 'change'] },
+  { max: 5000, message: '单条问题处理说明不能超过 5000 个字符', trigger: 'blur' }
+]
 const hasActiveSubmission = computed(() => Boolean(submission.value && submission.value.submissionStatus !== 'committed'))
-const isBusy = computed(() => recovering.value || ['preflighting', 'uploading', 'submitting', 'retrying'].includes(phase.value))
+const isBusy = computed(() => formValidating.value || recovering.value || ['preflighting', 'uploading', 'submitting', 'retrying'].includes(phase.value))
 const uploadedOnly = computed(() => Boolean(uploadResult.value && !submission.value))
 const composerLocked = computed(() => isBusy.value || uploadedOnly.value)
 const canDiscardUploadedFile = computed(() => (
@@ -128,7 +142,10 @@ function abortRequests() {
 }
 
 function resetComposer() {
+  formValidating.value = false
+  activeComposerSections.value = []
   selectedFile.value = null
+  fileUploadRef.value?.clearFiles?.()
   changelog.value = ''
   aiParamsText.value = ''
   issueResponseTexts.value = Object.fromEntries(props.openIssues.map(issue => [issue.issueId, '']))
@@ -139,6 +156,7 @@ function resetComposer() {
   requestError.value = null
   pollError.value = null
   validationMessage.value = ''
+  submissionFormRef.value?.clearValidate()
   resetPollingBudget()
   fileGeneration += 1
   idempotency.reset()
@@ -296,10 +314,10 @@ function discardUploadedFile() {
   resetComposer()
 }
 
-function chooseFile(event) {
+function chooseFile(uploadFile) {
   validationMessage.value = ''
   requestError.value = null
-  const file = event.target.files?.[0] || null
+  const file = uploadFile?.raw || uploadFile?.target?.files?.[0] || null
   if (!file) {
     selectedFile.value = null
     return
@@ -307,25 +325,29 @@ function chooseFile(event) {
   const extension = file.name.includes('.') ? file.name.split('.').pop().toLowerCase() : ''
   if (!acceptedExtensions.value.includes(extension)) {
     validationMessage.value = `当前任务只接受 ${acceptedExtensions.value.map(item => item.toUpperCase()).join('/')} 文件`
-    event.target.value = ''
+    if (uploadFile?.target) uploadFile.target.value = ''
+    fileUploadRef.value?.clearFiles?.()
     selectedFile.value = null
     return
   }
   if (file.size > MAX_VERSION_FILE_SIZE) {
     validationMessage.value = '版本文件不能超过 100 MiB'
-    event.target.value = ''
+    if (uploadFile?.target) uploadFile.target.value = ''
+    fileUploadRef.value?.clearFiles?.()
     selectedFile.value = null
     return
   }
   if (file.size <= 0) {
     validationMessage.value = '版本文件不能为空'
-    event.target.value = ''
+    if (uploadFile?.target) uploadFile.target.value = ''
+    fileUploadRef.value?.clearFiles?.()
     selectedFile.value = null
     return
   }
   workflowController?.abort()
   fileGeneration += 1
   selectedFile.value = file
+  submissionFormRef.value?.clearValidate('selectedFile')
   uploadResult.value = null
   uploadProgress.value = 0
   phase.value = 'idle'
@@ -347,6 +369,36 @@ function parseAiParams() {
   return value
 }
 
+function validateSelectedFile(_rule, file, callback) {
+  if (!file) return callback(new Error('请先选择版本文件'))
+  const extension = file.name?.includes('.') ? file.name.split('.').pop().toLowerCase() : ''
+  if (!acceptedExtensions.value.includes(extension)) {
+    return callback(new Error(`当前任务只接受 ${acceptedExtensions.value.map(item => item.toUpperCase()).join('/')} 文件`))
+  }
+  if (file.size > MAX_VERSION_FILE_SIZE) return callback(new Error('版本文件不能超过 100 MiB'))
+  if (file.size <= 0) return callback(new Error('版本文件不能为空'))
+  callback()
+}
+
+function validateChangelog(_rule, value, callback) {
+  const normalized = String(value || '').trim()
+  if (!normalized) return callback(new Error('请填写本轮修改说明'))
+  if (normalized.length > 5000) return callback(new Error('本轮修改说明不能超过 5000 个字符'))
+  if (Array.from(normalized).some(character => character !== ' ' && /[\p{C}\p{Z}]/u.test(character))) {
+    return callback(new Error('修改说明不能包含换行、Tab 或其他控制字符'))
+  }
+  callback()
+}
+
+function validateAiParams(_rule, _value, callback) {
+  try {
+    parseAiParams()
+    callback()
+  } catch (error) {
+    callback(new Error(error.message))
+  }
+}
+
 async function submitVersion() {
   if (isBusy.value || hasActiveSubmission.value) return
   validationMessage.value = ''
@@ -356,32 +408,29 @@ async function submitVersion() {
     validationMessage.value = '当前任务状态或账号权限不允许提交新版本'
     return
   }
-  if (!selectedFile.value) {
-    validationMessage.value = '请先选择版本文件'
-    return
-  }
-  const normalizedChangelog = changelog.value.trim()
-  if (!normalizedChangelog) {
-    validationMessage.value = '请填写本轮修改说明'
-    return
-  }
-  if (!issueResponsesComplete.value) {
-    validationMessage.value = props.openIssues.length
-      ? '请逐条填写审核人提出的全部问题处理说明'
-      : '退回修改任务缺少待处理问题，请刷新任务'
-    return
-  }
-  if (Array.from(normalizedChangelog).some(character => character !== ' ' && /[\p{C}\p{Z}]/u.test(character))) {
-    validationMessage.value = '修改说明不能包含换行、Tab 或其他控制字符'
-    return
-  }
+  formValidating.value = true
+  let valid = false
   let aiParams
   try {
+    await submissionFormRef.value?.validate((result, invalidFields) => {
+      valid = result
+      if (!result) {
+        validationMessage.value = Object.values(invalidFields || {}).flat()[0]?.message || '请检查版本提交表单'
+      }
+    })
+    if (!valid) return
+    if (props.taskStatus === 'revision' && !props.openIssues.length) {
+      validationMessage.value = '退回修改任务缺少待处理问题，请刷新任务'
+      return
+    }
     aiParams = parseAiParams()
   } catch (error) {
     validationMessage.value = error.message
     return
+  } finally {
+    formValidating.value = false
   }
+  const normalizedChangelog = changelog.value.trim()
 
   const generation = contextGeneration
   const targetTaskId = Number(props.taskId)
@@ -555,7 +604,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <section class="version-submission-panel">
+  <el-card class="version-submission-panel" shadow="never">
     <div class="panel-heading">
       <div>
         <p class="sg-eyebrow">UPLOAD &amp; PUBLISH</p>
@@ -566,44 +615,46 @@ onBeforeUnmount(() => {
       <el-button v-else-if="!recoveryResolved && !recovering && canQuery" :icon="Refresh" @click="recoverCurrentSubmission">重试检查</el-button>
     </div>
 
-    <div v-if="recovering" class="recovering-state">正在检查该任务是否存在未完成版本提交…</div>
+    <el-skeleton v-if="recovering" class="recovering-state" :rows="4" animated />
 
     <VersionSubmissionStatus v-else-if="submission" :submission="submission" :poll-error="pollError" />
 
-    <div v-if="requestError || validationMessage" class="version-error" role="alert">
-      <el-icon><WarningFilled /></el-icon>
-      <div>
-        <strong>{{ requestError?.title || '请检查提交内容' }}</strong>
-        <p>{{ requestError?.message || validationMessage }}</p>
-        <code v-if="requestError?.errorKey">{{ requestError.errorKey }}</code>
-      </div>
-    </div>
+    <el-alert
+      v-if="requestError || validationMessage"
+      class="version-error"
+      :title="requestError?.title || '请检查提交内容'"
+      :description="[requestError?.message || validationMessage, requestError?.errorKey].filter(Boolean).join(' · ')"
+      type="error"
+      :closable="false"
+      show-icon
+    />
 
-    <div v-if="submission?.submissionStatus === 'failed'" class="submission-actions">
-      <p>失败提交会继续占用该任务的版本号和源文件引用；必须重试当前提交，不能另传文件绕过。</p>
+    <el-alert v-if="submission?.submissionStatus === 'failed'" class="submission-actions" title="必须恢复当前失败提交" type="error" :closable="false" show-icon>
+      <span class="submission-actions__description">失败提交会继续占用该任务的版本号和源文件引用，不能另传文件绕过。</span>
       <el-button type="primary" :loading="phase === 'retrying'" :disabled="!canRetry" @click="retryFailedSubmission">
         {{ canRetry ? '人工重试当前提交' : '当前账号没有重试权限' }}
       </el-button>
-    </div>
+    </el-alert>
 
-    <form v-else-if="!submission" class="submission-form" @submit.prevent="submitVersion">
-      <label class="file-picker" :class="{ 'has-file': selectedFile }">
-        <input type="file" :accept="acceptAttribute" :disabled="composerLocked || !canSubmit" @change="chooseFile" />
-        <el-icon><UploadFilled /></el-icon>
-        <span>
-          <strong>{{ selectedFile?.name || '选择离线制作成果' }}</strong>
-          <small>{{ selectedFile ? `${(selectedFile.size / 1024 / 1024).toFixed(2)} MiB` : `仅接受 ${acceptedExtensions.map(item => item.toUpperCase()).join('/')}，最大 100 MiB` }}</small>
-        </span>
-        <b>{{ selectedFile ? '更换' : '选择文件' }}</b>
-      </label>
+    <el-form v-else-if="!submission" ref="submissionFormRef" :model="submissionFormModel" :rules="submissionFormRules" class="submission-form" label-position="top" aria-label="提交新版本">
+      <el-form-item class="submission-file-field" prop="selectedFile">
+        <el-upload ref="fileUploadRef" class="file-picker" :class="{ 'has-file': selectedFile }" action="#" :auto-upload="false" :show-file-list="false" :accept="acceptAttribute" :disabled="composerLocked || !canSubmit" :on-change="chooseFile">
+          <el-icon><UploadFilled /></el-icon>
+          <span>
+            <strong>{{ selectedFile?.name || '选择离线制作成果' }}</strong>
+            <small>{{ selectedFile ? `${(selectedFile.size / 1024 / 1024).toFixed(2)} MiB` : `仅接受 ${acceptedExtensions.map(item => item.toUpperCase()).join('/')}，最大 100 MiB` }}</small>
+          </span>
+          <b>{{ selectedFile ? '更换' : '选择文件' }}</b>
+        </el-upload>
+      </el-form-item>
 
-      <section v-if="taskStatus === 'revision'" class="issue-response-panel">
-        <header>
+      <el-card v-if="taskStatus === 'revision'" class="issue-response-panel" shadow="never">
+        <header class="issue-response-panel__heading">
           <div>
             <p class="sg-eyebrow">REVIEW ISSUES</p>
             <h4>逐条说明本轮如何处理</h4>
           </div>
-          <span>{{ openIssues.length }} 条待处理</span>
+          <el-tag type="warning" effect="plain" size="small" round>{{ openIssues.length }} 条待处理</el-tag>
         </header>
         <p class="issue-response-help">每条说明会随新版本永久保存，审核人将在下一版逐条确认是否已修复。</p>
         <div v-if="openIssues.length" class="issue-response-list">
@@ -613,78 +664,77 @@ onBeforeUnmount(() => {
               <span>待处理归属 {{ issue.pendingVersionNumber || issue.originVersionNumber }}<template v-if="issue.pendingVersionNumber && issue.pendingVersionNumber !== issue.originVersionNumber"> · 来源 {{ issue.originVersionNumber }}</template></span>
             </div>
             <p>{{ issue.content || `包含 ${issue.annotations?.items?.length || 0} 个画面标注` }}</p>
-            <button class="issue-source-link" type="button" @click="emit('focus-issue', issue)">
+            <el-button class="issue-source-link" link type="primary" @click="emit('focus-issue', issue)">
               查看来源版本{{ issue.annotations?.items?.length ? `与 ${issue.annotations.items.length} 处画面标注` : '' }}
-            </button>
-            <label class="field-label">
-              <span>本轮处理说明 <em>*</em></span>
-              <textarea
+            </el-button>
+            <el-form-item class="field-label" label="本轮处理说明" :prop="`issueResponseTexts.${issue.issueId}`" :rules="issueResponseRules">
+              <el-input
                 v-model="issueResponseTexts[issue.issueId]"
+                type="textarea"
                 maxlength="5000"
-                rows="3"
+                :rows="3"
+                show-word-limit
                 :disabled="composerLocked || !canSubmit"
                 placeholder="说明具体改了什么、如何改，以及需要审核人重点确认的位置。"
               />
-            </label>
+            </el-form-item>
           </article>
         </div>
-        <div v-else class="issue-response-empty">当前没有可处理问题，请刷新任务后再提交。</div>
-      </section>
+        <el-empty v-else class="issue-response-empty" :image-size="48" description="当前没有可处理问题，请刷新任务后再提交" />
+      </el-card>
 
-      <label class="field-label">
-        <span>本轮修改说明 <em>*</em></span>
-        <textarea v-model="changelog" maxlength="5000" rows="4" :disabled="composerLocked || !canSubmit" placeholder="说明本版本完成内容、修改点或需要审核人关注的部分。" />
-      </label>
+      <el-form-item class="field-label" label="本轮修改说明" prop="changelog">
+        <el-input v-model="changelog" type="textarea" maxlength="5000" :rows="4" show-word-limit :disabled="composerLocked || !canSubmit" placeholder="说明本版本完成内容、修改点或需要审核人关注的部分。" />
+      </el-form-item>
 
-      <details class="ai-params">
-        <summary>AI 生成参数（可选 JSON）</summary>
-        <textarea v-model="aiParamsText" rows="4" :disabled="composerLocked || !canSubmit" placeholder='例如：{"model":"...","seed":42}' />
-      </details>
+      <el-collapse v-model="activeComposerSections" class="ai-params">
+        <el-collapse-item title="AI 生成参数（可选 JSON）" name="ai-params">
+          <el-form-item prop="aiParamsText"><el-input v-model="aiParamsText" type="textarea" :rows="4" :disabled="composerLocked || !canSubmit" placeholder='例如：{"model":"...","seed":42}' /></el-form-item>
+        </el-collapse-item>
+      </el-collapse>
 
-      <div v-if="phase === 'uploading'" class="upload-progress" role="status">
-        <span><i :style="{ width: `${uploadProgress}%` }" /></span>
-        <small>正在上传平台私有文件 {{ uploadProgress }}%</small>
-      </div>
-      <div v-if="uploadedOnly" class="uploaded-boundary" role="status">
-        平台私有文件已上传，但正式版本尚未形成。文件与说明已锁定，请用同一幂等请求重放，避免已受理的超时请求被误判为失败。
-        <el-button v-if="canDiscardUploadedFile" native-type="button" text @click="discardUploadedFile">放弃已上传文件并重新选择</el-button>
-      </div>
+      <el-progress v-if="phase === 'uploading'" class="upload-progress" :percentage="uploadProgress" :stroke-width="8" :status="uploadProgress >= 100 ? 'success' : undefined" aria-label="平台私有文件上传进度" />
+      <el-alert v-if="uploadedOnly" class="uploaded-boundary" title="平台私有文件已上传，正式版本尚未形成" type="warning" :closable="false" show-icon>
+        <span class="submission-actions__description">文件与说明已锁定，请用同一幂等请求重放，避免已受理的超时请求被误判为失败。</span>
+        <el-button v-if="canDiscardUploadedFile" text @click="discardUploadedFile">放弃已上传文件并重新选择</el-button>
+      </el-alert>
 
       <footer>
         <p v-if="!canSubmit">后端动作镜像与平台 <code>shotgrid:version:add</code> 权限需同时满足；任务还须处于制作中或退回修改。</p>
         <p v-else>提交受理后会显示 pending → publishing → published → committing → committed 的真实状态。</p>
         <el-button
-          native-type="submit"
           type="primary"
           :loading="isBusy"
-          :disabled="!canSubmit || !selectedFile || !issueResponsesComplete"
+          :disabled="!canSubmit"
+          @click="submitVersion"
         >
           {{ uploadResult ? '重试创建版本提交' : '上传并提交版本' }}
         </el-button>
       </footer>
-    </form>
-  </section>
+    </el-form>
+  </el-card>
 </template>
 
 <style scoped lang="scss">
-.version-submission-panel { padding: 24px; background: var(--sg-surface); border: 1px solid var(--sg-border); border-radius: var(--sg-radius-lg); }
+.version-submission-panel { --el-card-bg-color: var(--sg-surface); --el-card-border-color: var(--sg-border); border-radius: var(--sg-radius-lg); }
+.version-submission-panel:deep(.el-card__body) { padding: 24px; }
 .panel-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
 .panel-heading h3 { margin: 3px 0 7px; font-size: 20px; }
 .panel-heading p:not(.sg-eyebrow) { margin: 0; color: var(--sg-text-muted); font-size: 12px; }
-.recovering-state { padding: 28px; margin-top: 20px; color: var(--sg-text-secondary); text-align: center; background: rgba(255, 255, 255, 0.025); border: 1px dashed var(--sg-border); border-radius: var(--sg-radius-md); }
+.recovering-state { min-height: 150px; padding: 28px; margin-top: 20px; background: rgba(255, 255, 255, 0.025); border: 1px dashed var(--sg-border); border-radius: var(--sg-radius-md); }
 .submission-status { margin-top: 20px; }
-.version-error { display: flex; padding: 13px 15px; margin-top: 16px; color: #ffb5ad; background: rgba(244, 92, 92, 0.08); border: 1px solid rgba(244, 92, 92, 0.2); border-radius: 10px; gap: 10px; }
-.version-error strong,
-.version-error p { display: block; margin: 0; }
-.version-error p { margin-top: 4px; font-size: 12px; }
+.version-error { margin-top: 16px; }
 .version-error code { display: inline-block; margin-top: 6px; color: inherit; font-size: 10px; }
-.submission-actions { display: flex; align-items: center; justify-content: space-between; padding-top: 16px; gap: 16px; }
-.submission-actions p { margin: 0; color: var(--sg-text-secondary); font-size: 11px; line-height: 1.6; }
+.submission-actions { margin-top: 16px; }
+.submission-actions__description { display: block; }
+.submission-actions .el-button { margin-top: 10px; }
 .submission-form { display: grid; margin-top: 20px; gap: 16px; }
-.issue-response-panel { display: grid; gap: 12px; padding: 17px; background: rgba(255, 182, 87, 0.045); border: 1px solid rgba(255, 182, 87, 0.2); border-radius: 12px; }
-.issue-response-panel > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.submission-form :deep(.el-form-item) { margin-bottom: 0; }
+.submission-file-field :deep(.el-form-item__content) { display: block; }
+.issue-response-panel { --el-card-bg-color: rgba(255, 182, 87, 0.045); --el-card-border-color: rgba(255, 182, 87, 0.2); border-radius: 12px; }
+.issue-response-panel:deep(.el-card__body) { display: grid; padding: 17px; gap: 12px; }
+.issue-response-panel__heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .issue-response-panel h4 { margin: 3px 0 0; font-size: 16px; }
-.issue-response-panel > header > span { padding: 5px 8px; color: var(--sg-accent); font-size: 10px; background: var(--sg-accent-soft); border-radius: 999px; }
 .issue-response-help { margin: 0; color: var(--sg-text-muted); font-size: 11px; line-height: 1.6; }
 .issue-response-list { display: grid; gap: 10px; }
 .issue-response-list article { display: grid; gap: 9px; padding: 13px; background: rgba(0, 0, 0, 0.14); border: 1px solid var(--sg-border); border-radius: 10px; }
@@ -692,31 +742,27 @@ onBeforeUnmount(() => {
 .issue-response-title strong { font-size: 12px; }
 .issue-response-title span { color: var(--sg-text-muted); font-size: 9px; }
 .issue-response-list article > p { margin: 0; color: var(--sg-text-secondary); font-size: 11px; line-height: 1.65; white-space: pre-wrap; }
-.issue-source-link { justify-self: start; padding: 0; color: #68b5ff; font: inherit; font-size: 10px; cursor: pointer; background: transparent; border: 0; }
-.issue-response-empty { padding: 18px; color: var(--sg-danger); font-size: 11px; text-align: center; border: 1px dashed rgba(244, 92, 92, 0.3); border-radius: 9px; }
-.file-picker { position: relative; display: grid; min-height: 84px; padding: 18px; cursor: pointer; background: rgba(255, 255, 255, 0.025); border: 1px dashed var(--sg-border-strong); border-radius: var(--sg-radius-md); grid-template-columns: auto minmax(0, 1fr) auto; gap: 14px; align-items: center; }
-.file-picker:hover,
-.file-picker.has-file { border-color: rgba(255, 182, 87, 0.5); }
-.file-picker input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.issue-source-link { justify-self: start; height: auto; padding: 0; font-size: 10px; }
+.issue-response-empty { padding: 18px; border: 1px dashed rgba(244, 92, 92, 0.3); border-radius: 9px; }
+.file-picker { width: 100%; }
+.file-picker :deep(.el-upload) { position: relative; display: grid; box-sizing: border-box; width: 100%; min-height: 84px; padding: 18px; cursor: pointer; background: rgba(255, 255, 255, 0.025); border: 1px dashed var(--sg-border-strong); border-radius: var(--sg-radius-md); grid-template-columns: auto minmax(0, 1fr) auto; gap: 14px; align-items: center; }
+.file-picker:hover :deep(.el-upload),
+.file-picker.has-file :deep(.el-upload) { border-color: rgba(255, 182, 87, 0.5); }
 .file-picker .el-icon { color: var(--sg-accent); font-size: 25px; }
 .file-picker strong,
 .file-picker small { display: block; }
 .file-picker small { margin-top: 6px; color: var(--sg-text-muted); font-size: 11px; }
 .file-picker b { color: var(--sg-accent); font-size: 12px; }
 .field-label { display: grid; gap: 8px; }
-.field-label > span { color: var(--sg-text-secondary); font-size: 12px; }
-.field-label em { color: #ff8e84; font-style: normal; }
-.field-label textarea,
-.ai-params textarea { box-sizing: border-box; width: 100%; padding: 12px 14px; color: var(--sg-text); resize: vertical; background: rgba(0, 0, 0, 0.16); border: 1px solid var(--sg-border); border-radius: 10px; outline: none; }
-.field-label textarea:focus,
-.ai-params textarea:focus { border-color: rgba(255, 182, 87, 0.5); }
-.ai-params { color: var(--sg-text-secondary); font-size: 12px; }
-.ai-params summary { margin-bottom: 10px; cursor: pointer; }
-.upload-progress { display: grid; gap: 7px; }
-.upload-progress > span { height: 5px; overflow: hidden; background: rgba(255, 255, 255, 0.07); border-radius: 999px; }
-.upload-progress i { display: block; height: 100%; background: var(--sg-accent); transition: width 150ms ease; }
-.upload-progress small { color: var(--sg-text-muted); }
-.uploaded-boundary { padding: 12px 14px; color: #f4c878; font-size: 11px; line-height: 1.6; background: rgba(255, 182, 87, 0.08); border-radius: 9px; }
+.field-label :deep(.el-form-item__label) { color: var(--sg-text-secondary); font-size: 12px; }
+.ai-params { color: var(--sg-text-secondary); font-size: 12px; border-color: var(--sg-border); }
+.ai-params:deep(.el-collapse-item__header),
+.ai-params:deep(.el-collapse-item__wrap) { color: var(--sg-text-secondary); background: transparent; border-color: var(--sg-border); }
+.ai-params:deep(.el-collapse-item__content) { padding-bottom: 12px; }
+.ai-params :deep(.el-form-item) { margin-bottom: 0; }
+.upload-progress { width: 100%; }
+.uploaded-boundary { font-size: 11px; line-height: 1.6; }
+.uploaded-boundary .el-button { margin-top: 8px; }
 .submission-form footer { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
 .submission-form footer p { max-width: 650px; margin: 0; color: var(--sg-text-muted); font-size: 11px; line-height: 1.6; }
 

@@ -1,4 +1,4 @@
-import { ElButton, ElDatePicker, ElForm, ElFormItem, ElIcon, ElInput } from 'element-plus'
+import { ElButton, ElDatePicker, ElForm, ElFormItem, ElIcon, ElInput, ElTag } from 'element-plus'
 import { createPinia, setActivePinia } from 'pinia'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
@@ -86,7 +86,7 @@ async function mountWorkbench(permissions = ['shotgrid:task:list']) {
   await router.push('/workbench')
   await router.isReady()
   const wrapper = mount(WorkbenchView, {
-    global: { plugins: [pinia, router], components: { ElButton, ElDatePicker, ElForm, ElFormItem, ElIcon, ElInput } }
+    global: { plugins: [pinia, router], components: { ElButton, ElDatePicker, ElForm, ElFormItem, ElIcon, ElInput, ElTag } }
   })
   await flushPromises()
   return { wrapper, router }
@@ -97,6 +97,10 @@ async function changeDatePicker(datePicker, value) {
   await datePicker.vm.$nextTick()
   datePicker.findComponent({ name: 'Picker' }).vm.$emit('change', value)
   await datePicker.vm.$nextTick()
+}
+
+function findTag(wrapper, text) {
+  return wrapper.findAllComponents(ElTag).find(tag => tag.text() === text)
 }
 
 async function mountDetail(path = '/tasks/31', permissions = ['shotgrid:task:query', 'shotgrid:task:start', 'shotgrid:task:edit']) {
@@ -115,7 +119,7 @@ async function mountDetail(path = '/tasks/31', permissions = ['shotgrid:task:que
   const wrapper = mount(TaskDetailView, {
     global: {
       plugins: [pinia, router],
-      components: { ElButton, ElIcon },
+      components: { ElButton, ElDatePicker, ElForm, ElFormItem, ElIcon, ElInput, ElTag },
       stubs: {
         VersionWorkspace: {
           props: ['taskId', 'taskKind', 'allowedActions', 'hasUncommittedSubmission', 'operationGeneration'],
@@ -148,27 +152,30 @@ describe('真实任务工作台', () => {
       taskKind: '',
       taskStatus: '',
       priority: '',
-      dueDateFrom: '',
-      dueDateTo: '',
+      dueDateRange: [],
       orderValue: 'updateTime:descending'
+    })
+    expect(filterForm.props('rules')).toMatchObject({
+      dueDateRange: [expect.objectContaining({ trigger: 'change' })]
     })
     expect(filterForm.findAllComponents(ElFormItem).map(item => item.props('prop'))).toEqual([
       'keyword',
       'taskKind',
       'taskStatus',
       'priority',
-      'dueDateFrom',
-      'dueDateTo',
+      'dueDateRange',
       'orderValue',
       undefined
     ])
+    const queryButton = filterForm.findAllComponents(ElButton)
+      .find(button => button.text() === '查询')
     const form = filterForm
     await form.find('input[placeholder="任务、项目、镜头或资产"]').setValue('动力舱')
     const selects = form.findAllComponents({ name: 'ElSelect' })
     await setElSelectValue(selects[0], 'shot_video')
     await setElSelectValue(selects[1], 'revision')
     await setElSelectValue(selects[2], 'urgent')
-    await form.trigger('submit')
+    await queryButton.trigger('click')
     await flushPromises()
 
     expect(getMineTaskPage).toHaveBeenLastCalledWith(expect.objectContaining({
@@ -187,12 +194,59 @@ describe('真实任务工作台', () => {
     wrapper.unmount()
   })
 
+  it('任务类型、状态、截止日期、优先级与最近版本使用 ElTag 动态类型', async () => {
+    getMineTaskPage.mockResolvedValueOnce({ rows: [taskFixture(31, {
+      taskKind: 'asset_image',
+      taskStatus: 'revision',
+      priority: 'urgent',
+      dueDate: '2020-01-01'
+    })], total: 1, hasNext: false })
+    getRecentMineVersions.mockResolvedValueOnce({ rows: [{
+      versionId: 91,
+      versionNumber: 'V001',
+      changelog: '完成首版',
+      versionStatus: 'final'
+    }], total: 1 })
+    getMineReviewListPage.mockResolvedValueOnce({ rows: [{
+      reviewListId: 101,
+      reviewListName: '角色批量审核',
+      projectCode: 'LCFR',
+      reviewMode: 'manual_batch',
+      versionCount: 3
+    }], total: 1 })
+
+    const { wrapper } = await mountWorkbench()
+    expect(findTag(wrapper, '1 项我的任务').props()).toMatchObject({ type: 'info', size: 'small', effect: 'plain', round: true })
+    expect(findTag(wrapper, '资产').props()).toMatchObject({ type: 'primary', size: 'small', effect: 'plain', round: true })
+    expect(findTag(wrapper, '待修订').props()).toMatchObject({ type: 'danger', effect: 'light', round: true })
+    expect(findTag(wrapper, '2020-01-01 · 已逾期').props()).toMatchObject({ type: 'danger', effect: 'plain', round: true })
+    expect(findTag(wrapper, '紧急').props()).toMatchObject({ type: 'danger', effect: 'plain', round: true })
+    expect(findTag(wrapper, '最终版本').props()).toMatchObject({ type: 'success', effect: 'plain', round: true })
+    expect(findTag(wrapper, '人工批量').props()).toMatchObject({ type: 'primary', size: 'small', effect: 'plain', round: true })
+    expect(wrapper.find('.activity-grid').text()).toContain('LCFR · 3 个版本')
+    expect(wrapper.find('.task-row__kind').exists()).toBe(false)
+    expect(wrapper.find('.status-chip').exists()).toBe(false)
+    expect(wrapper.find('.priority-chip').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
   it('Element Plus 筛选控件 change 后立即查询，并通过 Form 重置', async () => {
     const { wrapper } = await mountWorkbench()
     const filterForm = wrapper.findComponent(ElForm)
     const selects = filterForm.findAllComponents({ name: 'ElSelect' })
     const datePickers = filterForm.findAllComponents(ElDatePicker)
     getMineTaskPage.mockClear()
+
+    expect(datePickers).toHaveLength(1)
+    expect(datePickers[0].props()).toMatchObject({
+      type: 'daterange',
+      unlinkPanels: true,
+      valueFormat: 'YYYY-MM-DD',
+      format: 'YYYY/MM/DD',
+      rangeSeparator: '至',
+      startPlaceholder: '开始日期',
+      endPlaceholder: '结束日期'
+    })
 
     await setElSelectValue(selects[0], 'shot_video')
     await flushPromises()
@@ -206,13 +260,13 @@ describe('真实任务工作台', () => {
     await flushPromises()
     expect(getMineTaskPage).toHaveBeenLastCalledWith(expect.objectContaining({ priority: 'urgent', pageNum: 1 }), expect.anything())
 
-    await changeDatePicker(datePickers[0], '2026-08-01')
+    await changeDatePicker(datePickers[0], ['2026-08-01', '2026-08-31'])
     await flushPromises()
-    expect(getMineTaskPage).toHaveBeenLastCalledWith(expect.objectContaining({ dueDateFrom: '2026-08-01', pageNum: 1 }), expect.anything())
-
-    await changeDatePicker(datePickers[1], '2026-08-31')
-    await flushPromises()
-    expect(getMineTaskPage).toHaveBeenLastCalledWith(expect.objectContaining({ dueDateTo: '2026-08-31', pageNum: 1 }), expect.anything())
+    expect(getMineTaskPage).toHaveBeenLastCalledWith(expect.objectContaining({
+      dueDateFrom: '2026-08-01',
+      dueDateTo: '2026-08-31',
+      pageNum: 1
+    }), expect.anything())
 
     await setElSelectValue(selects[3], 'dueDate:ascending')
     await flushPromises()
@@ -225,8 +279,7 @@ describe('真实任务工作台', () => {
       taskKind: '',
       taskStatus: '',
       priority: '',
-      dueDateFrom: '',
-      dueDateTo: '',
+      dueDateRange: [],
       orderValue: 'updateTime:descending',
       pageNum: 1
     })
@@ -268,13 +321,16 @@ describe('真实任务工作台', () => {
     const { wrapper } = await mountWorkbench()
     const form = wrapper.find('form[aria-label="我的任务筛选"]')
     const search = form.find('input[placeholder="任务、项目、镜头或资产"]')
+    const queryButton = form.findAllComponents(ElButton)
+      .find(button => button.text() === '查询')
+    const taskKindSelect = wrapper.findComponent(ElForm).findAllComponents({ name: 'ElSelect' })[0]
 
     await search.setValue('旧查询')
-    await form.trigger('submit')
+    await queryButton.trigger('click')
+    await vi.waitFor(() => expect(resolveOld).toBeTypeOf('function'))
     await search.setValue('新查询')
-    await form.trigger('submit')
-    await flushPromises()
-    expect(wrapper.text()).toContain('当前任务')
+    await setElSelectValue(taskKindSelect, 'shot_video')
+    await vi.waitFor(() => expect(wrapper.text()).toContain('当前任务'))
 
     resolveOld({ rows: [taskFixture(32, { taskName: '迟到旧任务' })], total: 1, hasNext: false })
     await flushPromises()
@@ -283,22 +339,22 @@ describe('真实任务工作台', () => {
     wrapper.unmount()
   })
 
-  it('旧请求未完成时提交无效日期范围，会取消旧上下文并拒绝迟到回写', async () => {
+  it('旧请求未完成时切换为无效日期范围，会取消旧上下文并拒绝迟到回写', async () => {
     let resolveOld
     getMineTaskPage.mockImplementationOnce(() => new Promise(resolve => { resolveOld = resolve }))
     const { wrapper } = await mountWorkbench()
     const filterForm = wrapper.findComponent(ElForm)
-    const datePickers = filterForm.findAllComponents(ElDatePicker)
-    await changeDatePicker(datePickers[0], '2026-08-30')
+    const datePicker = filterForm.findComponent(ElDatePicker)
+    await changeDatePicker(datePicker, ['2026-08-30', '2026-08-01'])
     await flushPromises()
-    expect(filterForm.props('model').dueDateFrom).toBe('2026-08-30')
-    await changeDatePicker(filterForm.findAllComponents(ElDatePicker)[1], '2026-08-01')
-    await flushPromises()
-    expect(filterForm.props('model').dueDateTo).toBe('2026-08-01')
-    await filterForm.trigger('submit')
-    await flushPromises()
+    expect(filterForm.props('model').dueDateRange).toEqual(['2026-08-30', '2026-08-01'])
 
-    expect(filterForm.findAllComponents(ElFormItem)[5].props('error')).toBe('截止日期起点不能晚于终点。')
+    const dueDateRangeItem = filterForm.find('.task-filter-item--date-range')
+    await vi.waitFor(() => {
+      expect(dueDateRangeItem.classes().join(' ')).toContain('is-error')
+      expect(dueDateRangeItem.find('.el-form-item__error').text()).toBe('截止日期起点不能晚于终点。')
+    })
+    expect(getMineTaskPage).toHaveBeenCalledTimes(1)
     resolveOld({ rows: [taskFixture(88, { taskName: '迟到任务' })], total: 1 })
     await flushPromises()
     expect(wrapper.text()).not.toContain('迟到任务')
@@ -339,6 +395,34 @@ describe('任务详情、状态动作与异步上下文', () => {
     expect(missingBackendAction.wrapper.findAll('button').map(button => button.text())).not.toContain('开始任务')
     expect(missingBackendAction.wrapper.findAll('button').map(button => button.text())).not.toContain('编辑任务')
     missingBackendAction.wrapper.unmount()
+  })
+
+  it('任务详情的状态、优先级、类型、生命周期和版本标记使用 ElTag', async () => {
+    getTaskDetail.mockResolvedValueOnce({ data: taskFixture(31, {
+      taskKind: 'asset_image',
+      taskStatus: 'pending_review',
+      priority: 'urgent',
+      target: {
+        targetType: 'asset_item',
+        targetId: 131,
+        targetName: '角色概念图',
+        targetDescription: '女主角色设定',
+        lifecycleStatus: 'active',
+        assetId: 18,
+        productionItem: '角色概念图'
+      },
+      latestVersion: { versionNumber: 'V002', versionStatus: 'rejected', submittedTime: '2026-08-18T10:00:00' },
+      finalVersion: { versionNumber: 'V001' }
+    }) })
+
+    const { wrapper } = await mountDetail()
+    expect(findTag(wrapper, '待审核').props()).toMatchObject({ type: 'warning', effect: 'light', round: true })
+    expect(findTag(wrapper, '紧急优先级').props()).toMatchObject({ type: 'danger', effect: 'plain', round: true })
+    expect(findTag(wrapper, '资产图片').props()).toMatchObject({ type: 'primary', effect: 'plain', round: true })
+    expect(findTag(wrapper, '活动').props()).toMatchObject({ type: 'success', effect: 'plain', round: true })
+    expect(findTag(wrapper, '已退回').props()).toMatchObject({ type: 'danger', effect: 'light', round: true })
+    expect(findTag(wrapper, '最终版本：V001').props()).toMatchObject({ type: 'success', effect: 'plain', round: true })
+    wrapper.unmount()
   })
 
   it('404 与开始任务的 409 冲突均显示可区分状态', async () => {

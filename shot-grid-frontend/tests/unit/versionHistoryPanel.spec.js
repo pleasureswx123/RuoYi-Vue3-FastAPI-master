@@ -1,7 +1,8 @@
-import { ElButton, ElIcon, ElTag } from 'element-plus'
+import { ElButton, ElIcon, ElImage, ElTag } from 'element-plus'
 import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { getReviewActions, getTaskIssues } from '@/api/shot-grid/reviews'
 import { getTaskVersions, getVersionDetail } from '@/api/shot-grid/versions'
 import VersionHistoryPanel from '@/components/version/VersionHistoryPanel.vue'
 import { setElSelectValue } from '../helpers/elementPlus'
@@ -11,8 +12,12 @@ vi.mock('@/api/shot-grid/versions', () => ({
   getTaskVersions: vi.fn(),
   getVersionDetail: vi.fn()
 }))
+vi.mock('@/api/shot-grid/reviews', () => ({
+  getReviewActions: vi.fn(),
+  getTaskIssues: vi.fn()
+}))
 
-const mountOptions = { global: { components: { ElButton, ElIcon, ElTag } } }
+const mountOptions = { global: { components: { ElButton, ElIcon, ElImage, ElTag } } }
 
 function listItem(versionId, taskId = 31, overrides = {}) {
   return {
@@ -48,6 +53,8 @@ describe('版本历史面板', () => {
   beforeEach(() => {
     getTaskVersions.mockResolvedValue({ rows: [listItem(2), listItem(1)], total: 2 })
     getVersionDetail.mockImplementation(versionId => Promise.resolve(detail(versionId)))
+    getReviewActions.mockResolvedValue({ rows: [], total: 0 })
+    getTaskIssues.mockResolvedValue({ data: [] })
   })
 
   it('使用服务端分页版本历史并加载所选版本真实详情', async () => {
@@ -66,6 +73,10 @@ describe('版本历史面板', () => {
     expect(getVersionDetail).toHaveBeenCalledWith(2, expect.objectContaining({ signal: expect.any(AbortSignal) }))
     expect(wrapper.text()).toContain('V002')
     expect(wrapper.text()).toContain('自动审核 V2')
+    const statusTags = wrapper.findAllComponents(ElTag).filter(tag => tag.text() === '待审核')
+    expect(statusTags.length).toBeGreaterThanOrEqual(2)
+    statusTags.forEach(tag => expect(tag.props('type')).toBe('warning'))
+    expect(wrapper.find('.version-rail em').exists()).toBe(false)
 
     await wrapper.findAll('.version-rail > button').find(button => button.text().includes('V001')).trigger('click')
     await flushPromises()

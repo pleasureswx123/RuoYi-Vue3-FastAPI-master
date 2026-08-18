@@ -251,6 +251,9 @@ ruoyi-fastapi-backend/docs/file_management_usage_guide.md
 - 前端开发必须遵守当前工程已经确定的 Vue、Vue Router、Pinia、Axios、Element Plus、公共组件和 Store 体系；后端开发必须遵守 FastAPI、SQLAlchemy、Controller → Service → DAO → DO/VO、权限依赖和事务体系。不得为了局部省事绕开所属技术栈、重复造轮子或在前后端之间混用职责。
 - Element Plus 是前端通用 UI 的默认且强制优先实现。表单、输入框、选择器、复选框、单选框、按钮、表格、分页、弹窗、抽屉、卡片、标签、空态、加载、提示和确认等已有对应组件时，原则上必须使用 Element Plus，不得用原生控件加自制交互替代。
 - 业务表单和筛选表单默认使用 `ElForm` / `ElFormItem`，不得仅因原生 `<form>` 能提交就脱离组件体系。`section`、`header`、`nav`、`article` 等纯语义容器，以及 `<video>`、`canvas` 等 Element Plus 没有等价能力的浏览器原生元素可以保留。
+- 本项目业务 UI 禁止依赖浏览器原生 `submit` 作为业务动作入口。业务表单、筛选表单、弹窗表单、登录表单和确认操作不得使用 `<form @submit...>`、`<el-form @submit...>`、`@submit.prevent` 或 `ElButton native-type="submit"` 驱动业务提交；已有代码中的同类写法属于待治理技术债，不构成后续实现依据。
+- 表单提交必须充分使用 Element Plus 契约：`ElForm` 绑定 `model` 和按需配置 `rules`，字段由 `ElFormItem prop` 承载，`ElButton @click` 显式调用统一处理函数，处理函数通过表单实例 `validate()` / `validateField()` 门禁后再执行业务请求，重置使用 `resetFields()` / `clearValidate()`，并落实 loading、disabled、错误提示和重复提交保护。需要 Enter 触发时，在对应 Element Plus 输入组件上调用同一处理函数，不得退回原生 `submit` 链路。
+- 表单相关变更验收时必须检查本次作用域内不存在上述原生提交依赖，并通过按钮点击、校验失败、校验成功、加载和重置等直接交互证明 Element Plus Form 契约真实生效；不得把标签替换或页面可打开当作完成证据。
 - UI 框架重构必须迁移完整组件结构、属性和交互契约，禁止只把原生标签改成组件标签。以 Element Plus Form 为例，必须按场景正确配置 `model`，用 `ElFormItem` 承载字段并配置对应 `prop`，同时处理提交、校验、布局、加载和可访问性；只有标签名称变化不算完成重构。
 - 上述完整迁移要求适用于全部 UI 组件，不只适用于 Form。表格必须落实数据源、列、`row-key`、选择/排序事件、加载和空态；分页必须落实当前页、每页数量、总数及变更事件；弹窗和抽屉必须落实显隐模型、关闭流程、销毁/重置、提交加载及焦点行为；输入、选择、上传、图片预览、按钮、卡片、标签、提示和确认等也必须使用对应组件的标准属性、事件、插槽和状态能力。
 - UI 框架改造的验收对象是最终组件树和运行行为，而不是源码中出现了 `el-` 前缀。提交前必须检查组件层级、数据绑定、事件、禁用/加载/错误/空态、可访问性及响应式布局，并通过直接相关的测试或页面交互验证；仅替换标签、仅套一层组件、继续由自制 DOM/CSS/脚本承担核心行为，均判定为未完成。

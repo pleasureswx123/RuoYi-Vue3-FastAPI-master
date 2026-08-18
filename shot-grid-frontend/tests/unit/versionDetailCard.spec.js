@@ -32,7 +32,7 @@ function version(versionId = 7, overrides = {}) {
       fileId,
       originalName: '原始.mov',
       businessFileName: 'WGZR_EP001_001_S001_YJF_V001_1.mov',
-      role: 'primary',
+      role: 'review_media',
       isPrimary: true,
       fileSize: 2048,
       contentType: 'video/quicktime'
@@ -55,6 +55,11 @@ describe('版本详情与受保护下载', () => {
     await flushPromises()
 
     expect(downloadProtectedVersionFile).toHaveBeenCalledWith(7, fileId, expect.objectContaining({ signal: expect.any(AbortSignal) }))
+    const tags = wrapper.findAllComponents(ElTag)
+    expect(tags.map(tag => tag.text())).toEqual(['待审核', '审核文件', '主审核文件'])
+    expect(tags.map(tag => tag.props('type'))).toEqual(['warning', 'info', 'warning'])
+    expect(tags[0].props()).toMatchObject({ effect: 'light', size: 'small', round: true })
+    expect(tags[1].props()).toMatchObject({ effect: 'plain', size: 'small', round: true })
     expect(URL.createObjectURL).toHaveBeenCalledWith(expect.any(Blob))
     expect(click).toHaveBeenCalled()
     expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:version-file')

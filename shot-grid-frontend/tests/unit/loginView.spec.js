@@ -51,7 +51,7 @@ describe('独立业务端登录页', () => {
     await usernameInput.setValue('creator')
     await passwordInput.setValue('plain-password')
 
-    await wrapper.find('form').trigger('submit')
+    await wrapper.findAllComponents(ElButton).find(button => button.text() === '进入工作区').trigger('click')
     await flushPromises()
 
     expect(session.signIn).toHaveBeenCalledOnce()

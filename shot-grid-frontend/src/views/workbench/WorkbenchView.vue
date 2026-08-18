@@ -6,14 +6,17 @@ import { Refresh, Right, Search } from '@element-plus/icons-vue'
 import { getMineTaskPage } from '@/api/shot-grid/tasks'
 import { getMineReviewListPage, getRecentMineVersions } from '@/api/shot-grid/reviews'
 import { useSessionStore } from '@/store/modules/session'
+import { tagTypeFromTone } from '@/utils/tag'
 import ProjectStatePanel from '@/views/project/components/ProjectStatePanel.vue'
+import { reviewModeMeta } from '@/views/review/reviewPresentation'
 import {
   taskAssigneeLabel,
   taskDueState,
   taskErrorState,
   taskKindMeta,
   taskPriorityMeta,
-  taskStatusMeta
+  taskStatusMeta,
+  taskVersionStatusMeta
 } from '@/views/task/taskPresentation'
 
 const router = useRouter()
@@ -25,21 +28,32 @@ const errorState = ref(null)
 const pendingReviews = ref([])
 const recentSubmissions = ref([])
 const activityLoading = ref(false)
-const validationMessage = ref('')
 const taskFilterForm = ref(null)
 const query = reactive({
   keyword: '',
   taskKind: '',
   taskStatus: '',
   priority: '',
-  dueDateFrom: '',
-  dueDateTo: '',
+  dueDateRange: [],
   pageNum: 1,
   pageSize: 20,
   orderByColumn: 'updateTime',
   isAsc: 'descending',
   orderValue: 'updateTime:descending'
 })
+const taskFilterRules = {
+  dueDateRange: [{
+    validator: (_rule, value, callback) => {
+      const [dueDateFrom, dueDateTo] = Array.isArray(value) ? value : []
+      if (dueDateFrom && dueDateTo && dueDateFrom > dueDateTo) {
+        callback(new Error('截止日期起点不能晚于终点。'))
+        return
+      }
+      callback()
+    },
+    trigger: 'change'
+  }]
+}
 let controller = null
 let loadGeneration = 0
 let disposed = false
@@ -53,14 +67,20 @@ const pageSummary = computed(() => ({
   overdue: tasks.value.filter(task => task.taskStatus !== 'completed' && taskDueState(task.dueDate).overdue).length
 }))
 
+function getDueDateBounds() {
+  const [dueDateFrom, dueDateTo] = Array.isArray(query.dueDateRange) ? query.dueDateRange : []
+  return { dueDateFrom: dueDateFrom || '', dueDateTo: dueDateTo || '' }
+}
+
 function buildParams() {
+  const { dueDateFrom, dueDateTo } = getDueDateBounds()
   return {
     keyword: query.keyword.trim() || undefined,
     taskKind: query.taskKind || undefined,
     taskStatus: query.taskStatus || undefined,
     priority: query.priority || undefined,
-    dueDateFrom: query.dueDateFrom || undefined,
-    dueDateTo: query.dueDateTo || undefined,
+    dueDateFrom: dueDateFrom || undefined,
+    dueDateTo: dueDateTo || undefined,
     pageNum: query.pageNum,
     pageSize: query.pageSize,
     orderByColumn: query.orderByColumn,
@@ -72,12 +92,14 @@ async function loadTasks() {
   const generation = ++loadGeneration
   controller?.abort()
   controller = null
-  validationMessage.value = ''
-  if (query.dueDateFrom && query.dueDateTo && query.dueDateFrom > query.dueDateTo) {
-    validationMessage.value = '截止日期起点不能晚于终点。'
-    loading.value = false
-    return
+  loading.value = false
+  let isValid = true
+  if (taskFilterForm.value) {
+    await taskFilterForm.value.validate(valid => {
+      isValid = valid
+    })
   }
+  if (!isValid || disposed || generation !== loadGeneration) return
   const requestController = new AbortController()
   controller = requestController
   loading.value = true
@@ -169,12 +191,26 @@ onBeforeUnmount(() => {
         <h2>你好，{{ displayName }}</h2>
         <p>这里使用后端强制绑定当前账号的跨项目任务范围，不使用本地 Mock 或前端推断负责人。</p>
       </div>
-      <span class="workbench-hero__label">{{ total }} 项我的任务</span>
+      <el-tag class="workbench-hero__tag" type="info" size="small" effect="plain" round>{{ total }} 项我的任务</el-tag>
     </div>
 
-    <section class="activity-grid" :class="{ 'is-loading': activityLoading }">
-      <article><header><div><p class="sg-eyebrow">REVIEW QUEUE</p><h3>待我审核</h3></div><el-button text @click="router.push('/reviews')">查看全部</el-button></header><button v-for="item in pendingReviews" :key="item.reviewListId" type="button" @click="router.push(`/reviews/${item.reviewListId}`)"><span><strong>{{ item.reviewListName }}</strong><small>{{ item.projectCode }} · {{ item.reviewMode === 'manual_batch' ? `${item.versionCount} 个版本` : item.versionNumber }}</small></span><el-icon><Right /></el-icon></button><p v-if="!pendingReviews.length">当前没有待审核内容</p></article>
-      <article><header><div><p class="sg-eyebrow">RECENT DELIVERY</p><h3>最近提交</h3></div></header><button v-for="item in recentSubmissions" :key="item.versionId" type="button" @click="router.push(`/versions/${item.versionId}`)"><span><strong>{{ item.versionNumber }} · {{ item.changelog }}</strong><small>{{ item.versionStatus === 'pending_review' ? '等待审核' : item.versionStatus === 'final' ? '已通过' : '已退回' }}</small></span><el-icon><Right /></el-icon></button><p v-if="!recentSubmissions.length">最近还没有提交版本</p></article>
+    <section class="activity-grid" :aria-busy="activityLoading">
+      <el-card class="activity-card" shadow="never">
+        <template #header><header><div><p class="sg-eyebrow">REVIEW QUEUE</p><h3>待我审核</h3></div><el-button link type="primary" @click="router.push('/reviews')">查看全部</el-button></header></template>
+        <el-skeleton v-if="activityLoading" animated :rows="3" />
+        <template v-else-if="pendingReviews.length">
+          <el-button v-for="item in pendingReviews" :key="item.reviewListId" class="activity-entry" text @click="router.push(`/reviews/${item.reviewListId}`)"><span class="activity-entry__content"><strong>{{ item.reviewListName }}</strong><small>{{ item.projectCode }} · {{ item.reviewMode === 'manual_batch' ? `${item.versionCount} 个版本` : item.versionNumber }}</small><el-tag :type="tagTypeFromTone(reviewModeMeta(item.reviewMode).tone)" size="small" effect="plain" round>{{ reviewModeMeta(item.reviewMode).label }}</el-tag></span><el-icon><Right /></el-icon></el-button>
+        </template>
+        <el-empty v-else :image-size="42" description="当前没有待审核内容" />
+      </el-card>
+      <el-card class="activity-card" shadow="never">
+        <template #header><header><div><p class="sg-eyebrow">RECENT DELIVERY</p><h3>最近提交</h3></div></header></template>
+        <el-skeleton v-if="activityLoading" animated :rows="3" />
+        <template v-else-if="recentSubmissions.length">
+          <el-button v-for="item in recentSubmissions" :key="item.versionId" class="activity-entry" text @click="router.push(`/versions/${item.versionId}`)"><span class="activity-entry__content"><strong>{{ item.versionNumber }} · {{ item.changelog }}</strong><el-tag :type="tagTypeFromTone(taskVersionStatusMeta(item.versionStatus).tone)" size="small" effect="plain" round>{{ taskVersionStatusMeta(item.versionStatus).label }}</el-tag></span><el-icon><Right /></el-icon></el-button>
+        </template>
+        <el-empty v-else :image-size="42" description="最近还没有提交版本" />
+      </el-card>
     </section>
 
     <section class="task-workbench" aria-labelledby="my-task-title">
@@ -188,13 +224,13 @@ onBeforeUnmount(() => {
       </header>
 
       <div class="task-stats" aria-label="当前分页任务摘要">
-        <article><span>制作中</span><strong>{{ pageSummary.inProgress }}</strong><small>当前页</small></article>
-        <article><span>待审核</span><strong>{{ pageSummary.pendingReview }}</strong><small>当前页</small></article>
-        <article><span>待修订</span><strong>{{ pageSummary.revision }}</strong><small>当前页</small></article>
-        <article :data-alert="pageSummary.overdue > 0"><span>已逾期</span><strong>{{ pageSummary.overdue }}</strong><small>当前页未完成</small></article>
+        <el-card shadow="never"><span>制作中</span><strong>{{ pageSummary.inProgress }}</strong><small>当前页</small></el-card>
+        <el-card shadow="never"><span>待审核</span><strong>{{ pageSummary.pendingReview }}</strong><small>当前页</small></el-card>
+        <el-card shadow="never"><span>待修订</span><strong>{{ pageSummary.revision }}</strong><small>当前页</small></el-card>
+        <el-card shadow="never" :class="{ 'is-alert': pageSummary.overdue > 0 }"><span>已逾期</span><strong>{{ pageSummary.overdue }}</strong><small>当前页未完成</small></el-card>
       </div>
 
-      <el-form ref="taskFilterForm" :model="query" class="task-filters" label-position="top" aria-label="我的任务筛选" @submit.prevent="submitFilters">
+      <el-form ref="taskFilterForm" :model="query" :rules="taskFilterRules" class="task-filters" size="large" label-position="top" aria-label="我的任务筛选">
         <el-form-item class="task-filter-item task-filter-item--search" label="搜索" prop="keyword">
           <el-input v-model="query.keyword" class="sg-input" :prefix-icon="Search" maxlength="200" clearable placeholder="任务、项目、镜头或资产" aria-label="搜索任务" />
         </el-form-item>
@@ -207,16 +243,25 @@ onBeforeUnmount(() => {
         <el-form-item class="task-filter-item" label="优先级" prop="priority">
           <el-select v-model="query.priority" class="sg-select" placeholder="全部优先级" aria-label="按优先级筛选" @change="submitFilters"><el-option label="全部优先级" value="" /><el-option label="紧急" value="urgent" /><el-option label="高" value="high" /><el-option label="普通" value="normal" /><el-option label="低" value="low" /></el-select>
         </el-form-item>
-        <el-form-item class="task-filter-item" label="截止日期起" prop="dueDateFrom">
-          <el-date-picker v-model="query.dueDateFrom" class="sg-input" type="date" value-format="YYYY-MM-DD" format="YYYY/MM/DD" placeholder="选择开始日期" aria-label="截止日期起" @change="submitFilters" />
-        </el-form-item>
-        <el-form-item class="task-filter-item" label="截止日期止" prop="dueDateTo" :error="validationMessage">
-          <el-date-picker v-model="query.dueDateTo" class="sg-input" type="date" value-format="YYYY-MM-DD" format="YYYY/MM/DD" placeholder="选择结束日期" aria-label="截止日期止" @change="submitFilters" />
+        <el-form-item class="task-filter-item task-filter-item--date-range" label="截止日期" prop="dueDateRange">
+          <el-date-picker
+            v-model="query.dueDateRange"
+            class="sg-input"
+            type="daterange"
+            unlink-panels
+            value-format="YYYY-MM-DD"
+            format="YYYY/MM/DD"
+            range-separator="至"
+            start-placeholder="开始日期"
+            end-placeholder="结束日期"
+            aria-label="截止日期范围"
+            @change="submitFilters"
+          />
         </el-form-item>
         <el-form-item class="task-filter-item" label="排序" prop="orderValue">
           <el-select v-model="query.orderValue" class="sg-select" aria-label="任务排序" @change="applyOrder"><el-option label="最近更新" value="updateTime:descending" /><el-option label="截止日期由近到远" value="dueDate:ascending" /><el-option label="优先级由高到低" value="priority:ascending" /><el-option label="最近创建" value="createTime:descending" /></el-select>
         </el-form-item>
-        <el-form-item class="task-filter-actions"><el-button native-type="submit" type="primary" :loading="loading">查询</el-button><el-button :disabled="loading" @click="resetFilters">重置</el-button></el-form-item>
+        <el-form-item class="task-filter-actions"><el-button type="primary" :loading="loading" @click="submitFilters">查询</el-button><el-button :disabled="loading" @click="resetFilters">重置</el-button></el-form-item>
       </el-form>
 
       <ProjectStatePanel
@@ -227,31 +272,24 @@ onBeforeUnmount(() => {
         :retryable="errorState.retryable"
         @retry="loadTasks"
       />
-      <div v-else-if="loading && !tasks.length" class="task-loading">正在加载我的任务…</div>
-      <div v-else-if="!tasks.length" class="task-empty">
-        <strong>{{ total ? '当前页没有任务' : '当前筛选暂无任务' }}</strong>
-        <p>任务由项目总监在镜头或资产制作分项上分配，不在工作台中临时创建无归属任务。</p>
-      </div>
+      <el-card v-else-if="loading && !tasks.length" class="task-loading" shadow="never" aria-busy="true"><el-skeleton animated :rows="5" /></el-card>
+      <el-empty v-else-if="!tasks.length" class="task-empty" :description="total ? '当前页没有任务' : '当前筛选暂无任务'"><p>任务由项目管理人在镜头或资产制作分项上分配，不在工作台中临时创建无归属任务。</p></el-empty>
       <div v-else class="task-list" :class="{ 'is-refreshing': loading }">
-        <button v-for="item in tasks" :key="item.taskId" class="task-row" type="button" @click="openTask(item)">
-          <span class="task-row__kind" :data-tone="taskKindMeta(item.taskKind).tone">{{ taskKindMeta(item.taskKind).shortLabel }}</span>
+        <el-button v-for="item in tasks" :key="item.taskId" class="task-row" text @click="openTask(item)">
+          <el-tag class="task-kind-tag" :type="tagTypeFromTone(taskKindMeta(item.taskKind).tone)" size="small" effect="plain" round>{{ taskKindMeta(item.taskKind).shortLabel }}</el-tag>
           <span class="task-row__main">
-            <span class="task-row__heading"><strong>{{ item.taskName }}</strong><span class="status-chip" :data-tone="taskStatusMeta(item.taskStatus).tone">{{ taskStatusMeta(item.taskStatus).label }}</span></span>
+            <span class="task-row__heading"><strong>{{ item.taskName }}</strong><el-tag :type="tagTypeFromTone(taskStatusMeta(item.taskStatus).tone)" size="small" effect="light" round>{{ taskStatusMeta(item.taskStatus).label }}</el-tag></span>
             <small>{{ item.project.projectCode }} · {{ item.project.projectName }} / {{ item.target.targetName }}</small>
             <span>{{ item.requirements || '暂无额外制作要求' }}</span>
           </span>
-          <span class="task-row__meta"><span>{{ taskAssigneeLabel(item.assignee) }}</span><small :data-tone="taskDueState(item.dueDate).tone">{{ taskDueState(item.dueDate).label }}</small></span>
+          <span class="task-row__meta"><span>{{ taskAssigneeLabel(item.assignee) }}</span><span class="task-row__due"><el-tag :type="tagTypeFromTone(taskDueState(item.dueDate).tone)" size="small" effect="plain" round>{{ taskDueState(item.dueDate).label }}</el-tag></span></span>
           <span class="task-row__version"><strong>{{ item.latestVersion?.versionNumber || '—' }}</strong><small>{{ item.versionCount }} 个版本</small></span>
-          <span class="priority-chip" :data-tone="taskPriorityMeta(item.priority).tone">{{ taskPriorityMeta(item.priority).label }}</span>
+          <el-tag class="task-priority-tag" :type="tagTypeFromTone(taskPriorityMeta(item.priority).tone)" size="small" effect="plain" round>{{ taskPriorityMeta(item.priority).label }}</el-tag>
           <el-icon class="task-row__arrow"><Right /></el-icon>
-        </button>
+        </el-button>
       </div>
 
-      <nav v-if="total" class="task-pagination" aria-label="任务分页">
-        <button type="button" :disabled="query.pageNum <= 1 || loading" @click="changePage(query.pageNum - 1)">上一页</button>
-        <span>第 {{ query.pageNum }} / {{ pageCount }} 页 · 共 {{ total }} 项</span>
-        <button type="button" :disabled="query.pageNum >= pageCount || loading" @click="changePage(query.pageNum + 1)">下一页</button>
-      </nav>
+      <el-pagination v-if="total" class="task-pagination" background layout="prev, pager, next, total" :current-page="query.pageNum" :page-size="query.pageSize" :total="total" :disabled="loading" aria-label="任务分页" @current-change="changePage" />
     </section>
 
   </section>
@@ -259,17 +297,38 @@ onBeforeUnmount(() => {
 
 <style scoped lang="scss">
 .activity-grid.is-loading{opacity:.55;pointer-events:none}
-.activity-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.activity-grid>article{display:grid;gap:8px;padding:18px;background:var(--sg-surface);border:1px solid var(--sg-border);border-radius:var(--sg-radius-md)}.activity-grid header{display:flex;align-items:center;justify-content:space-between}.activity-grid h3{margin:3px 0 0;font-size:16px}.activity-grid button{display:flex;gap:12px;align-items:center;justify-content:space-between;padding:11px;color:var(--sg-text);text-align:left;cursor:pointer;background:rgba(255,255,255,.025);border:1px solid var(--sg-border);border-radius:9px}.activity-grid button span{display:grid;min-width:0;gap:5px}.activity-grid button strong{overflow:hidden;font-size:11px;text-overflow:ellipsis;white-space:nowrap}.activity-grid button small,.activity-grid>article>p{margin:0;color:var(--sg-text-muted);font-size:9px}@media(max-width:800px){.activity-grid{grid-template-columns:1fr}}
-.workbench-page{display:grid;gap:28px}.workbench-hero{position:relative;display:flex;min-height:218px;align-items:flex-end;justify-content:space-between;padding:clamp(30px,5vw,54px);overflow:hidden;background:radial-gradient(circle at 86% 12%,rgba(255,182,87,.24),transparent 28%),linear-gradient(135deg,#1c222c,#101319 72%);border:1px solid var(--sg-border);border-radius:var(--sg-radius-lg);box-shadow:var(--sg-shadow)}.workbench-hero::after{position:absolute;top:-80px;right:-10px;width:310px;height:310px;content:'';border:1px solid rgba(255,255,255,.08);border-radius:50%}.workbench-hero>div{position:relative;z-index:1;max-width:760px}.workbench-hero h2{margin:0;font-size:clamp(30px,4vw,48px);font-weight:600;letter-spacing:-.045em}.workbench-hero p:not(.sg-eyebrow){max-width:680px;margin:16px 0 0;color:var(--sg-text-secondary);font-size:14px;line-height:1.8}.workbench-hero__label{position:relative;z-index:1;padding:7px 11px;color:var(--sg-text-secondary);font-size:11px;background:rgba(0,0,0,.22);border:1px solid var(--sg-border);border-radius:999px}.task-workbench{display:grid;gap:16px}.workbench-section-heading{display:flex;gap:20px;align-items:flex-end;justify-content:space-between}.workbench-section-heading h3{margin:0;font-size:19px}.workbench-section-heading p:not(.sg-eyebrow){margin:7px 0 0;color:var(--sg-text-muted);font-size:12px}.task-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.task-stats article{display:grid;grid-template-columns:1fr auto;gap:4px 12px;padding:15px 17px;background:var(--sg-surface);border:1px solid var(--sg-border);border-radius:var(--sg-radius-md)}.task-stats article[data-alert=true]{border-color:rgba(255,107,107,.28)}.task-stats span,.task-stats small{color:var(--sg-text-muted);font-size:10px}.task-stats strong{grid-row:1/3;grid-column:2;font-size:25px}.task-filters{display:grid;grid-template-columns:2fr repeat(6,minmax(120px,1fr)) auto;gap:10px;align-items:end;padding:16px;background:var(--sg-surface);border:1px solid var(--sg-border);border-radius:var(--sg-radius-md)}.task-filters label{display:grid;gap:6px}.task-filters label>span{color:var(--sg-text-muted);font-size:10px}.task-filters input,.task-filters select{width:100%;height:38px;box-sizing:border-box;padding:0 10px;color:var(--sg-text);background:#11151a;border:1px solid var(--sg-border);border-radius:8px}.task-filters__search>div{position:relative}.task-filters__search .el-icon{position:absolute;top:11px;left:10px;color:var(--sg-text-muted)}.task-filters__search input{padding-left:31px}.task-filters__actions{display:flex;gap:7px}.task-filters__error{grid-column:1/-1;margin:0;color:var(--sg-danger);font-size:12px}.task-loading,.task-empty{display:grid;min-height:190px;padding:24px;color:var(--sg-text-muted);text-align:center;background:var(--sg-surface);border:1px dashed var(--sg-border-strong);border-radius:var(--sg-radius-md);place-content:center}.task-empty strong{color:var(--sg-text-secondary)}.task-empty p{max-width:620px;margin:8px 0 0;font-size:12px;line-height:1.7}.task-list{display:grid;overflow:hidden;background:var(--sg-border);border:1px solid var(--sg-border);border-radius:var(--sg-radius-md);gap:1px}.task-list.is-refreshing{pointer-events:none;opacity:.58}.task-row{display:grid;min-height:88px;grid-template-columns:48px minmax(240px,2fr) minmax(150px,1fr) 80px auto auto;gap:14px;align-items:center;padding:16px 18px;color:var(--sg-text);text-align:left;cursor:pointer;background:var(--sg-surface);border:0}.task-row:hover{background:var(--sg-surface-raised)}.task-row__kind{display:grid;width:42px;height:42px;color:#80bfff;font-size:11px;background:rgba(128,191,255,.08);border-radius:11px;place-items:center}.task-row__kind[data-tone=purple]{color:#c9a7ff;background:rgba(165,112,255,.1)}.task-row__main,.task-row__meta,.task-row__version{display:grid;min-width:0;gap:6px}.task-row__heading{display:flex;gap:8px;align-items:center}.task-row__heading strong{overflow:hidden;font-size:13px;text-overflow:ellipsis;white-space:nowrap}.task-row__main>small,.task-row__main>span:not(.task-row__heading),.task-row__meta,.task-row__version small{overflow:hidden;color:var(--sg-text-muted);font-size:10px;text-overflow:ellipsis;white-space:nowrap}.task-row__meta>span{color:var(--sg-text-secondary);font-size:11px}.task-row__meta small[data-tone=danger]{color:var(--sg-danger)}.task-row__version strong{color:var(--sg-accent)}.status-chip,.priority-chip{display:inline-flex;width:max-content;padding:4px 7px;font-size:9px;background:rgba(255,255,255,.05);border-radius:999px}.status-chip[data-tone=success]{color:var(--sg-success);background:rgba(98,212,155,.1)}.status-chip[data-tone=warning],.priority-chip[data-tone=warning]{color:var(--sg-accent);background:var(--sg-accent-soft)}.status-chip[data-tone=danger],.priority-chip[data-tone=danger]{color:var(--sg-danger);background:rgba(255,107,107,.09)}.status-chip[data-tone=info],.priority-chip[data-tone=info]{color:#80bfff;background:rgba(128,191,255,.08)}.task-row__arrow{color:var(--sg-text-muted)}.task-pagination{display:flex;gap:14px;align-items:center;justify-content:center}.task-pagination button{padding:7px 11px;color:var(--sg-text-secondary);cursor:pointer;background:var(--sg-surface);border:1px solid var(--sg-border);border-radius:8px}.task-pagination button:disabled{opacity:.35;cursor:not-allowed}.task-pagination span{color:var(--sg-text-muted);font-size:11px}@media(max-width:1400px){.task-filters{grid-template-columns:repeat(4,minmax(0,1fr))}.task-filters__search{grid-column:span 2}.task-row{grid-template-columns:48px minmax(240px,2fr) minmax(140px,1fr) 70px auto}.task-row__arrow{display:none}}@media(max-width:1000px){.task-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.task-row{grid-template-columns:44px minmax(0,1fr) auto}.task-row__meta,.task-row__version{display:none}}@media(max-width:680px){.workbench-hero__label{display:none}.workbench-section-heading{align-items:flex-start;flex-direction:column}.task-stats,.task-filters{grid-template-columns:1fr}.task-filters__search{grid-column:auto}.task-filters__actions{width:100%}.task-row{grid-template-columns:38px minmax(0,1fr)}.task-row>.priority-chip{display:none}.task-row__kind{width:36px;height:36px}.task-row__heading{align-items:flex-start;flex-direction:column}}
+.activity-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.activity-grid>article{display:grid;gap:8px;padding:18px;background:var(--sg-surface);border:1px solid var(--sg-border);border-radius:var(--sg-radius-md)}.activity-grid header{display:flex;align-items:center;justify-content:space-between}.activity-grid h3{margin:3px 0 0;font-size:16px}.activity-grid button{display:flex;gap:12px;align-items:center;justify-content:space-between;padding:11px;color:var(--sg-text);text-align:left;cursor:pointer;background:rgba(255,255,255,.025);border:1px solid var(--sg-border);border-radius:9px}.activity-grid button>span{display:grid;min-width:0;gap:5px}.activity-grid button strong{overflow:hidden;font-size:11px;text-overflow:ellipsis;white-space:nowrap}.activity-grid button .el-tag{justify-self:start}.activity-grid button small,.activity-grid>article>p{margin:0;color:var(--sg-text-muted);font-size:9px}@media(max-width:800px){.activity-grid{grid-template-columns:1fr}}
+.workbench-page{display:grid;gap:28px}.workbench-hero{position:relative;display:flex;min-height:218px;align-items:flex-end;justify-content:space-between;padding:clamp(30px,5vw,54px);overflow:hidden;background:radial-gradient(circle at 86% 12%,rgba(255,182,87,.24),transparent 28%),linear-gradient(135deg,#1c222c,#101319 72%);border:1px solid var(--sg-border);border-radius:var(--sg-radius-lg);box-shadow:var(--sg-shadow)}.workbench-hero::after{position:absolute;top:-80px;right:-10px;width:310px;height:310px;content:'';border:1px solid rgba(255,255,255,.08);border-radius:50%}.workbench-hero>div{position:relative;z-index:1;max-width:760px}.workbench-hero h2{margin:0;font-size:clamp(30px,4vw,48px);font-weight:600;letter-spacing:-.045em}.workbench-hero p:not(.sg-eyebrow){max-width:680px;margin:16px 0 0;color:var(--sg-text-secondary);font-size:14px;line-height:1.8}.workbench-hero__tag{position:relative;z-index:1}.task-workbench{display:grid;gap:16px}.workbench-section-heading{display:flex;gap:20px;align-items:flex-end;justify-content:space-between}.workbench-section-heading h3{margin:0;font-size:19px}.workbench-section-heading p:not(.sg-eyebrow){margin:7px 0 0;color:var(--sg-text-muted);font-size:12px}.task-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.task-stats article{display:grid;grid-template-columns:1fr auto;gap:4px 12px;padding:15px 17px;background:var(--sg-surface);border:1px solid var(--sg-border);border-radius:var(--sg-radius-md)}.task-stats article[data-alert=true]{border-color:rgba(255,107,107,.28)}.task-stats span,.task-stats small{color:var(--sg-text-muted);font-size:10px}.task-stats strong{grid-row:1/3;grid-column:2;font-size:25px}.task-filters{display:grid;grid-template-columns:2fr repeat(6,minmax(120px,1fr)) auto;gap:10px;align-items:end;padding:16px;background:var(--sg-surface);border:1px solid var(--sg-border);border-radius:var(--sg-radius-md)}.task-filters label{display:grid;gap:6px}.task-filters label>span{color:var(--sg-text-muted);font-size:10px}.task-filters input,.task-filters select{width:100%;height:38px;box-sizing:border-box;padding:0 10px;color:var(--sg-text);background:#11151a;border:1px solid var(--sg-border);border-radius:8px}.task-filters__search>div{position:relative}.task-filters__search .el-icon{position:absolute;top:11px;left:10px;color:var(--sg-text-muted)}.task-filters__search input{padding-left:31px}.task-filters__actions{display:flex;gap:7px}.task-filters__error{grid-column:1/-1;margin:0;color:var(--sg-danger);font-size:12px}.task-loading,.task-empty{display:grid;min-height:190px;padding:24px;color:var(--sg-text-muted);text-align:center;background:var(--sg-surface);border:1px dashed var(--sg-border-strong);border-radius:var(--sg-radius-md);place-content:center}.task-empty strong{color:var(--sg-text-secondary)}.task-empty p{max-width:620px;margin:8px 0 0;font-size:12px;line-height:1.7}.task-list{display:grid;overflow:hidden;background:var(--sg-border);border:1px solid var(--sg-border);border-radius:var(--sg-radius-md);gap:1px}.task-list.is-refreshing{pointer-events:none;opacity:.58}.task-row{display:grid;min-height:88px;grid-template-columns:48px minmax(240px,2fr) minmax(150px,1fr) 80px auto auto;gap:14px;align-items:center;padding:16px 18px;color:var(--sg-text);text-align:left;cursor:pointer;background:var(--sg-surface);border:0}.task-row:hover{background:var(--sg-surface-raised)}.task-kind-tag{justify-self:start}.task-row__main,.task-row__meta,.task-row__version{display:grid;min-width:0;gap:6px}.task-row__heading{display:flex;gap:8px;align-items:center}.task-row__heading strong{overflow:hidden;font-size:13px;text-overflow:ellipsis;white-space:nowrap}.task-row__main>small,.task-row__main>span:not(.task-row__heading),.task-row__meta,.task-row__version small{overflow:hidden;color:var(--sg-text-muted);font-size:10px;text-overflow:ellipsis;white-space:nowrap}.task-row__meta>span{color:var(--sg-text-secondary);font-size:11px}.task-row__meta .el-tag{justify-self:start}.task-row__version strong{color:var(--sg-accent)}.task-row__arrow{color:var(--sg-text-muted)}.task-pagination{display:flex;gap:14px;align-items:center;justify-content:center}.task-pagination button{padding:7px 11px;color:var(--sg-text-secondary);cursor:pointer;background:var(--sg-surface);border:1px solid var(--sg-border);border-radius:8px}.task-pagination button:disabled{opacity:.35;cursor:not-allowed}.task-pagination span{color:var(--sg-text-muted);font-size:11px}@media(max-width:1400px){.task-filters{grid-template-columns:repeat(4,minmax(0,1fr))}.task-filters__search{grid-column:span 2}.task-row{grid-template-columns:48px minmax(240px,2fr) minmax(140px,1fr) 70px auto}.task-row__arrow{display:none}}@media(max-width:1000px){.task-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.task-row{grid-template-columns:44px minmax(0,1fr) auto}.task-row__meta,.task-row__version{display:none}}@media(max-width:680px){.workbench-hero__tag{display:none}.workbench-section-heading{align-items:flex-start;flex-direction:column}.task-stats,.task-filters{grid-template-columns:1fr}.task-filters__search{grid-column:auto}.task-filters__actions{width:100%}.task-row{grid-template-columns:38px minmax(0,1fr)}.task-row>.task-priority-tag{display:none}.task-row__heading{align-items:flex-start;flex-direction:column}}
 .task-filters:deep(.el-form-item){min-width:0;margin-bottom:0}
 .task-filters:deep(.el-form-item__label){display:flex;height:auto;padding-bottom:6px;color:var(--sg-text-muted);font-size:10px;line-height:1}
+.task-filter-item--date-range{grid-column:span 2}
 .task-filter-item:deep(.el-form-item__content),
 .task-filter-item:deep(.el-input),
 .task-filter-item:deep(.el-select),
 .task-filter-item:deep(.el-date-editor){width:100%;min-width:0}
+.task-filter-item:deep(.el-range-editor.sg-input){background:var(--sg-surface-soft);border-radius:10px;box-shadow:0 0 0 1px var(--sg-border-strong) inset}
+.task-filter-item:deep(.el-range-editor.sg-input:hover){box-shadow:0 0 0 1px rgba(255,182,87,.46) inset}
+.task-filter-item:deep(.el-range-editor.sg-input.is-active){box-shadow:0 0 0 1px var(--sg-accent) inset}
 .task-filter-item:deep(.el-input__inner){height:auto;padding:0;background:transparent;border:0;border-radius:0}
 .task-filter-actions:deep(.el-form-item__content){flex-wrap:nowrap;justify-content:flex-end}
 .task-filter-item:deep(.el-form-item__error){padding-top:4px;white-space:nowrap}
 @media(max-width:1400px){.task-filter-item--search{grid-column:span 2}.task-filter-actions:deep(.el-form-item__content){justify-content:flex-start}}
-@media(max-width:680px){.task-filter-item--search{grid-column:auto}.task-filter-actions{width:100%}}
+@media(max-width:680px){.task-filter-item--search,.task-filter-item--date-range{grid-column:auto}.task-filter-actions{width:100%}}
+.task-row__due { justify-self: start; }
+.activity-card.el-card{background:var(--sg-surface);border-color:var(--sg-border)}
+.activity-card:deep(.el-card__header){padding:18px 18px 10px;border-bottom:0}
+.activity-card:deep(.el-card__body){display:grid;gap:8px;padding:0 18px 18px}
+:deep(.activity-entry>span),:deep(.task-row>span){display:contents}
+.activity-entry.el-button{width:100%;height:auto;margin:0;white-space:normal}
+.activity-entry__content{display:grid;min-width:0;flex:1;gap:5px}
+.task-stats:deep(.el-card){background:var(--sg-surface);border-color:var(--sg-border)}
+.task-stats:deep(.el-card.is-alert){border-color:rgba(255,107,107,.28)}
+.task-stats:deep(.el-card__body){display:grid;grid-template-columns:1fr auto;gap:4px 12px;padding:15px 17px}
+.task-loading.el-card{display:block;padding:0}
+.task-loading:deep(.el-card__body){width:100%;box-sizing:border-box;padding:24px}
+.task-empty.el-empty{padding:24px;background:var(--sg-surface);border:1px dashed var(--sg-border-strong);border-radius:var(--sg-radius-md)}
+.task-empty p{max-width:620px;margin:0;color:var(--sg-text-muted);font-size:12px;line-height:1.7}
+.task-pagination{justify-content:center}
+.workbench-hero { background: var(--sg-workbench-hero-bg); }
+.workbench-hero::after { border-color: var(--sg-workbench-hero-ring); }
 </style>

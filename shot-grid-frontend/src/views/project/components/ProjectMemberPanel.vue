@@ -9,7 +9,7 @@ import {
   removeProjectMember,
   updateProjectMember
 } from '@/api/shot-grid/projects'
-import { projectErrorState, formatDateTime } from '@/views/project/projectPresentation'
+import { projectErrorState, projectRoleMeta, formatDateTime } from '@/views/project/projectPresentation'
 import MemberCandidateSelect from './MemberCandidateSelect.vue'
 import ProjectModal from './ProjectModal.vue'
 import ProjectStatePanel from './ProjectStatePanel.vue'
@@ -26,8 +26,19 @@ const errorState = ref(null)
 const mutationError = ref(null)
 const selectedCandidate = ref(null)
 const editingMember = ref(null)
+const addFormRef = ref(null)
+const editFormRef = ref(null)
 const addForm = reactive({ projectRole: 'creator' })
 const editForm = reactive({ projectRole: 'creator' })
+const memberRules = {
+  projectRole: [{
+    validator: (_rule, value, callback) => {
+      if (!['creator', 'director'].includes(value)) callback(new Error('请选择有效的项目角色'))
+      else callback()
+    },
+    trigger: 'change'
+  }]
+}
 let controller = null
 
 const wildcard = computed(() => props.permissions.includes('*:*:*'))
@@ -64,15 +75,34 @@ function openEdit(member) {
   mutationError.value = null
 }
 
+function closeAddDialog() {
+  addFormRef.value?.resetFields()
+  selectedCandidate.value = null
+  mutationError.value = null
+}
+
+function closeEditDialog() {
+  editFormRef.value?.resetFields()
+  editingMember.value = null
+  mutationError.value = null
+}
+
 async function submitAdd() {
+  if (mutationBusy.value || !selectedCandidate.value) return
   mutationError.value = null
   mutationBusy.value = true
   try {
+    const isValid = addFormRef.value
+      ? await addFormRef.value.validate().catch(() => false)
+      : false
+    const candidate = selectedCandidate.value
+    if (!isValid || !candidate) return
+
     await addProjectMember(props.projectId, {
-      userId: selectedCandidate.value.userId,
+      userId: candidate.userId,
       projectRole: addForm.projectRole
     })
-    selectedCandidate.value = null
+    closeAddDialog()
     ElMessage.success('项目成员已添加')
     await loadMembers()
   } catch (error) {
@@ -81,13 +111,20 @@ async function submitAdd() {
 }
 
 async function submitEdit() {
+  if (mutationBusy.value || !editingMember.value) return
   mutationError.value = null
   mutationBusy.value = true
   try {
-    await updateProjectMember(props.projectId, editingMember.value.userId, {
+    const isValid = editFormRef.value
+      ? await editFormRef.value.validate().catch(() => false)
+      : false
+    const member = editingMember.value
+    if (!isValid || !member) return
+
+    await updateProjectMember(props.projectId, member.userId, {
       projectRole: editForm.projectRole
     })
-    editingMember.value = null
+    closeEditDialog()
     ElMessage.success('成员信息已更新')
     await loadMembers()
   } catch (error) {
@@ -120,87 +157,79 @@ onBeforeUnmount(() => controller?.abort())
 </script>
 
 <template>
-  <section class="detail-panel member-panel">
-    <header class="detail-panel__heading">
-      <div><p class="sg-eyebrow">MEMBERS</p><h2>项目成员</h2><span>项目角色独立于平台系统角色。</span></div>
-      <el-button :icon="Refresh" circle aria-label="刷新成员" :loading="loading" @click="loadMembers" />
-    </header>
+  <el-card class="detail-panel member-panel" shadow="never">
+    <template #header>
+      <header class="detail-panel__heading">
+        <div><p class="sg-eyebrow">MEMBERS</p><h2>项目成员</h2><span>项目角色独立于平台系统角色。</span></div>
+        <el-button :icon="Refresh" circle aria-label="刷新成员" :loading="loading" @click="loadMembers" />
+      </header>
+    </template>
 
     <ProjectStatePanel v-if="errorState" compact :title="errorState.title" :message="errorState.message" :retryable="errorState.retryable" @retry="loadMembers" />
     <template v-else>
-      <div v-if="canAdd" class="member-add">
+      <el-card v-if="canAdd" class="member-add" shadow="never">
         <strong><el-icon><Plus /></el-icon> 添加项目成员</strong>
         <MemberCandidateSelect :project-id="projectId" :exclude-ids="selectedIds" @select="chooseCandidate" />
-      </div>
-      <p v-if="loading && !members.length" class="panel-muted">正在加载项目成员…</p>
-      <p v-else-if="!members.length" class="panel-muted">项目当前没有可展示的活动成员。</p>
-      <div v-else class="member-table-wrap">
-        <table>
-          <thead><tr><th>成员</th><th>项目角色</th><th>部门</th><th>加入时间</th><th v-if="canEdit || canRemove">操作</th></tr></thead>
-          <tbody>
-            <tr v-for="member in members" :key="member.userId">
-              <td><strong>{{ member.nickName || member.userName }}</strong><small>{{ member.userName }}</small></td>
-              <td>{{ member.projectRole === 'director' ? '项目管理人员' : '制作人员' }}</td>
-              <td>{{ member.deptName || '—' }}</td>
-              <td>{{ formatDateTime(member.joinedTime) }}</td>
-              <td v-if="canEdit || canRemove" class="member-actions">
-                <button v-if="canEdit" type="button" @click="openEdit(member)">编辑</button>
-                <button v-if="canRemove" type="button" class="danger" :disabled="mutationBusy" @click="removeMember(member)">移除</button>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-      <div v-if="mutationError && !selectedCandidate && !editingMember" class="inline-error" role="alert">
-        <strong>{{ mutationError.title }}</strong><span>{{ mutationError.message }}</span>
-      </div>
+      </el-card>
+      <el-skeleton v-if="loading && !members.length" :rows="4" animated />
+      <el-empty v-else-if="!members.length" :image-size="72" description="项目当前没有可展示的活动成员" />
+      <el-table v-else class="member-table" :data="members" row-key="userId" v-loading="loading" empty-text="项目当前没有可展示的活动成员">
+        <el-table-column label="成员" min-width="170" fixed="left">
+          <template #default="{ row }"><strong>{{ row.nickName || row.userName }}</strong><small>{{ row.userName }}</small></template>
+        </el-table-column>
+        <el-table-column label="项目角色" min-width="130">
+          <template #default="{ row }"><el-tag size="small" effect="plain" round :type="projectRoleMeta(row.projectRole).type">{{ projectRoleMeta(row.projectRole).label }}</el-tag></template>
+        </el-table-column>
+        <el-table-column label="部门" min-width="130"><template #default="{ row }">{{ row.deptName || '—' }}</template></el-table-column>
+        <el-table-column label="加入时间" min-width="170"><template #default="{ row }">{{ formatDateTime(row.joinedTime) }}</template></el-table-column>
+        <el-table-column v-if="canEdit || canRemove" label="操作" width="200" fixed="right">
+          <template #default="{ row }">
+            <el-button v-if="canEdit" text type="primary" @click="openEdit(row)">编辑</el-button>
+            <el-button v-if="canRemove" text type="danger" :disabled="mutationBusy" @click="removeMember(row)">移除</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+      <el-alert v-if="mutationError && !selectedCandidate && !editingMember" :title="mutationError.title" :description="mutationError.message" type="error" show-icon :closable="false" />
     </template>
 
-    <ProjectModal v-if="selectedCandidate" title="添加项目成员" :busy="mutationBusy" @close="selectedCandidate = null">
-      <form class="member-form" @submit.prevent="submitAdd">
+    <ProjectModal v-if="selectedCandidate" title="添加项目成员" :busy="mutationBusy" @close="closeAddDialog">
+      <el-form ref="addFormRef" :model="addForm" :rules="memberRules" class="member-form" size="large" label-position="top">
         <div class="member-identity"><strong>{{ selectedCandidate.nickName || selectedCandidate.userName }}</strong><span>{{ selectedCandidate.userName }} · {{ selectedCandidate.deptName || '未分配部门' }}</span></div>
-        <label><span>项目角色</span><el-select v-model="addForm.projectRole" class="sg-select"><el-option label="制作人员" value="creator" /><el-option label="项目管理人员" value="director" /></el-select></label>
-        <div v-if="mutationError" class="inline-error" role="alert"><strong>{{ mutationError.title }}</strong><span>{{ mutationError.message }}</span></div>
-        <footer><el-button :disabled="mutationBusy" @click="selectedCandidate = null">取消</el-button><el-button type="primary" native-type="submit" :loading="mutationBusy">添加</el-button></footer>
-      </form>
+        <el-form-item label="项目角色" prop="projectRole" required><el-select v-model="addForm.projectRole" class="sg-select"><el-option :label="projectRoleMeta('creator').label" value="creator" /><el-option :label="projectRoleMeta('director').label" value="director" /></el-select></el-form-item>
+        <el-alert v-if="mutationError" :title="mutationError.title" :description="mutationError.message" type="error" show-icon :closable="false" />
+        <footer><el-button :disabled="mutationBusy" @click="closeAddDialog">取消</el-button><el-button type="primary" :loading="mutationBusy" @click="submitAdd">添加</el-button></footer>
+      </el-form>
     </ProjectModal>
 
-    <ProjectModal v-if="editingMember" title="编辑项目成员" :busy="mutationBusy" @close="editingMember = null">
-      <form class="member-form" @submit.prevent="submitEdit">
+    <ProjectModal v-if="editingMember" title="编辑项目成员" :busy="mutationBusy" @close="closeEditDialog">
+      <el-form ref="editFormRef" :model="editForm" :rules="memberRules" class="member-form" size="large" label-position="top">
         <div class="member-identity"><strong>{{ editingMember.nickName || editingMember.userName }}</strong><span>{{ editingMember.userName }}</span></div>
-        <label><span>项目角色</span><el-select v-model="editForm.projectRole" class="sg-select"><el-option label="制作人员" value="creator" /><el-option label="项目管理人员" value="director" /></el-select></label>
-        <div v-if="mutationError" class="inline-error" role="alert"><strong>{{ mutationError.title }}</strong><span>{{ mutationError.message }}</span></div>
-        <footer><el-button :disabled="mutationBusy" @click="editingMember = null">取消</el-button><el-button type="primary" native-type="submit" :loading="mutationBusy">保存</el-button></footer>
-      </form>
+        <el-form-item label="项目角色" prop="projectRole" required><el-select v-model="editForm.projectRole" class="sg-select"><el-option :label="projectRoleMeta('creator').label" value="creator" /><el-option :label="projectRoleMeta('director').label" value="director" /></el-select></el-form-item>
+        <el-alert v-if="mutationError" :title="mutationError.title" :description="mutationError.message" type="error" show-icon :closable="false" />
+        <footer><el-button :disabled="mutationBusy" @click="closeEditDialog">取消</el-button><el-button type="primary" :loading="mutationBusy" @click="submitEdit">保存</el-button></footer>
+      </el-form>
     </ProjectModal>
-  </section>
+  </el-card>
 </template>
 
 <style scoped>
-.detail-panel { padding: 24px; background: var(--sg-surface); border: 1px solid var(--sg-border); border-radius: var(--sg-radius-lg); }
-.detail-panel__heading { display:flex; gap:16px; align-items:flex-start; justify-content:space-between; margin-bottom:20px; }
+.detail-panel { background: var(--sg-surface); border-color: var(--sg-border); border-radius: var(--sg-radius-lg); }
+.detail-panel :deep(.el-card__header) { padding: 20px 24px; border-bottom-color: var(--sg-border); }
+.detail-panel :deep(.el-card__body) { display: grid; gap: 16px; padding: 20px 24px 24px; }
+.detail-panel__heading { display:flex; gap:16px; align-items:flex-start; justify-content:space-between; }
 .detail-panel__heading h2, .detail-panel__heading span { margin:0; }
 .detail-panel__heading h2 { font-size:19px; }
 .detail-panel__heading span { display:block; margin-top:6px; color:var(--sg-text-muted); font-size:12px; }
-.member-add { display:grid; gap:11px; margin-bottom:18px; padding:14px; background:rgba(255,255,255,.025); border:1px solid var(--sg-border); border-radius:12px; }
+.member-add { background:rgba(255,255,255,.025); border-color:var(--sg-border); border-radius:12px; }
+.member-add :deep(.el-card__body) { display:grid; gap:11px; padding:14px; }
 .member-add strong { display:flex; gap:7px; align-items:center; font-size:13px; }
-.member-table-wrap { overflow-x:auto; }
-table { width:100%; border-collapse:collapse; }
-th, td { padding:13px 12px; text-align:left; border-bottom:1px solid var(--sg-border); white-space:nowrap; }
-th { color:var(--sg-text-muted); font-size:10px; letter-spacing:.06em; text-transform:uppercase; }
-td { color:var(--sg-text-secondary); font-size:12px; }
-td strong, td small { display:block; }
-td strong { color:var(--sg-text); font-size:13px; }
-td small { margin-top:3px; color:var(--sg-text-muted); }
-td code { color:var(--sg-accent); }
-.member-actions button { padding:5px 7px; color:var(--sg-accent); cursor:pointer; background:transparent; border:0; }
-.member-actions button.danger { color:var(--sg-danger); }
-.panel-muted { padding:28px; color:var(--sg-text-muted); font-size:13px; text-align:center; }
-.inline-error { display:grid; gap:5px; margin-top:14px; padding:12px 14px; color:#ffb4b4; font-size:12px; background:rgba(255,107,107,.08); border-radius:9px; }
-.member-form, .member-form label { display:grid; gap:8px; }
-.member-form { gap:18px; }
-.member-form label span { font-size:13px; font-weight:600; }
-.member-form input { height:42px; padding:0 12px; color:var(--sg-text); background:rgba(255,255,255,.035); border:1px solid var(--sg-border-strong); border-radius:10px; }
+.member-table { --el-table-text-color:var(--sg-text-secondary); --el-table-header-text-color:var(--sg-text-muted); --el-table-border-color:var(--sg-border); width:100%; }
+.member-table strong,.member-table small { display:block; }
+.member-table strong { color:var(--sg-text); font-size:13px; }
+.member-table small { margin-top:3px; color:var(--sg-text-muted); }
+.member-form { display:grid; gap:18px; }
+.member-form :deep(.el-form-item) { margin-bottom:0; }
+.member-form :deep(.el-select) { width:100%; }
 .member-identity { padding:14px; background:var(--sg-accent-soft); border-radius:10px; }
 .member-identity strong, .member-identity span { display:block; }
 .member-identity span { margin-top:4px; color:var(--sg-text-muted); font-size:12px; }

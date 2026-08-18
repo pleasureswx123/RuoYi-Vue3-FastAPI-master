@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, ref } from 'vue'
 import { Search } from '@element-plus/icons-vue'
 
 import { getMemberCandidatePage, getProjectMemberCandidatePage } from '@/api/shot-grid/projects'
@@ -13,11 +13,10 @@ const props = defineProps({
 })
 const emit = defineEmits(['select'])
 const keyword = ref('')
+const selectedUserId = ref('')
 const candidates = ref([])
 const loading = ref(false)
-const searched = ref(false)
 const errorState = ref(null)
-const root = ref(null)
 let controller = null
 let timer = null
 
@@ -26,13 +25,13 @@ const visibleCandidates = computed(() =>
   candidates.value.filter(candidate => !excluded.value.has(Number(candidate.userId)))
 )
 
-async function search() {
+async function search(nextKeyword = keyword.value) {
   clearTimeout(timer)
+  keyword.value = String(nextKeyword || '')
   controller?.abort()
   const requestController = new AbortController()
   controller = requestController
   loading.value = true
-  searched.value = true
   errorState.value = null
   try {
     const params = {
@@ -56,85 +55,152 @@ async function search() {
   }
 }
 
-function scheduleSearch() {
+function scheduleSearch(nextKeyword = '') {
+  keyword.value = String(nextKeyword || '')
   clearTimeout(timer)
-  timer = setTimeout(search, 260)
+  timer = setTimeout(() => search(keyword.value), 260)
 }
 
-function choose(candidate) {
+function choose(userId) {
+  const candidate = visibleCandidates.value.find(item => String(item.userId) === String(userId))
+  if (!candidate) return
   emit('select', candidate)
+  selectedUserId.value = ''
   keyword.value = ''
   candidates.value = []
-  searched.value = false
   errorState.value = null
 }
 
-function closeOnOutsidePointer(event) {
-  if (root.value && !root.value.contains(event.target)) searched.value = false
+function openSelect(visible) {
+  if (visible && !candidates.value.length && !loading.value) search(keyword.value)
 }
-
-onMounted(() => document.addEventListener('pointerdown', closeOnOutsidePointer))
 
 onBeforeUnmount(() => {
   clearTimeout(timer)
   controller?.abort()
-  document.removeEventListener('pointerdown', closeOnOutsidePointer)
 })
 </script>
 
 <template>
-  <div ref="root" class="candidate-select">
-    <label>
-      <el-icon><Search /></el-icon>
-      <input
-        v-model="keyword"
-        :placeholder="placeholder"
-        aria-label="搜索平台成员"
-        @focus="!searched && search()"
-        @input="scheduleSearch"
-        @keydown.enter.prevent="search"
-      />
-      <span v-if="loading">查询中…</span>
-    </label>
-    <div v-if="errorState" class="candidate-select__error" role="alert">
-      <span>{{ errorState.message }}</span>
-      <button v-if="errorState.retryable" type="button" @click="search">重试</button>
-    </div>
-    <ul v-else-if="searched && !loading" class="candidate-select__results">
-      <li v-for="candidate in visibleCandidates" :key="candidate.userId">
-        <button type="button" @click="choose(candidate)">
-          <span class="candidate-select__avatar">{{ (candidate.nickName || candidate.userName).slice(0, 1) }}</span>
-          <span>
-            <strong>{{ candidate.nickName || candidate.userName }}</strong>
-            <small>{{ candidate.userName }} · {{ candidate.deptName || '未分配部门' }}</small>
-          </span>
-        </button>
-      </li>
-      <li v-if="visibleCandidates.length === 0" class="candidate-select__empty">没有匹配且尚未选择的有效账号</li>
-    </ul>
+  <div class="candidate-select">
+    <el-select
+      v-model="selectedUserId"
+      class="candidate-select__control"
+      filterable
+      remote
+      clearable
+      :remote-method="scheduleSearch"
+      :loading="loading"
+      :placeholder="placeholder"
+      popper-class="candidate-select__popper"
+      loading-text="正在查询平台用户…"
+      no-data-text="没有匹配且尚未选择的有效账号"
+      aria-label="搜索平台成员"
+      :suffix-icon="Search"
+      @visible-change="openSelect"
+      @change="choose"
+    >
+      <el-option
+        v-for="candidate in visibleCandidates"
+        :key="candidate.userId"
+        :value="String(candidate.userId)"
+        :label="candidate.nickName || candidate.userName"
+      >
+        <span class="candidate-select__avatar">{{ (candidate.nickName || candidate.userName).slice(0, 1) }}</span>
+        <span class="candidate-select__identity">
+          <strong>{{ candidate.nickName || candidate.userName }}</strong>
+          <small>{{ candidate.userName }} · {{ candidate.deptName || '未分配部门' }}</small>
+        </span>
+      </el-option>
+    </el-select>
+    <el-alert v-if="errorState" class="candidate-select__error" :title="errorState.message" type="error" show-icon :closable="false">
+      <el-button v-if="errorState.retryable" link type="danger" @click="search(keyword)">重试</el-button>
+    </el-alert>
   </div>
 </template>
 
 <style scoped>
-.candidate-select { position: relative; }
-.candidate-select > label {
-  display: flex; height: 42px; gap: 9px; align-items: center; padding: 0 12px;
-  background: rgba(255,255,255,.035); border: 1px solid var(--sg-border-strong); border-radius: 10px;
+.candidate-select { display: grid; gap: 7px; }
+.candidate-select__control { width: 100%; }
+.candidate-select__error { --el-alert-bg-color: rgba(255,107,107,.08); }
+.candidate-select__error :deep(.el-alert__description) { margin-top: 4px; }
+
+/* 下拉层 Teleport 到 body，使用专属 popper 类承载两行成员信息及明暗主题。 */
+:global(.candidate-select__popper.el-select__popper.el-popper) {
+  --el-bg-color-overlay: var(--sg-surface-raised);
+  --el-border-color-light: var(--sg-border-strong);
+  --el-fill-color-light: var(--sg-fill-soft);
+  --el-text-color-regular: var(--sg-text-secondary);
+  --el-text-color-secondary: var(--sg-text-muted);
+  background: var(--sg-surface-raised);
+  border-color: var(--sg-border-strong);
+  box-shadow: var(--sg-shadow);
 }
-.candidate-select input { min-width: 0; flex: 1; color: var(--sg-text); background: transparent; border: 0; outline: 0; }
-.candidate-select label > span { color: var(--sg-text-muted); font-size: 11px; }
-.candidate-select__results {
-  position: absolute; z-index: 20; right: 0; left: 0; max-height: 280px; margin: 6px 0 0; padding: 6px;
-  overflow-y: auto; list-style: none; background: var(--sg-surface-raised); border: 1px solid var(--sg-border-strong);
-  border-radius: 12px; box-shadow: var(--sg-shadow);
+
+:global(.candidate-select__popper .el-select-dropdown__list) {
+  padding: 6px;
 }
-.candidate-select__results button { display: flex; width: 100%; gap: 10px; align-items: center; padding: 10px; color: var(--sg-text); text-align: left; cursor: pointer; background: transparent; border: 0; border-radius: 8px; }
-.candidate-select__results button:hover { background: rgba(255,255,255,.05); }
-.candidate-select__avatar { display: grid; width: 32px; height: 32px; flex: 0 0 auto; color: #17130e; font-weight: 700; background: var(--sg-accent); border-radius: 50%; place-items: center; }
-.candidate-select__results strong, .candidate-select__results small { display: block; }
-.candidate-select__results strong { font-size: 13px; }
-.candidate-select__results small { margin-top: 3px; color: var(--sg-text-muted); font-size: 11px; }
-.candidate-select__empty { padding: 14px; color: var(--sg-text-muted); font-size: 12px; text-align: center; }
-.candidate-select__error { display: flex; gap: 10px; justify-content: space-between; margin-top: 6px; padding: 9px 11px; color: #ffb4b4; font-size: 11px; background: rgba(255,107,107,.08); border-radius: 8px; }
-.candidate-select__error button { color: var(--sg-accent); cursor: pointer; background: transparent; border: 0; }
+
+:global(.candidate-select__popper .el-select-dropdown__item) {
+  display: flex;
+  min-height: 52px;
+  height: auto;
+  align-items: center;
+  padding: 8px 12px;
+  line-height: 1.25;
+  border-radius: 8px;
+}
+
+:global(.candidate-select__popper .el-select-dropdown__item.is-hovering) {
+  background: var(--sg-fill-soft);
+}
+
+:global(.candidate-select__popper .el-select-dropdown__item.is-selected) {
+  background: var(--sg-accent-soft);
+}
+
+:global(.candidate-select__popper .candidate-select__avatar) {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  color: var(--sg-on-accent);
+  font-weight: 700;
+  line-height: 1;
+  background: var(--sg-accent-surface);
+  border-radius: 50%;
+  place-items: center;
+}
+
+:global(.candidate-select__popper .candidate-select__identity) {
+  display: block;
+  min-width: 0;
+  margin-left: 10px;
+  line-height: 1.25;
+}
+
+:global(.candidate-select__popper .candidate-select__identity strong),
+:global(.candidate-select__popper .candidate-select__identity small) {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+:global(.candidate-select__popper .candidate-select__identity strong) {
+  color: var(--sg-text);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+:global(.candidate-select__popper .candidate-select__identity small) {
+  margin-top: 3px;
+  color: var(--sg-text-secondary);
+  font-size: 11px;
+  font-weight: 400;
+}
+
+:global(.candidate-select__popper .el-select-dropdown__item.is-selected .candidate-select__identity strong) {
+  color: var(--sg-accent);
+}
 </style>

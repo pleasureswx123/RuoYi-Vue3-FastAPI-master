@@ -1,4 +1,4 @@
-import { ElButton, ElDialog, ElIcon, ElTable, ElTableColumn } from 'element-plus'
+import { ElButton, ElDialog, ElIcon, ElTable, ElTableColumn, ElTag } from 'element-plus'
 import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -57,7 +57,7 @@ describe('资产 Excel 导入对话框', () => {
   it('展示类型统计和行级问题，并按 Sheet 与源数据行提交可导入选择', async () => {
     const wrapper = mount(AssetImportDialog, {
       props: { projectId: 8, operationGeneration: 1, projectName: '罗刹夫人', members: [{ userId: 7, userName: '庞晓亮', nickName: 'PXL', projectRole: 'creator' }] },
-      global: { components: { ElButton, ElDialog, ElIcon, ElTable, ElTableColumn }, stubs: { teleport: true } }
+      global: { components: { ElButton, ElDialog, ElIcon, ElTable, ElTableColumn, ElTag }, stubs: { teleport: true } }
     })
     const input = wrapper.find('input[type="file"]')
     const file = new File(['xlsx'], '资产样表.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
@@ -70,6 +70,10 @@ describe('资产 Excel 导入对话框', () => {
     expect(wrapper.text()).toContain('制作人必须唯一')
     expect(wrapper.text()).toContain('制作分项可后补')
     expect(wrapper.text()).toContain('已选 2 行 · 2 条可导入')
+    const previewTags = wrapper.findAllComponents(ElTag)
+    expect(previewTags.find(tag => tag.text().includes('角色 1 资产'))?.props('type')).toBe('warning')
+    expect(previewTags.find(tag => tag.text().includes('场景 1 资产'))?.props('type')).toBe('primary')
+    expect(previewTags.find(tag => tag.text() === '1' && tag.props('type') === 'warning')).toBeTruthy()
 
     await wrapper.get('select[aria-label="选择 Sheet1 第 3 行制作人"]').setValue('')
     expect(wrapper.text()).toContain('将以未分配状态导入')
@@ -90,6 +94,10 @@ describe('资产 Excel 导入对话框', () => {
       expect.stringContaining('asset-import-8:')
     )
     expect(wrapper.text()).toContain('资产已按单事务完成导入')
+    const resultTags = wrapper.findAllComponents(ElTag)
+    expect(resultTags.find(tag => tag.text() === '角色 1')?.props('type')).toBe('warning')
+    expect(resultTags.find(tag => tag.text() === '场景 1')?.props('type')).toBe('primary')
+    expect(resultTags.find(tag => tag.text() === '复用资产 0')?.props('type')).toBe('info')
     expect(localStorage.length).toBe(0)
     expect(sessionStorage.length).toBe(0)
     wrapper.unmount()
@@ -105,7 +113,7 @@ describe('资产 Excel 导入对话框', () => {
           { userId: 9, userName: '钱志锋', nickName: 'QZF', projectRole: 'creator' }
         ]
       },
-      global: { components: { ElButton, ElDialog, ElIcon, ElTable, ElTableColumn }, stubs: { teleport: true } }
+      global: { components: { ElButton, ElDialog, ElIcon, ElTable, ElTableColumn, ElTag }, stubs: { teleport: true } }
     })
     const input = wrapper.find('input[type="file"]')
     const file = new File(['xlsx'], '资产样表.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
@@ -143,7 +151,7 @@ describe('资产 Excel 导入对话框', () => {
       .mockResolvedValueOnce({ data: { ...preview, rows: [{ ...preview.rows[0], normalized: { ...preview.rows[0].normalized, assetName: '新资产' } }] } })
     const wrapper = mount(AssetImportDialog, {
       props: { projectId: 8, operationGeneration: 1 },
-      global: { components: { ElButton, ElDialog, ElIcon, ElTable, ElTableColumn }, stubs: { teleport: true } }
+      global: { components: { ElButton, ElDialog, ElIcon, ElTable, ElTableColumn, ElTag }, stubs: { teleport: true } }
     })
     const input = wrapper.find('input[type="file"]')
     const oldFile = new File(['old'], '旧资产.xlsx')
@@ -170,7 +178,7 @@ describe('资产 Excel 导入对话框', () => {
   it('重新预检开始即清除旧 Token 和选择，失败后不能提交旧预检', async () => {
     const wrapper = mount(AssetImportDialog, {
       props: { projectId: 8, operationGeneration: 1 },
-      global: { components: { ElButton, ElDialog, ElIcon, ElTable, ElTableColumn }, stubs: { teleport: true } }
+      global: { components: { ElButton, ElDialog, ElIcon, ElTable, ElTableColumn, ElTag }, stubs: { teleport: true } }
     })
     const input = wrapper.find('input[type="file"]')
     const file = new File(['xlsx'], '资产样表.xlsx')
@@ -198,7 +206,7 @@ describe('资产 Excel 导入对话框', () => {
     const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
     const wrapper = mount(AssetImportDialog, {
       props: { projectId: 8, operationGeneration: 1 },
-      global: { components: { ElButton, ElDialog, ElIcon, ElTable, ElTableColumn }, stubs: { teleport: true } }
+      global: { components: { ElButton, ElDialog, ElIcon, ElTable, ElTableColumn, ElTag }, stubs: { teleport: true } }
     })
     const button = wrapper.findAll('button').find(item => item.text().includes('下载官方模板'))
     await button.trigger('click')

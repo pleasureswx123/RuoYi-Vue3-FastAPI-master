@@ -1,4 +1,4 @@
-import { ElAlert, ElButton, ElIcon, ElSkeleton, ElTag } from 'element-plus'
+import { ElAlert, ElButton, ElDatePicker, ElDialog, ElForm, ElFormItem, ElIcon, ElImage, ElInput, ElRadioButton, ElRadioGroup, ElSkeleton, ElTag } from 'element-plus'
 import { createPinia, setActivePinia } from 'pinia'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
@@ -6,19 +6,20 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { getProjectPage } from '@/api/shot-grid/projects'
 import {
-  addVersionNote,
+  addVersionIssue,
+  createManualReviewList,
   createReviewAction,
-  getNoteReplies,
   getReviewActions,
   getReviewListDetail,
   getReviewListPage,
-  getVersionNotes
+  getVersionReviewContext
 } from '@/api/shot-grid/reviews'
 import { getTaskVersions, getVersionDetail } from '@/api/shot-grid/versions'
 import { downloadProtectedThumbnail } from '@/api/shot-grid/shots'
 import { useSessionStore } from '@/store/modules/session'
 import ReviewDetailView from '@/views/review/ReviewDetailView.vue'
 import ReviewListView from '@/views/review/ReviewListView.vue'
+import ManualReviewDialog from '@/views/review/components/ManualReviewDialog.vue'
 
 vi.mock('@/api/shot-grid/projects', () => ({
   assertPositiveId: value => {
@@ -29,15 +30,13 @@ vi.mock('@/api/shot-grid/projects', () => ({
   getProjectPage: vi.fn()
 }))
 vi.mock('@/api/shot-grid/reviews', () => ({
-  addNoteReply: vi.fn(),
-  addVersionNote: vi.fn(),
+  addVersionIssue: vi.fn(),
+  createManualReviewList: vi.fn(),
   createReviewAction: vi.fn(),
-  getNoteReplies: vi.fn(),
   getReviewActions: vi.fn(),
   getReviewListDetail: vi.fn(),
   getReviewListPage: vi.fn(),
-  getVersionNotes: vi.fn(),
-  resolveNote: vi.fn(),
+  getVersionReviewContext: vi.fn(),
   transitionManualReviewList: vi.fn()
 }))
 vi.mock('@/api/shot-grid/versions', () => ({
@@ -50,6 +49,7 @@ vi.mock('@/api/shot-grid/shots', () => ({
 }))
 
 const project = { projectId: 8, projectCode: 'LCFR', projectName: '罗刹夫人' }
+const ElSelectStub = { name: 'ElSelect', template: '<div class="el-select-stub" />' }
 const review = {
   reviewListId: 101,
   projectId: 8,
@@ -84,22 +84,6 @@ const version = {
   aiParams: null,
   autoReviewList: { reviewListId: 101, reviewListName: review.reviewListName }
 }
-const note = {
-  noteId: 501,
-  projectId: 8,
-  versionId: 33,
-  reviewerUserId: 1,
-  reviewerName: '审核导演',
-  content: '12 秒处需要降低高光。',
-  mediaTimeMs: 12_000,
-  annotations: null,
-  isMandatory: false,
-  noteStatus: 'open',
-  replyCount: 0,
-  createTime: '2026-08-12T10:10:00',
-  updateTime: '2026-08-12T10:10:00'
-}
-
 function installSession(permissions) {
   const pinia = createPinia()
   setActivePinia(pinia)
@@ -120,7 +104,7 @@ async function mountList() {
   })
   await router.push('/reviews')
   await router.isReady()
-  const wrapper = mount(ReviewListView, { global: { plugins: [pinia, router], components: { ElButton, ElIcon } } })
+  const wrapper = mount(ReviewListView, { global: { plugins: [pinia, router], components: { ElButton, ElIcon, ElTag } } })
   await flushPromises()
   return { wrapper, router }
 }
@@ -138,7 +122,10 @@ async function mountDetail(permissions = ['shotgrid:reviewList:query', 'shotgrid
   await router.push('/reviews/101')
   await router.isReady()
   const wrapper = mount(ReviewDetailView, {
-    global: { plugins: [pinia, router], components: { ElAlert, ElButton, ElIcon, ElSkeleton, ElTag } }
+    global: {
+      plugins: [pinia, router],
+      components: { ElAlert, ElButton, ElForm, ElFormItem, ElIcon, ElImage, ElInput, ElRadioButton, ElRadioGroup, ElSkeleton, ElTag }
+    }
   })
   await flushPromises()
   return { wrapper, router }
@@ -150,12 +137,12 @@ describe('版本审核页面', () => {
     getReviewListPage.mockResolvedValue({ rows: [review], total: 1 })
     getReviewListDetail.mockResolvedValue({ data: { ...review, version } })
     getVersionDetail.mockResolvedValue({ data: version })
-    getVersionNotes.mockResolvedValue({ rows: [note], total: 1 })
-    getNoteReplies.mockResolvedValue({ rows: [], total: 0 })
+    getVersionReviewContext.mockResolvedValue({ data: { currentVersion: version, carriedIssues: [], currentVersionIssues: [] } })
     getReviewActions.mockResolvedValue({ rows: [], total: 0 })
     getTaskVersions.mockResolvedValue({ rows: [], total: 0 })
     downloadProtectedThumbnail.mockResolvedValue(new Blob(['thumbnail'], { type: 'image/jpeg' }))
-    addVersionNote.mockResolvedValue({ data: { noteId: 502 } })
+    addVersionIssue.mockResolvedValue({ data: { issueId: 502 } })
+    createManualReviewList.mockResolvedValue({ data: { reviewListId: 202 } })
     createReviewAction.mockResolvedValue({ data: { actionId: 901 } })
   })
 
@@ -165,6 +152,11 @@ describe('版本审核页面', () => {
     expect(getReviewListPage).toHaveBeenCalledWith('8', expect.objectContaining({ reviewStatus: 'active' }), expect.objectContaining({ signal: expect.any(AbortSignal) }))
     expect(wrapper.text()).toContain('动力舱合成 V003 审核')
     expect(wrapper.text()).toContain('预览已优化')
+    const tags = wrapper.find('.review-card').findAllComponents(ElTag)
+    expect(tags.map(tag => tag.text())).toEqual(['自动单版', '待审核', '预览已优化', '待审核'])
+    expect(tags.map(tag => tag.props('type'))).toEqual(['primary', 'warning', 'success', 'warning'])
+    tags.slice(0, 3).forEach(tag => expect(tag.props()).toMatchObject({ effect: 'plain', size: 'small', round: true }))
+    expect(tags[3].props()).toMatchObject({ effect: 'light', size: 'small', round: true })
     await wrapper.find('.review-card').trigger('click')
     await flushPromises()
     expect(router.currentRoute.value.fullPath).toBe('/reviews/101')
@@ -177,7 +169,10 @@ describe('版本审核页面', () => {
     expect(getReviewListDetail).toHaveBeenCalledWith(101, expect.objectContaining({ signal: expect.any(AbortSignal) }))
     expect(getVersionDetail).toHaveBeenCalledWith(33, expect.objectContaining({ signal: expect.any(AbortSignal) }))
     expect(wrapper.text()).toContain('补充舱体冷凝效果')
-    expect(wrapper.text()).toContain('12 秒处需要降低高光')
+    const headingTags = wrapper.find('.heading-actions').findAllComponents(ElTag)
+    expect(headingTags.map(tag => tag.text())).toEqual(['自动单版', '待审核'])
+    expect(headingTags[0].props()).toMatchObject({ type: 'primary', effect: 'plain', size: 'small', round: true })
+    expect(headingTags[1].props()).toMatchObject({ type: 'warning', effect: 'light', size: 'small', round: true })
 
     const approveButton = wrapper.findAll('button').find(button => button.text().includes('确认通过'))
     await approveButton.trigger('click')
@@ -186,7 +181,8 @@ describe('版本审核页面', () => {
     expect(createReviewAction).toHaveBeenCalledWith(33, {
       actionType: 'approve',
       reason: null,
-      lockVersion: 2
+      lockVersion: 2,
+      issueVerifications: []
     }, expect.stringMatching(/^review-action:/))
     wrapper.unmount()
   })
@@ -195,6 +191,7 @@ describe('版本审核页面', () => {
     const { wrapper } = await mountDetail([
       'shotgrid:reviewList:query',
       'shotgrid:version:query',
+      'shotgrid:version:review',
       'shotgrid:note:list',
       'shotgrid:note:add'
     ])
@@ -206,15 +203,14 @@ describe('版本审核页面', () => {
       items: [{ id: 'annotation-test', type: 'rectangle', color: '#ff6b6b', strokeWidth: 0.004, points: [{ x: 0.1, y: 0.2 }, { x: 0.4, y: 0.5 }] }]
     }
     workspace.vm.$emit('annotations-change', annotations)
-    await wrapper.find('.note-compose textarea').setValue('这里需要降低高光')
-    await wrapper.find('.note-compose button[type="submit"]').trigger('submit')
+    await wrapper.find('.issue-compose textarea').setValue('这里需要降低高光')
+    await wrapper.findAllComponents(ElButton).find(button => button.text().includes('保存为一条修改问题')).trigger('click')
     await flushPromises()
 
-    expect(addVersionNote).toHaveBeenCalledWith(33, {
-      content: '这里需要降低高光',
+    expect(addVersionIssue).toHaveBeenCalledWith(33, {
+      content: '问题：这里需要降低高光',
       mediaTimeMs: null,
-      annotations,
-      isMandatory: false
+      annotations
     })
     wrapper.unmount()
   })
@@ -224,9 +220,33 @@ describe('版本审核页面', () => {
     getVersionDetail.mockResolvedValueOnce({ data: { ...version, versionStatus: 'rejected' } })
     const { wrapper, router } = await mountDetail()
 
-    await wrapper.findAll('button').find(button => button.text().includes('前往任务提交修订版本')).trigger('click')
+    await wrapper.findAll('button').find(button => button.text().includes('查看制作任务')).trigger('click')
     await flushPromises()
     expect(router.currentRoute.value.fullPath).toBe('/tasks/21#version-workspace')
+    wrapper.unmount()
+  })
+
+  it('人工审核单由按钮显式触发 ElForm 字段校验并阻止无效请求', async () => {
+    const wrapper = mount(ManualReviewDialog, {
+      props: {
+        modelValue: true,
+        projectId: 8,
+        candidates: [{ autoVersionId: 33, versionNumber: 'V003', reviewListName: '动力舱审核' }]
+      },
+      global: {
+        components: { ElButton, ElDatePicker, ElDialog, ElForm, ElFormItem, ElInput, ElSelect: ElSelectStub },
+        stubs: { teleport: true }
+      }
+    })
+    await flushPromises()
+
+    const createButton = wrapper.findAllComponents(ElButton).find(button => button.text() === '创建审核单')
+    const formWrapper = wrapper.findComponent(ElForm)
+    expect(formWrapper.props('rules')).toHaveProperty('reviewListName')
+    expect(formWrapper.props('rules')).toHaveProperty('versionIds')
+    await createButton.trigger('click')
+    await flushPromises()
+    expect(createManualReviewList).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 })

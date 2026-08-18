@@ -17,6 +17,7 @@ import {
 
 import { useSessionStore } from '@/store/modules/session'
 import GlobalSearchDialog from '@/components/search/GlobalSearchDialog.vue'
+import ThemeModeSwitch from '@/components/theme/ThemeModeSwitch.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -57,6 +58,12 @@ const userDisplayName = computed(
 )
 
 const pageTitle = computed(() => route.meta?.title || 'Shot Grid')
+const activeNavigationPath = computed(() => {
+  const routeKey = route.meta?.routeKey
+  const matchedByKey = navigationItems.value.find(item => item.routeKey === routeKey)
+  if (matchedByKey) return matchedByKey.path
+  return navigationItems.value.find(item => route.path === item.path || route.path.startsWith(`${item.path}/`))?.path || ''
+})
 const canUseSearch = computed(() => {
   const permissions = sessionStore.permissions || []
   if (permissions.includes('*:*:*')) return true
@@ -97,8 +104,8 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleSearchShortcut
 </script>
 
 <template>
-  <div class="app-shell" :class="{ 'is-collapsed': collapsed }">
-    <aside class="app-sidebar" aria-label="Shot Grid 主导航">
+  <el-container class="app-shell" :class="{ 'is-collapsed': collapsed }">
+    <el-aside class="app-sidebar" width="var(--app-sidebar-width)" aria-label="Shot Grid 主导航">
       <div class="app-brand">
         <span class="app-brand__mark" aria-hidden="true">
           <span></span><span></span><span></span>
@@ -111,25 +118,32 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleSearchShortcut
 
       <nav class="app-navigation">
         <p v-show="!collapsed" class="app-navigation__label">制作工作区</p>
-        <router-link
-          v-for="item in navigationItems"
-          :key="item.routeKey"
-          :to="item.path"
-          class="app-navigation__item"
-          :aria-label="item.title"
+        <el-menu
+          v-if="navigationItems.length"
+          class="app-navigation__menu"
+          router
+          :collapse="collapsed"
+          :collapse-transition="false"
+          :default-active="activeNavigationPath"
         >
-          <el-icon><component :is="item.icon" /></el-icon>
-          <span v-show="!collapsed">{{ item.title }}</span>
-        </router-link>
+          <el-menu-item
+            v-for="item in navigationItems"
+            :key="item.routeKey"
+            :index="item.path"
+            :route="{ path: item.path }"
+            :aria-label="item.title"
+          >
+            <el-icon><component :is="item.icon" /></el-icon>
+            <template #title>{{ item.title }}</template>
+          </el-menu-item>
+        </el-menu>
 
-        <p v-if="navigationItems.length === 0 && !collapsed" class="app-navigation__empty">
-          当前账号没有可访问的业务模块
-        </p>
+        <el-empty v-else-if="!collapsed" class="app-navigation__empty" :image-size="42" description="当前账号没有可访问的业务模块" />
       </nav>
 
-      <button
+      <el-button
         class="app-sidebar__toggle"
-        type="button"
+        text
         :aria-label="collapsed ? '展开侧边栏' : '收起侧边栏'"
         @click="collapsed = !collapsed"
       >
@@ -138,11 +152,11 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleSearchShortcut
           <ArrowLeftBold v-else />
         </el-icon>
         <span v-show="!collapsed">收起导航</span>
-      </button>
-    </aside>
+      </el-button>
+    </el-aside>
 
-    <section class="app-stage">
-      <header class="app-header">
+    <el-container class="app-stage" direction="vertical">
+      <el-header class="app-header" height="auto">
         <div>
           <p class="app-header__context">AI 影视短片制作</p>
           <h1>{{ pageTitle }}</h1>
@@ -157,34 +171,34 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleSearchShortcut
           >
             搜索 <kbd>Ctrl K</kbd>
           </el-button>
-          <span class="app-account__avatar" aria-hidden="true">{{ userDisplayName.slice(0, 1) }}</span>
+          <ThemeModeSwitch />
+          <el-avatar class="app-account__avatar" :size="32" aria-hidden="true">{{ userDisplayName.slice(0, 1) }}</el-avatar>
           <span class="app-account__name">{{ userDisplayName }}</span>
           <el-button text :icon="SwitchButton" aria-label="退出登录" @click="handleSignOut">
             退出
           </el-button>
         </div>
-      </header>
+      </el-header>
 
-      <p v-if="passwordNotice" class="app-security-notice" role="status">{{ passwordNotice }}</p>
+      <el-alert v-if="passwordNotice" class="app-security-notice" :title="passwordNotice" type="warning" :closable="false" show-icon />
 
-      <main class="app-content">
+      <el-main class="app-content">
         <router-view />
-      </main>
-    </section>
+      </el-main>
+    </el-container>
     <GlobalSearchDialog v-model="searchVisible" :permissions="sessionStore.permissions" />
-  </div>
+  </el-container>
 </template>
 
 <style scoped lang="scss">
 .app-shell {
-  display: grid;
+  --app-sidebar-width: 244px;
   min-height: 100vh;
-  grid-template-columns: 244px minmax(0, 1fr);
-  transition: grid-template-columns 180ms ease;
+  transition: 180ms ease;
 }
 
 .app-shell.is-collapsed {
-  grid-template-columns: 76px minmax(0, 1fr);
+  --app-sidebar-width: 76px;
 }
 
 .app-sidebar {
@@ -195,9 +209,10 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleSearchShortcut
   height: 100vh;
   min-width: 0;
   flex-direction: column;
-  background: rgba(13, 16, 21, 0.94);
+  background: var(--sg-sidebar-bg);
   border-right: 1px solid var(--sg-border);
   backdrop-filter: blur(18px);
+  transition: background-color 180ms ease, border-color 180ms ease;
 }
 
 .app-brand {
@@ -218,7 +233,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleSearchShortcut
   align-items: flex-end;
   justify-content: center;
   padding: 8px;
-  background: var(--sg-accent);
+  background: var(--sg-accent-surface);
   border-radius: 10px;
   transform: rotate(-2deg);
 }
@@ -268,59 +283,52 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleSearchShortcut
   letter-spacing: 0.16em;
 }
 
-.app-navigation__item {
-  display: flex;
+.app-navigation__menu {
+  --el-menu-bg-color: transparent;
+  --el-menu-text-color: var(--sg-text-secondary);
+  --el-menu-hover-bg-color: var(--sg-fill-soft);
+  --el-menu-active-color: var(--sg-text);
+  border-right: 0;
+}
+
+.app-navigation__menu:deep(.el-menu-item) {
   height: 44px;
-  gap: 12px;
-  align-items: center;
   margin: 4px 0;
   padding: 0 12px;
-  color: var(--sg-text-secondary);
   font-size: 13px;
   border: 1px solid transparent;
   border-radius: 10px;
   transition: 150ms ease;
 }
 
-.app-navigation__item:hover {
-  color: var(--sg-text);
-  background: rgba(255, 255, 255, 0.045);
-}
-
-.app-navigation__item.router-link-active {
-  color: var(--sg-text);
+.app-navigation__menu:deep(.el-menu-item.is-active) {
   background: var(--sg-accent-soft);
   border-color: rgba(255, 182, 87, 0.15);
 }
 
-.app-navigation__item.router-link-active .el-icon {
+.app-navigation__menu:deep(.el-menu-item.is-active .el-icon) {
   color: var(--sg-accent);
 }
 
-.app-navigation__item .el-icon {
+.app-navigation__menu:deep(.el-menu-item .el-icon) {
   flex: 0 0 auto;
   font-size: 18px;
 }
 
 .app-navigation__empty {
-  margin: 14px 10px;
-  color: var(--sg-text-muted);
-  font-size: 12px;
-  line-height: 1.7;
+  padding: 14px 4px;
 }
 
 .app-sidebar__toggle {
-  display: flex;
+  width: 100%;
   height: 58px;
   gap: 10px;
-  align-items: center;
-  margin-top: auto;
+  justify-content: flex-start;
+  margin: auto 0 0;
   padding: 0 24px;
   color: var(--sg-text-muted);
-  cursor: pointer;
-  background: transparent;
-  border: 0;
   border-top: 1px solid var(--sg-border);
+  border-radius: 0;
 }
 
 .app-sidebar__toggle:hover {
@@ -340,9 +348,10 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleSearchShortcut
   align-items: center;
   justify-content: space-between;
   padding: 0 clamp(20px, 3vw, 48px);
-  background: rgba(9, 11, 15, 0.82);
+  background: var(--sg-header-bg);
   border-bottom: 1px solid var(--sg-border);
   backdrop-filter: blur(18px);
+  transition: background-color 180ms ease, border-color 180ms ease;
 }
 
 .app-header__context {
@@ -370,21 +379,16 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleSearchShortcut
   color: var(--sg-text-muted);
   font-family: inherit;
   font-size: 10px;
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--sg-fill-soft);
   border: 1px solid var(--sg-border);
   border-radius: 4px;
 }
 
 .app-account__avatar {
-  display: grid;
-  width: 32px;
-  height: 32px;
   color: #17130e;
   font-size: 13px;
   font-weight: 700;
-  background: var(--sg-accent);
-  border-radius: 50%;
-  place-items: center;
+  background: var(--sg-accent-surface);
 }
 
 .app-account__name {
@@ -394,21 +398,24 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleSearchShortcut
 
 .app-content {
   min-height: calc(100vh - 76px);
+  padding: 0;
 }
 
 .app-security-notice {
   margin: 0;
-  padding: 10px clamp(20px, 3vw, 48px);
-  color: #ffd49b;
-  font-size: 12px;
   background: rgba(255, 182, 87, 0.08);
   border-bottom: 1px solid rgba(255, 182, 87, 0.18);
+  border-radius: 0;
+}
+
+.app-security-notice:deep(.el-alert__content) {
+  padding: 0 clamp(12px, 2vw, 28px);
 }
 
 @media (max-width: 820px) {
   .app-shell,
   .app-shell.is-collapsed {
-    grid-template-columns: 68px minmax(0, 1fr);
+    --app-sidebar-width: 68px;
   }
 
   .app-brand {
@@ -417,7 +424,6 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleSearchShortcut
 
   .app-brand__copy,
   .app-navigation__label,
-  .app-navigation__item span,
   .app-navigation__empty,
   .app-sidebar__toggle span,
   .app-account__name {
@@ -426,9 +432,13 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleSearchShortcut
 
   .app-search-trigger kbd { display: none; }
 
-  .app-navigation__item {
+  .app-navigation__menu:deep(.el-menu-item) {
     justify-content: center;
     padding: 0;
+  }
+
+  .app-navigation__menu:deep(.el-menu-item > span) {
+    display: none;
   }
 
   .app-sidebar__toggle {

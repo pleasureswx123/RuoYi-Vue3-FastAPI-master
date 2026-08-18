@@ -1,4 +1,4 @@
-import { ElAlert, ElButton, ElEmpty, ElIcon, ElInput, ElScrollbar, ElSkeleton } from 'element-plus'
+import { ElAlert, ElButton, ElEmpty, ElIcon, ElInput, ElScrollbar, ElSkeleton, ElTag } from 'element-plus'
 import { flushPromises, mount } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -21,7 +21,7 @@ function mountDialog(permissions = [
     props: { modelValue: true, permissions },
     attachTo: document.body,
     global: {
-      components: { ElAlert, ElButton, ElEmpty, ElIcon, ElInput, ElScrollbar, ElSkeleton },
+      components: { ElAlert, ElButton, ElEmpty, ElIcon, ElInput, ElScrollbar, ElSkeleton, ElTag },
       stubs: {
         ElDialog: {
           template: '<div class="dialog-stub"><slot /></div>'
@@ -82,6 +82,9 @@ describe('全局搜索弹窗', () => {
       signal: expect.any(AbortSignal)
     }))
     expect(document.body.textContent).toContain('EP001-002-S003')
+    const projectTag = wrapper.findComponent(ElTag)
+    expect(projectTag.text()).toBe('LCFR · 罗刹夫人')
+    expect(projectTag.props()).toMatchObject({ type: 'info', effect: 'plain', size: 'small', round: true })
     wrapper.unmount()
   })
 

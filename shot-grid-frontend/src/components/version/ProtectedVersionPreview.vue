@@ -1,6 +1,6 @@
 <script setup>
 import { computed, onBeforeUnmount, reactive, watch } from 'vue'
-import { Picture, Refresh, VideoPlay, WarningFilled } from '@element-plus/icons-vue'
+import { Picture, Refresh, VideoPlay } from '@element-plus/icons-vue'
 
 import {
   createVersionPlaybackTicket,
@@ -150,21 +150,11 @@ onBeforeUnmount(() => {
       <el-button v-if="preview.state === 'error' && !disposed" text :icon="Refresh" @click="loadPreview">重新加载</el-button>
     </header>
 
-    <div v-if="preview.state === 'loading'" class="preview-state">
-      <el-icon class="is-loading"><Refresh /></el-icon><span>正在安全加载版本文件…</span>
-    </div>
-    <div v-else-if="preview.state === 'empty'" class="preview-state">
-      <el-icon><Picture /></el-icon><span>当前版本没有可预览的主文件。</span>
-    </div>
-    <div v-else-if="preview.state === 'forbidden'" class="preview-state">
-      <el-icon><WarningFilled /></el-icon><span>当前账号没有版本文件预览权限。</span>
-    </div>
-    <div v-else-if="preview.state === 'unsupported'" class="preview-state">
-      <el-icon><WarningFilled /></el-icon><span>该文件类型暂不支持网页预览，可以使用下方下载操作。</span>
-    </div>
-    <div v-else-if="preview.state === 'error'" class="preview-state is-error" role="alert">
-      <el-icon><WarningFilled /></el-icon><div><strong>{{ preview.error?.title }}</strong><span>{{ preview.error?.message }}</span><code v-if="preview.error?.errorKey">{{ preview.error.errorKey }}</code></div>
-    </div>
+    <el-skeleton v-if="preview.state === 'loading'" class="preview-state" :rows="5" animated />
+    <el-empty v-else-if="preview.state === 'empty'" class="preview-state" :image-size="64" description="当前版本没有可预览的主文件" />
+    <el-result v-else-if="preview.state === 'forbidden'" class="preview-state" icon="warning" title="没有预览权限" sub-title="当前账号没有版本文件预览权限。" />
+    <el-result v-else-if="preview.state === 'unsupported'" class="preview-state" icon="info" title="暂不支持网页预览" sub-title="可以使用下方下载操作取得受保护文件。" />
+    <el-result v-else-if="preview.state === 'error'" class="preview-state is-error" icon="error" :title="preview.error?.title" :sub-title="[preview.error?.message, preview.error?.errorKey].filter(Boolean).join(' · ')" />
     <div v-else-if="preview.state === 'ready'" class="preview-stage" :class="{ 'preview-stage--image': kind === 'image' }">
       <template v-if="kind === 'image'">
         <el-image
@@ -181,7 +171,7 @@ onBeforeUnmount(() => {
       <video v-else-if="kind === 'video'" :src="preview.url" :poster="preview.posterUrl || undefined" controls playsinline preload="metadata" @error="handlePlaybackError">
         当前浏览器不支持视频预览。
       </video>
-      <span class="preview-type"><el-icon><component :is="kind === 'video' ? VideoPlay : Picture" /></el-icon>{{ kind === 'video' ? '视频' : '图片' }}</span>
+      <el-tag class="preview-media-tag" type="info" effect="dark" size="small" round><el-icon><component :is="kind === 'video' ? VideoPlay : Picture" /></el-icon>{{ kind === 'video' ? '视频' : '图片' }}</el-tag>
     </div>
   </section>
 </template>
@@ -204,14 +194,10 @@ onBeforeUnmount(() => {
 .preview-hint span { display: block; }
 .preview-hint strong { font-size: 12px; }
 .preview-hint span { margin-top: 7px; color: var(--sg-text-muted); font-size: 10px; line-height: 1.6; }
-.preview-type { position: absolute; top: 12px; right: 12px; display: inline-flex; align-items: center; padding: 5px 8px; color: rgba(255, 255, 255, 0.78); font-size: 9px; background: rgba(0, 0, 0, 0.62); border-radius: 999px; gap: 4px; pointer-events: none; }
-.preview-state { display: flex; min-height: 230px; align-items: center; justify-content: center; padding: 28px; color: var(--sg-text-muted); text-align: center; gap: 9px; }
+.preview-media-tag { position: absolute; top: 12px; right: 12px; pointer-events: none; }
+.preview-media-tag .el-icon { margin-right: 4px; }
+.preview-state { min-height: 230px; padding: 28px; color: var(--sg-text-muted); }
 .preview-state.is-error { color: #ffb5ad; }
-.preview-state.is-error div,
-.preview-state.is-error strong,
-.preview-state.is-error span { display: block; }
-.preview-state.is-error span { margin-top: 5px; font-size: 11px; }
-.preview-state.is-error code { display: block; margin-top: 7px; color: inherit; font-size: 10px; }
 
 @media (max-width: 760px) {
   .preview-stage,

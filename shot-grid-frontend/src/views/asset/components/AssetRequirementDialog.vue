@@ -1,5 +1,5 @@
 <script setup>
-import { onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Refresh, Search } from '@element-plus/icons-vue'
 
@@ -11,6 +11,7 @@ import {
   resolveAssetRequirement
 } from '@/api/shot-grid/assets'
 import ProjectModal from '@/views/project/components/ProjectModal.vue'
+import { tagTypeFromTone } from '@/utils/tag'
 import { assetErrorState, assetTypeMeta } from '@/views/asset/assetPresentation'
 
 const props = defineProps({
@@ -29,6 +30,8 @@ const resolveVisible = ref(false)
 const activeRequirement = ref(null)
 const candidates = ref([])
 const candidateLoading = ref(false)
+const requirementFilterForm = ref(null)
+const resolveFormRef = ref(null)
 const resolveForm = reactive({ assetId: '', reason: '' })
 const query = reactive({
   keyword: '',
@@ -39,6 +42,31 @@ const query = reactive({
   orderByColumn: 'createTime',
   isAsc: 'descending'
 })
+const requirementFilterRules = {
+  keyword: [{ max: 200, message: '搜索关键字不能超过 200 个字符', trigger: 'blur' }]
+}
+const resolveRules = {
+  assetId: [{
+    validator: (_rule, value, callback) => {
+      if (!value) {
+        callback(new Error('请选择同类型正式资产'))
+        return
+      }
+      callback()
+    },
+    trigger: 'change'
+  }],
+  reason: [{
+    validator: (_rule, value, callback) => {
+      if (!String(value || '').trim()) {
+        callback(new Error('请填写解决原因'))
+        return
+      }
+      callback()
+    },
+    trigger: 'blur'
+  }]
+}
 let listController = null
 let candidateController = null
 
@@ -86,7 +114,9 @@ async function loadRequirements() {
   }
 }
 
-function submitQuery() {
+async function submitQuery() {
+  const isValid = await requirementFilterForm.value?.validate().catch(() => false)
+  if (!isValid) return
   query.pageNum = 1
   loadRequirements()
 }
@@ -102,6 +132,8 @@ async function openResolve(row) {
   resolveForm.reason = ''
   candidates.value = []
   resolveVisible.value = true
+  await nextTick()
+  resolveFormRef.value?.clearValidate()
   candidateController?.abort()
   const controller = new AbortController()
   candidateController = controller
@@ -125,10 +157,9 @@ async function openResolve(row) {
 }
 
 async function submitResolve() {
-  if (!resolveForm.assetId || !resolveForm.reason.trim()) {
-    ElMessage.warning('请选择正式资产并填写解决原因')
-    return
-  }
+  if (submitting.value) return
+  const isValid = await resolveFormRef.value?.validate().catch(() => false)
+  if (!isValid) return
   submitting.value = true
   try {
     await resolveAssetRequirement(
@@ -146,6 +177,18 @@ async function submitResolve() {
   } finally {
     submitting.value = false
   }
+}
+
+function closeResolve() {
+  if (!submitting.value) resolveVisible.value = false
+}
+
+function resetResolveForm() {
+  resolveForm.assetId = ''
+  resolveForm.reason = ''
+  activeRequirement.value = null
+  candidates.value = []
+  resolveFormRef.value?.clearValidate()
 }
 
 async function ignore(row) {
@@ -200,19 +243,18 @@ onBeforeUnmount(() => {
 <template>
   <ProjectModal title="资产待匹配需求" description="镜头导入不会隐式创建正式资产；在这里选择同类型正式资产、明确忽略，或重新执行项目级唯一匹配。" :busy="submitting" wide @close="emit('close')">
     <div class="requirement-dialog">
-      <form class="requirement-filters" @submit.prevent="submitQuery">
-        <el-input v-model="query.keyword" clearable placeholder="搜索需求名称或匹配资产" :prefix-icon="Search" />
-        <el-select v-model="query.resolutionStatus" placeholder="全部状态"><el-option label="全部状态" value="" /><el-option label="待匹配" value="pending" /><el-option label="冲突" value="conflict" /><el-option label="已匹配" value="matched" /><el-option label="已忽略" value="ignored" /></el-select>
-        <el-select v-model="query.assetType" placeholder="全部类型"><el-option label="全部类型" value="" /><el-option label="角色" value="Character" /><el-option label="场景" value="Environment" /><el-option label="道具" value="Prop" /></el-select>
-        <el-button native-type="submit" :loading="loading" :icon="Search">查询</el-button>
-        <el-button v-if="canRematch" :loading="submitting" :icon="Refresh" @click="rematch">重新匹配</el-button>
-      </form>
+      <el-form ref="requirementFilterForm" :model="query" :rules="requirementFilterRules" class="requirement-filters" aria-label="资产需求筛选">
+        <el-form-item prop="keyword"><el-input v-model="query.keyword" maxlength="200" clearable placeholder="搜索需求名称或匹配资产" :prefix-icon="Search" /></el-form-item>
+        <el-form-item prop="resolutionStatus"><el-select v-model="query.resolutionStatus" placeholder="全部状态"><el-option label="全部状态" value="" /><el-option label="待匹配" value="pending" /><el-option label="冲突" value="conflict" /><el-option label="已匹配" value="matched" /><el-option label="已忽略" value="ignored" /></el-select></el-form-item>
+        <el-form-item prop="assetType"><el-select v-model="query.assetType" placeholder="全部类型"><el-option label="全部类型" value="" /><el-option label="角色" value="Character" /><el-option label="场景" value="Environment" /><el-option label="道具" value="Prop" /></el-select></el-form-item>
+        <el-form-item class="requirement-filter-actions"><el-button :loading="loading" :icon="Search" @click="submitQuery">查询</el-button><el-button v-if="canRematch" :loading="submitting" :icon="Refresh" @click="rematch">重新匹配</el-button></el-form-item>
+      </el-form>
 
       <el-alert v-if="error" :title="error.title" :description="error.message" type="error" show-icon :closable="false" />
       <el-table v-else :data="rows" v-loading="loading" empty-text="当前条件下没有资产需求" max-height="470">
         <el-table-column label="来源镜头" min-width="150"><template #default="{ row }"><strong>{{ shotLabel(row) }}</strong><small>#{{ row.shotId }}</small></template></el-table-column>
-        <el-table-column label="类型 / 原始名称" min-width="190"><template #default="{ row }"><el-tag effect="plain">{{ assetTypeMeta(row.assetType).label }}</el-tag><strong>{{ row.rawName }}</strong></template></el-table-column>
-        <el-table-column label="状态" width="100"><template #default="{ row }"><el-tag :type="stateMeta(row.resolutionStatus).type">{{ stateMeta(row.resolutionStatus).label }}</el-tag></template></el-table-column>
+        <el-table-column label="类型 / 原始名称" min-width="190"><template #default="{ row }"><el-tag size="small" effect="plain" round :type="tagTypeFromTone(assetTypeMeta(row.assetType).tone)">{{ assetTypeMeta(row.assetType).label }}</el-tag><strong>{{ row.rawName }}</strong></template></el-table-column>
+        <el-table-column label="状态" width="100"><template #default="{ row }"><el-tag size="small" effect="plain" round :type="stateMeta(row.resolutionStatus).type">{{ stateMeta(row.resolutionStatus).label }}</el-tag></template></el-table-column>
         <el-table-column label="处理结果" min-width="190"><template #default="{ row }"><strong>{{ row.assetName || '—' }}</strong><small>{{ row.resolutionReason || '尚未处理' }}</small></template></el-table-column>
         <el-table-column label="操作" width="150" fixed="right"><template #default="{ row }"><template v-if="['pending','conflict'].includes(row.resolutionStatus)"><el-button v-if="canResolve" text type="primary" @click="openResolve(row)">选择资产</el-button><el-button v-if="canIgnore" text type="danger" @click="ignore(row)">忽略</el-button></template><span v-else>已处理</span></template></el-table-column>
       </el-table>
@@ -220,17 +262,17 @@ onBeforeUnmount(() => {
       <el-pagination v-if="total" background layout="total, prev, pager, next" :total="total" :page-size="query.pageSize" :current-page="query.pageNum" @current-change="changePage" />
     </div>
 
-    <el-dialog v-model="resolveVisible" title="选择正式资产" width="520px" append-to-body :close-on-click-modal="!submitting">
-      <el-form label-position="top">
+    <el-dialog v-model="resolveVisible" title="选择正式资产" width="520px" append-to-body :close-on-click-modal="!submitting" :close-on-press-escape="!submitting" :show-close="!submitting" @closed="resetResolveForm">
+      <el-form ref="resolveFormRef" :model="resolveForm" :rules="resolveRules" label-position="top" aria-label="资产需求匹配表单">
         <el-form-item label="待匹配需求"><el-input :model-value="`${assetTypeMeta(activeRequirement?.assetType).label} · ${activeRequirement?.rawName || ''}`" disabled /></el-form-item>
-        <el-form-item label="同类型正式资产" required><el-select v-model="resolveForm.assetId" filterable class="full-width" :loading="candidateLoading" placeholder="请选择正式资产"><el-option v-for="asset in candidates" :key="asset.assetId" :label="asset.assetName" :value="String(asset.assetId)" /></el-select></el-form-item>
-        <el-form-item label="解决原因" required><el-input v-model="resolveForm.reason" type="textarea" :rows="3" maxlength="500" show-word-limit placeholder="说明为何选择该资产" /></el-form-item>
+        <el-form-item label="同类型正式资产" prop="assetId"><el-select v-model="resolveForm.assetId" filterable class="full-width" :loading="candidateLoading" :disabled="submitting" placeholder="请选择正式资产"><el-option v-for="asset in candidates" :key="asset.assetId" :label="asset.assetName" :value="String(asset.assetId)" /></el-select></el-form-item>
+        <el-form-item label="解决原因" prop="reason"><el-input v-model="resolveForm.reason" type="textarea" :rows="3" maxlength="500" show-word-limit :disabled="submitting" placeholder="说明为何选择该资产" /></el-form-item>
       </el-form>
-      <template #footer><el-button :disabled="submitting" @click="resolveVisible = false">取消</el-button><el-button type="primary" :loading="submitting" @click="submitResolve">确认匹配</el-button></template>
+      <template #footer><el-button :disabled="submitting" @click="closeResolve">取消</el-button><el-button type="primary" :loading="submitting" @click="submitResolve">确认匹配</el-button></template>
     </el-dialog>
   </ProjectModal>
 </template>
 
 <style scoped>
-.requirement-dialog{display:grid;gap:16px}.requirement-filters{display:grid;grid-template-columns:minmax(220px,1fr) 150px 140px auto auto;gap:9px}.el-table strong,.el-table small{display:block}.el-table strong{margin-top:5px}.el-table small{margin-top:4px;color:var(--sg-text-muted);line-height:1.45}.el-pagination{justify-content:flex-end}.full-width{width:100%}@media(max-width:760px){.requirement-filters{grid-template-columns:1fr}.el-pagination{justify-content:center}}
+.requirement-dialog{display:grid;gap:16px}.requirement-filters{display:grid;grid-template-columns:minmax(220px,1fr) 150px 140px auto;gap:9px}.requirement-filters:deep(.el-form-item){min-width:0;margin-bottom:0}.requirement-filters:deep(.el-form-item__content),.requirement-filters:deep(.el-select),.requirement-filters:deep(.el-input){width:100%}.requirement-filter-actions:deep(.el-form-item__content){flex-wrap:nowrap}.el-table strong,.el-table small{display:block}.el-table strong{margin-top:5px}.el-table small{margin-top:4px;color:var(--sg-text-muted);line-height:1.45}.el-pagination{justify-content:flex-end}.full-width{width:100%}@media(max-width:760px){.requirement-filters{grid-template-columns:1fr}.requirement-filter-actions:deep(.el-form-item__content){flex-wrap:wrap}.el-pagination{justify-content:center}}
 </style>

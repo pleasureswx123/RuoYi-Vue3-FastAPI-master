@@ -1,5 +1,4 @@
 <script setup>
-import { Lock } from '@element-plus/icons-vue'
 import { useRouter } from 'vue-router'
 
 import { useSessionStore } from '@/store/modules/session'
@@ -15,16 +14,12 @@ async function returnToLogin() {
 
 <template>
   <main class="error-page">
-    <div class="error-card">
-      <span class="error-card__code">403</span>
-      <span class="error-card__icon"><el-icon><Lock /></el-icon></span>
-      <h1>无权访问此业务模块</h1>
-      <p>当前账号未获得所需的 Shot Grid 导航或业务权限。项目成员关系和具体操作仍由后端逐接口校验。</p>
-      <div class="error-card__actions">
+    <el-result class="error-card" icon="warning" title="403 · 无权访问此业务模块" sub-title="当前账号未获得所需的 Shot Grid 导航或业务权限。项目成员关系和具体操作仍由后端逐接口校验。">
+      <template #extra><div class="error-card__actions">
         <el-button type="primary" @click="returnToLogin">退出并重新登录</el-button>
         <el-button @click="$router.replace('/')">返回可访问模块</el-button>
-      </div>
-    </div>
+      </div></template>
+    </el-result>
   </main>
 </template>
 

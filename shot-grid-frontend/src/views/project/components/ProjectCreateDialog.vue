@@ -7,15 +7,15 @@ import {
   previewProjectPath
 } from '@/api/shot-grid/projects'
 import { createIdempotencyState } from '@/utils/idempotency'
-import { projectErrorState } from '@/views/project/projectPresentation'
+import { projectErrorState, projectRoleMeta } from '@/views/project/projectPresentation'
 import MemberCandidateSelect from './MemberCandidateSelect.vue'
 import ProjectModal from './ProjectModal.vue'
 
 const props = defineProps({ currentUser: { type: Object, required: true } })
 const emit = defineEmits(['close', 'created'])
 const idempotency = createIdempotencyState('project-create')
+const createFormRef = ref(null)
 const busy = ref(false)
-const validationMessage = ref('')
 const requestError = ref(null)
 const storageRoots = ref([])
 const storageLoading = ref(false)
@@ -23,26 +23,69 @@ const storageError = ref(null)
 const pathPreview = ref(null)
 const previewLoading = ref(false)
 const previewError = ref(null)
-const members = ref([
-  {
+const form = reactive({
+  projectCode: '',
+  projectName: '',
+  projectType: 'ai_short_film',
+  projectDescription: '',
+  aspectRatio: '16:9',
+  storageRootId: '',
+  remark: '',
+  members: [{
     userId: Number(props.currentUser.userId),
     userName: props.currentUser.userName,
     nickName: props.currentUser.nickName,
     deptName: props.currentUser.dept?.deptName || null,
     projectRole: 'director',
     isCurrentUser: true
-  }
-])
-const form = reactive({
-  projectCode: '', projectName: '', projectDescription: '', aspectRatio: '16:9',
-  storageRootId: '', remark: ''
+  }]
 })
+const createRules = {
+  projectName: [{
+    validator: (_rule, value, callback) => {
+      const normalized = String(value || '').trim()
+      if (!normalized) callback(new Error('项目名称不能为空'))
+      else if (normalized.length > 200) callback(new Error('项目名称不能超过 200 个字符'))
+      else callback()
+    },
+    trigger: 'change'
+  }],
+  projectCode: [{
+    validator: (_rule, value, callback) => {
+      const normalized = String(value || '').trim().toUpperCase()
+      if (!/^[A-Z0-9]{2,12}$/.test(normalized)) callback(new Error('项目代号必须为 2—12 位大写英文字母或数字'))
+      else callback()
+    },
+    trigger: 'change'
+  }],
+  projectType: [{ required: true, type: 'enum', enum: ['ai_short_film'], message: '请选择有效的项目类型', trigger: 'change' }],
+  aspectRatio: [{ required: true, type: 'enum', enum: ['16:9', '21:9', '2.39:1', '9:16', '1:1'], message: '请选择有效的画幅', trigger: 'change' }],
+  storageRootId: [{
+    validator: (_rule, value, callback) => {
+      const storageRootId = Number(value)
+      if (!Number.isSafeInteger(storageRootId) || storageRootId <= 0) callback(new Error('请选择有效的 NAS 根目录'))
+      else callback()
+    },
+    trigger: 'change'
+  }],
+  members: [{
+    validator: (_rule, value, callback) => {
+      if (!Array.isArray(value) || !value.some(member => member.projectRole === 'director')) {
+        callback(new Error('项目必须至少有一名项目管理人'))
+      } else {
+        callback()
+      }
+    },
+    trigger: 'change'
+  }],
+  remark: [{ max: 500, message: '备注不能超过 500 个字符', trigger: 'change' }]
+}
 let storageController = null
 let previewController = null
 let previewTimer = null
 let previewGeneration = 0
 
-const selectedUserIds = computed(() => members.value.map(item => item.userId))
+const selectedUserIds = computed(() => form.members.map(item => item.userId))
 const selectedStorageRoot = computed(() =>
   storageRoots.value.find(root => String(root.storageRootId) === String(form.storageRootId)) || null
 )
@@ -122,24 +165,26 @@ function schedulePathPreview() {
 }
 
 function addMember(candidate) {
-  members.value.push({ ...candidate, projectRole: 'creator' })
+  form.members.push({ ...candidate, projectRole: 'creator' })
+  createFormRef.value?.validateField('members').catch(() => false)
+}
+
+function removeMember(index) {
+  form.members.splice(index, 1)
+  createFormRef.value?.validateField('members').catch(() => false)
 }
 
 function buildPayload() {
   const projectCode = form.projectCode.trim().toUpperCase()
-  if (!/^[A-Z0-9]{2,12}$/.test(projectCode)) throw new Error('项目代号必须为 2—12 位大写英文字母或数字')
   const projectName = form.projectName.trim()
-  if (!projectName) throw new Error('项目名称不能为空')
   const storageRootId = Number(form.storageRootId)
-  if (!Number.isSafeInteger(storageRootId) || storageRootId <= 0) throw new Error('请选择有效的 NAS 根目录')
-  const normalizedMembers = members.value.map(member => ({
+  const normalizedMembers = form.members.map(member => ({
     userId: member.userId,
     projectRole: member.projectRole
   }))
   const directorUserIds = normalizedMembers
     .filter(member => member.projectRole === 'director')
     .map(member => member.userId)
-  if (!directorUserIds.length) throw new Error('项目必须至少有一名项目管理者')
   const initialMembers = normalizedMembers.filter(member => member.projectRole !== 'director')
   return {
     projectCode, projectName, projectType: 'ai_short_film',
@@ -151,14 +196,19 @@ function buildPayload() {
 }
 
 async function submit() {
-  validationMessage.value = ''
+  if (busy.value) return
   requestError.value = null
-  let payload
-  try { payload = buildPayload() } catch (error) { validationMessage.value = error.message; return }
-  const preview = pathPreview.value || (await loadPathPreview())
-  if (!preview || preview.pathConflict) return
   busy.value = true
   try {
+    const isValid = createFormRef.value
+      ? await createFormRef.value.validate().catch(() => false)
+      : false
+    if (!isValid) return
+
+    const payload = buildPayload()
+    const preview = pathPreview.value || (await loadPathPreview())
+    if (!preview || preview.pathConflict) return
+
     const response = await createProject(payload, idempotency.forPayload(payload))
     emit('created', response.data)
   } catch (error) {
@@ -181,92 +231,80 @@ onBeforeUnmount(() => {
 
 <template>
   <ProjectModal title="创建项目" description="项目名称同时作为 NAS 项目目录名称，系统自动计算并校验保存路径。" :busy="busy" wide @close="emit('close')">
-    <form class="project-form" @submit.prevent="submit">
+    <el-form ref="createFormRef" :model="form" :rules="createRules" class="project-form" size="large" label-position="top">
       <div class="project-form__grid">
-        <label><span>项目名称 *</span><input v-model="form.projectName" maxlength="200" placeholder="如：罗刹夫人" /></label>
-        <label><span>项目代号 *</span><input v-model="form.projectCode" maxlength="12" placeholder="如：LCFR" @input="form.projectCode = form.projectCode.toUpperCase()" /></label>
-        <label><span>画幅 *</span><el-select v-model="form.aspectRatio" class="sg-select"><el-option v-for="ratio in ['16:9','21:9','2.39:1','9:16','1:1']" :key="ratio" :label="ratio" :value="ratio" /></el-select></label>
-        <label><span>项目类型</span><input value="AI 影视短片" disabled /></label>
-        <label>
-          <span>NAS 根目录 *</span>
-          <el-select v-model="form.storageRootId" class="sg-select" :placeholder="storageLoading ? '正在加载健康根目录…' : '请选择健康根目录'" :disabled="storageLoading || !!storageError">
+        <el-form-item label="项目名称" prop="projectName" required>
+          <el-input v-model="form.projectName" maxlength="200" placeholder="如：罗刹夫人" />
+        </el-form-item>
+        <el-form-item label="项目代号" prop="projectCode" required>
+          <el-input v-model="form.projectCode" maxlength="12" placeholder="如：LCFR" @input="value => form.projectCode = value.toUpperCase()" />
+        </el-form-item>
+        <el-form-item label="画幅" prop="aspectRatio" required>
+          <el-select v-model="form.aspectRatio" class="sg-select"><el-option v-for="ratio in ['16:9','21:9','2.39:1','9:16','1:1']" :key="ratio" :label="ratio" :value="ratio" /></el-select>
+        </el-form-item>
+        <el-form-item label="项目类型" prop="projectType">
+          <el-input model-value="AI 影视短片" disabled />
+        </el-form-item>
+        <el-form-item label="NAS 根目录" prop="storageRootId" required>
+          <el-select v-model="form.storageRootId" class="sg-select" :placeholder="storageLoading ? '正在加载健康根目录…' : '请选择健康根目录'" :loading="storageLoading" :disabled="storageLoading || !!storageError">
             <el-option :label="storageLoading ? '正在加载健康根目录…' : '请选择健康根目录'" value="" />
             <el-option v-for="root in storageRoots" :key="root.storageRootId" :label="`${root.rootName}（${root.rootCode}）`" :value="String(root.storageRootId)" />
           </el-select>
           <small v-if="!storageError && !storageLoading && storageRoots.length === 0">当前没有已启用且探测健康的 NAS 根目录，请联系管理员。</small>
-          <small v-if="storageError" class="field-error">
-            {{ storageError.message }}
-            <button v-if="storageError.retryable" type="button" @click="loadStorageRoots">重试</button>
-          </small>
-        </label>
+          <el-alert v-if="storageError" class="field-alert" :title="storageError.message" type="error" show-icon :closable="false"><el-button v-if="storageError.retryable" link type="danger" @click="loadStorageRoots">重试</el-button></el-alert>
+        </el-form-item>
       </div>
 
-      <section class="path-preview">
-        <div>
-          <strong>项目保存路径</strong>
-          <p v-if="selectedStorageRoot" class="path-line"><span>NAS 根目录</span><code>{{ selectedStorageRoot.uncRootPath }}</code></p>
-          <p v-else>请选择 NAS 根目录。</p>
-          <p v-if="previewLoading">正在自动计算完整项目路径…</p>
-          <p v-else-if="pathPreview" class="path-line" :class="{ conflict: pathPreview.pathConflict }"><span>完整路径</span><code>{{ pathPreview.projectPathPreview }}</code></p>
-          <p v-else-if="selectedStorageRoot">填写项目名称后，这里会自动显示完整路径。</p>
-          <small v-if="previewError" class="field-error">{{ previewError.message }}</small>
-        </div>
-      </section>
+      <el-card class="path-preview" shadow="never">
+        <template #header><strong>项目保存路径</strong></template>
+        <el-skeleton v-if="previewLoading" :rows="2" animated />
+        <el-descriptions v-else :column="1" border>
+          <el-descriptions-item label="NAS 根目录"><code v-if="selectedStorageRoot">{{ selectedStorageRoot.uncRootPath }}</code><span v-else>请选择 NAS 根目录</span></el-descriptions-item>
+          <el-descriptions-item label="完整路径"><code v-if="pathPreview" :class="{ conflict: pathPreview.pathConflict }">{{ pathPreview.projectPathPreview }}</code><span v-else-if="selectedStorageRoot">填写项目名称后自动计算</span><span v-else>—</span></el-descriptions-item>
+        </el-descriptions>
+        <el-alert v-if="previewError" :title="previewError.title" :description="previewError.message" type="error" show-icon :closable="false" />
+      </el-card>
 
-      <section class="people-section">
-        <div class="people-section__heading"><div><strong>项目成员</strong><p>当前账号默认加入项目；所有成员均可设置为项目管理者或制作人员，且至少需要一名项目管理者。</p></div></div>
-        <MemberCandidateSelect :department-id="currentUser.dept?.deptId" :exclude-ids="selectedUserIds" @select="addMember" />
-        <div class="member-rows">
-          <div v-for="(member,index) in members" :key="member.userId" class="member-row">
-            <div><strong>{{ member.nickName || member.userName }}</strong><small>{{ member.userName }} · {{ member.deptName || '未分配部门' }}<template v-if="member.isCurrentUser"> · 当前登录账号</template></small></div>
-            <el-select v-model="member.projectRole" class="sg-select"><el-option label="制作人员" value="creator" /><el-option label="项目管理者" value="director" /></el-select>
-            <button v-if="!member.isCurrentUser" type="button" @click="members.splice(index,1)">移除</button>
-            <span v-else></span>
-          </div>
-        </div>
-      </section>
+      <el-form-item prop="members" class="project-form__members">
+        <el-card class="people-section" shadow="never">
+          <template #header><div class="people-section__heading"><div><strong>项目成员</strong><p>当前账号默认加入项目；所有成员均可设置为项目管理人或制作人员，且至少需要一名项目管理人。</p></div></div></template>
+          <MemberCandidateSelect :department-id="currentUser.dept?.deptId" :exclude-ids="selectedUserIds" @select="addMember" />
+          <el-table class="member-rows" :data="form.members" row-key="userId" empty-text="尚未添加项目成员">
+            <el-table-column label="成员" min-width="210"><template #default="{ row }"><strong>{{ row.nickName || row.userName }}</strong><small>{{ row.userName }} · {{ row.deptName || '未分配部门' }}<template v-if="row.isCurrentUser"> · 当前登录账号</template></small></template></el-table-column>
+            <el-table-column label="项目角色" width="170"><template #default="{ row }"><el-select v-model="row.projectRole" class="sg-select" size="default" aria-label="项目角色"><el-option :label="projectRoleMeta('creator').label" value="creator" /><el-option :label="projectRoleMeta('director').label" value="director" /></el-select></template></el-table-column>
+            <el-table-column label="操作" width="90"><template #default="{ row, $index }"><el-button v-if="!row.isCurrentUser" link type="danger" @click="removeMember($index)">移除</el-button><el-tag v-else size="small" type="info" effect="plain">本人</el-tag></template></el-table-column>
+          </el-table>
+        </el-card>
+      </el-form-item>
 
-      <label class="project-form__full"><span>项目描述</span><textarea v-model="form.projectDescription" rows="3" /></label>
-      <label class="project-form__full"><span>备注</span><textarea v-model="form.remark" rows="2" maxlength="500" /></label>
+      <el-form-item label="项目描述" prop="projectDescription" class="project-form__full">
+        <el-input v-model="form.projectDescription" type="textarea" :rows="3" />
+      </el-form-item>
+      <el-form-item label="备注" prop="remark" class="project-form__full">
+        <el-input v-model="form.remark" type="textarea" :rows="2" maxlength="500" show-word-limit />
+      </el-form-item>
 
-      <div v-if="validationMessage || requestError" class="form-error" role="alert"><strong>{{ requestError?.title || '请检查表单' }}</strong><span>{{ requestError?.message || validationMessage }}</span><code v-if="requestError?.errorKey">{{ requestError.errorKey }}</code></div>
-      <footer><el-button :disabled="busy" @click="emit('close')">取消</el-button><el-button type="primary" native-type="submit" :loading="busy" :disabled="!canSubmit">创建并初始化 NAS</el-button></footer>
-    </form>
+      <el-alert v-if="requestError" :title="requestError.title" :description="requestError.message" type="error" show-icon :closable="false" />
+      <footer><el-button :disabled="busy" @click="emit('close')">取消</el-button><el-button type="primary" :loading="busy" :disabled="!canSubmit" @click="submit">创建并初始化 NAS</el-button></footer>
+    </el-form>
   </ProjectModal>
 </template>
 
 <style scoped>
-.project-form, .project-form label { display: grid; gap: 8px; }
-.project-form { gap: 22px; }
+.project-form { display: grid; gap: 22px; }
 .project-form__grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 18px; }
-label > span, .people-section strong, .path-preview strong { font-size: 13px; font-weight: 600; }
-input, textarea { width: 100%; color: var(--sg-text); background: rgba(255,255,255,.035); border: 1px solid var(--sg-border-strong); border-radius: 10px; }
-input { height: 42px; padding: 0 12px; }
-textarea { padding: 11px 12px; resize: vertical; }
-input:focus, textarea:focus { border-color: var(--sg-accent); outline: 0; }
-input:disabled { color: var(--sg-text-muted); cursor: not-allowed; }
+.project-form :deep(.el-form-item) { margin-bottom: 0; }
+.project-form :deep(.el-input),
+.project-form :deep(.el-select) { width: 100%; }
+.project-form :deep(.el-textarea__inner) { resize: vertical; }
+.project-form__members :deep(.el-form-item__content) { display: block; }
+.people-section strong, .path-preview strong { font-size: 13px; font-weight: 600; }
 small, .people-section p, .path-preview p { margin: 0; color: var(--sg-text-muted); font-size: 11px; line-height: 1.55; }
 .field-error { color: #ffb4b4; }
-.field-error button { color: var(--sg-accent); cursor: pointer; background: transparent; border: 0; }
-.path-preview, .people-section { padding: 18px; background: rgba(255,255,255,.025); border: 1px solid var(--sg-border); border-radius: 14px; }
-.path-preview { display: flex; gap: 18px; align-items: center; justify-content: space-between; }
-.path-preview p { margin-top: 6px; overflow-wrap: anywhere; }
-.path-preview p.conflict { color: var(--sg-danger); }
-.path-line { display: grid; grid-template-columns: 72px minmax(0,1fr); gap: 10px; align-items: start; }
-.path-line span { color: var(--sg-text-muted); }
-.path-line code { color: var(--sg-text-secondary); font-family: Consolas, 'Courier New', monospace; white-space: normal; overflow-wrap: anywhere; }
-.people-section { display: grid; gap: 13px; }
+.path-preview, .people-section { background: rgba(255,255,255,.025); border-color: var(--sg-border); border-radius: 14px; }
+.path-preview :deep(.el-card__header),.people-section :deep(.el-card__header){padding:14px 16px;border-bottom-color:var(--sg-border)}.path-preview :deep(.el-card__body),.people-section :deep(.el-card__body){display:grid;gap:13px;padding:16px}.path-preview code { color: var(--sg-text-secondary); font-family: Consolas, 'Courier New', monospace; white-space: normal; overflow-wrap: anywhere; }.path-preview code.conflict{color:var(--sg-danger)}
 .people-section__heading { display: flex; justify-content: space-between; }
-.people-pills { display: flex; flex-wrap: wrap; gap: 8px; }
-.people-pills span { padding: 7px 10px; color: var(--sg-text-secondary); font-size: 12px; background: var(--sg-accent-soft); border-radius: 999px; }
-.people-pills button { margin-left: 7px; color: var(--sg-danger); cursor: pointer; background: transparent; border: 0; }
-.member-rows { display: grid; gap: 9px; }
-.member-row { display: grid; grid-template-columns: minmax(150px,1fr) 150px auto; gap: 9px; align-items: center; }
-.member-row strong, .member-row small { display: block; }
-.member-row strong { font-size: 12px; }
-.member-row button { color: var(--sg-danger); cursor: pointer; background: transparent; border: 0; }
-.form-error { display: grid; gap: 5px; padding: 14px; color: #ffb4b4; font-size: 13px; background: rgba(255,107,107,.08); border-radius: 10px; }
-.form-error code { color: var(--sg-text-muted); font-size: 11px; }
+.member-rows { --el-table-text-color:var(--sg-text-secondary);--el-table-header-text-color:var(--sg-text-muted);--el-table-border-color:var(--sg-border);width:100% }.member-rows strong,.member-rows small{display:block}.member-rows small{margin-top:3px;color:var(--sg-text-muted)}
 footer { display: flex; gap: 10px; justify-content: flex-end; }
-@media (max-width:700px) { .project-form__grid, .member-row { grid-template-columns: 1fr; } .path-preview { align-items: stretch; flex-direction: column; } }
+@media (max-width:700px) { .project-form__grid { grid-template-columns: 1fr; } }
 </style>

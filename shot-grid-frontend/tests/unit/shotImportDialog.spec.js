@@ -1,4 +1,4 @@
-import { ElButton, ElDialog, ElIcon, ElTable, ElTableColumn } from 'element-plus'
+import { ElButton, ElDialog, ElIcon, ElTable, ElTableColumn, ElTag } from 'element-plus'
 import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -34,7 +34,7 @@ describe('镜头 Excel 导入对话框', () => {
   it('展示跨 Sheet 行级问题并只提交可导入选择', async () => {
     const wrapper = mount(ShotImportDialog, {
       props: { projectId: 8, operationGeneration: 1, projectName: '罗刹夫人', members: [{ userId: 7, nickName: 'YJF', userName: '杨景锋', projectRole: 'creator' }] },
-      global: { components: { ElButton, ElDialog, ElIcon, ElTable, ElTableColumn }, stubs: { teleport: true } }
+      global: { components: { ElButton, ElDialog, ElIcon, ElTable, ElTableColumn, ElTag }, stubs: { teleport: true } }
     })
     const input = wrapper.find('input[type="file"]')
     const file = new File(['xlsx'], '镜头样表.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
@@ -57,13 +57,15 @@ describe('镜头 Excel 导入对话框', () => {
     expect(wrapper.text()).toContain('冷蓝色调')
     expect(wrapper.text()).toContain('注意节奏')
     expect(wrapper.text()).toContain('已选 1 行 · 1 条可导入')
-    expect(wrapper.findAll('.preview-summary strong')[0].text()).toBe('1 / 3')
+    expect(wrapper.findAll('.shot-preview-summary strong')[0].text()).toBe('1 / 3')
+    const summaryTags = wrapper.findAllComponents(ElTag)
+    expect(summaryTags.find(tag => tag.text() === '1')?.props()).toMatchObject({ type: 'warning', effect: 'plain', size: 'small', round: true })
 
     const assigneeSelect = wrapper.get('select[aria-label="选择 EP002 第 2 行制作人"]')
     await assigneeSelect.setValue('7')
     expect(wrapper.text()).toContain('已选择：YJF（杨景锋）')
     expect(wrapper.text()).toContain('已选 2 行 · 2 条可导入')
-    expect(wrapper.findAll('.preview-summary strong')[0].text()).toBe('2 / 3')
+    expect(wrapper.findAll('.shot-preview-summary strong')[0].text()).toBe('2 / 3')
 
     await wrapper.findAll('button').find(button => button.text().includes('正式导入 2 行')).trigger('click')
     await flushPromises()
@@ -85,7 +87,7 @@ describe('镜头 Excel 导入对话框', () => {
   it('使用 Element Plus 选择列，并通过批量分配弹窗只覆盖勾选行', async () => {
     const wrapper = mount(ShotImportDialog, {
       props: { projectId: 8, operationGeneration: 1, members: [{ userId: 7, nickName: 'YJF', userName: '杨景锋', projectRole: 'creator' }] },
-      global: { components: { ElButton, ElDialog, ElIcon, ElTable, ElTableColumn }, stubs: { teleport: true } }
+      global: { components: { ElButton, ElDialog, ElIcon, ElTable, ElTableColumn, ElTag }, stubs: { teleport: true } }
     })
     const input = wrapper.find('input[type="file"]')
     const file = new File(['xlsx'], '镜头样表.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
@@ -109,7 +111,7 @@ describe('镜头 Excel 导入对话框', () => {
 
     expect(wrapper.text()).toContain('已选 1 行 · 1 条可导入')
     expect(wrapper.text()).toContain('已选择：YJF（杨景锋）')
-    expect(wrapper.findAll('.preview-summary strong')[0].text()).toBe('1 / 3')
+    expect(wrapper.findAll('.shot-preview-summary strong')[0].text()).toBe('1 / 3')
     expect(wrapper.get('select[aria-label="选择 EP001 第 2 行制作人"]').element.value).toBe('7')
     expect(wrapper.get('select[aria-label="选择 EP002 第 2 行制作人"]').element.value).toBe('__unresolved__')
 

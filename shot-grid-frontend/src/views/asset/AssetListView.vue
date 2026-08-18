@@ -7,6 +7,7 @@ import { Box, Collection, Delete, Edit, Grid, List, Link, Plus, Refresh, Refresh
 import { archiveAsset, batchAssignAssetItemTasks, batchDeleteAssets, getAssetDetail, getAssetPage, listAssetAssignees } from '@/api/shot-grid/assets'
 import { assertPositiveId, getProjectDetail, getProjectPage } from '@/api/shot-grid/projects'
 import { useSessionStore } from '@/store/modules/session'
+import { tagTypeFromTone } from '@/utils/tag'
 import ProjectStatePanel from '@/views/project/components/ProjectStatePanel.vue'
 import AssetFormDialog from '@/views/asset/components/AssetFormDialog.vue'
 import AssetImportDialog from '@/views/asset/components/AssetImportDialog.vue'
@@ -14,6 +15,7 @@ import AssetRequirementDialog from '@/views/asset/components/AssetRequirementDia
 import AssetDetailView from '@/views/asset/AssetDetailView.vue'
 import ProtectedAssetThumbnail from '@/views/asset/components/ProtectedAssetThumbnail.vue'
 import { assetAssigneeSummary, assetDirectoryStatusMeta, assetErrorState, assetStatusMeta, assetTypeMeta, memberLabel, resolveAssetThumbnail } from '@/views/asset/assetPresentation'
+import { projectRoleMeta, storageMeta } from '@/views/project/projectPresentation'
 
 const route = useRoute()
 const router = useRouter()
@@ -28,8 +30,8 @@ const projectsLoading = ref(false)
 const assetsLoading = ref(false)
 const projectsError = ref(null)
 const assetsError = ref(null)
-const selectedProjectId = ref('')
-const scope = ref('')
+const projectContextForm = ref(null)
+const projectContext = reactive({ selectedProjectId: '', scope: '' })
 const viewMode = ref('table')
 const showCreate = ref(false)
 const showImport = ref(false)
@@ -41,7 +43,8 @@ const editingAssetId = ref(null)
 const deleting = ref(false)
 const assigning = ref(false)
 const showBatchAssign = ref(false)
-const batchAssigneeUserId = ref('')
+const batchAssignFormRef = ref(null)
+const batchAssignForm = reactive({ assigneeUserId: '' })
 const showDetail = ref(false)
 const detailAssetId = ref(null)
 const createContext = ref(null)
@@ -57,6 +60,25 @@ const query = reactive({
   orderByColumn: 'sortOrder',
   isAsc: 'ascending'
 })
+const projectContextRules = {
+  selectedProjectId: [{ required: true, message: '请选择当前项目', trigger: 'change' }],
+  scope: [{
+    validator: (_rule, value, callback) => {
+      if (!['', 'all'].includes(String(value || ''))) {
+        callback(new Error('项目范围无效'))
+        return
+      }
+      callback()
+    },
+    trigger: 'change'
+  }]
+}
+const assetFilterRules = {
+  keyword: [{ max: 200, message: '搜索关键字不能超过 200 个字符', trigger: 'blur' }]
+}
+const batchAssignRules = {
+  assigneeUserId: [{ required: true, message: '请选择要分配的新制作人', trigger: 'change' }]
+}
 let projectController = null
 let assetController = null
 let disposed = false
@@ -80,7 +102,7 @@ const canRematchRequirements = computed(() => hasPermission('shotgrid:assetRequi
 const pageCount = computed(() => Math.max(1, Math.ceil(total.value / query.pageSize)))
 const currentProjectId = computed(() => {
   try {
-    return assertPositiveId(selectedProjectId.value, '项目')
+    return assertPositiveId(projectContext.selectedProjectId, '项目')
   } catch {
     return null
   }
@@ -137,18 +159,18 @@ async function loadProjects(preferredId = null) {
   try {
     const rows = await fetchAllPages(
       (params, options) => getProjectPage(params, options),
-      { scope: scope.value || undefined, orderByColumn: 'projectName', isAsc: 'ascending' },
+      { scope: projectContext.scope || undefined, orderByColumn: 'projectName', isAsc: 'ascending' },
       controller.signal
     )
     if (projectController !== controller || controller.signal.aborted) return
     projects.value = rows
     const routeId = preferredId || route.query.projectId
     const candidate = rows.find(item => String(item.projectId) === String(routeId)) || rows[0]
-    selectedProjectId.value = candidate ? String(candidate.projectId) : ''
+    projectContext.selectedProjectId = candidate ? String(candidate.projectId) : ''
   } catch (error) {
     if (projectController === controller && !controller.signal.aborted && error?.code !== 'ERR_CANCELED') {
       projects.value = []
-      selectedProjectId.value = ''
+      projectContext.selectedProjectId = ''
       projectsError.value = assetErrorState(error, '项目范围加载失败')
     }
   } finally {
@@ -226,15 +248,18 @@ async function loadAssets(existingController = null) {
   }
 }
 
-function submitFilters() {
+async function submitFilters() {
+  const isValid = await assetFilterForm.value?.validate().catch(() => false)
+  if (!isValid) return
   query.pageNum = 1
   loadAssets()
 }
 
-function resetFilters() {
+async function resetFilters() {
   assetFilterForm.value?.resetFields()
+  assetFilterForm.value?.clearValidate()
   query.pageNum = 1
-  loadAssets()
+  await loadAssets()
 }
 
 function changePage(page) {
@@ -289,19 +314,27 @@ function toggleAllSelectable() {
 
 function openBatchAssignDialog() {
   if (!selectedAssets.value.length || assigning.value || deleting.value) return
-  batchAssigneeUserId.value = ''
+  batchAssignForm.assigneeUserId = ''
+  batchAssignFormRef.value?.clearValidate()
   showBatchAssign.value = true
 }
 
 function closeBatchAssignDialog() {
   if (assigning.value) return
   showBatchAssign.value = false
-  batchAssigneeUserId.value = ''
+}
+
+function resetBatchAssignForm() {
+  batchAssignFormRef.value?.resetFields()
+  batchAssignFormRef.value?.clearValidate()
+  batchAssignForm.assigneeUserId = ''
 }
 
 async function confirmBatchAssign() {
   if (assigning.value || !selectedAssets.value.length) return
-  const assigneeUserId = Number(batchAssigneeUserId.value)
+  const isValid = await batchAssignFormRef.value?.validate().catch(() => false)
+  if (!isValid) return
+  const assigneeUserId = Number(batchAssignForm.assigneeUserId)
   const member = creatorMembers.value.find(item => Number(item.userId) === assigneeUserId)
   if (!member) {
     ElMessage.warning('请先选择要分配的新制作人')
@@ -342,7 +375,7 @@ async function confirmBatchAssign() {
     ElMessage.success(`已将 ${targetAssets.length} 个资产的 ${items.length} 个制作分项分配给 ${member.nickName || member.userName}`)
     if (currentProjectId.value === targetProjectId) {
       showBatchAssign.value = false
-      batchAssigneeUserId.value = ''
+      batchAssignForm.assigneeUserId = ''
       selectedAssetIds.value = new Set()
       await loadAssets()
     }
@@ -539,7 +572,7 @@ async function handleImported(result, operationContext) {
   await loadAssets()
 }
 
-watch(selectedProjectId, (next, previous) => {
+watch(() => projectContext.selectedProjectId, (next, previous) => {
   if (next === previous) return
   closeCreateDialog()
   closeImportDialog()
@@ -548,16 +581,16 @@ watch(selectedProjectId, (next, previous) => {
   closeDetailDrawer()
   clearDetailDrawer()
   showBatchAssign.value = false
-  batchAssigneeUserId.value = ''
+  batchAssignForm.assigneeUserId = ''
   selectedAssetIds.value = new Set()
   query.pageNum = 1
   query.assigneeUserId = ''
   loadProjectContext()
 })
-watch(scope, () => loadProjects())
+watch(() => projectContext.scope, () => loadProjects())
 watch(() => route.query.projectId, next => {
-  if (next && String(next) !== selectedProjectId.value && projects.value.some(item => String(item.projectId) === String(next))) {
-    selectedProjectId.value = String(next)
+  if (next && String(next) !== projectContext.selectedProjectId && projects.value.some(item => String(item.projectId) === String(next))) {
+    projectContext.selectedProjectId = String(next)
   }
 })
 onMounted(() => loadProjects(route.query.projectId))
@@ -577,16 +610,17 @@ onBeforeUnmount(() => {
 
     <ProjectStatePanel v-if="projectsError" :title="projectsError.title" :message="projectsError.message" :retryable="projectsError.retryable" @retry="loadProjects" />
     <template v-else>
-      <el-form class="project-context" inline label-position="top" aria-label="项目上下文">
-        <el-form-item label="当前项目"><el-select v-model="selectedProjectId" class="sg-select" :placeholder="projectsLoading ? '正在加载项目…' : '请选择项目'" :disabled="projectsLoading"><el-option :label="projectsLoading ? '正在加载项目…' : '请选择项目'" value="" /><el-option v-for="item in projects" :key="item.projectId" :label="`${item.projectCode} · ${item.projectName}`" :value="String(item.projectId)" /></el-select></el-form-item>
-        <el-form-item v-if="canViewAll" label="项目范围"><el-select v-model="scope" class="sg-select" placeholder="我的项目"><el-option label="我的项目" value="" /><el-option label="全部项目" value="all" /></el-select></el-form-item>
-        <div v-if="project" class="project-context__meta"><el-tag size="small" effect="plain">{{ project.projectTypeName }}</el-tag><el-tag size="small" effect="plain">{{ project.aspectRatio }}</el-tag><el-tag size="small" effect="plain">{{ project.myProjectRole === 'director' ? '项目总监' : project.myProjectRole === 'creator' ? '制作人员' : '跨项目管理员' }}</el-tag><el-tag size="small" effect="plain" :type="project.storageStatus === 'ready' ? 'success' : project.storageStatus === 'failed' ? 'danger' : 'warning'">存储：{{ project.storageStatus === 'ready' ? '就绪' : project.storageStatus === 'failed' ? '失败' : '初始化中' }}</el-tag></div>
+      <el-form ref="projectContextForm" :model="projectContext" :rules="projectContextRules" class="project-context" size="large" inline label-position="top" aria-label="项目上下文">
+        <el-form-item label="当前项目" prop="selectedProjectId"><el-select v-model="projectContext.selectedProjectId" class="sg-select" :placeholder="projectsLoading ? '正在加载项目…' : '请选择项目'" :disabled="projectsLoading"><el-option :label="projectsLoading ? '正在加载项目…' : '请选择项目'" value="" /><el-option v-for="item in projects" :key="item.projectId" :label="`${item.projectCode} · ${item.projectName}`" :value="String(item.projectId)" /></el-select></el-form-item>
+        <el-form-item v-if="canViewAll" label="项目范围" prop="scope"><el-select v-model="projectContext.scope" class="sg-select" placeholder="我的项目"><el-option label="我的项目" value="" /><el-option label="全部项目" value="all" /></el-select></el-form-item>
+        <div v-if="project" class="project-context__meta"><el-tag size="small" effect="plain" type="primary">{{ project.projectTypeName }}</el-tag><el-tag size="small" effect="plain" type="info">{{ project.aspectRatio }}</el-tag><el-tag size="small" effect="plain" round :type="projectRoleMeta(project.myProjectRole).type">我的角色：{{ projectRoleMeta(project.myProjectRole).label }}</el-tag><el-tag size="small" effect="plain" round :type="tagTypeFromTone(storageMeta(project.storageStatus).tone)">存储：{{ storageMeta(project.storageStatus).label }}</el-tag></div>
       </el-form>
 
-      <section v-if="!selectedProjectId && !projectsLoading" class="asset-empty"><el-icon><Collection /></el-icon><h3>当前范围暂无可选项目</h3><p>请先创建项目或加入项目成员范围。</p></section>
+      <el-card v-if="projectsLoading && !projectContext.selectedProjectId" class="asset-context-loading" shadow="never"><el-skeleton :rows="3" animated /></el-card>
+      <el-empty v-else-if="!projectContext.selectedProjectId" class="asset-empty" description="当前范围暂无可选项目"><template #image><el-icon><Collection /></el-icon></template><p>请先创建项目或加入项目成员范围。</p></el-empty>
 
-      <template v-else-if="selectedProjectId">
-        <el-form ref="assetFilterForm" :model="query" class="asset-filters" aria-label="资产筛选" @submit.prevent="submitFilters">
+      <template v-else-if="projectContext.selectedProjectId">
+        <el-form ref="assetFilterForm" :model="query" :rules="assetFilterRules" class="asset-filters" size="large" aria-label="资产筛选">
           <el-form-item class="asset-filter-item asset-filter-item--keyword" prop="keyword">
             <el-input v-model="query.keyword" class="asset-search sg-input" :prefix-icon="Search" maxlength="200" clearable placeholder="资产名称或描述" aria-label="按资产名称或描述搜索" />
           </el-form-item>
@@ -600,7 +634,7 @@ onBeforeUnmount(() => {
             <el-select v-model="query.assigneeUserId" class="sg-select" placeholder="全部制作人" aria-label="按制作人筛选" @change="submitFilters"><el-option label="全部制作人" value="" /><el-option v-for="member in members" :key="member.userId" :label="memberLabel(member)" :value="String(member.userId)" /></el-select>
           </el-form-item>
           <el-form-item class="asset-filter-actions">
-            <el-button type="primary" native-type="submit" :icon="Search" :loading="assetsLoading">查询</el-button>
+            <el-button type="primary" :icon="Search" :loading="assetsLoading" @click="submitFilters">查询</el-button>
             <el-button :icon="RefreshLeft" :disabled="assetsLoading" @click="resetFilters">重置</el-button>
             <el-button :icon="Refresh" :disabled="assetsLoading" @click="loadProjectContext">刷新</el-button>
           </el-form-item>
@@ -609,13 +643,13 @@ onBeforeUnmount(() => {
         <section class="asset-toolbar"><div class="asset-toolbar__summary"><strong>{{ total }}</strong><span>个资产</span><template v-if="selectedAssets.length"><el-button v-if="canAssign" text type="primary" :loading="assigning" @click="openBatchAssignDialog">{{ batchAssignLabel }}（{{ selectedAssets.length }}）</el-button><el-button v-if="canDelete" text type="danger" :icon="Delete" :loading="deleting" :disabled="!canDeleteSelection" @click="deleteSelectedAssets">批量删除（{{ selectedAssets.length }}）</el-button></template></div><el-radio-group v-model="viewMode" class="view-switch" size="small" aria-label="资产视图"><el-radio-button value="table"><el-icon><List /></el-icon>表格</el-radio-button><el-radio-button value="card"><el-icon><Grid /></el-icon>卡片</el-radio-button><el-radio-button value="type"><el-icon><Box /></el-icon>类型看板</el-radio-button></el-radio-group></section>
 
         <ProjectStatePanel v-if="assetsError" :title="assetsError.title" :message="assetsError.message" :retryable="assetsError.retryable" @retry="loadProjectContext" />
-        <section v-else-if="!assetsLoading && !assets.length" class="asset-empty"><el-icon><Box /></el-icon><h3>当前筛选没有资产</h3><p>调整筛选条件，或在存储就绪的活动项目中新建/导入资产。</p></section>
+        <el-empty v-else-if="!assetsLoading && !assets.length" class="asset-empty" description="当前筛选没有资产"><template #image><el-icon><Box /></el-icon></template><p>调整筛选条件，或在存储就绪的活动项目中新建/导入资产。</p></el-empty>
 
-        <div v-else-if="viewMode === 'table'" class="asset-table-wrap" :class="{ 'is-refreshing': assetsLoading }"><el-table class="asset-data-table" :data="assets" row-key="assetId" max-height="620"><el-table-column width="52" fixed="left" align="center"><template #header><el-checkbox :model-value="allSelectableSelected" :indeterminate="selectedAssets.length > 0 && !allSelectableSelected" :disabled="!selectableAssets.length" aria-label="选择当前页全部可操作资产" @change="toggleAllSelectable" /></template><template #default="scope"><el-checkbox v-if="scope?.row" :model-value="selectedAssetIds.has(Number(scope.row.assetId))" :disabled="!canSelectAsset(scope.row)" :aria-label="`选择资产 ${scope.row.assetName}`" @change="toggleAssetSelection(scope.row)" /></template></el-table-column><el-table-column label="缩略图" width="112"><template #default="scope"><ProtectedAssetThumbnail v-if="scope?.row" class="asset-thumb asset-thumb--small" :thumbnail="resolveAssetThumbnail(scope.row)" :alt="`${scope.row.assetName} 缩略图`" /></template></el-table-column><el-table-column label="类型 / 名称" width="170"><template #default="scope"><div v-if="scope?.row" class="asset-identity"><span class="type-chip" :data-tone="assetTypeMeta(scope.row.assetType).tone">{{ assetTypeMeta(scope.row.assetType).label }}</span><strong>{{ scope.row.assetName }}</strong><small>排序 {{ scope.row.sortOrder }}</small></div></template></el-table-column><el-table-column label="说明" min-width="220"><template #default="scope"><div v-if="scope?.row" class="asset-description">{{ scope.row.description || '—' }}</div></template></el-table-column><el-table-column label="制作分项" width="90" align="center" prop="itemCount" /><el-table-column label="制作人" width="130"><template #default="scope">{{ scope?.row ? assetAssigneeSummary(scope.row.assigneeUserIds, members) : '—' }}</template></el-table-column><el-table-column label="镜头使用" width="90" align="center" prop="usageShotCount" /><el-table-column label="状态 / 目录" width="120"><template #default="scope"><div v-if="scope?.row" class="asset-status"><span class="status-chip" :data-tone="assetStatusMeta(scope.row.assetStatus).tone">{{ assetStatusMeta(scope.row.assetStatus).label }}</span><small :data-tone="assetDirectoryStatusMeta(scope.row.directoryStatus).tone">{{ assetDirectoryStatusMeta(scope.row.directoryStatus).label }}</small></div></template></el-table-column><el-table-column label="操作" fixed="right" width="250"><template #default="scope"><div v-if="scope?.row" class="asset-row-actions"><el-button text type="primary" @click="openAsset(scope.row)">详情</el-button><el-button v-if="canEditAsset(scope.row)" text type="warning" :icon="Edit" :loading="editingAssetId === Number(scope.row.assetId)" @click="openEditDialog(scope.row)">编辑</el-button><el-button v-if="canDeleteAsset(scope.row)" text type="danger" :icon="Delete" :loading="deleting" @click="deleteAsset(scope.row)">删除</el-button></div></template></el-table-column></el-table></div>
+        <div v-else-if="viewMode === 'table'" class="asset-table-wrap"><el-table class="asset-data-table" :data="assets" row-key="assetId" max-height="620" v-loading="assetsLoading" empty-text="当前筛选没有资产"><el-table-column width="52" fixed="left" align="center"><template #header><el-checkbox :model-value="allSelectableSelected" :indeterminate="selectedAssets.length > 0 && !allSelectableSelected" :disabled="!selectableAssets.length" aria-label="选择当前页全部可操作资产" @change="toggleAllSelectable" /></template><template #default="scope"><el-checkbox v-if="scope?.row" :model-value="selectedAssetIds.has(Number(scope.row.assetId))" :disabled="!canSelectAsset(scope.row)" :aria-label="`选择资产 ${scope.row.assetName}`" @change="toggleAssetSelection(scope.row)" /></template></el-table-column><el-table-column label="缩略图" width="112"><template #default="scope"><ProtectedAssetThumbnail v-if="scope?.row" class="asset-thumb asset-thumb--small" :thumbnail="resolveAssetThumbnail(scope.row)" :alt="`${scope.row.assetName} 缩略图`" /></template></el-table-column><el-table-column label="类型 / 名称" width="170"><template #default="scope"><div v-if="scope?.row" class="asset-identity"><el-tag size="small" effect="plain" round :type="tagTypeFromTone(assetTypeMeta(scope.row.assetType).tone)">{{ assetTypeMeta(scope.row.assetType).label }}</el-tag><strong>{{ scope.row.assetName }}</strong><small>排序 {{ scope.row.sortOrder }}</small></div></template></el-table-column><el-table-column label="说明" min-width="220"><template #default="scope"><div v-if="scope?.row" class="asset-description">{{ scope.row.description || '—' }}</div></template></el-table-column><el-table-column label="制作分项" width="90" align="center" prop="itemCount" /><el-table-column label="制作人" width="130"><template #default="scope">{{ scope?.row ? assetAssigneeSummary(scope.row.assigneeUserIds, members) : '—' }}</template></el-table-column><el-table-column label="镜头使用" width="90" align="center" prop="usageShotCount" /><el-table-column label="状态 / 目录" width="132"><template #default="scope"><div v-if="scope?.row" class="asset-status"><el-tag size="small" effect="plain" round :type="tagTypeFromTone(assetStatusMeta(scope.row.assetStatus).tone)">{{ assetStatusMeta(scope.row.assetStatus).label }}</el-tag><el-tag size="small" effect="plain" round :type="tagTypeFromTone(assetDirectoryStatusMeta(scope.row.directoryStatus).tone)">{{ assetDirectoryStatusMeta(scope.row.directoryStatus).label }}</el-tag></div></template></el-table-column><el-table-column label="操作" fixed="right" width="250"><template #default="scope"><div v-if="scope?.row" class="asset-row-actions"><el-button text type="primary" @click="openAsset(scope.row)">详情</el-button><el-button v-if="canEditAsset(scope.row)" text type="warning" :icon="Edit" :loading="editingAssetId === Number(scope.row.assetId)" @click="openEditDialog(scope.row)">编辑</el-button><el-button v-if="canDeleteAsset(scope.row)" text type="danger" :icon="Delete" :loading="deleting" @click="deleteAsset(scope.row)">删除</el-button></div></template></el-table-column></el-table></div>
 
-        <div v-else-if="viewMode === 'card'" class="asset-grid" :class="{ 'is-refreshing': assetsLoading }"><el-card v-for="asset in assets" :key="asset.assetId" class="asset-card" shadow="hover" tabindex="0" @click="openAsset(asset)" @keydown.enter="openAsset(asset)"><ProtectedAssetThumbnail class="asset-thumb" :thumbnail="resolveAssetThumbnail(asset)" :alt="`${asset.assetName} 缩略图`" /><header><span class="type-chip" :data-tone="assetTypeMeta(asset.assetType).tone">{{ assetTypeMeta(asset.assetType).label }}</span><span class="status-chip" :data-tone="assetStatusMeta(asset.assetStatus).tone">{{ assetStatusMeta(asset.assetStatus).label }}</span></header><h3>{{ asset.assetName }}</h3><p>{{ asset.description || '暂无资产说明' }}</p><footer><span>{{ asset.itemCount }} 个制作分项</span><span>{{ asset.usageShotCount }} 个使用镜头</span></footer></el-card></div>
+        <div v-else-if="viewMode === 'card'" class="asset-grid" v-loading="assetsLoading"><el-card v-for="asset in assets" :key="asset.assetId" class="asset-card" shadow="hover" tabindex="0" @click="openAsset(asset)" @keydown.enter="openAsset(asset)"><ProtectedAssetThumbnail class="asset-thumb" :thumbnail="resolveAssetThumbnail(asset)" :alt="`${asset.assetName} 缩略图`" /><header><el-tag size="small" effect="plain" round :type="tagTypeFromTone(assetTypeMeta(asset.assetType).tone)">{{ assetTypeMeta(asset.assetType).label }}</el-tag><el-tag size="small" effect="plain" round :type="tagTypeFromTone(assetStatusMeta(asset.assetStatus).tone)">{{ assetStatusMeta(asset.assetStatus).label }}</el-tag></header><h3>{{ asset.assetName }}</h3><p>{{ asset.description || '暂无资产说明' }}</p><footer><span>{{ asset.itemCount }} 个制作分项</span><span>{{ asset.usageShotCount }} 个使用镜头</span></footer></el-card></div>
 
-        <div v-else class="type-board" :class="{ 'is-refreshing': assetsLoading }"><el-card v-for="group in groupedAssets" :key="group.type" class="type-board__column" shadow="never"><header><div><span class="type-chip" :data-tone="assetTypeMeta(group.type).tone">{{ assetTypeMeta(group.type).label }}</span><strong>{{ group.assets.length }}</strong></div><small>当前分页结果</small></header><div v-if="group.assets.length" class="type-board__items"><el-button v-for="asset in group.assets" :key="asset.assetId" text class="type-board__asset" @click="openAsset(asset)"><ProtectedAssetThumbnail class="asset-thumb asset-thumb--board" :thumbnail="resolveAssetThumbnail(asset)" :alt="`${asset.assetName} 缩略图`" /><span><strong>{{ asset.assetName }}</strong><small>{{ asset.itemCount }} 分项 · {{ assetStatusMeta(asset.assetStatus).label }}</small></span></el-button></div><el-empty v-else :image-size="48" :description="`本页暂无${assetTypeMeta(group.type).label}资产`" /></el-card></div>
+        <div v-else class="type-board" v-loading="assetsLoading"><el-card v-for="group in groupedAssets" :key="group.type" class="type-board__column" shadow="never"><header><div><el-tag size="small" effect="plain" round :type="tagTypeFromTone(assetTypeMeta(group.type).tone)">{{ assetTypeMeta(group.type).label }}</el-tag><strong>{{ group.assets.length }}</strong></div><small>当前分页结果</small></header><div v-if="group.assets.length" class="type-board__items"><el-button v-for="asset in group.assets" :key="asset.assetId" text class="type-board__asset" @click="openAsset(asset)"><ProtectedAssetThumbnail class="asset-thumb asset-thumb--board" :thumbnail="resolveAssetThumbnail(asset)" :alt="`${asset.assetName} 缩略图`" /><span><strong>{{ asset.assetName }}</strong><small>{{ asset.itemCount }} 分项</small><el-tag size="small" effect="plain" round :type="tagTypeFromTone(assetStatusMeta(asset.assetStatus).tone)">{{ assetStatusMeta(asset.assetStatus).label }}</el-tag></span></el-button></div><el-empty v-else :image-size="48" :description="`本页暂无${assetTypeMeta(group.type).label}资产`" /></el-card></div>
 
         <el-pagination v-if="total" class="asset-pagination" background layout="prev, pager, next, total" :current-page="query.pageNum" :page-size="query.pageSize" :total="total" :disabled="assetsLoading" aria-label="资产分页" @current-change="changePage" />
       </template>
@@ -626,21 +660,51 @@ onBeforeUnmount(() => {
     <AssetImportDialog v-if="showImport && importContext" :project-id="importContext.projectId" :operation-generation="importContext.operationGeneration" :project-name="project?.projectName" :members="members" @close="closeImportDialog" @imported="handleImported" />
     <AssetRequirementDialog v-if="showRequirements && currentProjectId" :project-id="currentProjectId" :can-resolve="canResolveRequirements" :can-ignore="canIgnoreRequirements" :can-rematch="canRematchRequirements" @close="closeRequirementDialog" @updated="loadProjectContext" />
 
-    <el-dialog v-model="showBatchAssign" :title="`${batchAssignLabel}资产制作人`" width="480px" :close-on-click-modal="!assigning" :close-on-press-escape="!assigning" :show-close="!assigning" @closed="batchAssigneeUserId = ''">
-      <div class="asset-batch-assign-dialog"><p>将所选 {{ selectedAssets.length }} 个资产的全部活动制作分项分配给同一位制作人；已有任务会执行改派。</p><label><span>制作人</span><el-select v-model="batchAssigneeUserId" class="sg-select" placeholder="请选择制作人" :disabled="assigning"><el-option v-for="member in creatorMembers" :key="member.userId" :label="memberLabel(member)" :value="String(member.userId)" /></el-select></label></div>
-      <template #footer><el-button :disabled="assigning" @click="closeBatchAssignDialog">取消</el-button><el-button type="primary" :loading="assigning" :disabled="!batchAssigneeUserId" @click="confirmBatchAssign">确认{{ batchAssignLabel }}</el-button></template>
+    <el-dialog v-model="showBatchAssign" :title="`${batchAssignLabel}资产制作人`" width="480px" :close-on-click-modal="!assigning" :close-on-press-escape="!assigning" :show-close="!assigning" @closed="resetBatchAssignForm">
+      <el-form ref="batchAssignFormRef" :model="batchAssignForm" :rules="batchAssignRules" class="asset-batch-assign-dialog" size="large" label-position="top" aria-label="资产批量分配表单"><p>将所选 {{ selectedAssets.length }} 个资产的全部活动制作分项分配给同一位制作人；已有任务会执行改派。</p><el-form-item label="制作人" prop="assigneeUserId"><el-select v-model="batchAssignForm.assigneeUserId" class="sg-select" placeholder="请选择制作人" :disabled="assigning"><el-option v-for="member in creatorMembers" :key="member.userId" :label="memberLabel(member)" :value="String(member.userId)" /></el-select></el-form-item></el-form>
+      <template #footer><el-button size="large" :disabled="assigning" @click="closeBatchAssignDialog">取消</el-button><el-button size="large" type="primary" :loading="assigning" @click="confirmBatchAssign">确认{{ batchAssignLabel }}</el-button></template>
     </el-dialog>
-    <el-drawer v-model="showDetail" class="asset-detail-drawer" :title="detailDrawerTitle" direction="rtl" size="72%" resizable append-to-body destroy-on-close @closed="clearDetailDrawer">
+    <el-drawer v-model="showDetail" class="sg-detail-drawer asset-detail-drawer" modal-class="sg-detail-drawer-mask" header-class="sg-detail-drawer__header" body-class="sg-detail-drawer__body" :title="detailDrawerTitle" direction="rtl" size="72%" resizable append-to-body destroy-on-close @closed="clearDetailDrawer">
       <AssetDetailView v-if="detailAssetId && currentProjectId" embedded :target-project-id="currentProjectId" :target-asset-id="detailAssetId" @changed="handleDetailChanged" @deleted="handleDetailDeleted" />
     </el-drawer>
   </section>
 </template>
 
 <style scoped>
-.asset-page{display:grid;gap:18px}.asset-heading{display:flex;gap:20px;align-items:flex-start;justify-content:space-between}.asset-heading__actions{display:flex;gap:9px}.project-context{display:flex;gap:14px;align-items:end;padding:15px 17px;background:var(--sg-surface);border:1px solid var(--sg-border);border-radius:var(--sg-radius-md);flex-wrap:wrap}.project-context label{display:grid;min-width:240px;gap:6px}.project-context label span{color:var(--sg-text-muted);font-size:10px}.project-context select,.asset-filters select,.asset-search{padding:10px 11px;color:var(--sg-text);background:#11151a;border:1px solid var(--sg-border);border-radius:8px}.project-context__meta{display:flex;gap:8px;align-items:center;flex:1;justify-content:flex-end;flex-wrap:wrap}.project-context__meta span{padding:6px 8px;color:var(--sg-text-muted);font-size:10px;background:rgba(255,255,255,.035);border-radius:7px}.project-context__meta span[data-ready=true]{color:var(--sg-success)}.asset-filters{display:grid;grid-template-columns:minmax(220px,1fr) repeat(3,minmax(130px,180px)) auto auto;gap:9px}.asset-search{display:flex;gap:8px;align-items:center}.asset-search input{width:100%;color:var(--sg-text);background:transparent;border:0;outline:0}.asset-toolbar{display:flex;align-items:center;justify-content:space-between}.asset-toolbar>div:first-child{display:flex;gap:6px;align-items:baseline}.asset-toolbar strong{font-size:23px}.asset-toolbar span{color:var(--sg-text-muted);font-size:11px}.view-switch{display:flex;padding:3px;background:rgba(255,255,255,.035);border-radius:9px}.view-switch button{display:flex;gap:6px;align-items:center;padding:7px 9px;color:var(--sg-text-muted);font-size:11px;cursor:pointer;background:transparent;border:0;border-radius:7px}.view-switch button[data-active=true]{color:var(--sg-text);background:rgba(255,255,255,.08)}.asset-table-wrap{overflow:auto;background:var(--sg-surface);border:1px solid var(--sg-border);border-radius:var(--sg-radius-md)}table{width:100%;min-width:1040px;border-collapse:collapse}th,td{padding:12px;border-bottom:1px solid var(--sg-border);font-size:11px;text-align:left;vertical-align:middle}th{color:var(--sg-text-muted)}td{color:var(--sg-text-secondary)}td strong,td small{display:block;margin-top:4px}.asset-description{max-width:290px;line-height:1.55}.asset-thumb--small{width:82px;height:54px;border-radius:7px}.type-chip,.status-chip{display:inline-flex;width:max-content;padding:5px 7px;font-size:10px;border-radius:999px}.type-chip[data-tone=character]{color:var(--sg-accent);background:var(--sg-accent-soft)}.type-chip[data-tone=environment]{color:#80bfff;background:rgba(128,191,255,.08)}.type-chip[data-tone=prop]{color:#8dd8a9;background:rgba(98,212,155,.08)}.status-chip{color:var(--sg-text-muted);background:rgba(255,255,255,.05)}.status-chip[data-tone=success]{color:var(--sg-success);background:rgba(98,212,155,.1)}.status-chip[data-tone=warning]{color:var(--sg-accent);background:var(--sg-accent-soft)}.status-chip[data-tone=danger]{color:var(--sg-danger);background:rgba(255,107,107,.09)}td small[data-tone=success]{color:var(--sg-success)}td small[data-tone=warning]{color:var(--sg-accent)}td small[data-tone=danger]{color:var(--sg-danger)}.asset-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:13px}.asset-card{overflow:hidden;cursor:pointer;background:var(--sg-surface);border:1px solid var(--sg-border);border-radius:var(--sg-radius-md);transition:.18s ease}.asset-card:hover,.asset-card:focus{border-color:var(--sg-border-strong);transform:translateY(-2px);outline:0}.asset-card>.asset-thumb{height:150px}.asset-card header,.asset-card footer{display:flex;align-items:center;justify-content:space-between}.asset-card header{padding:12px 14px 0}.asset-card h3,.asset-card p{margin:0;padding:0 14px}.asset-card h3{margin-top:10px}.asset-card p{min-height:38px;margin-top:6px;color:var(--sg-text-muted);font-size:11px;line-height:1.55}.asset-card footer{margin-top:12px;padding:10px 14px;color:var(--sg-text-muted);font-size:10px;border-top:1px solid var(--sg-border)}.type-board{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:13px}.type-board>section{min-width:0;padding:13px;background:var(--sg-surface);border:1px solid var(--sg-border);border-radius:var(--sg-radius-md)}.type-board section>header{display:flex;align-items:center;justify-content:space-between;margin-bottom:11px}.type-board header div{display:flex;gap:8px;align-items:center}.type-board header small,.type-board section>p{color:var(--sg-text-muted);font-size:10px}.type-board section>div{display:grid;gap:8px}.type-board button{display:grid;grid-template-columns:68px 1fr;gap:9px;align-items:center;padding:8px;color:var(--sg-text);text-align:left;cursor:pointer;background:rgba(255,255,255,.025);border:1px solid transparent;border-radius:9px}.type-board button:hover{border-color:var(--sg-border-strong)}.asset-thumb--board{width:68px;height:48px;border-radius:6px}.type-board button span strong,.type-board button span small{display:block}.type-board button span small{margin-top:4px;color:var(--sg-text-muted);font-size:9px}.asset-empty{display:grid;min-height:260px;align-content:center;color:var(--sg-text-muted);text-align:center;background:var(--sg-surface);border:1px dashed var(--sg-border);border-radius:var(--sg-radius-md);place-items:center}.asset-empty>.el-icon{font-size:34px}.asset-empty h3,.asset-empty p{margin:8px 0 0}.asset-empty p{font-size:11px}.asset-pagination{display:flex;gap:12px;align-items:center;justify-content:center}.asset-pagination button{padding:8px 11px;color:var(--sg-text-secondary);cursor:pointer;background:var(--sg-surface);border:1px solid var(--sg-border);border-radius:7px}.asset-pagination button:disabled{opacity:.35;cursor:not-allowed}.asset-pagination span{color:var(--sg-text-muted);font-size:11px}.is-refreshing{opacity:.55;pointer-events:none}@media(max-width:1100px){.asset-filters{grid-template-columns:1fr 1fr 1fr}.type-board{grid-template-columns:1fr}}@media(max-width:700px){.asset-heading{flex-direction:column}.asset-filters{grid-template-columns:1fr}.project-context label{min-width:100%}.project-context__meta{justify-content:flex-start}.asset-grid{grid-template-columns:1fr}}
-.asset-toolbar{gap:12px}.asset-toolbar__summary{display:flex!important;gap:8px!important;align-items:center!important;flex-wrap:wrap}.asset-table-wrap table{min-width:1180px}.asset-select-cell{width:34px;text-align:center}.asset-row-actions{display:flex;align-items:center;white-space:nowrap}.asset-batch-assign-dialog{display:grid;gap:16px}.asset-batch-assign-dialog p{margin:0;color:var(--sg-text-secondary);font-size:12px;line-height:1.65}.asset-batch-assign-dialog label{display:grid;gap:7px}.asset-batch-assign-dialog label span{color:var(--sg-text-muted);font-size:11px}
-:global(.asset-detail-drawer){min-width:720px;max-width:1100px;background:#10141a}:global(.asset-detail-drawer .el-drawer__header){margin-bottom:0;padding:18px 22px;color:var(--sg-text);border-bottom:1px solid var(--sg-border)}:global(.asset-detail-drawer .el-drawer__body){padding:20px 22px}@media(max-width:760px){:global(.asset-detail-drawer){min-width:0;width:94%!important}}
-.project-context:deep(.el-form-item){min-width:240px;margin:0}.project-context:deep(.el-form-item__label){height:auto;padding-bottom:6px;color:var(--sg-text-muted);font-size:10px;line-height:1}.project-context__meta:deep(.el-tag){background:rgba(255,255,255,.035);border-color:transparent}.asset-filters .asset-search{padding:0;background:transparent;border:0}.view-switch{padding:0;background:transparent}.view-switch:deep(.el-radio-button__inner){display:flex;gap:6px;align-items:center;color:var(--sg-text-muted);background:var(--sg-surface);border-color:var(--sg-border);box-shadow:none}.view-switch:deep(.el-radio-button__original-radio:checked+.el-radio-button__inner){color:var(--sg-accent);background:var(--sg-accent-soft);border-color:rgba(255,182,87,.32);box-shadow:-1px 0 0 0 rgba(255,182,87,.32)}.asset-table-wrap{overflow:hidden}.asset-data-table{--el-table-bg-color:var(--sg-surface);--el-table-tr-bg-color:var(--sg-surface);--el-table-header-bg-color:#15191f;--el-table-text-color:var(--sg-text-secondary);--el-table-header-text-color:var(--sg-text-muted);--el-table-border-color:var(--sg-border);--el-table-row-hover-bg-color:#171b22;width:100%}.asset-data-table:deep(.el-table__cell){padding:11px 0;font-size:11px}.asset-data-table:deep(.el-table-fixed-column--left),.asset-data-table:deep(.el-table-fixed-column--right){background:var(--sg-surface)}.asset-data-table:deep(th.el-table-fixed-column--left),.asset-data-table:deep(th.el-table-fixed-column--right){background:#15191f}.asset-data-table:deep(.el-table__body tr:hover>td.el-table-fixed-column--left),.asset-data-table:deep(.el-table__body tr:hover>td.el-table-fixed-column--right){background:#171b22}.asset-identity strong,.asset-identity small,.asset-status small{display:block;margin-top:5px}.asset-card:deep(.el-card__body){padding:0}.asset-card>.asset-thumb,.asset-card:deep(.el-card__body>.asset-thumb){height:150px}.type-board__column{min-width:0;background:var(--sg-surface);border-color:var(--sg-border)}.type-board__column:deep(.el-card__body){padding:13px}.type-board__column header{display:flex;align-items:center;justify-content:space-between;margin-bottom:11px}.type-board__items{display:grid;gap:8px}.type-board .type-board__asset{display:grid;width:100%;height:auto;grid-template-columns:68px minmax(0,1fr);gap:9px;align-items:center;justify-content:stretch;margin:0;padding:8px;color:var(--sg-text);text-align:left;background:rgba(255,255,255,.025);border:1px solid transparent}.type-board .type-board__asset:hover{background:rgba(255,255,255,.04);border-color:var(--sg-border-strong)}.type-board__asset>span{display:block;min-width:0}.type-board__asset>span strong,.type-board__asset>span small{display:block;overflow:hidden;text-overflow:ellipsis}.asset-pagination{margin-top:2px}.asset-pagination:deep(.el-pager li),.asset-pagination:deep(button){background:var(--sg-surface)!important}.asset-pagination:deep(.is-active){color:#17130d!important;background:var(--sg-accent)!important}
+.asset-page { display: grid; gap: 18px; }
+.asset-heading { display: flex; gap: 20px; align-items: flex-start; justify-content: space-between; }
+.asset-heading__actions { display: flex; gap: 9px; flex-wrap: wrap; }
+.project-context { display: flex; gap: 14px; align-items: end; padding: 15px 17px; background: var(--sg-surface); border: 1px solid var(--sg-border); border-radius: var(--sg-radius-md); flex-wrap: wrap; }
+.project-context__meta { display: flex; flex: 1; gap: 8px; align-items: center; justify-content: flex-end; flex-wrap: wrap; }
+.asset-filters { display: grid; grid-template-columns: minmax(220px, 1fr) repeat(3, minmax(130px, 180px)) auto; gap: 9px; }
+.asset-toolbar { display: flex; align-items: center; justify-content: space-between; }
+.asset-toolbar > div:first-child { display: flex; gap: 6px; align-items: baseline; }
+.asset-toolbar strong { font-size: 23px; }
+.asset-toolbar span { color: var(--sg-text-muted); font-size: 11px; }
+.asset-table-wrap { overflow: hidden; background: var(--sg-surface); border: 1px solid var(--sg-border); border-radius: var(--sg-radius-md); }
+.asset-description { max-width: 290px; line-height: 1.55; }
+.asset-thumb--small { width: 82px; height: 54px; border-radius: 7px; }
+.asset-status { display: flex; gap: 5px; align-items: flex-start; flex-direction: column; }
+.asset-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 13px; min-height: 120px; }
+.asset-card { overflow: hidden; cursor: pointer; background: var(--sg-surface); border-color: var(--sg-border); border-radius: var(--sg-radius-md); transition: .18s ease; }
+.asset-card:hover, .asset-card:focus { border-color: var(--sg-border-strong); transform: translateY(-2px); outline: 0; }
+.asset-card header, .asset-card footer { display: flex; align-items: center; justify-content: space-between; }
+.asset-card header { padding: 12px 14px 0; }
+.asset-card h3, .asset-card p { margin: 0; padding: 0 14px; }
+.asset-card h3 { margin-top: 10px; }
+.asset-card p { min-height: 38px; margin-top: 6px; color: var(--sg-text-muted); font-size: 11px; line-height: 1.55; }
+.asset-card footer { margin-top: 12px; padding: 10px 14px; color: var(--sg-text-muted); font-size: 10px; border-top: 1px solid var(--sg-border); }
+.type-board { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 13px; min-height: 120px; }
+.type-board header div { display: flex; gap: 8px; align-items: center; }
+.type-board header small { color: var(--sg-text-muted); font-size: 10px; }
+.asset-empty, .asset-context-loading { min-height: 260px; background: var(--sg-surface); border-color: var(--sg-border); border-radius: var(--sg-radius-md); }
+.asset-empty :deep(.el-empty__image .el-icon) { color: var(--sg-text-muted); font-size: 34px; }
+.asset-empty p { margin: 8px 0 0; color: var(--sg-text-muted); font-size: 11px; }
+.asset-pagination { justify-content: center; }
+@media (max-width: 1100px) { .asset-filters { grid-template-columns: 1fr 1fr 1fr; } .type-board { grid-template-columns: 1fr; } }
+@media (max-width: 700px) { .asset-heading { flex-direction: column; } .asset-filters { grid-template-columns: 1fr; } .project-context__meta { justify-content: flex-start; } .asset-grid { grid-template-columns: 1fr; } }
+.asset-toolbar{gap:12px}.asset-toolbar__summary{display:flex!important;gap:8px!important;align-items:center!important;flex-wrap:wrap}.asset-select-cell{width:34px;text-align:center}.asset-row-actions{display:flex;align-items:center;white-space:nowrap}.asset-batch-assign-dialog{display:grid;gap:16px}.asset-batch-assign-dialog p{margin:0;color:var(--sg-text-secondary);font-size:12px;line-height:1.65}.asset-batch-assign-dialog:deep(.el-form-item){margin-bottom:0}.asset-batch-assign-dialog:deep(.el-form-item__label){color:var(--sg-text-muted);font-size:11px}.asset-batch-assign-dialog:deep(.el-select){width:100%}
+.project-context:deep(.el-form-item){min-width:240px;margin:0}.project-context:deep(.el-form-item__label){height:auto;padding-bottom:6px;color:var(--sg-text-muted);font-size:10px;line-height:1}.asset-filters .asset-search{padding:0;background:transparent;border:0}.view-switch{padding:0;background:transparent}.view-switch:deep(.el-radio-button__inner){display:flex;gap:6px;align-items:center;color:var(--sg-text-muted);background:var(--sg-surface);border-color:var(--sg-border);box-shadow:none}.view-switch:deep(.el-radio-button__original-radio:checked+.el-radio-button__inner){color:var(--sg-accent);background:var(--sg-accent-soft);border-color:rgba(255,182,87,.32);box-shadow:-1px 0 0 0 rgba(255,182,87,.32)}.asset-table-wrap{overflow:hidden}.asset-data-table{--el-table-text-color:var(--sg-text-secondary);--el-table-header-text-color:var(--sg-text-muted);--el-table-border-color:var(--sg-border);width:100%}.asset-data-table:deep(.el-table__cell){padding:11px 0;font-size:11px}.asset-identity strong,.asset-identity small{display:block;margin-top:5px}.asset-card:deep(.el-card__body){padding:0}.asset-card>.asset-thumb,.asset-card:deep(.el-card__body>.asset-thumb){height:150px}.type-board__column{min-width:0;background:var(--sg-surface);border-color:var(--sg-border)}.type-board__column:deep(.el-card__body){padding:13px}.type-board__column header{display:flex;align-items:center;justify-content:space-between;margin-bottom:11px}.type-board__items{display:grid;gap:8px}.type-board .type-board__asset{display:block;width:100%;height:auto;margin:0;padding:8px;color:var(--sg-text);text-align:left;background:rgba(255,255,255,.025);border:1px solid transparent}.type-board .type-board__asset:hover{background:rgba(255,255,255,.04);border-color:var(--sg-border-strong)}.type-board .type-board__asset:deep(>span){display:grid;min-width:0;grid-template-columns:68px minmax(0,1fr);gap:9px;align-items:center}.type-board .type-board__asset:deep(>span>span){display:block;min-width:0}.type-board__asset:deep(>span>span strong),.type-board__asset:deep(>span>span small){display:block;overflow:hidden;text-overflow:ellipsis}.type-board__asset:deep(.el-tag){margin-top:5px}.asset-pagination{margin-top:2px}.asset-pagination:deep(.el-pager li),.asset-pagination:deep(button){background:var(--sg-surface)!important}.asset-pagination:deep(.is-active){color:#17130d!important;background:var(--sg-accent)!important}
 .asset-filters{grid-template-columns:minmax(220px,1fr) repeat(3,minmax(130px,180px)) auto}
 .asset-filters:deep(.el-form-item){min-width:0;margin-bottom:0}
 .asset-filter-item:deep(.el-form-item__content),.asset-filter-item:deep(.el-select),.asset-filter-item:deep(.el-input){width:100%;min-width:0}

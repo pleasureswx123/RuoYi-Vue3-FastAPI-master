@@ -93,10 +93,14 @@ describe('文件与 NAS 一级页', () => {
       orderByColumn: 'submittedTime'
     }), expect.objectContaining({ signal: expect.any(AbortSignal) }))
     expect(wrapper.text()).toContain('LCFR_EP001_001_S001_YJF_V003_1786.mp4')
-    expect(wrapper.text()).toContain('动力舱合成 · V003 · 审核文件')
+    expect(wrapper.text()).toContain('动力舱合成 · V003')
+    expect(wrapper.text()).toContain('审核文件')
     expect(wrapper.text()).toContain('EP01/SHOT/S001/LCFR_V003.mp4')
     expect(wrapper.find('.file-card.el-card').exists()).toBe(true)
-    expect(wrapper.findAll('.file-card .el-tag')).toHaveLength(2)
+    const fileTags = wrapper.find('.file-card').findAllComponents(ElTag)
+    expect(fileTags.map(tag => tag.text())).toEqual(['待审核', '审核文件', '主文件'])
+    expect(fileTags.map(tag => tag.props('type'))).toEqual(['warning', 'info', 'warning'])
+    fileTags.forEach(tag => expect(tag.props()).toMatchObject({ effect: 'plain', size: 'small', round: true }))
     expect(downloadProtectedVersionFile).toHaveBeenCalledWith(
       33,
       '018f1e40-2222-4222-8222-222222222222',
@@ -125,7 +129,7 @@ describe('文件与 NAS 一级页', () => {
     const wrapper = await mountView()
 
     await wrapper.find('input[aria-label="搜索业务文件"]').setValue('动力舱')
-    await wrapper.find('form.file-toolbar').trigger('submit')
+    await wrapper.findAllComponents(ElButton).find(button => button.text() === '搜索').trigger('click')
     await flushPromises()
     expect(getProjectFilePage).toHaveBeenLastCalledWith('8', expect.objectContaining({ keyword: '动力舱', pageNum: 1 }), expect.anything())
 

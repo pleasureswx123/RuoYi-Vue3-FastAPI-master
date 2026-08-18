@@ -1,7 +1,5 @@
 <script setup>
-import { computed, ref } from 'vue'
-import { WarningFilled } from '@element-plus/icons-vue'
-
+import { computed, reactive, ref } from 'vue'
 import { archiveAsset, archiveAssetItem } from '@/api/shot-grid/assets'
 import ProjectModal from '@/views/project/components/ProjectModal.vue'
 import { assetErrorState } from '@/views/asset/assetPresentation'
@@ -20,16 +18,29 @@ const operationContext = Object.freeze({
   assetItemId: props.item?.assetItemId ? Number(props.item.assetItemId) : null,
   operationGeneration: Number(props.operationGeneration)
 })
-const reason = ref('')
+const archiveForm = ref(null)
+const form = reactive({ reason: '' })
 const saving = ref(false)
-const validationMessage = ref('')
 const requestError = ref(null)
+const archiveRules = {
+  reason: [{
+    validator: (_rule, value, callback) => {
+      if (!String(value || '').trim()) {
+        callback(new Error('必须填写归档原因'))
+        return
+      }
+      callback()
+    },
+    trigger: 'blur'
+  }]
+}
 
 async function submit() {
-  const normalizedReason = reason.value.trim()
-  validationMessage.value = normalizedReason ? '' : '必须填写归档原因'
+  if (saving.value) return
   requestError.value = null
-  if (validationMessage.value) return
+  const isValid = await archiveForm.value?.validate().catch(() => false)
+  if (!isValid) return
+  const normalizedReason = form.reason.trim()
   saving.value = true
   try {
     const response = targetIsItem.value
@@ -48,19 +59,29 @@ async function submit() {
     saving.value = false
   }
 }
+
+function closeDialog() {
+  if (saving.value) return
+  archiveForm.value?.resetFields()
+  archiveForm.value?.clearValidate()
+  requestError.value = null
+  emit('close')
+}
 </script>
 
 <template>
-  <ProjectModal :title="targetIsItem ? '归档制作分项' : '归档资产'" :description="targetIsItem ? `${asset.assetName} · ${item.productionItem || '未命名制作分项'}；历史任务与版本不会被级联删除。` : `${asset.assetName}；资产及历史版本将保留，归档后不再进入活动生产。`" :busy="saving" @close="emit('close')">
-    <form class="archive-form" @submit.prevent="submit">
-      <div class="archive-form__warning"><el-icon><WarningFilled /></el-icon><span>这是受控业务动作，请填写可审计原因并确认目标。</span></div>
-      <div v-if="validationMessage || requestError" class="archive-form__error" role="alert"><strong>{{ requestError?.title || '请检查归档条件' }}</strong><p>{{ requestError?.message || validationMessage }}</p><code v-if="requestError?.errorKey">{{ requestError.errorKey }}</code><button v-if="requestError?.status === 409" type="button" @click="emit('refresh')">刷新后重试</button></div>
-      <label><span>归档原因</span><textarea v-model="reason" rows="4" maxlength="500" :disabled="saving" placeholder="说明归档原因" /></label>
-      <footer><el-button :disabled="saving" @click="emit('close')">取消</el-button><el-button type="danger" native-type="submit" :loading="saving">确认归档</el-button></footer>
-    </form>
+  <ProjectModal :title="targetIsItem ? '归档制作分项' : '归档资产'" :description="targetIsItem ? `${asset.assetName} · ${item.productionItem || '未命名制作分项'}；历史任务与版本不会被级联删除。` : `${asset.assetName}；资产及历史版本将保留，归档后不再进入活动生产。`" :busy="saving" @close="closeDialog">
+    <el-form ref="archiveForm" :model="form" :rules="archiveRules" class="archive-form" label-position="top" aria-label="资产归档表单">
+      <el-alert title="这是受控业务动作" description="请填写可审计原因并确认归档目标。" type="warning" show-icon :closable="false" />
+      <el-alert v-if="requestError" :title="requestError.title" type="error" show-icon :closable="false"><span>{{ requestError.message }}</span><code v-if="requestError.errorKey">{{ requestError.errorKey }}</code><el-button v-if="requestError.status === 409" link type="danger" @click="emit('refresh')">刷新后重试</el-button></el-alert>
+      <el-form-item label="归档原因" prop="reason">
+        <el-input v-model="form.reason" type="textarea" :rows="4" maxlength="500" show-word-limit :disabled="saving" placeholder="说明归档原因" />
+      </el-form-item>
+      <footer><el-button :disabled="saving" @click="closeDialog">取消</el-button><el-button type="danger" :loading="saving" @click="submit">确认归档</el-button></footer>
+    </el-form>
   </ProjectModal>
 </template>
 
 <style scoped>
-.archive-form{display:grid;gap:14px}.archive-form__warning{display:flex;gap:9px;align-items:center;padding:12px;color:var(--sg-accent);font-size:12px;background:var(--sg-accent-soft);border-radius:9px}.archive-form__error{padding:13px;color:#ffb4b4;background:rgba(255,107,107,.08);border-radius:9px}.archive-form__error p{margin:4px 0;font-size:12px}.archive-form__error code{font-size:10px}.archive-form__error button{display:block;padding:0;color:var(--sg-accent);cursor:pointer;background:transparent;border:0}.archive-form label{display:grid;gap:6px}.archive-form label span{color:var(--sg-text-muted);font-size:11px}.archive-form textarea{width:100%;box-sizing:border-box;padding:10px 11px;color:var(--sg-text);resize:vertical;background:#11151a;border:1px solid var(--sg-border);border-radius:8px}footer{display:flex;gap:10px;justify-content:flex-end}
+.archive-form{display:grid;gap:14px}.archive-form:deep(.el-form-item){margin-bottom:0}.archive-form:deep(.el-form-item__label){color:var(--sg-text-muted);font-size:11px}.archive-form:deep(.el-textarea__inner){resize:vertical}.archive-form :deep(.el-alert__description){display:grid;gap:4px}.archive-form :deep(.el-alert code){font-size:10px}footer{display:flex;gap:10px;justify-content:flex-end}
 </style>

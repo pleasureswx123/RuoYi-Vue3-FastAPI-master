@@ -5,6 +5,18 @@ const REVIEW_STATUS = Object.freeze({
   archived: { label: '已归档', tone: 'neutral' }
 })
 
+const REVIEW_MODE = Object.freeze({
+  auto_single: { label: '自动单版', tone: 'info' },
+  manual_batch: { label: '人工批量', tone: 'primary' }
+})
+
+const MEDIA_DERIVATION_STATUS = Object.freeze({
+  pending: { label: '媒体排队中', tone: 'warning' },
+  processing: { label: '正在生成预览', tone: 'warning' },
+  completed: { label: '预览已优化', tone: 'success' },
+  failed: { label: '使用原始媒体', tone: 'danger' }
+})
+
 const ACTION_META = Object.freeze({
   approve: { label: '确认通过', tone: 'success' },
   reject: { label: '退回修改', tone: 'danger' },
@@ -13,6 +25,14 @@ const ACTION_META = Object.freeze({
 
 export function reviewStatusMeta(status) {
   return REVIEW_STATUS[status] || { label: status || '未知', tone: 'neutral' }
+}
+
+export function reviewModeMeta(mode) {
+  return REVIEW_MODE[mode] || { label: mode || '未知模式', tone: 'neutral' }
+}
+
+export function mediaDerivationStatusMeta(status) {
+  return MEDIA_DERIVATION_STATUS[status] || null
 }
 
 export function reviewActionMeta(action) {

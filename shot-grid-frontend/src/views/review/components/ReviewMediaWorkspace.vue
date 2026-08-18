@@ -29,6 +29,22 @@ const comparisonVersion = ref(null)
 const comparisonLoading = ref(false)
 const comparisonPanelOpen = ref(false)
 const annotationPanelOpen = ref(false)
+const activeToolPanels = computed({
+  get: () => [
+    comparisonPanelOpen.value ? 'comparison' : '',
+    annotationPanelOpen.value ? 'annotation' : ''
+  ].filter(Boolean),
+  set: value => {
+    const next = new Set(Array.isArray(value) ? value : [value])
+    const comparisonWasOpen = comparisonPanelOpen.value
+    const annotationWasOpen = annotationPanelOpen.value
+    comparisonPanelOpen.value = next.has('comparison')
+    annotationPanelOpen.value = next.has('annotation')
+    if (comparisonWasOpen && !comparisonPanelOpen.value) comparisonVersionId.value = ''
+    if (!annotationWasOpen && annotationPanelOpen.value && tool.value === 'navigate') tool.value = 'point'
+    if (annotationWasOpen && !annotationPanelOpen.value) tool.value = 'navigate'
+  }
+})
 const tool = ref('navigate')
 const draftItems = ref([])
 const video = ref(null)
@@ -226,16 +242,6 @@ function captureCurrentTime() {
   ElMessage.success(`已捕获时间点 ${formatMediaTime(currentTimeMs.value)}`)
 }
 
-function toggleComparisonPanel() {
-  comparisonPanelOpen.value = !comparisonPanelOpen.value
-  if (!comparisonPanelOpen.value) comparisonVersionId.value = ''
-}
-
-function toggleAnnotationPanel() {
-  annotationPanelOpen.value = !annotationPanelOpen.value
-  tool.value = annotationPanelOpen.value ? 'point' : 'navigate'
-}
-
 function dismissGuide() {
   guideVisible.value = false
   try {
@@ -398,26 +404,28 @@ defineExpose({ clearDraft, seekToNote })
     <header class="media-heading">
       <div><p class="sg-eyebrow">{{ feedbackMode ? 'REVIEW FEEDBACK' : 'REVIEW MEDIA' }}</p><h3>{{ feedbackMode ? '审核人标注画面' : '查看审核作品' }}</h3><small>{{ feedbackMode ? '选择右侧意见，在原始版本画面上查看审核人留下的标注。' : '先查看作品；需要比较或指出具体画面时，再打开对应工具。' }}</small></div>
       <div class="media-actions">
-        <el-button v-if="canCompare" :type="comparisonPanelOpen ? 'primary' : 'default'" @click="toggleComparisonPanel">{{ comparisonVersionId ? '正在 A/B 对比' : 'A/B 对比' }}</el-button>
-        <el-button v-if="canAnnotate" :type="annotationPanelOpen ? 'primary' : 'default'" :icon="EditPen" @click="toggleAnnotationPanel">{{ annotationPanelOpen ? '结束画面标注' : '添加画面标注' }}</el-button>
-        <el-button v-if="!feedbackMode" text @click="showGuide">使用帮助</el-button>
+        <el-button v-if="!feedbackMode" link type="primary" @click="showGuide">使用帮助</el-button>
       </div>
     </header>
 
-    <section v-if="!feedbackMode && guideVisible" class="quick-guide" aria-label="审核作品操作引导">
-      <div><span>1</span><p><strong>先查看</strong>完整浏览当前版本，确认整体效果。</p></div>
-      <div><span>2</span><p><strong>有需要再标注</strong>选择点、框、箭头或文字后在画面上操作。</p></div>
-      <div><span>3</span><p><strong>回到右侧提交</strong>添加修改意见，最后选择审核结果。</p></div>
-      <el-button size="small" type="primary" plain @click="dismissGuide">知道了</el-button>
-    </section>
+    <el-alert v-if="!feedbackMode && guideVisible" class="quick-guide-alert" title="审核作品操作引导" type="info" show-icon @close="dismissGuide">
+      <div class="quick-guide">
+        <div><span>1</span><p><strong>先查看</strong>完整浏览当前版本，确认整体效果。</p></div>
+        <div><span>2</span><p><strong>有需要再标注</strong>选择点、框、箭头或文字后在画面上操作。</p></div>
+        <div><span>3</span><p><strong>回到右侧提交</strong>添加修改意见，最后选择审核结果。</p></div>
+      </div>
+    </el-alert>
 
-    <div v-show="comparisonPanelOpen || annotationPanelOpen" class="advanced-toolbar">
-      <div v-show="comparisonPanelOpen" class="comparison-controls">
+    <el-collapse v-if="canCompare || canAnnotate" v-model="activeToolPanels" class="advanced-toolbar">
+      <el-collapse-item v-if="canCompare" name="comparison" :title="comparisonVersionId ? 'A/B 对比（已选择 B 版本）' : 'A/B 对比'">
+        <div class="comparison-controls">
         <label>选择要与当前版本对比的历史版本</label>
         <el-select v-if="canCompare" v-model="comparisonVersionId" clearable filterable placeholder="选择 B 版本" :loading="comparisonLoading"><el-option v-for="item in comparisonVersions" :key="item.versionId" :label="`${item.versionNumber} · ${item.changelog}`" :value="String(item.versionId)" /></el-select>
         <small v-if="!comparisonVersions.length && !comparisonLoading">当前任务没有其他可对比版本。</small>
-      </div>
-      <div v-show="annotationPanelOpen" class="annotation-controls">
+        </div>
+      </el-collapse-item>
+      <el-collapse-item v-if="canAnnotate" name="annotation" title="画面标注工具">
+        <div class="annotation-controls">
         <span>选择标注方式</span>
         <el-button :type="tool === 'navigate' ? 'primary' : 'default'" :icon="VideoPlay" @click="tool = 'navigate'">浏览</el-button>
         <el-button :type="tool === 'point' ? 'primary' : 'default'" :icon="Aim" @click="tool = 'point'">点标注</el-button>
@@ -425,15 +433,16 @@ defineExpose({ clearDraft, seekToNote })
         <el-button :type="tool === 'arrow' ? 'primary' : 'default'" :icon="TopRight" @click="tool = 'arrow'">箭头</el-button>
         <el-button :type="tool === 'text' ? 'primary' : 'default'" :icon="EditPen" @click="tool = 'text'">文字</el-button>
         <el-button v-if="draftItems.length" :icon="Delete" @click="clearDraft">清空本次标注</el-button>
-      </div>
-    </div>
+        </div>
+      </el-collapse-item>
+    </el-collapse>
 
-    <div v-if="selectedNote" class="note-focus-banner" :class="{ 'is-pulsing': noteFocusPulse }"><span>正在查看意见</span><strong>{{ selectedNoteSummary }}</strong><el-button text size="small" @click="emit('clear-note-focus')">退出定位</el-button><p>{{ selectedNote.content }}</p></div>
+    <div v-if="selectedNote" class="note-focus-banner" :class="{ 'is-pulsing': noteFocusPulse }"><el-tag type="primary" effect="plain" size="small" round>正在查看意见</el-tag><strong>{{ selectedNoteSummary }}</strong><el-button text size="small" @click="emit('clear-note-focus')">退出定位</el-button><p>{{ selectedNote.content }}</p></div>
 
     <div class="media-columns" :class="{ 'has-comparison': comparisonVersionId }">
       <article class="media-column">
         <el-alert v-if="derivationLabel" class="media-derivation" :title="derivationLabel" :type="version.mediaDerivationStatus === 'failed' ? 'warning' : version.mediaDerivationStatus === 'completed' ? 'success' : 'info'" :closable="false" show-icon />
-        <div class="media-label"><strong>{{ feedbackMode ? '反馈版本' : 'A' }} · {{ version.versionNumber }} <em v-if="usingProxy">网页代理</em></strong><span v-if="currentKind === 'video'">{{ formatMediaTime(currentTimeMs) }}</span></div>
+        <div class="media-label"><strong>{{ feedbackMode ? '反馈版本' : 'A' }} · {{ version.versionNumber }} <el-tag v-if="usingProxy" type="success" effect="plain" size="small" round>网页代理</el-tag></strong><span v-if="currentKind === 'video'">{{ formatMediaTime(currentTimeMs) }}</span></div>
         <div v-if="currentMedia.state === 'ready' && currentKind !== 'unsupported'" class="media-stage" :class="{ 'is-note-focus': noteFocusPulse }" :style="stageStyle">
           <img v-if="currentKind === 'image'" :src="currentMedia.url" alt="当前审核图片" @load="onMediaReady($event, currentMedia)" />
           <video v-else ref="video" :src="currentMedia.url" :poster="currentMedia.posterUrl || undefined" controls preload="metadata" @loadedmetadata="onMediaReady($event, currentMedia)" @timeupdate="updateVideoTime" />
@@ -446,7 +455,7 @@ defineExpose({ clearDraft, seekToNote })
             </template>
           </div>
         </div>
-        <div v-else class="media-empty"><el-skeleton v-if="currentMedia.state === 'loading'" animated :rows="4" /><strong v-else>{{ !hasMedia ? '当前版本没有审核文件' : currentMedia.state === 'forbidden' ? '没有媒体下载权限' : currentMedia.state === 'error' ? currentMedia.error?.message : currentKind === 'unsupported' ? '该文件类型暂不支持内嵌预览' : '正在准备媒体…' }}</strong></div>
+        <div v-else class="media-empty"><el-skeleton v-if="currentMedia.state === 'loading'" animated :rows="4" /><el-empty v-else :image-size="52" :description="!hasMedia ? '当前版本没有审核文件' : currentMedia.state === 'forbidden' ? '没有媒体下载权限' : currentMedia.state === 'error' ? currentMedia.error?.message : currentKind === 'unsupported' ? '该文件类型暂不支持内嵌预览' : '正在准备媒体…'" /></div>
         <el-button v-if="!feedbackMode && currentKind === 'video' && currentMedia.state === 'ready'" :icon="Aim" @click="captureCurrentTime">把当前帧时间带入意见</el-button>
       </article>
 
@@ -464,7 +473,7 @@ defineExpose({ clearDraft, seekToNote })
             </template>
           </div>
         </div>
-        <div v-else class="media-empty"><strong>{{ compareMedia.state === 'error' ? compareMedia.error?.message : '正在加载对比版本…' }}</strong></div>
+        <div v-else class="media-empty"><el-skeleton v-if="compareMedia.state === 'loading'" animated :rows="4" /><el-empty v-else :image-size="52" :description="compareMedia.state === 'error' ? compareMedia.error?.message : '请选择可对比的版本'" /></div>
         <el-button :icon="RefreshRight" @click="comparisonVersionId = ''">退出对比</el-button>
       </article>
     </div>
@@ -473,8 +482,14 @@ defineExpose({ clearDraft, seekToNote })
 
 <style scoped>
 .media-workspace{display:grid;gap:15px;padding:20px;background:var(--sg-surface);border:1px solid var(--sg-border);border-radius:var(--sg-radius-md)}.media-heading,.media-actions,.media-label{display:flex;gap:10px;align-items:center;justify-content:space-between}.media-heading h3{margin:3px 0 0;font-size:16px}.media-heading small,.media-label span{color:var(--sg-text-muted);font-size:10px}.media-actions{justify-content:flex-end;flex-wrap:wrap}.media-actions .el-select{width:230px}.media-columns{display:grid;gap:14px}.media-columns.has-comparison{grid-template-columns:repeat(2,minmax(0,1fr))}.media-column{display:grid;min-width:0;gap:10px}.media-stage{position:relative;overflow:hidden;max-height:620px;background:#050608;border:1px solid var(--sg-border-strong);border-radius:10px}.media-stage img,.media-stage video{display:block;width:100%;height:100%;object-fit:contain}.annotation-layer{position:absolute;inset:0;pointer-events:none}.annotation-layer[data-active=true]{cursor:crosshair;pointer-events:auto}.annotation-point{position:absolute;width:18px;height:18px;border:3px solid;border-radius:50%;box-shadow:0 0 0 2px rgba(0,0,0,.6);transform:translate(-50%,-50%)}.annotation-rectangle{position:absolute;border:3px solid;box-shadow:0 0 0 1px rgba(0,0,0,.55)}.annotation-arrow{position:absolute;height:3px;background:currentColor;box-shadow:0 1px 2px rgba(0,0,0,.7);transform-origin:left center}.annotation-arrow i{position:absolute;top:50%;right:-2px;width:12px;height:12px;border-top:3px solid currentColor;border-right:3px solid currentColor;transform:translateY(-50%) rotate(45deg)}.annotation-text{position:absolute;max-width:min(280px,60%);padding:5px 8px;font-size:12px;font-weight:700;line-height:1.45;white-space:pre-wrap;overflow-wrap:anywhere;background:rgba(0,0,0,.72);border:1px solid currentColor;border-radius:6px;box-shadow:0 2px 8px rgba(0,0,0,.4);transform:translateY(-50%)}.media-empty{display:grid;min-height:260px;color:var(--sg-text-muted);text-align:center;background:#080a0d;border:1px dashed var(--sg-border);border-radius:10px;place-items:center}@media(max-width:950px){.media-heading{align-items:flex-start;flex-direction:column}.media-actions{justify-content:flex-start}.media-columns.has-comparison{grid-template-columns:1fr}}
-.media-label em{padding:3px 6px;color:var(--sg-success);font-size:9px;font-style:normal;background:rgba(98,212,155,.1);border-radius:999px}
-.quick-guide{display:grid;grid-template-columns:repeat(3,minmax(0,1fr)) auto;gap:12px;align-items:center;padding:12px 14px;background:linear-gradient(90deg,rgba(255,179,71,.1),rgba(98,212,155,.05));border:1px solid rgba(255,179,71,.25);border-radius:10px}.quick-guide>div{display:grid;grid-template-columns:auto 1fr;gap:8px;align-items:center}.quick-guide>div>span{display:grid;width:22px;height:22px;color:var(--sg-accent);font-size:10px;font-weight:800;background:var(--sg-accent-soft);border-radius:50%;place-items:center}.quick-guide p{margin:0;color:var(--sg-text-muted);font-size:9px;line-height:1.45}.quick-guide strong{display:block;color:var(--sg-text-secondary);font-size:10px}.advanced-toolbar{display:grid;gap:10px;padding:12px 14px;background:rgba(0,0,0,.12);border:1px solid var(--sg-border);border-radius:10px}.comparison-controls,.annotation-controls{display:flex;gap:9px;align-items:center;flex-wrap:wrap}.comparison-controls label,.annotation-controls>span{color:var(--sg-text-secondary);font-size:10px;font-weight:700}.comparison-controls .el-select{width:min(300px,100%)}.comparison-controls small{color:var(--sg-text-muted);font-size:9px}.note-focus-banner{display:grid;grid-template-columns:auto 1fr auto;gap:4px 10px;align-items:center;padding:10px 12px;background:rgba(104,181,255,.07);border:1px solid rgba(104,181,255,.22);border-radius:9px}.note-focus-banner>span{padding:3px 6px;color:#68b5ff;font-size:8px;background:rgba(104,181,255,.1);border-radius:999px}.note-focus-banner strong{font-size:10px}.note-focus-banner p{grid-column:1/-1;margin:0;color:var(--sg-text-muted);font-size:9px;line-height:1.5;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.note-focus-banner.is-pulsing{animation:note-focus-banner 1.2s ease-out}.media-stage.is-note-focus{box-shadow:0 0 0 2px rgba(104,181,255,.65),0 0 24px rgba(104,181,255,.18)}.annotation-point.is-selected-note,.annotation-rectangle.is-selected-note,.annotation-arrow.is-selected-note,.annotation-text.is-selected-note{z-index:2;filter:drop-shadow(0 0 6px currentColor);animation:selected-annotation 1s ease-in-out 2}.annotation-point.is-selected-note{box-shadow:0 0 0 5px rgba(255,255,255,.35),0 0 18px currentColor}
+.media-label strong{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.quick-guide{display:grid;grid-template-columns:repeat(3,minmax(0,1fr)) auto;gap:12px;align-items:center;padding:12px 14px;background:linear-gradient(90deg,rgba(255,179,71,.1),rgba(98,212,155,.05));border:1px solid rgba(255,179,71,.25);border-radius:10px}.quick-guide>div{display:grid;grid-template-columns:auto 1fr;gap:8px;align-items:center}.quick-guide>div>span{display:grid;width:22px;height:22px;color:var(--sg-accent);font-size:10px;font-weight:800;background:var(--sg-accent-soft);border-radius:50%;place-items:center}.quick-guide p{margin:0;color:var(--sg-text-muted);font-size:9px;line-height:1.45}.quick-guide strong{display:block;color:var(--sg-text-secondary);font-size:10px}.advanced-toolbar{display:grid;gap:10px;padding:12px 14px;background:rgba(0,0,0,.12);border:1px solid var(--sg-border);border-radius:10px}.comparison-controls,.annotation-controls{display:flex;gap:9px;align-items:center;flex-wrap:wrap}.comparison-controls label,.annotation-controls>span{color:var(--sg-text-secondary);font-size:10px;font-weight:700}.comparison-controls .el-select{width:min(300px,100%)}.comparison-controls small{color:var(--sg-text-muted);font-size:9px}.note-focus-banner{display:grid;grid-template-columns:auto 1fr auto;gap:4px 10px;align-items:center;padding:10px 12px;background:rgba(104,181,255,.07);border:1px solid rgba(104,181,255,.22);border-radius:9px}.note-focus-banner strong{font-size:10px}.note-focus-banner p{grid-column:1/-1;margin:0;color:var(--sg-text-muted);font-size:9px;line-height:1.5;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.note-focus-banner.is-pulsing{animation:note-focus-banner 1.2s ease-out}.media-stage.is-note-focus{box-shadow:0 0 0 2px rgba(104,181,255,.65),0 0 24px rgba(104,181,255,.18)}.annotation-point.is-selected-note,.annotation-rectangle.is-selected-note,.annotation-arrow.is-selected-note,.annotation-text.is-selected-note{z-index:2;filter:drop-shadow(0 0 6px currentColor);animation:selected-annotation 1s ease-in-out 2}.annotation-point.is-selected-note{box-shadow:0 0 0 5px rgba(255,255,255,.35),0 0 18px currentColor}
 @keyframes note-focus-banner{0%{transform:translateY(-3px);box-shadow:0 0 0 0 rgba(104,181,255,.45)}100%{transform:translateY(0);box-shadow:0 0 0 12px rgba(104,181,255,0)}}@keyframes selected-annotation{50%{opacity:.45}}
 @media(max-width:950px){.quick-guide{grid-template-columns:1fr}.quick-guide>.el-button{justify-self:start}.comparison-controls,.annotation-controls{align-items:flex-start;flex-direction:column}.comparison-controls .el-select{width:100%}}
+.quick-guide-alert:deep(.el-alert__content){width:100%}
+.quick-guide-alert .quick-guide{grid-template-columns:repeat(3,minmax(0,1fr));padding:8px 0 0;background:transparent;border:0}
+.advanced-toolbar{--el-collapse-border-color:var(--sg-border);--el-collapse-header-bg-color:transparent;--el-collapse-header-text-color:var(--sg-text-secondary);--el-collapse-content-bg-color:transparent;--el-collapse-content-text-color:var(--sg-text-secondary)}
+.advanced-toolbar:deep(.el-collapse-item__header){font-size:12px;font-weight:650}
+.advanced-toolbar:deep(.el-collapse-item__content){padding:4px 0 12px}
+@media(max-width:950px){.quick-guide-alert .quick-guide{grid-template-columns:1fr}}
 </style>

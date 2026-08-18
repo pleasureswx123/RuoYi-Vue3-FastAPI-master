@@ -6,11 +6,13 @@ import { Plus, Refresh, Search } from '@element-plus/icons-vue'
 
 import { getProjectPage } from '@/api/shot-grid/projects'
 import { useSessionStore } from '@/store/modules/session'
+import { tagTypeFromTone } from '@/utils/tag'
 import ProjectCreateDialog from '@/views/project/components/ProjectCreateDialog.vue'
 import ProjectStatePanel from '@/views/project/components/ProjectStatePanel.vue'
 import {
   phaseLabel,
   projectErrorState,
+  projectRoleMeta,
   statusMeta,
   storageMeta
 } from '@/views/project/projectPresentation'
@@ -22,6 +24,7 @@ const total = ref(0)
 const loading = ref(false)
 const errorState = ref(null)
 const showCreate = ref(false)
+const filterFormRef = ref(null)
 const query = reactive({
   keyword: '',
   projectStatus: '',
@@ -31,7 +34,21 @@ const query = reactive({
   orderByColumn: 'createTime',
   isAsc: 'descending'
 })
+const projectFilterRules = {
+  keyword: [{
+    validator: (_rule, value, callback) => {
+      if (String(value || '').length > 200) callback(new Error('搜索内容不能超过 200 个字符'))
+      else callback()
+    },
+    trigger: 'change'
+  }],
+  projectStatus: [{ type: 'enum', enum: ['', 'preparing', 'active', 'completed', 'archived'], message: '请选择有效的项目状态', trigger: 'change' }],
+  scope: [{ type: 'enum', enum: ['', 'all'], message: '请选择有效的项目范围', trigger: 'change' }],
+  orderByColumn: [{ required: true, type: 'enum', enum: ['createTime', 'projectCode', 'projectName'], message: '请选择有效的排序字段', trigger: 'change' }],
+  isAsc: [{ required: true, type: 'enum', enum: ['descending', 'ascending'], message: '请选择有效的排序方向', trigger: 'change' }]
+}
 let activeController = null
+let loadGeneration = 0
 
 const hasWildcard = computed(() => sessionStore.permissions.includes('*:*:*'))
 const canCreate = computed(
@@ -43,7 +60,15 @@ const canViewAll = computed(
 const pageCount = computed(() => Math.max(1, Math.ceil(total.value / query.pageSize)))
 
 async function loadProjects() {
+  const generation = ++loadGeneration
   activeController?.abort()
+  activeController = null
+  loading.value = false
+  const isValid = filterFormRef.value
+    ? await filterFormRef.value.validate().catch(() => false)
+    : false
+  if (!isValid || generation !== loadGeneration) return
+
   const controller = new AbortController()
   activeController = controller
   loading.value = true
@@ -57,16 +82,18 @@ async function loadProjects() {
       },
       { signal: controller.signal }
     )
-    projects.value = Array.isArray(response.rows) ? response.rows : []
-    total.value = Number(response.total || 0)
+    if (generation === loadGeneration) {
+      projects.value = Array.isArray(response.rows) ? response.rows : []
+      total.value = Number(response.total || 0)
+    }
   } catch (error) {
-    if (error?.code !== 'ERR_CANCELED') {
+    if (generation === loadGeneration && error?.code !== 'ERR_CANCELED') {
       projects.value = []
       total.value = 0
       errorState.value = projectErrorState(error, '项目列表加载失败')
     }
   } finally {
-    if (activeController === controller) loading.value = false
+    if (generation === loadGeneration && activeController === controller) loading.value = false
   }
 }
 
@@ -81,10 +108,6 @@ function changePage(nextPage) {
   loadProjects()
 }
 
-function tagType(tone) {
-  return ['success', 'warning', 'danger'].includes(tone) ? tone : 'info'
-}
-
 async function openProject(projectId) {
   await router.push(`/projects/${projectId}/overview`)
 }
@@ -96,7 +119,10 @@ async function handleCreated(result) {
 }
 
 onMounted(loadProjects)
-onBeforeUnmount(() => activeController?.abort())
+onBeforeUnmount(() => {
+  loadGeneration += 1
+  activeController?.abort()
+})
 </script>
 
 <template>
@@ -110,7 +136,7 @@ onBeforeUnmount(() => activeController?.abort())
       <el-button v-if="canCreate" type="primary" :icon="Plus" @click="showCreate = true">创建项目</el-button>
     </header>
 
-    <el-form :model="query" class="project-filters" aria-label="项目筛选" @submit.prevent="submitFilters">
+    <el-form ref="filterFormRef" :model="query" :rules="projectFilterRules" class="project-filters" size="large" aria-label="项目筛选">
       <el-form-item class="project-filter-item project-filter-item--keyword" prop="keyword">
         <el-input v-model="query.keyword" :prefix-icon="Search" maxlength="200" clearable placeholder="搜索项目名称或代号" aria-label="搜索项目名称或代号" />
       </el-form-item>
@@ -143,7 +169,7 @@ onBeforeUnmount(() => activeController?.abort())
         </el-select>
       </el-form-item>
       <el-form-item class="project-filter-actions">
-        <el-button type="primary" native-type="submit" :loading="loading">查询</el-button>
+        <el-button type="primary" :loading="loading" @click="submitFilters">查询</el-button>
         <el-button :icon="Refresh" circle aria-label="刷新项目列表" :disabled="loading" @click="loadProjects" />
       </el-form-item>
     </el-form>
@@ -163,7 +189,7 @@ onBeforeUnmount(() => activeController?.abort())
     </div>
 
     <el-empty v-else-if="projects.length === 0" class="project-empty" description="当前范围暂无项目">
-      <p>可以调整筛选条件，或由具备权限的项目总监创建第一个项目。</p>
+      <p>可以调整筛选条件，或由具备项目创建权限的用户创建第一个项目。</p>
       <el-button v-if="canCreate" type="primary" :icon="Plus" @click="showCreate = true">创建项目</el-button>
     </el-empty>
 
@@ -172,7 +198,7 @@ onBeforeUnmount(() => activeController?.abort())
         <span>共 {{ total }} 个项目</span>
         <span v-if="loading">正在刷新…</span>
       </div>
-      <div class="project-grid" :class="{ 'is-refreshing': loading }">
+      <div class="project-grid" v-loading="loading">
         <el-card
           v-for="project in projects"
           :key="project.projectId"
@@ -186,28 +212,32 @@ onBeforeUnmount(() => activeController?.abort())
         >
           <header class="project-card__header">
             <span class="project-card__code">{{ project.projectCode }}</span>
-            <el-tag size="small" effect="plain" :type="tagType(statusMeta(project.projectStatus).tone)">
+            <el-tag size="small" effect="plain" round :type="tagTypeFromTone(statusMeta(project.projectStatus).tone)">
               {{ statusMeta(project.projectStatus).label }}
             </el-tag>
           </header>
           <div class="project-card__title-row">
             <div>
               <h3>{{ project.projectName }}</h3>
-              <p>{{ project.projectTypeName }} · {{ project.aspectRatio }}</p>
+              <div class="project-card__attributes">
+                <el-tag size="small" effect="plain" type="primary">{{ project.projectTypeName }}</el-tag>
+                <el-tag size="small" effect="plain" type="info">{{ project.aspectRatio }}</el-tag>
+              </div>
             </div>
-            <el-tag class="project-card__role" size="small" effect="plain" type="info">{{ project.myProjectRole === 'director' ? '项目总监' : project.myProjectRole === 'creator' ? '制作人员' : '跨项目管理员' }}</el-tag>
+            <el-tag class="project-card__role" size="small" effect="plain" round :type="projectRoleMeta(project.myProjectRole).type">我的角色：{{ projectRoleMeta(project.myProjectRole).label }}</el-tag>
           </div>
           <div class="project-card__storage">
-            <span class="status-dot" :data-tone="storageMeta(project.storageStatus).tone"></span>
-            {{ storageMeta(project.storageStatus).label }}
+            <el-tag size="small" effect="plain" round :type="tagTypeFromTone(storageMeta(project.storageStatus).tone)">{{ storageMeta(project.storageStatus).label }}</el-tag>
           </div>
-          <dl class="project-card__metrics">
-            <div><dt>阶段</dt><dd>{{ phaseLabel(project.currentPhase) }}</dd></div>
-            <div><dt>镜头</dt><dd>{{ project.completedShots }}/{{ project.totalShots }}</dd></div>
-            <div><dt>资产</dt><dd>{{ project.completedAssets }}/{{ project.totalAssets }}</dd></div>
-          </dl>
+          <el-descriptions class="project-card__metrics" :column="3" size="small" border>
+            <el-descriptions-item label="阶段">
+              <el-tag size="small" effect="plain" type="info">{{ phaseLabel(project.currentPhase) }}</el-tag>
+            </el-descriptions-item>
+            <el-descriptions-item label="镜头">{{ project.completedShots }}/{{ project.totalShots }}</el-descriptions-item>
+            <el-descriptions-item label="资产">{{ project.completedAssets }}/{{ project.totalAssets }}</el-descriptions-item>
+          </el-descriptions>
           <div class="project-card__progress">
-            <el-progress :percentage="Number(project.overallProgress || 0)" :stroke-width="5" :show-text="false" />
+            <el-progress :percentage="Number(project.overallProgress || 0)" :stroke-width="5" :show-text="false" color="var(--sg-accent)" />
             <strong>{{ Number(project.overallProgress || 0).toFixed(0) }}%</strong>
           </div>
         </el-card>
@@ -269,11 +299,6 @@ onBeforeUnmount(() => activeController?.abort())
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 16px;
-  transition: opacity 150ms ease;
-}
-
-.project-grid.is-refreshing {
-  opacity: 0.58;
 }
 
 .project-card {
@@ -322,6 +347,13 @@ onBeforeUnmount(() => activeController?.abort())
   margin: 0;
 }
 
+.project-card__attributes {
+  display: flex;
+  gap: 6px;
+  margin-top: 7px;
+  flex-wrap: wrap;
+}
+
 .project-card h3 {
   font-size: 20px;
 }
@@ -346,40 +378,28 @@ onBeforeUnmount(() => activeController?.abort())
   font-size: 12px;
 }
 
-.status-dot {
-  width: 7px;
-  height: 7px;
-  background: var(--sg-text-muted);
-  border-radius: 50%;
-}
-
-.status-dot[data-tone='success'] { background: var(--sg-success); }
-.status-dot[data-tone='warning'] { background: var(--sg-accent); }
-.status-dot[data-tone='danger'] { background: var(--sg-danger); }
-
 .project-card__metrics {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 14px;
-  margin: 0;
+  --el-descriptions-table-border: var(--sg-border);
+  width: 100%;
 }
 
-.project-card__metrics div {
-  min-width: 0;
+.project-card__metrics :deep(.el-descriptions__body) {
+  background: transparent;
 }
 
-.project-card__metrics dt {
+.project-card__metrics :deep(.el-descriptions__label.el-descriptions__cell) {
+  padding: 8px 10px 3px;
   color: var(--sg-text-muted);
+  background: rgba(255, 255, 255, 0.018);
   font-size: 10px;
+  font-weight: 500;
 }
 
-.project-card__metrics dd {
-  margin: 4px 0 0;
-  overflow: hidden;
+.project-card__metrics :deep(.el-descriptions__content.el-descriptions__cell) {
+  padding: 3px 10px 9px;
   color: var(--sg-text-secondary);
+  background: rgba(255, 255, 255, 0.018);
   font-size: 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .project-card__progress {
@@ -387,11 +407,9 @@ onBeforeUnmount(() => activeController?.abort())
 }
 
 .project-card__progress :deep(.el-progress) {
+  --el-fill-color-light: var(--sg-progress-track);
   flex: 1;
 }
-
-.project-card__progress :deep(.el-progress-bar__outer) { background: rgba(255, 255, 255, 0.06); }
-.project-card__progress :deep(.el-progress-bar__inner) { background: var(--sg-accent); }
 
 .project-card__progress strong {
   color: var(--sg-text-secondary);

@@ -1,4 +1,4 @@
-import { ElButton, ElIcon, ElImage } from 'element-plus'
+import { ElButton, ElIcon, ElImage, ElTag } from 'element-plus'
 import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -17,7 +17,7 @@ vi.mock('@/api/shot-grid/versions', () => ({
 
 const imageFileId = '550e8400-e29b-41d4-a716-446655440000'
 const videoFileId = '550e8400-e29b-41d4-a716-446655440001'
-const mountOptions = { global: { components: { ElButton, ElIcon, ElImage } } }
+const mountOptions = { global: { components: { ElButton, ElIcon, ElImage, ElTag } } }
 
 function version(file, overrides = {}) {
   return {
@@ -44,6 +44,8 @@ describe('受保护版本预览', () => {
     expect(downloadProtectedVersionFile).toHaveBeenCalledWith(7, imageFileId, expect.objectContaining({ signal: expect.any(AbortSignal) }))
     expect(wrapper.findComponent(ElImage).props('previewSrcList')).toEqual(['blob:version-preview'])
     expect(wrapper.find('img').attributes('src')).toBe('blob:version-preview')
+    expect(wrapper.findComponent(ElTag).props()).toMatchObject({ type: 'info', effect: 'dark', size: 'small', round: true })
+    expect(wrapper.findComponent(ElTag).text()).toBe('图片')
     wrapper.unmount()
     expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:version-preview')
   })
@@ -56,6 +58,7 @@ describe('受保护版本预览', () => {
     expect(createVersionPlaybackTicket).toHaveBeenCalledWith(7, videoFileId, expect.objectContaining({ signal: expect.any(AbortSignal) }))
     expect(resolvePlaybackUrl).toHaveBeenCalledWith('/shot-grid/playback/ticket')
     expect(wrapper.find('video').attributes('src')).toBe('/dev-api/shot-grid/playback/ticket')
+    expect(wrapper.findComponent(ElTag).text()).toBe('视频')
     wrapper.unmount()
   })
 

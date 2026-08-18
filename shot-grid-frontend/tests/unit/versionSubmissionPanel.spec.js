@@ -1,4 +1,4 @@
-import { ElButton, ElIcon, ElTag } from 'element-plus'
+import { ElButton, ElForm, ElFormItem, ElIcon, ElInput, ElTag, ElUpload } from 'element-plus'
 import { flushPromises, mount } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -23,7 +23,7 @@ vi.mock('@/api/shot-grid/versions', () => ({
 
 const fileId = '550e8400-e29b-41d4-a716-446655440000'
 const mountOptions = {
-  global: { components: { ElButton, ElIcon, ElTag } }
+  global: { components: { ElButton, ElForm, ElFormItem, ElIcon, ElInput, ElTag, ElUpload } }
 }
 
 function accepted(overrides = {}) {
@@ -61,7 +61,7 @@ async function chooseValidFileAndSubmit(wrapper) {
   Object.defineProperty(input.element, 'files', { configurable: true, value: [file] })
   await input.trigger('change')
   await wrapper.find('.field-label textarea').setValue('调整镜头节奏')
-  await wrapper.find('form').trigger('submit')
+  await wrapper.findAllComponents(ElButton).find(button => button.text().includes('上传并提交版本')).trigger('click')
   await flushPromises()
   return file
 }
@@ -107,19 +107,21 @@ describe('版本上传与发布面板', () => {
 
     expect(preflightVersionSubmission).toHaveBeenCalledWith(
       31,
-      { fileName: '结果.mov', fileSize: file.size, changelog: '调整镜头节奏', aiParams: null },
+      { fileName: '结果.mov', fileSize: file.size, changelog: '调整镜头节奏', aiParams: null, issueResponses: [] },
       expect.objectContaining({ signal: expect.any(AbortSignal) })
     )
     expect(uploadProtectedVersionFile).toHaveBeenCalledWith(file, expect.objectContaining({ signal: expect.any(AbortSignal), onUploadProgress: expect.any(Function) }))
     expect(createVersionSubmission).toHaveBeenCalledWith(
       31,
-      { fileId, changelog: '调整镜头节奏', aiParams: null },
+      { fileId, changelog: '调整镜头节奏', aiParams: null, openIssueSnapshotHash: undefined, issueResponses: [] },
       expect.stringContaining('version-31:'),
       expect.objectContaining({ signal: expect.any(AbortSignal) })
     )
     expect(preflightVersionSubmission.mock.invocationCallOrder[0]).toBeLessThan(uploadProtectedVersionFile.mock.invocationCallOrder[0])
     expect(uploadProtectedVersionFile.mock.invocationCallOrder[0]).toBeLessThan(createVersionSubmission.mock.invocationCallOrder[0])
     expect(wrapper.text()).toContain('等待发布')
+    expect(wrapper.find('.submission-status').findComponent(ElTag).text()).toBe('等待发布')
+    expect(wrapper.find('.submission-status').findComponent(ElTag).text()).not.toBe('pending')
     expect(wrapper.text()).toContain('不能视为版本成功')
     expect(wrapper.emitted('committed')).toBeUndefined()
     expect(localStorage.length).toBe(0)
@@ -142,7 +144,7 @@ describe('版本上传与发布面板', () => {
     expect(wrapper.find('.field-label textarea').attributes('disabled')).toBeDefined()
     expect(wrapper.find('.ai-params textarea').attributes('disabled')).toBeDefined()
 
-    await wrapper.find('form').trigger('submit')
+    await wrapper.findAllComponents(ElButton).find(button => button.text().includes('重试创建版本提交')).trigger('click')
     await flushPromises()
     expect(uploadProtectedVersionFile).toHaveBeenCalledTimes(1)
     expect(preflightVersionSubmission).toHaveBeenCalledTimes(1)
@@ -266,7 +268,7 @@ describe('版本上传与发布面板', () => {
     })
     await flushPromises()
     await chooseValidFileAndSubmit(wrapper)
-    await wrapper.find('form').trigger('submit')
+    await wrapper.findAllComponents(ElButton).find(button => button.text().includes('重试创建版本提交')).trigger('click')
     await flushPromises()
 
     expect(wrapper.emitted('committed')).toHaveLength(1)
@@ -316,6 +318,9 @@ describe('版本上传与发布面板', () => {
     expect(wrapper.text()).toContain('发布失败')
     expect(wrapper.text()).toContain('平台源文件暂不可读')
     expect(wrapper.find('input[type="file"]').exists()).toBe(false)
+    expect(wrapper.findComponent(ElTag).props()).toMatchObject({
+      type: 'danger', effect: 'dark', size: 'small', round: true
+    })
 
     await wrapper.findAll('button').find(item => item.text().includes('人工重试')).trigger('click')
     await flushPromises()
@@ -438,7 +443,7 @@ describe('版本上传与发布面板', () => {
     Object.defineProperty(input.element, 'files', { configurable: true, value: [file] })
     await input.trigger('change')
     await wrapper.find('.field-label textarea').setValue('第一行\n第二行')
-    await wrapper.find('form').trigger('submit')
+    await wrapper.findAllComponents(ElButton).find(button => button.text().includes('上传并提交版本')).trigger('click')
     await flushPromises()
 
     expect(wrapper.text()).toContain('不能包含换行、Tab 或其他控制字符')

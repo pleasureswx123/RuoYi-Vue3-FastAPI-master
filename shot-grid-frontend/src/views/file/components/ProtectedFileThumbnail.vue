@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import { Files, Loading, Lock, Picture, VideoPlay, WarningFilled } from '@element-plus/icons-vue'
-import { ElButton, ElDialog, ElImage } from 'element-plus'
+import { VideoPlay } from '@element-plus/icons-vue'
+import { ElButton, ElDialog, ElEmpty, ElImage, ElResult, ElSkeleton, ElSkeletonItem } from 'element-plus'
 
 import { downloadProtectedVersionFile } from '@/api/shot-grid/versions'
 
@@ -113,17 +113,17 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="file-thumbnail" :data-state="state">
-    <button
+    <ElButton
       v-if="state === 'ready' && video?.fileId"
       class="file-thumbnail__video-trigger"
-      type="button"
+      text
       :aria-label="`${alt}，点击预览视频`"
       title="点击预览视频"
       @click="openVideoPreview"
     >
       <ElImage class="file-thumbnail__image" :src="objectUrl" :alt="alt" fit="contain" />
       <span class="file-thumbnail__play" aria-hidden="true"><el-icon><VideoPlay /></el-icon></span>
-    </button>
+    </ElButton>
     <ElImage
       v-else-if="state === 'ready'"
       class="file-thumbnail__image"
@@ -135,12 +135,10 @@ onBeforeUnmount(() => {
       hide-on-click-modal
       preview-teleported
     />
-    <div v-else class="file-thumbnail__placeholder" :title="message">
-      <el-icon v-if="state === 'forbidden'"><Lock /></el-icon>
-      <el-icon v-else-if="state === 'missing' || state === 'error'"><Picture /></el-icon>
-      <el-icon v-else><Files /></el-icon>
-      <span>{{ message }}</span>
-    </div>
+    <ElSkeleton v-else-if="state === 'loading'" class="file-thumbnail__placeholder" animated>
+      <template #template><ElSkeletonItem class="file-thumbnail__skeleton" variant="image" /></template>
+    </ElSkeleton>
+    <ElEmpty v-else class="file-thumbnail__placeholder" :image-size="20" :description="message" :title="message" />
   </div>
 
   <ElDialog
@@ -153,12 +151,8 @@ onBeforeUnmount(() => {
     destroy-on-close
     @close="closeVideoPreview"
   >
-    <div v-if="videoState === 'loading'" class="file-video-preview__state">
-      <el-icon class="is-loading"><Loading /></el-icon><span>正在安全加载视频…</span>
-    </div>
-    <div v-else-if="videoState === 'error'" class="file-video-preview__state is-error" role="alert">
-      <el-icon><WarningFilled /></el-icon><span>视频加载失败，请重试。</span><ElButton @click="openVideoPreview">重试</ElButton>
-    </div>
+    <ElSkeleton v-if="videoState === 'loading'" class="file-video-preview__state" :rows="5" animated />
+    <ElResult v-else-if="videoState === 'error'" class="file-video-preview__state is-error" icon="error" title="视频加载失败" sub-title="受保护视频未能加载，请重试。"><template #extra><ElButton @click="openVideoPreview">重试</ElButton></template></ElResult>
     <video
       v-else-if="videoState === 'ready'"
       class="file-video-preview__player"
@@ -173,5 +167,5 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.file-thumbnail{position:relative;width:112px;aspect-ratio:16/9;overflow:hidden;background:linear-gradient(135deg,#252a32,#11151a);border:1px solid var(--sg-border);border-radius:9px}.file-thumbnail__image{position:absolute;inset:0;width:100%;height:100%;cursor:zoom-in}.file-thumbnail__image:deep(.el-image__inner){width:100%;height:100%;object-position:center}.file-thumbnail__video-trigger{position:absolute;inset:0;width:100%;height:100%;padding:0;overflow:hidden;color:#fff;cursor:pointer;background:transparent;border:0}.file-thumbnail__video-trigger .file-thumbnail__image{cursor:pointer}.file-thumbnail__play{position:absolute;top:50%;left:50%;display:grid;width:29px;height:29px;color:#fff;background:rgba(0,0,0,.68);border:1px solid rgba(255,255,255,.72);border-radius:50%;box-shadow:0 3px 10px rgba(0,0,0,.4);transform:translate(-50%,-50%);transition:background .15s,transform .15s;place-items:center}.file-thumbnail__play .el-icon{margin-left:2px;font-size:15px}.file-thumbnail__video-trigger:hover .file-thumbnail__play,.file-thumbnail__video-trigger:focus-visible .file-thumbnail__play{background:var(--sg-accent);transform:translate(-50%,-50%) scale(1.08)}.file-thumbnail__video-trigger:focus-visible{outline:2px solid var(--sg-accent);outline-offset:-2px}.file-thumbnail__placeholder{position:absolute;inset:0;display:grid;gap:4px;align-content:center;color:var(--sg-text-muted);font-size:9px;text-align:center;place-items:center}.file-thumbnail__placeholder .el-icon{font-size:20px}.file-thumbnail[data-state=loading] .el-icon{animation:file-thumbnail-pulse 1s ease-in-out infinite}.file-video-preview__state{display:flex;min-height:300px;gap:9px;align-items:center;justify-content:center;color:var(--sg-text-muted)}.file-video-preview__state.is-error{color:var(--sg-danger)}.file-video-preview__player{display:block;width:100%;max-height:72vh;background:#050608;object-fit:contain}@keyframes file-thumbnail-pulse{50%{opacity:.35}}
+.file-thumbnail{position:relative;width:112px;aspect-ratio:16/9;overflow:hidden;background:linear-gradient(135deg,#252a32,#11151a);border:1px solid var(--sg-border);border-radius:9px}.file-thumbnail__image{position:absolute;inset:0;width:100%;height:100%;cursor:zoom-in}.file-thumbnail__image:deep(.el-image__inner){width:100%;height:100%;object-position:center}.file-thumbnail__video-trigger{position:absolute;inset:0;width:100%;height:100%;padding:0;overflow:hidden;color:#fff;cursor:pointer;background:transparent;border:0;border-radius:0}.file-thumbnail__video-trigger .file-thumbnail__image{cursor:pointer}.file-thumbnail__play{position:absolute;top:50%;left:50%;display:grid;width:29px;height:29px;color:#fff;background:rgba(0,0,0,.68);border:1px solid rgba(255,255,255,.72);border-radius:50%;box-shadow:0 3px 10px rgba(0,0,0,.4);transform:translate(-50%,-50%);transition:background .15s,transform .15s;place-items:center}.file-thumbnail__play .el-icon{margin-left:2px;font-size:15px}.file-thumbnail__video-trigger:hover .file-thumbnail__play,.file-thumbnail__video-trigger:focus-visible .file-thumbnail__play{background:var(--sg-accent);transform:translate(-50%,-50%) scale(1.08)}.file-thumbnail__video-trigger:focus-visible{outline:2px solid var(--sg-accent);outline-offset:-2px}.file-thumbnail__placeholder{position:absolute;inset:0;margin:0;padding:0}.file-thumbnail__placeholder:deep(.el-empty__description){margin-top:2px}.file-thumbnail__placeholder:deep(.el-empty__description p){font-size:8px}.file-thumbnail__skeleton{width:100%;height:100%}.file-video-preview__state{min-height:300px;padding:24px}.file-video-preview__state.is-error{color:var(--sg-danger)}.file-video-preview__player{display:block;width:100%;max-height:72vh;background:#050608;object-fit:contain}
 </style>

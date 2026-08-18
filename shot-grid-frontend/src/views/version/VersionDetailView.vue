@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ArrowLeft, Refresh, WarningFilled } from '@element-plus/icons-vue'
+import { ArrowLeft, Refresh } from '@element-plus/icons-vue'
 
 import { getVersionDetail } from '@/api/shot-grid/versions'
 import VersionDetailCard from '@/components/version/VersionDetailCard.vue'
@@ -79,9 +79,10 @@ onBeforeUnmount(() => {
       <div><p class="sg-eyebrow">VERSION</p><h2>版本详情</h2><p>通过专用受保护接口查看不可覆盖的版本文件。</p></div>
       <div><el-button :icon="ArrowLeft" @click="router.back()">返回</el-button><el-button :icon="Refresh" :loading="loading" @click="loadVersion">刷新</el-button></div>
     </header>
-    <div v-if="loading" class="view-state">正在加载版本详情…</div>
-    <div v-else-if="errorState" class="view-state is-error" role="alert"><el-icon><WarningFilled /></el-icon><div><strong>{{ errorState.title }}</strong><p>{{ errorState.message }}</p><code v-if="errorState.errorKey">{{ errorState.errorKey }}</code></div></div>
+    <el-skeleton v-if="loading" class="view-state" :rows="6" animated />
+    <el-alert v-else-if="errorState" class="view-state is-error" :title="errorState.title" :description="[errorState.message, errorState.errorKey].filter(Boolean).join(' · ')" type="error" :closable="false" show-icon />
     <VersionDetailCard v-else-if="version" :version="version" :can-download="canDownload" />
+    <el-empty v-else class="view-state" description="当前没有可展示的版本详情" />
   </section>
 </template>
 
@@ -91,12 +92,9 @@ onBeforeUnmount(() => {
 .view-heading h2 { margin: 4px 0 7px; font-size: 28px; }
 .view-heading p:not(.sg-eyebrow) { margin: 0; color: var(--sg-text-muted); font-size: 12px; }
 .view-heading > div:last-child { display: flex; gap: 8px; }
-.view-state { display: flex; min-height: 220px; align-items: center; justify-content: center; padding: 30px; color: var(--sg-text-muted); text-align: center; background: var(--sg-surface); border: 1px dashed var(--sg-border); border-radius: var(--sg-radius-lg); }
-.view-state.is-error { color: #ffb5ad; gap: 10px; }
-.view-state strong,
-.view-state p { display: block; margin: 0; }
-.view-state p { margin-top: 5px; font-size: 11px; }
-.view-state code { font-size: 10px; }
+.view-state { min-height: 220px; padding: 30px; background: var(--sg-surface); border: 1px dashed var(--sg-border); border-radius: var(--sg-radius-lg); }
+.view-state.is-error { min-height: auto; border-style: solid; }
+.view-state code { display: block; margin-top: 6px; font-size: 10px; }
 
 @media (max-width: 700px) {
   .view-heading { align-items: stretch; flex-direction: column; }

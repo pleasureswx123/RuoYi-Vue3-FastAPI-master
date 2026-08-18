@@ -40,6 +40,11 @@ export default defineConfig(({ mode }) => {
     },
     test: {
       environment: 'jsdom',
+      server: {
+        deps: {
+          inline: ['element-plus']
+        }
+      },
       include: ['tests/**/*.spec.js'],
       setupFiles: ['./tests/setup.js'],
       clearMocks: true,

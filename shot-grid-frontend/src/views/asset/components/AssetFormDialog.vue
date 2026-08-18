@@ -1,6 +1,6 @@
 <script setup>
 import { computed, reactive, ref } from 'vue'
-import { Plus, WarningFilled } from '@element-plus/icons-vue'
+import { Plus } from '@element-plus/icons-vue'
 
 import { createAsset, updateAsset } from '@/api/shot-grid/assets'
 import ProjectModal from '@/views/project/components/ProjectModal.vue'
@@ -28,12 +28,35 @@ const form = reactive({
   remark: props.asset?.remark || '',
   items: isEdit.value ? [] : [newItem()]
 })
+const assetForm = ref(null)
 const saving = ref(false)
-const validationMessage = ref('')
 const requestError = ref(null)
+const assetFormRules = {
+  assetType: [{ required: true, message: '请选择资产类型', trigger: 'change' }],
+  assetName: [{
+    validator: (_rule, value, callback) => {
+      if (!isEdit.value && !String(value || '').trim()) {
+        callback(new Error('资产名称不能为空'))
+        return
+      }
+      callback()
+    },
+    trigger: 'blur'
+  }],
+  sortOrder: [{
+    validator: (_rule, value, callback) => {
+      if (!Number.isInteger(Number(value)) || Number(value) < 0) {
+        callback(new Error('排序必须是非负整数'))
+        return
+      }
+      callback()
+    },
+    trigger: 'change'
+  }]
+}
 
 function newItem() {
-  return {
+  const item = {
     localKey: nextItemKey++,
     productionItem: '',
     description: '',
@@ -42,6 +65,40 @@ function newItem() {
     taskDescription: '',
     remark: ''
   }
+  item.formRules = {
+    productionItem: [{
+      validator: (_rule, value, callback) => {
+        const normalized = String(value || '').trim()
+        if (item.assigneeUserId && !normalized) {
+          callback(new Error('分配主制作人前必须填写对应制作分项'))
+          return
+        }
+        if (normalized) {
+          const normalizedName = normalized.toLocaleLowerCase()
+          const duplicated = form.items.some(candidate => (
+            candidate.localKey !== item.localKey && candidate.productionItem.trim().toLocaleLowerCase() === normalizedName
+          ))
+          if (duplicated) {
+            callback(new Error('同一资产内制作分项名称不能重复'))
+            return
+          }
+        }
+        callback()
+      },
+      trigger: 'blur'
+    }],
+    sortOrder: [{
+      validator: (_rule, value, callback) => {
+        if (!Number.isInteger(Number(value)) || Number(value) < 0) {
+          callback(new Error('制作分项排序必须是非负整数'))
+          return
+        }
+        callback()
+      },
+      trigger: 'change'
+    }]
+  }
+  return item
 }
 
 function optionalText(value) {
@@ -51,24 +108,13 @@ function optionalText(value) {
 
 function addItem() {
   form.items.push(newItem())
+  assetForm.value?.clearValidate()
 }
 
 function removeItem(index) {
   if (form.items.length <= 1) return
   form.items.splice(index, 1)
-}
-
-function validate() {
-  if (!isEdit.value && !form.assetName.trim()) return '资产名称不能为空'
-  if (!Number.isInteger(Number(form.sortOrder)) || Number(form.sortOrder) < 0) return '排序必须是非负整数'
-  if (!isEdit.value) {
-    if (!form.items.length) return '至少需要一个制作分项'
-    if (form.items.some(item => item.assigneeUserId && !item.productionItem.trim())) return '分配主制作人前必须填写对应制作分项'
-    const names = form.items.map(item => item.productionItem.trim().toLocaleLowerCase()).filter(Boolean)
-    if (new Set(names).size !== names.length) return '同一资产内制作分项名称不能重复'
-    if (form.items.some(item => !Number.isInteger(Number(item.sortOrder)) || Number(item.sortOrder) < 0)) return '制作分项排序必须是非负整数'
-  }
-  return ''
+  assetForm.value?.clearValidate()
 }
 
 function buildCreatePayload() {
@@ -90,9 +136,10 @@ function buildCreatePayload() {
 }
 
 async function submit() {
-  validationMessage.value = validate()
+  if (saving.value) return
   requestError.value = null
-  if (validationMessage.value) return
+  const isValid = await assetForm.value?.validate().catch(() => false)
+  if (!isValid) return
   saving.value = true
   try {
     const response = isEdit.value
@@ -110,41 +157,49 @@ async function submit() {
     saving.value = false
   }
 }
+
+function closeDialog() {
+  if (saving.value) return
+  assetForm.value?.resetFields()
+  assetForm.value?.clearValidate()
+  requestError.value = null
+  emit('close')
+}
 </script>
 
 <template>
-  <ProjectModal :title="isEdit ? `编辑资产 · ${asset.assetName}` : '新建资产'" :description="isEdit ? '资产类型、名称和目录身份不可普通修改；此处保存非身份主数据完整快照。' : '创建资产时至少创建一个制作分项；制作人可稍后通过任务分配补充。'" :busy="saving" wide @close="emit('close')">
-    <form class="asset-form" @submit.prevent="submit">
-      <div v-if="validationMessage || requestError" class="asset-form__error" role="alert"><el-icon><WarningFilled /></el-icon><div><strong>{{ requestError?.title || '请检查表单' }}</strong><p>{{ requestError?.message || validationMessage }}</p><code v-if="requestError?.errorKey">{{ requestError.errorKey }}</code><button v-if="requestError?.status === 409" type="button" @click="emit('refresh')">刷新后重试</button></div></div>
+  <ProjectModal :title="isEdit ? `编辑资产 · ${asset.assetName}` : '新建资产'" :description="isEdit ? '资产类型、名称和目录身份不可普通修改；此处保存非身份主数据完整快照。' : '创建资产时至少创建一个制作分项；制作人可稍后通过任务分配补充。'" :busy="saving" wide @close="closeDialog">
+    <el-form ref="assetForm" :model="form" :rules="assetFormRules" class="asset-form" size="large" label-position="top" aria-label="资产主数据表单">
+      <el-alert v-if="requestError" :title="requestError.title" type="error" show-icon :closable="false"><span>{{ requestError.message }}</span><code v-if="requestError.errorKey">{{ requestError.errorKey }}</code><el-button v-if="requestError.status === 409" link type="danger" @click="emit('refresh')">刷新后重试</el-button></el-alert>
 
       <section class="asset-form__grid">
-        <label><span>资产类型</span><el-select v-model="form.assetType" class="sg-select" :disabled="isEdit || saving"><el-option label="角色" value="Character" /><el-option label="场景" value="Environment" /><el-option label="道具" value="Prop" /></el-select></label>
-        <label><span>资产名称</span><input v-model="form.assetName" maxlength="200" :disabled="isEdit || saving" placeholder="例如：动力舱室内" /></label>
-        <label><span>项目内排序</span><input v-model.number="form.sortOrder" type="number" min="0" step="1" :disabled="saving" /></label>
-        <label class="asset-form__wide"><span>资产说明</span><textarea v-model="form.description" rows="3" :disabled="saving" placeholder="资产的稳定业务说明" /></label>
-        <label class="asset-form__wide"><span>备注</span><textarea v-model="form.remark" rows="2" maxlength="500" :disabled="saving" placeholder="内部备注，可留空" /></label>
+        <el-form-item label="资产类型" prop="assetType"><el-select v-model="form.assetType" class="sg-select" :disabled="isEdit || saving"><el-option label="角色" value="Character" /><el-option label="场景" value="Environment" /><el-option label="道具" value="Prop" /></el-select></el-form-item>
+        <el-form-item label="资产名称" prop="assetName"><el-input v-model="form.assetName" maxlength="200" show-word-limit :disabled="isEdit || saving" placeholder="例如：动力舱室内" /></el-form-item>
+        <el-form-item label="项目内排序" prop="sortOrder"><el-input-number v-model="form.sortOrder" :min="0" :step="1" step-strictly controls-position="right" :disabled="saving" /></el-form-item>
+        <el-form-item class="asset-form__wide" label="资产说明" prop="description"><el-input v-model="form.description" type="textarea" :rows="3" :disabled="saving" placeholder="资产的稳定业务说明" /></el-form-item>
+        <el-form-item class="asset-form__wide" label="备注" prop="remark"><el-input v-model="form.remark" type="textarea" :rows="2" maxlength="500" show-word-limit :disabled="saving" placeholder="内部备注，可留空" /></el-form-item>
       </section>
 
-      <section v-if="!isEdit" class="asset-items-editor">
-        <header><div><strong>首批制作分项</strong><p>未分配的分项名称允许暂缺；选择制作人前必须填写完整。</p></div><el-button :icon="Plus" :disabled="saving || form.items.length >= 200" @click="addItem">添加分项</el-button></header>
-        <article v-for="(item,index) in form.items" :key="item.localKey">
-          <div class="asset-items-editor__heading"><strong>分项 {{ index + 1 }}</strong><button type="button" :disabled="saving || form.items.length <= 1" @click="removeItem(index)">移除</button></div>
+      <el-card v-if="!isEdit" class="asset-items-editor" shadow="never">
+        <template #header><header><div><strong>首批制作分项</strong><p>未分配的分项名称允许暂缺；选择制作人前必须填写完整。</p></div><el-button :icon="Plus" :disabled="saving || form.items.length >= 200" @click="addItem">添加分项</el-button></header></template>
+        <el-card v-for="(item,index) in form.items" :key="item.localKey" class="asset-item-editor" shadow="never">
+          <template #header><div class="asset-items-editor__heading"><strong>分项 {{ index + 1 }}</strong><el-button link type="danger" :disabled="saving || form.items.length <= 1" @click="removeItem(index)">移除</el-button></div></template>
           <div class="asset-items-editor__grid">
-            <label><span>制作分项</span><input v-model="item.productionItem" maxlength="240" :disabled="saving" placeholder="允许稍后补齐" /></label>
-            <label><span>排序</span><input v-model.number="item.sortOrder" type="number" min="0" step="1" :disabled="saving" /></label>
-            <label><span>主制作人</span><el-select v-model="item.assigneeUserId" class="sg-select" :placeholder="item.productionItem.trim() ? '暂不分配' : '请先填写制作分项'" :disabled="saving || !item.productionItem.trim()"><el-option label="暂不分配" value="" /><el-option v-for="member in members" :key="member.userId" :label="memberLabel(member)" :value="String(member.userId)" /></el-select></label>
-            <label class="asset-items-editor__wide"><span>分项说明</span><textarea v-model="item.description" rows="2" :disabled="saving" /></label>
-            <label class="asset-items-editor__wide"><span>首次任务要求</span><textarea v-model="item.taskDescription" rows="2" :disabled="saving || !item.assigneeUserId" /></label>
-            <label class="asset-items-editor__wide"><span>备注</span><input v-model="item.remark" maxlength="500" :disabled="saving" /></label>
+            <el-form-item label="制作分项" :prop="`items.${index}.productionItem`" :rules="item.formRules.productionItem"><el-input v-model="item.productionItem" maxlength="240" :disabled="saving" placeholder="允许稍后补齐" /></el-form-item>
+            <el-form-item label="排序" :prop="`items.${index}.sortOrder`" :rules="item.formRules.sortOrder"><el-input-number v-model="item.sortOrder" :min="0" :step="1" step-strictly controls-position="right" :disabled="saving" /></el-form-item>
+            <el-form-item label="主制作人" :prop="`items.${index}.assigneeUserId`"><el-select v-model="item.assigneeUserId" class="sg-select" :placeholder="item.productionItem.trim() ? '暂不分配' : '请先填写制作分项'" :disabled="saving || !item.productionItem.trim()"><el-option label="暂不分配" value="" /><el-option v-for="member in members" :key="member.userId" :label="memberLabel(member)" :value="String(member.userId)" /></el-select></el-form-item>
+            <el-form-item class="asset-items-editor__wide" label="分项说明" :prop="`items.${index}.description`"><el-input v-model="item.description" type="textarea" :rows="2" :disabled="saving" /></el-form-item>
+            <el-form-item class="asset-items-editor__wide" label="首次任务要求" :prop="`items.${index}.taskDescription`"><el-input v-model="item.taskDescription" type="textarea" :rows="2" :disabled="saving || !item.assigneeUserId" /></el-form-item>
+            <el-form-item class="asset-items-editor__wide" label="备注" :prop="`items.${index}.remark`"><el-input v-model="item.remark" maxlength="500" :disabled="saving" /></el-form-item>
           </div>
-        </article>
-      </section>
+        </el-card>
+      </el-card>
 
-      <footer><el-button :disabled="saving" @click="emit('close')">取消</el-button><el-button type="primary" native-type="submit" :loading="saving">{{ isEdit ? '保存资产' : '创建资产' }}</el-button></footer>
-    </form>
+      <footer><el-button :disabled="saving" @click="closeDialog">取消</el-button><el-button type="primary" :loading="saving" @click="submit">{{ isEdit ? '保存资产' : '创建资产' }}</el-button></footer>
+    </el-form>
   </ProjectModal>
 </template>
 
 <style scoped>
-.asset-form{display:grid;gap:18px}.asset-form__error{display:grid;grid-template-columns:auto 1fr;gap:10px;padding:14px;color:#ffb4b4;background:rgba(255,107,107,.08);border-radius:10px}.asset-form__error p{margin:4px 0;font-size:12px}.asset-form__error code{font-size:10px}.asset-form__error button{display:block;padding:0;color:var(--sg-accent);cursor:pointer;background:transparent;border:0}.asset-form__grid,.asset-items-editor__grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}.asset-form label,.asset-items-editor label{display:grid;gap:6px}.asset-form label span{color:var(--sg-text-muted);font-size:11px}.asset-form input,.asset-form select,.asset-form textarea{width:100%;box-sizing:border-box;padding:10px 11px;color:var(--sg-text);background:#11151a;border:1px solid var(--sg-border);border-radius:8px}.asset-form textarea{resize:vertical}.asset-form__wide,.asset-items-editor__wide{grid-column:1/-1}.asset-items-editor{display:grid;gap:12px}.asset-items-editor>header,.asset-items-editor__heading,footer{display:flex;gap:12px;align-items:center;justify-content:space-between}.asset-items-editor header p{margin:4px 0 0;color:var(--sg-text-muted);font-size:11px}.asset-items-editor article{padding:15px;background:rgba(255,255,255,.025);border:1px solid var(--sg-border);border-radius:11px}.asset-items-editor__heading{margin-bottom:12px}.asset-items-editor__heading button{color:var(--sg-danger);cursor:pointer;background:transparent;border:0}.asset-items-editor__heading button:disabled{opacity:.35;cursor:not-allowed}footer{justify-content:flex-end}@media(max-width:760px){.asset-form__grid,.asset-items-editor__grid{grid-template-columns:1fr}.asset-form__wide,.asset-items-editor__wide{grid-column:auto}}
+.asset-form{display:grid;gap:18px}.asset-form :deep(.el-alert__description){display:grid;gap:4px}.asset-form :deep(.el-alert code){font-size:10px}.asset-form__grid,.asset-items-editor__grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}.asset-form:deep(.el-form-item){min-width:0;margin-bottom:0}.asset-form:deep(.el-form-item__label){color:var(--sg-text-muted);font-size:11px}.asset-form:deep(.el-select),.asset-form:deep(.el-input-number){width:100%}.asset-form:deep(.el-textarea__inner){resize:vertical}.asset-form__wide,.asset-items-editor__wide{grid-column:1/-1}.asset-items-editor{background:rgba(255,255,255,.015);border-color:var(--sg-border)}.asset-items-editor:deep(>.el-card__header){padding:14px 16px;border-bottom-color:var(--sg-border)}.asset-items-editor:deep(>.el-card__body){display:grid;gap:12px;padding:14px}.asset-items-editor header,.asset-items-editor__heading,footer{display:flex;gap:12px;align-items:center;justify-content:space-between}.asset-items-editor header p{margin:4px 0 0;color:var(--sg-text-muted);font-size:11px}.asset-item-editor{background:rgba(255,255,255,.025);border-color:var(--sg-border);border-radius:11px}.asset-item-editor:deep(.el-card__header){padding:10px 14px;border-bottom-color:var(--sg-border)}.asset-item-editor:deep(.el-card__body){padding:14px}.asset-items-editor__heading{width:100%}footer{justify-content:flex-end}@media(max-width:760px){.asset-form__grid,.asset-items-editor__grid{grid-template-columns:1fr}.asset-form__wide,.asset-items-editor__wide{grid-column:auto}}
 </style>

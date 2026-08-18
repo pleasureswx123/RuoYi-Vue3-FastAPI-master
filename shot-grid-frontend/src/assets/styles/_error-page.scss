@@ -20,55 +20,29 @@
   box-shadow: var(--sg-shadow);
 }
 
-.error-card__code {
-  position: absolute;
-  top: -20px;
-  right: 14px;
-  color: rgba(255, 255, 255, 0.025);
-  font-size: 112px;
-  font-weight: 800;
-  letter-spacing: -0.08em;
-  pointer-events: none;
-}
-
-.error-card__icon {
-  position: relative;
-  display: grid;
+.error-card:deep(.el-result__icon svg) {
   width: 70px;
   height: 70px;
-  margin: 0 auto 24px;
-  color: var(--sg-accent);
-  background: var(--sg-accent-soft);
-  border: 1px solid rgba(255, 182, 87, 0.22);
-  border-radius: 21px;
-  place-items: center;
 }
 
-.error-card__icon.is-warning {
-  color: var(--sg-danger);
-  background: rgba(255, 107, 107, 0.09);
-  border-color: rgba(255, 107, 107, 0.2);
-}
-
-.error-card__icon .el-icon {
-  font-size: 30px;
-}
-
-.error-card h1 {
-  position: relative;
+.error-card:deep(.el-result__title p) {
   margin: 0;
+  color: var(--sg-text);
   font-size: clamp(25px, 4vw, 34px);
   font-weight: 600;
   letter-spacing: -0.035em;
 }
 
-.error-card p {
-  position: relative;
+.error-card:deep(.el-result__subtitle p) {
   max-width: 500px;
-  margin: 15px auto 28px;
+  margin: 15px auto 0;
   color: var(--sg-text-secondary);
   font-size: 14px;
   line-height: 1.8;
+}
+
+.error-card:deep(.el-result__extra) {
+  margin-top: 28px;
 }
 
 .error-card__actions {

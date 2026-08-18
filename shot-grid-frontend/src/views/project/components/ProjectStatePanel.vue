@@ -1,6 +1,4 @@
 <script setup>
-import { Warning } from '@element-plus/icons-vue'
-
 defineProps({
   title: { type: String, required: true },
   message: { type: String, required: true },
@@ -12,26 +10,22 @@ defineEmits(['retry'])
 </script>
 
 <template>
-  <section class="project-state" :class="{ 'project-state--compact': compact }" role="alert">
-    <el-icon><Warning /></el-icon>
-    <div>
-      <h2>{{ title }}</h2>
-      <p>{{ message }}</p>
-    </div>
-    <el-button v-if="retryable" plain @click="$emit('retry')">重新加载</el-button>
-  </section>
+  <div class="project-state" :class="{ 'project-state--compact': compact }">
+    <el-alert :title="title" :description="message" type="error" show-icon :closable="false" />
+    <el-button v-if="retryable" type="danger" plain @click="$emit('retry')">重新加载</el-button>
+  </div>
 </template>
 
 <style scoped>
 .project-state {
   display: grid;
   min-height: 260px;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 16px;
   align-items: center;
   padding: 28px;
-  background: var(--sg-surface);
-  border: 1px solid var(--sg-border);
+  background: rgba(255, 107, 107, 0.07);
+  border: 1px solid rgba(255, 107, 107, 0.18);
   border-radius: var(--sg-radius-lg);
 }
 
@@ -40,22 +34,19 @@ defineEmits(['retry'])
   padding: 20px;
 }
 
-.project-state > .el-icon {
-  color: var(--sg-accent);
-  font-size: 28px;
+.project-state :deep(.el-alert) {
+  --el-alert-bg-color: transparent;
+  padding: 0;
 }
 
-h2,
-p {
-  margin: 0;
-}
-
-h2 {
+.project-state :deep(.el-alert__title) {
+  color: var(--sg-text);
   font-size: 17px;
+  font-weight: 700;
 }
 
-p {
-  margin-top: 6px;
+.project-state :deep(.el-alert__description) {
+  margin-top: 8px;
   color: var(--sg-text-secondary);
   font-size: 13px;
   line-height: 1.7;
@@ -63,11 +54,11 @@ p {
 
 @media (max-width: 640px) {
   .project-state {
-    grid-template-columns: auto 1fr;
+    grid-template-columns: 1fr;
   }
 
-  .project-state .el-button {
-    grid-column: 1 / -1;
+  .project-state > .el-button {
+    width: max-content;
   }
 }
 </style>

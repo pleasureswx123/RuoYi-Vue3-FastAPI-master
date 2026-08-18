@@ -49,7 +49,10 @@ async function refreshCaptcha(clearError = true) {
 }
 
 async function submit() {
-  const valid = await formRef.value?.validate().catch(() => false)
+  let valid = false
+  await formRef.value?.validate(result => {
+    valid = result
+  })
   if (!valid || submitting.value) return
 
   submitting.value = true
@@ -104,7 +107,7 @@ onMounted(() => refreshCaptcha().catch(() => undefined))
           <span>使用平台分配的账号继续工作</span>
         </div>
 
-        <el-form ref="formRef" :model="form" :rules="rules" label-position="top" @submit.prevent="submit">
+        <el-form ref="formRef" :model="form" :rules="rules" label-position="top" aria-label="登录制作工作区">
           <el-form-item label="账号" prop="username">
             <el-input
               v-model="form.username"
@@ -135,27 +138,26 @@ onMounted(() => refreshCaptcha().catch(() => undefined))
                 size="large"
                 @keyup.enter="submit"
               />
-              <button
+              <el-button
                 class="captcha-image"
-                type="button"
                 aria-label="刷新验证码"
                 :disabled="captchaLoading"
                 @click="refreshCaptcha"
               >
                 <img v-if="captchaImage" :src="captchaImage" alt="验证码" />
                 <el-icon v-else :class="{ 'is-loading': captchaLoading }"><Refresh /></el-icon>
-              </button>
+              </el-button>
             </div>
           </el-form-item>
 
-          <p v-if="errorMessage" class="login-error" role="alert">{{ errorMessage }}</p>
+          <el-alert v-if="errorMessage" class="login-error" :title="errorMessage" type="error" :closable="false" show-icon />
 
-          <el-button class="login-submit" type="primary" size="large" native-type="submit" :loading="submitting">
+          <el-button class="login-submit" type="primary" size="large" :loading="submitting" @click="submit">
             进入工作区
           </el-button>
         </el-form>
 
-        <p class="login-security">登录信息通过平台统一认证，本应用不会持久化保存密码。</p>
+        <el-alert class="login-security" title="登录信息通过平台统一认证，本应用不会持久化保存密码。" type="info" :closable="false" show-icon />
       </div>
     </section>
   </main>
@@ -166,7 +168,7 @@ onMounted(() => refreshCaptcha().catch(() => undefined))
   display: grid;
   min-height: 100vh;
   grid-template-columns: minmax(0, 1.2fr) minmax(420px, 0.8fr);
-  background: #090b0f;
+  background: var(--sg-bg);
 }
 
 .login-scene {
@@ -176,6 +178,7 @@ onMounted(() => refreshCaptcha().catch(() => undefined))
   align-items: flex-end;
   padding: clamp(48px, 7vw, 104px);
   overflow: hidden;
+  color: var(--sg-on-media);
   background:
     linear-gradient(180deg, rgba(7, 9, 13, 0.05), rgba(7, 9, 13, 0.92)),
     radial-gradient(circle at 65% 30%, rgba(255, 181, 87, 0.25), transparent 27%),
@@ -241,7 +244,7 @@ onMounted(() => refreshCaptcha().catch(() => undefined))
 
 .login-scene__eyebrow {
   margin: 0 0 18px;
-  color: var(--sg-accent);
+  color: var(--sg-accent-surface);
   font-size: 12px;
   font-weight: 700;
   letter-spacing: 0.24em;
@@ -282,7 +285,7 @@ onMounted(() => refreshCaptcha().catch(() => undefined))
   display: grid;
   min-height: 100vh;
   padding: 48px clamp(34px, 5vw, 76px);
-  background: rgba(12, 15, 20, 0.98);
+  background: var(--sg-surface);
   border-left: 1px solid var(--sg-border);
   place-items: center;
 }
@@ -306,7 +309,7 @@ onMounted(() => refreshCaptcha().catch(() => undefined))
   align-items: flex-end;
   justify-content: center;
   padding: 8px;
-  background: var(--sg-accent);
+  background: var(--sg-accent-surface);
   border-radius: 11px;
 }
 
@@ -403,7 +406,7 @@ onMounted(() => refreshCaptcha().catch(() => undefined))
 }
 
 :deep(.el-input__wrapper) {
-  background: rgba(255, 255, 255, 0.035);
+  background: var(--sg-fill-soft);
   box-shadow: 0 0 0 1px var(--sg-border) inset;
 }
 

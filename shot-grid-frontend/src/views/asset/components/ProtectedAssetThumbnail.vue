@@ -70,15 +70,19 @@ onBeforeUnmount(() => {
         preview-teleported
       />
     </div>
-    <div v-else class="asset-thumbnail__placeholder" :title="message">
-      <el-icon v-if="state === 'forbidden'"><Lock /></el-icon>
-      <el-icon v-else-if="state === 'missing' || state === 'error'"><Picture /></el-icon>
-      <el-icon v-else><Box /></el-icon>
-      <span>{{ message }}</span>
-    </div>
+    <el-skeleton v-else-if="state === 'loading'" class="asset-thumbnail__loading" animated>
+      <template #template><el-skeleton-item variant="image" class="asset-thumbnail__skeleton" /></template>
+    </el-skeleton>
+    <el-empty v-else class="asset-thumbnail__placeholder" :description="message" :image-size="28" :title="message">
+      <template #image>
+        <el-icon v-if="state === 'forbidden'"><Lock /></el-icon>
+        <el-icon v-else-if="state === 'missing' || state === 'error'"><Picture /></el-icon>
+        <el-icon v-else><Box /></el-icon>
+      </template>
+    </el-empty>
   </div>
 </template>
 
 <style scoped>
-.asset-thumbnail{position:relative;width:100%;height:100%;overflow:hidden;background:linear-gradient(135deg,#242830,#11151a)}.asset-thumbnail__preview,.asset-thumbnail__image{position:absolute;inset:0;width:100%;height:100%}.asset-thumbnail__image{cursor:zoom-in}.asset-thumbnail__image:deep(.el-image__inner){width:100%;height:100%;object-position:center}.asset-thumbnail__placeholder{position:absolute;inset:0;display:grid;gap:5px;align-content:center;color:var(--sg-text-muted);font-size:10px;text-align:center;place-items:center}.asset-thumbnail__placeholder .el-icon{font-size:23px}.asset-thumbnail[data-state=loading] .el-icon{animation:asset-thumbnail-pulse 1s ease-in-out infinite}@keyframes asset-thumbnail-pulse{50%{opacity:.35}}
+.asset-thumbnail{position:relative;width:100%;height:100%;overflow:hidden;background:linear-gradient(135deg,#242830,#11151a)}.asset-thumbnail__preview,.asset-thumbnail__image,.asset-thumbnail__loading{position:absolute;inset:0;width:100%;height:100%}.asset-thumbnail__image{cursor:zoom-in}.asset-thumbnail__image:deep(.el-image__inner){width:100%;height:100%;object-position:center}.asset-thumbnail__skeleton{width:100%;height:100%}.asset-thumbnail__placeholder{position:absolute;inset:0;padding:4px}.asset-thumbnail__placeholder:deep(.el-empty__image){height:auto;margin-bottom:3px}.asset-thumbnail__placeholder:deep(.el-empty__description){margin-top:0}.asset-thumbnail__placeholder:deep(.el-empty__description p){color:var(--sg-text-muted);font-size:10px}.asset-thumbnail__placeholder .el-icon{font-size:23px}
 </style>

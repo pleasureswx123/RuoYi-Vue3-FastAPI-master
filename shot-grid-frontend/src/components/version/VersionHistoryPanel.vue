@@ -1,9 +1,10 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
-import { Refresh, WarningFilled } from '@element-plus/icons-vue'
+import { Refresh } from '@element-plus/icons-vue'
 
 import { getReviewActions, getTaskIssues } from '@/api/shot-grid/reviews'
 import { getTaskVersions, getVersionDetail } from '@/api/shot-grid/versions'
+import { tagTypeFromTone } from '@/utils/tag'
 import ReviewMediaWorkspace from '@/views/review/components/ReviewMediaWorkspace.vue'
 import { formatMediaTime, formatReviewDateTime, reviewActionMeta, reviewErrorState } from '@/views/review/reviewPresentation'
 import VersionDetailCard from './VersionDetailCard.vue'
@@ -44,6 +45,7 @@ let listController = null
 let detailController = null
 
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / props.pageSize)))
+const historyFilters = computed(() => ({ versionStatus: statusFilter.value }))
 const latestDecision = computed(() => feedbackActions.value.find(item => ['approve', 'reject', 'defer'].includes(item.actionType)) || null)
 const hasFeedback = computed(() => Boolean(feedbackNotes.value.length || latestDecision.value))
 const pendingFeedbackCount = computed(() => feedbackNotes.value.filter(item => item.displayScope === 'pending').length)
@@ -97,17 +99,37 @@ function buildVersionFeedback(issues, versionId) {
     })
 }
 
-function feedbackBadge(note) {
+function feedbackBadgeMeta(note) {
   if (note.displayScope === 'pending') {
-    return Number(note.originVersionId) === selectedVersionId.value
-      ? '待处理'
-      : `${note.originVersionNumber} 遗留 · 待处理`
+    return {
+      label: Number(note.originVersionId) === selectedVersionId.value
+        ? '待处理'
+        : `${note.originVersionNumber} 遗留 · 待处理`,
+      tone: 'warning'
+    }
   }
   const verification = verificationForVersion(note)
-  if (verification?.result === 'resolved') return '本版确认已修复'
-  if (verification?.result === 'still_present') return `本版确认仍存在${note.pendingVersionNumber ? ` · 已转入 ${note.pendingVersionNumber}` : ''}`
-  if (note.noteStatus === 'resolved') return `已在 ${note.resolvedInVersionNumber || '后续版本'} 修复`
-  return `已处理但未通过 · 转入 ${note.pendingVersionNumber || '最新版本'}`
+  if (verification?.result === 'resolved') return { label: '本版确认已修复', tone: 'success' }
+  if (verification?.result === 'still_present') {
+    return {
+      label: `本版确认仍存在${note.pendingVersionNumber ? ` · 已转入 ${note.pendingVersionNumber}` : ''}`,
+      tone: 'danger'
+    }
+  }
+  if (note.noteStatus === 'resolved') {
+    return { label: `已在 ${note.resolvedInVersionNumber || '后续版本'} 修复`, tone: 'success' }
+  }
+  return {
+    label: `已处理但未通过 · 转入 ${note.pendingVersionNumber || '最新版本'}`,
+    tone: 'warning'
+  }
+}
+
+function alertTypeFromTone(tone) {
+  if (tone === 'success') return 'success'
+  if (tone === 'danger') return 'error'
+  if (tone === 'warning') return 'warning'
+  return 'info'
 }
 
 function feedbackContext(note) {
@@ -278,7 +300,8 @@ async function focusIssue(issue) {
   await loadDetail(originVersionId)
   selectedFeedback.value = feedbackNotes.value.find(item => Number(item.issueId) === issueId) || null
   await nextTick()
-  feedbackPanel.value?.scrollIntoView?.({ behavior: 'smooth', block: 'start' })
+  const feedbackElement = feedbackPanel.value?.$el || feedbackPanel.value
+  feedbackElement?.scrollIntoView?.({ behavior: 'smooth', block: 'start' })
 }
 
 function selectFeedback(issue) {
@@ -295,8 +318,8 @@ function applyStatusFilter() {
   loadVersions({ preserveSelection: false })
 }
 
-function changePage(delta) {
-  const next = Math.min(totalPages.value, Math.max(1, pageNum.value + delta))
+function changePage(targetPage) {
+  const next = Math.min(totalPages.value, Math.max(1, Number(targetPage) || 1))
   if (next === pageNum.value) return
   pageNum.value = next
   loadVersions({ preserveSelection: false })
@@ -344,142 +367,128 @@ defineExpose({ focusIssue })
 </script>
 
 <template>
-  <section class="version-history-panel">
+  <el-card class="version-history-panel" shadow="never">
     <header class="history-heading">
       <div><p class="sg-eyebrow">IMMUTABLE HISTORY</p><h3>版本历史</h3><p>版本号由后端分配；修订只新增版本，不覆盖历史文件。</p></div>
-      <div class="history-tools">
-        <el-select v-model="statusFilter" class="sg-select" placeholder="全部状态" aria-label="筛选版本状态" @change="applyStatusFilter">
-          <el-option label="全部状态" value="" />
-          <el-option label="待审核" value="pending_review" />
-          <el-option label="已退回" value="rejected" />
-          <el-option label="最终版本" value="final" />
-        </el-select>
-        <el-button v-if="canList" :icon="Refresh" :loading="loading" @click="loadVersions()">刷新</el-button>
-      </div>
+      <el-form :model="historyFilters" class="history-tools" size="large" inline aria-label="版本历史筛选">
+        <el-form-item prop="versionStatus">
+          <el-select v-model="statusFilter" class="sg-select" placeholder="全部状态" aria-label="筛选版本状态" @change="applyStatusFilter">
+            <el-option label="全部状态" value="" />
+            <el-option label="待审核" value="pending_review" />
+            <el-option label="已退回" value="rejected" />
+            <el-option label="最终版本" value="final" />
+          </el-select>
+        </el-form-item>
+        <el-form-item><el-button v-if="canList" :icon="Refresh" :loading="loading" @click="loadVersions()">刷新</el-button></el-form-item>
+      </el-form>
     </header>
 
-    <div v-if="!canList" class="history-error" role="status">
-      <el-icon><WarningFilled /></el-icon><div><strong>当前账号没有版本列表权限</strong><p>未发起版本历史请求。</p></div>
-    </div>
-    <div v-else-if="listError" class="history-error" role="alert">
-      <el-icon><WarningFilled /></el-icon><div><strong>{{ listError.title }}</strong><p>{{ listError.message }}</p><code v-if="listError.errorKey">{{ listError.errorKey }}</code></div>
-    </div>
+    <el-alert v-if="!canList" class="history-error" title="当前账号没有版本列表权限" description="未发起版本历史请求。" type="warning" :closable="false" show-icon />
+    <el-alert v-else-if="listError" class="history-error" :title="listError.title" :description="[listError.message, listError.errorKey].filter(Boolean).join(' · ')" type="error" :closable="false" show-icon />
 
     <div class="history-layout">
       <aside class="version-rail" :aria-busy="loading">
-        <button
+        <el-button
           v-for="version in versions"
           :key="version.versionId"
-          type="button"
+          text
+          class="version-rail__item"
           :class="{ active: selectedVersionId === Number(version.versionId) }"
           @click="selectVersion(version.versionId)"
         >
-          <span><strong>{{ version.versionNumber }}</strong><small>{{ version.submitterName || `用户 #${version.submittedBy}` }}</small></span>
-          <em :data-tone="versionStatusMeta(version.versionStatus).tone">{{ versionStatusMeta(version.versionStatus).label }}</em>
-          <p>{{ version.changelog }}</p>
-          <time>{{ formatVersionDateTime(version.submittedTime) }}</time>
-        </button>
-        <div v-if="!loading && !versions.length && !listError" class="history-empty">该任务还没有正式版本。</div>
-        <div v-if="loading && !versions.length" class="history-empty">正在加载版本历史…</div>
-        <footer v-if="total > pageSize">
-          <button type="button" :disabled="pageNum <= 1" @click="changePage(-1)">上一页</button>
-          <span>{{ pageNum }} / {{ totalPages }}</span>
-          <button type="button" :disabled="pageNum >= totalPages" @click="changePage(1)">下一页</button>
-        </footer>
+          <span class="version-rail__content">
+            <span><strong>{{ version.versionNumber }}</strong><small>{{ version.submitterName || `用户 #${version.submittedBy}` }}</small></span>
+            <el-tag class="version-rail__status" size="small" effect="plain" round :type="tagTypeFromTone(versionStatusMeta(version.versionStatus).tone)">{{ versionStatusMeta(version.versionStatus).label }}</el-tag>
+            <p>{{ version.changelog }}</p>
+            <time>{{ formatVersionDateTime(version.submittedTime) }}</time>
+          </span>
+        </el-button>
+        <el-skeleton v-if="loading && !versions.length" class="history-empty" :rows="4" animated />
+        <el-empty v-else-if="!versions.length && !listError" class="history-empty" :image-size="56" description="该任务还没有正式版本" />
+        <el-pagination v-if="total > pageSize" class="version-pagination" small background layout="prev, pager, next" :current-page="pageNum" :page-size="pageSize" :total="total" :disabled="loading" aria-label="版本历史分页" @current-change="changePage" />
       </aside>
 
       <main class="history-detail">
-        <div v-if="detailLoading" class="detail-placeholder">正在加载版本详情…</div>
-        <div v-else-if="detailError" class="detail-placeholder is-error" role="alert">
-          <strong>{{ detailError.title }}</strong><p>{{ detailError.message }}</p><code v-if="detailError.errorKey">{{ detailError.errorKey }}</code>
-        </div>
+        <el-skeleton v-if="detailLoading" class="detail-placeholder" :rows="8" animated />
+        <el-alert v-else-if="detailError" class="detail-placeholder is-error" :title="detailError.title" :description="[detailError.message, detailError.errorKey].filter(Boolean).join(' · ')" type="error" :closable="false" show-icon />
         <template v-else-if="versionDetail">
           <VersionDetailCard :version="versionDetail" :can-download="canDownload" :show-preview="!feedbackNotes.length" />
-          <section v-if="feedbackLoading || feedbackError || hasFeedback" ref="feedbackPanel" class="version-feedback-panel">
-            <header><div><p class="sg-eyebrow">REVIEW FEEDBACK</p><h3>本版待处理问题与审核记录</h3><p>待处理工作始终归属最近一次退回的版本；原始问题与标注仍保留在最初提出版本中供追溯。</p></div><span>{{ pendingFeedbackCount }} 条待处理 · {{ feedbackNotes.length - pendingFeedbackCount }} 条历史</span></header>
-            <div v-if="latestDecision" class="feedback-decision" :data-tone="reviewActionMeta(latestDecision.actionType).tone"><strong>{{ reviewActionMeta(latestDecision.actionType).label }}</strong><p>{{ latestDecision.reason || '审核人未填写额外说明。' }}</p><small>{{ latestDecision.reviewerName || `用户 #${latestDecision.reviewerUserId}` }} · {{ formatReviewDateTime(latestDecision.createTime) }}</small></div>
-            <div v-if="feedbackLoading" class="feedback-state">正在加载审核反馈…</div>
-            <div v-else-if="feedbackError" class="feedback-state is-error"><strong>{{ feedbackError.title }}</strong><p>{{ feedbackError.message }}</p></div>
+          <el-card v-if="feedbackLoading || feedbackError || hasFeedback" ref="feedbackPanel" class="version-feedback-panel" shadow="never">
+            <header class="version-feedback-panel__heading"><div><p class="sg-eyebrow">REVIEW FEEDBACK</p><h3>本版待处理问题与审核记录</h3><p>待处理工作始终归属最近一次退回的版本；原始问题与标注仍保留在最初提出版本中供追溯。</p></div><span>{{ pendingFeedbackCount }} 条待处理 · {{ feedbackNotes.length - pendingFeedbackCount }} 条历史</span></header>
+            <el-alert v-if="latestDecision" class="feedback-decision" :type="alertTypeFromTone(reviewActionMeta(latestDecision.actionType).tone)" :title="reviewActionMeta(latestDecision.actionType).label" :description="`${latestDecision.reason || '审核人未填写额外说明。'} · ${latestDecision.reviewerName || `用户 #${latestDecision.reviewerUserId}`} · ${formatReviewDateTime(latestDecision.createTime)}`" :closable="false" show-icon />
+            <el-skeleton v-if="feedbackLoading" class="feedback-state" :rows="4" animated />
+            <el-alert v-else-if="feedbackError" class="feedback-state is-error" :title="feedbackError.title" :description="feedbackError.message" type="error" :closable="false" show-icon />
             <div v-else-if="feedbackNotes.length" class="feedback-layout">
               <ReviewMediaWorkspace :version="versionDetail" :selected-note="selectedFeedback" :can-download="canDownload" feedback-mode @clear-note-focus="selectedFeedback = null" />
               <aside class="feedback-list">
-                <button v-for="note in feedbackNotes" :key="note.noteId" type="button" :class="{ active: selectedFeedback?.noteId === note.noteId }" @click="selectFeedback(note)">
-                  <span><strong>{{ note.displayScope === 'pending' ? '本版待处理问题' : note.displayScope === 'origin_history' ? '来源版本历史问题' : '本版处理确认记录' }}</strong><em>{{ feedbackBadge(note) }}</em></span>
-                  <p>{{ note.content || '该问题仅包含画面标注' }}</p>
-                  <small class="feedback-context">{{ feedbackContext(note) }}</small>
-                  <p v-if="displayedResponse(note)" class="feedback-response">制作人对 {{ displayedResponse(note).versionNumber || '后续版本' }} 的处理说明：{{ displayedResponse(note).responseText }}</p>
-                  <p v-if="feedbackVerificationComment(note)" class="feedback-verification">审核人未通过原因：{{ feedbackVerificationComment(note) }}</p>
-                  <small><template v-if="note.annotations?.items?.length">{{ note.annotations.items.length }} 个画面标注 · </template><template v-if="note.mediaTimeMs !== null && note.mediaTimeMs !== undefined">{{ formatMediaTime(note.mediaTimeMs) }} · </template>{{ formatReviewDateTime(note.createTime) }}</small>
-                </button>
+                <el-button v-for="note in feedbackNotes" :key="note.noteId" text class="feedback-item" :class="{ active: selectedFeedback?.noteId === note.noteId }" @click="selectFeedback(note)">
+                  <span class="feedback-item__content">
+                    <span class="feedback-item__heading"><strong>{{ note.displayScope === 'pending' ? '本版待处理问题' : note.displayScope === 'origin_history' ? '来源版本历史问题' : '本版处理确认记录' }}</strong><el-tag size="small" effect="plain" round :type="tagTypeFromTone(feedbackBadgeMeta(note).tone)">{{ feedbackBadgeMeta(note).label }}</el-tag></span>
+                    <p>{{ note.content || '该问题仅包含画面标注' }}</p>
+                    <small class="feedback-context">{{ feedbackContext(note) }}</small>
+                    <p v-if="displayedResponse(note)" class="feedback-response">制作人对 {{ displayedResponse(note).versionNumber || '后续版本' }} 的处理说明：{{ displayedResponse(note).responseText }}</p>
+                    <p v-if="feedbackVerificationComment(note)" class="feedback-verification">审核人未通过原因：{{ feedbackVerificationComment(note) }}</p>
+                    <small><template v-if="note.annotations?.items?.length">{{ note.annotations.items.length }} 个画面标注 · </template><template v-if="note.mediaTimeMs !== null && note.mediaTimeMs !== undefined">{{ formatMediaTime(note.mediaTimeMs) }} · </template>{{ formatReviewDateTime(note.createTime) }}</small>
+                  </span>
+                </el-button>
               </aside>
             </div>
-            <div v-else class="feedback-state">审核人没有在该版本提出修改问题。</div>
-          </section>
+            <el-empty v-else class="feedback-state" :image-size="48" description="审核人没有在该版本提出修改问题" />
+          </el-card>
         </template>
-        <div v-else-if="!canQuery" class="detail-placeholder">当前账号没有版本详情权限。</div>
-        <div v-else class="detail-placeholder">选择左侧版本查看文件和审核单信息。</div>
+        <el-empty v-else-if="!canQuery" class="detail-placeholder" :image-size="56" description="当前账号没有版本详情权限" />
+        <el-empty v-else class="detail-placeholder" :image-size="56" description="选择左侧版本查看文件和审核单信息" />
       </main>
     </div>
-  </section>
+  </el-card>
 </template>
 
 <style scoped lang="scss">
-.version-history-panel { padding: 24px; background: var(--sg-surface); border: 1px solid var(--sg-border); border-radius: var(--sg-radius-lg); }
+.version-history-panel { --el-card-bg-color: var(--sg-surface); --el-card-border-color: var(--sg-border); border-radius: var(--sg-radius-lg); }
+.version-history-panel:deep(.el-card__body) { padding: 24px; }
 .history-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
 .history-heading h3 { margin: 3px 0 7px; font-size: 20px; }
 .history-heading p:not(.sg-eyebrow) { margin: 0; color: var(--sg-text-muted); font-size: 12px; }
 .history-tools { display: flex; gap: 9px; }
+.history-tools:deep(.el-form-item) { margin: 0; }
 .history-tools .sg-select { width: 160px; }
-.history-error { display: flex; padding: 13px 15px; margin-top: 16px; color: #ffb5ad; background: rgba(244, 92, 92, 0.08); border-radius: 9px; gap: 10px; }
-.history-error strong,
-.history-error p { display: block; margin: 0; }
-.history-error p { margin-top: 4px; font-size: 11px; }
+.history-error { margin-top: 16px; }
 .history-error code { color: inherit; font-size: 10px; }
 .history-layout { display: grid; margin-top: 20px; grid-template-columns: minmax(230px, 0.34fr) minmax(0, 1fr); gap: 14px; }
 .version-rail { display: grid; align-content: start; gap: 8px; }
-.version-rail > button { display: grid; width: 100%; padding: 14px; color: var(--sg-text); text-align: left; cursor: pointer; background: rgba(255, 255, 255, 0.025); border: 1px solid var(--sg-border); border-radius: 10px; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
-.version-rail > button:hover,
-.version-rail > button.active { background: rgba(255, 182, 87, 0.06); border-color: rgba(255, 182, 87, 0.35); }
+.version-rail > .el-button { display: grid; width: 100%; height: auto; margin: 0; padding: 14px; color: var(--sg-text); text-align: left; background: rgba(255, 255, 255, 0.025); border: 1px solid var(--sg-border); border-radius: 10px; }
+.version-rail__content { display: grid; width: 100%; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+.version-rail > .el-button:hover,
+.version-rail > .el-button.active { background: rgba(255, 182, 87, 0.06); border-color: rgba(255, 182, 87, 0.35); }
 .version-rail strong,
 .version-rail small { display: block; }
 .version-rail strong { font-size: 14px; }
 .version-rail small { margin-top: 4px; color: var(--sg-text-muted); font-size: 10px; }
-.version-rail em { align-self: start; padding: 4px 7px; color: var(--sg-text-muted); font-size: 9px; font-style: normal; background: rgba(255, 255, 255, 0.04); border-radius: 999px; }
-.version-rail em[data-tone='success'] { color: #7ee0ac; }
-.version-rail em[data-tone='warning'] { color: #f4c878; }
-.version-rail em[data-tone='danger'] { color: #ff9a90; }
+.version-rail__status { align-self: start; }
 .version-rail p { display: -webkit-box; grid-column: 1 / -1; margin: 2px 0 0; overflow: hidden; color: var(--sg-text-secondary); font-size: 11px; line-height: 1.55; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .version-rail time { grid-column: 1 / -1; color: var(--sg-text-muted); font-size: 9px; }
-.version-rail footer { display: flex; align-items: center; justify-content: space-between; padding: 8px 2px; color: var(--sg-text-muted); font-size: 10px; }
-.version-rail footer button { padding: 5px 8px; color: var(--sg-text-secondary); cursor: pointer; background: transparent; border: 1px solid var(--sg-border); border-radius: 7px; }
-.version-rail footer button:disabled { cursor: not-allowed; opacity: 0.4; }
+.version-pagination { justify-content: center; padding: 8px 2px; }
 .history-empty,
 .detail-placeholder { display: grid; min-height: 180px; padding: 24px; color: var(--sg-text-muted); text-align: center; background: rgba(255, 255, 255, 0.018); border: 1px dashed var(--sg-border); border-radius: var(--sg-radius-md); place-items: center; }
 .detail-placeholder.is-error { color: #ffb5ad; }
 .detail-placeholder p { margin: 5px 0 0; font-size: 11px; }
 .detail-placeholder code { font-size: 10px; }
-.version-feedback-panel { display: grid; margin-top: 14px; padding: 18px; background: rgba(104, 181, 255, 0.035); border: 1px solid rgba(104, 181, 255, 0.18); border-radius: var(--sg-radius-md); gap: 14px; }
-.version-feedback-panel > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
-.version-feedback-panel > header h3 { margin: 3px 0 5px; font-size: 17px; }
-.version-feedback-panel > header p:not(.sg-eyebrow) { margin: 0; color: var(--sg-text-muted); font-size: 10px; }
-.version-feedback-panel > header > span { color: var(--sg-text-muted); font-size: 10px; white-space: nowrap; }
-.feedback-decision { padding: 12px 14px; background: rgba(255, 255, 255, 0.025); border-left: 3px solid var(--sg-accent); border-radius: 8px; }
-.feedback-decision[data-tone='success'] { border-left-color: var(--sg-success); }
-.feedback-decision[data-tone='danger'] { border-left-color: var(--sg-danger); }
-.feedback-decision strong,
-.feedback-decision p,
-.feedback-decision small { display: block; }
-.feedback-decision strong { font-size: 11px; }
-.feedback-decision p { margin: 5px 0; color: var(--sg-text-secondary); font-size: 11px; line-height: 1.6; }
+.version-feedback-panel { --el-card-bg-color: rgba(104, 181, 255, 0.035); --el-card-border-color: rgba(104, 181, 255, 0.18); margin-top: 14px; border-radius: var(--sg-radius-md); }
+.version-feedback-panel:deep(.el-card__body) { display: grid; padding: 18px; gap: 14px; }
+.version-feedback-panel__heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+.version-feedback-panel__heading h3 { margin: 3px 0 5px; font-size: 17px; }
+.version-feedback-panel__heading p:not(.sg-eyebrow) { margin: 0; color: var(--sg-text-muted); font-size: 10px; }
+.version-feedback-panel__heading > span { color: var(--sg-text-muted); font-size: 10px; white-space: nowrap; }
+.feedback-decision { padding: 12px 14px; }
 .feedback-decision small { color: var(--sg-text-muted); font-size: 9px; }
 .feedback-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(240px, 0.42fr); gap: 12px; align-items: start; }
 .feedback-list { display: grid; max-height: 620px; overflow-y: auto; gap: 8px; }
-.feedback-list button { display: grid; width: 100%; padding: 12px; color: var(--sg-text); text-align: left; cursor: pointer; background: rgba(255, 255, 255, 0.025); border: 1px solid var(--sg-border); border-radius: 9px; gap: 8px; }
-.feedback-list button:hover,
-.feedback-list button.active { background: rgba(104, 181, 255, 0.07); border-color: rgba(104, 181, 255, 0.42); }
-.feedback-list button > span { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.feedback-list .feedback-item { display: grid; width: 100%; height: auto; margin: 0; padding: 12px; color: var(--sg-text); text-align: left; background: rgba(255, 255, 255, 0.025); border: 1px solid var(--sg-border); border-radius: 9px; }
+.feedback-item__content { display: grid; width: 100%; gap: 8px; }
+.feedback-list .feedback-item:hover,
+.feedback-list .feedback-item.active { background: rgba(104, 181, 255, 0.07); border-color: rgba(104, 181, 255, 0.42); }
+.feedback-item__heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .feedback-list strong { font-size: 10px; }
-.feedback-list em { padding: 3px 6px; color: var(--sg-text-muted); font-size: 8px; font-style: normal; background: rgba(255, 255, 255, 0.05); border-radius: 999px; }
 .feedback-list p { margin: 0; color: var(--sg-text-secondary); font-size: 11px; line-height: 1.6; white-space: pre-wrap; }
 .feedback-list small { color: var(--sg-text-muted); font-size: 9px; }
 .feedback-list .feedback-context { color: #68b5ff; line-height: 1.5; }
@@ -494,6 +503,7 @@ defineExpose({ focusIssue })
   .history-layout { grid-template-columns: 1fr; }
   .version-rail { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .version-rail footer,
+  .version-pagination,
   .history-empty { grid-column: 1 / -1; }
   .feedback-layout { grid-template-columns: 1fr; }
   .feedback-list { max-height: none; }

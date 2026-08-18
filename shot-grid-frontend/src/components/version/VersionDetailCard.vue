@@ -1,8 +1,10 @@
 <script setup>
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import { Download, Document, WarningFilled } from '@element-plus/icons-vue'
+import { Download, Document } from '@element-plus/icons-vue'
 
 import { downloadProtectedVersionFile } from '@/api/shot-grid/versions'
+import { tagTypeFromTone } from '@/utils/tag'
+import { fileRoleLabel } from '@/views/file/filePresentation'
 import ProtectedVersionPreview from './ProtectedVersionPreview.vue'
 import { formatFileSize, formatVersionDateTime, versionErrorState, versionStatusMeta } from './versionPresentation'
 
@@ -14,6 +16,7 @@ const props = defineProps({
 
 const downloadingFileId = ref(null)
 const downloadError = ref(null)
+const activeAiSections = ref([])
 let downloadController = null
 let versionGeneration = 0
 let disposed = false
@@ -76,6 +79,7 @@ watch(
     downloadController = null
     downloadingFileId.value = null
     downloadError.value = null
+    activeAiSections.value = []
   }
 )
 
@@ -87,24 +91,24 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <article class="version-detail-card">
+  <el-card class="version-detail-card" shadow="never">
     <header>
       <div>
         <p class="sg-eyebrow">VERSION DETAIL</p>
         <h3>{{ version.versionNumber }}</h3>
         <p>{{ version.changelog }}</p>
       </div>
-      <span class="version-state" :data-tone="statusMeta.tone">{{ statusMeta.label }}</span>
+      <el-tag size="small" effect="light" round :type="tagTypeFromTone(statusMeta.tone)">{{ statusMeta.label }}</el-tag>
     </header>
 
     <ProtectedVersionPreview v-if="showPreview" :version="version" :can-preview="canDownload" />
 
-    <dl class="version-facts">
-      <div><dt>提交人</dt><dd>{{ version.submitterName || `用户 #${version.submittedBy}` }}</dd></div>
-      <div><dt>提交时间</dt><dd>{{ formatVersionDateTime(version.submittedTime) }}</dd></div>
-      <div><dt>版本锁</dt><dd>{{ version.lockVersion }}</dd></div>
-      <div><dt>审核单</dt><dd>{{ version.autoReviewList?.reviewListName || '—' }}</dd></div>
-    </dl>
+    <el-descriptions class="version-facts" :column="2" border size="small">
+      <el-descriptions-item label="提交人">{{ version.submitterName || `用户 #${version.submittedBy}` }}</el-descriptions-item>
+      <el-descriptions-item label="提交时间">{{ formatVersionDateTime(version.submittedTime) }}</el-descriptions-item>
+      <el-descriptions-item label="版本锁">{{ version.lockVersion }}</el-descriptions-item>
+      <el-descriptions-item label="审核单">{{ version.autoReviewList?.reviewListName || '—' }}</el-descriptions-item>
+    </el-descriptions>
 
     <section class="version-files">
       <div class="subheading"><strong>版本文件</strong><span>{{ version.files?.length || 0 }} 个</span></div>
@@ -113,9 +117,12 @@ onBeforeUnmount(() => {
           <span class="file-icon"><el-icon><Document /></el-icon></span>
           <div>
             <strong>{{ file.businessFileName || file.originalName }}</strong>
-            <small>{{ file.role }} · {{ formatFileSize(file.fileSize) }} · {{ file.contentType || '未知类型' }}</small>
+            <small>{{ formatFileSize(file.fileSize) }} · {{ file.contentType || '未知类型' }}</small>
           </div>
-          <el-tag v-if="file.isPrimary" size="small" type="warning">主审核文件</el-tag>
+          <div class="file-tags">
+            <el-tag size="small" effect="plain" round type="info">{{ fileRoleLabel(file.role) }}</el-tag>
+            <el-tag v-if="file.isPrimary" size="small" effect="plain" round type="warning">主审核文件</el-tag>
+          </div>
           <el-button
             v-if="canDownload"
             :icon="Download"
@@ -125,34 +132,26 @@ onBeforeUnmount(() => {
           >下载</el-button>
         </div>
       </div>
-      <div v-else class="empty-files">当前版本没有可访问文件。</div>
+      <el-empty v-else class="empty-files" :image-size="54" description="当前版本没有可访问文件" />
     </section>
 
-    <div v-if="downloadError" class="download-error" role="alert">
-      <el-icon><WarningFilled /></el-icon>
-      <div><strong>{{ downloadError.title }}</strong><p>{{ downloadError.message }}</p><code v-if="downloadError.errorKey">{{ downloadError.errorKey }}</code></div>
-    </div>
+    <el-alert v-if="downloadError" class="download-error" :title="downloadError.title" :description="[downloadError.message, downloadError.errorKey].filter(Boolean).join(' · ')" type="error" :closable="false" show-icon />
 
-    <details v-if="version.aiParams" class="ai-snapshot">
-      <summary>AI 参数快照</summary>
-      <pre>{{ JSON.stringify(version.aiParams, null, 2) }}</pre>
-    </details>
-  </article>
+    <el-collapse v-if="version.aiParams" v-model="activeAiSections" class="ai-snapshot">
+      <el-collapse-item title="AI 参数快照" name="ai-params"><pre>{{ JSON.stringify(version.aiParams, null, 2) }}</pre></el-collapse-item>
+    </el-collapse>
+  </el-card>
 </template>
 
 <style scoped lang="scss">
-.version-detail-card { padding: 22px; background: var(--sg-surface); border: 1px solid var(--sg-border); border-radius: var(--sg-radius-md); }
-.version-detail-card > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
+.version-detail-card { background: var(--sg-surface); border-color: var(--sg-border); border-radius: var(--sg-radius-md); }
+.version-detail-card:deep(.el-card__body) { padding: 22px; }
+.version-detail-card header { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
 .version-detail-card h3 { margin: 3px 0 7px; font-size: 22px; }
 .version-detail-card header p:not(.sg-eyebrow) { max-width: 700px; margin: 0; color: var(--sg-text-secondary); font-size: 12px; line-height: 1.65; white-space: pre-wrap; }
-.version-state { padding: 6px 10px; color: var(--sg-text-secondary); font-size: 11px; background: rgba(255, 255, 255, 0.05); border-radius: 999px; white-space: nowrap; }
-.version-state[data-tone='success'] { color: #7ee0ac; background: rgba(56, 189, 130, 0.1); }
-.version-state[data-tone='warning'] { color: #f4c878; background: rgba(255, 182, 87, 0.1); }
-.version-state[data-tone='danger'] { color: #ff9a90; background: rgba(244, 92, 92, 0.1); }
-.version-facts { display: grid; margin: 20px 0; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
-.version-facts div { padding: 11px 13px; background: rgba(0, 0, 0, 0.13); border-radius: 9px; }
-.version-facts dt { color: var(--sg-text-muted); font-size: 10px; }
-.version-facts dd { margin: 5px 0 0; font-size: 12px; }
+.version-facts { margin: 20px 0; }
+.version-facts:deep(.el-descriptions__body),
+.version-facts:deep(.el-descriptions__cell) { background: rgba(0, 0, 0, 0.13); border-color: var(--sg-border); }
 .subheading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; font-size: 12px; }
 .subheading span { color: var(--sg-text-muted); }
 .file-list { display: grid; gap: 8px; }
@@ -162,19 +161,19 @@ onBeforeUnmount(() => {
 .file-row small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .file-row strong { font-size: 12px; }
 .file-row small { margin-top: 5px; color: var(--sg-text-muted); font-size: 10px; }
-.empty-files { padding: 26px; color: var(--sg-text-muted); text-align: center; background: rgba(255, 255, 255, 0.02); border-radius: 10px; }
-.download-error { display: flex; padding: 12px 14px; margin-top: 14px; color: #ffb5ad; background: rgba(244, 92, 92, 0.08); border-radius: 9px; gap: 10px; }
-.download-error strong,
-.download-error p { display: block; margin: 0; }
-.download-error p { margin-top: 4px; font-size: 11px; }
+.file-tags { display: flex; align-items: center; justify-content: flex-end; gap: 6px; flex-wrap: wrap; }
+.empty-files { padding: 18px; background: rgba(255, 255, 255, 0.02); border-radius: 10px; }
+.download-error { margin-top: 14px; }
 .download-error code { color: inherit; font-size: 10px; }
 .ai-snapshot { margin-top: 18px; color: var(--sg-text-secondary); font-size: 12px; }
+.ai-snapshot:deep(.el-collapse-item__header),
+.ai-snapshot:deep(.el-collapse-item__wrap) { color: var(--sg-text-secondary); background: transparent; border-color: var(--sg-border); }
 .ai-snapshot pre { max-height: 260px; padding: 14px; overflow: auto; color: var(--sg-text-secondary); background: rgba(0, 0, 0, 0.18); border-radius: 9px; white-space: pre-wrap; word-break: break-word; }
 
 @media (max-width: 760px) {
-  .version-facts { grid-template-columns: 1fr 1fr; }
   .file-row { grid-template-columns: auto minmax(0, 1fr); }
-  .file-row .el-tag,
+  .file-tags,
   .file-row .el-button { grid-column: 2; justify-self: start; }
+  .file-tags { justify-content: flex-start; }
 }
 </style>

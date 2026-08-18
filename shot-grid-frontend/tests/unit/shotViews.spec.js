@@ -1,4 +1,4 @@
-import { ElButton, ElCard, ElDialog, ElDrawer, ElForm, ElFormItem, ElIcon, ElInput, ElMessageBox, ElPagination, ElRadioButton, ElRadioGroup, ElTable, ElTableColumn, ElTag } from 'element-plus'
+import { ElButton, ElCard, ElDatePicker, ElDialog, ElDrawer, ElForm, ElFormItem, ElIcon, ElInput, ElInputNumber, ElMessageBox, ElOption, ElPagination, ElRadioButton, ElRadioGroup, ElSelect, ElTable, ElTableColumn, ElTag } from 'element-plus'
 import { createPinia, setActivePinia } from 'pinia'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
@@ -9,12 +9,15 @@ import {
   batchAssignShotTasks,
   batchDeleteShots,
   commitShotImport,
+  createShot,
   getEpisodePage,
   getScenePage,
   getShotDetail,
   getShotPage,
   listShotAssignees,
-  previewShotImport
+  previewShotImport,
+  assignShotTask,
+  updateShot
 } from '@/api/shot-grid/shots'
 import { useSessionStore } from '@/store/modules/session'
 import { setElSelectValue } from '../helpers/elementPlus'
@@ -89,6 +92,8 @@ const shotRow = {
   taskLockVersion: 4
 }
 
+const formComponents = { ElButton, ElDatePicker, ElForm, ElFormItem, ElIcon, ElInput, ElInputNumber, ElOption, ElSelect }
+
 async function mountView(permissions = ['shotgrid:shot:list', 'shotgrid:shot:add', 'shotgrid:shot:import', 'shotgrid:member:list'], configureRouter = null) {
   const pinia = createPinia()
   setActivePinia(pinia)
@@ -106,7 +111,7 @@ async function mountView(permissions = ['shotgrid:shot:list', 'shotgrid:shot:add
   await router.push('/shots?projectId=8')
   await router.isReady()
   const wrapper = mount(ShotListView, {
-    global: { plugins: [pinia, router], components: { ElButton, ElCard, ElDialog, ElDrawer, ElForm, ElFormItem, ElIcon, ElInput, ElPagination, ElRadioButton, ElRadioGroup, ElTable, ElTableColumn, ElTag } }
+    global: { plugins: [pinia, router], components: { ...formComponents, ElCard, ElDialog, ElDrawer, ElPagination, ElRadioButton, ElRadioGroup, ElTable, ElTableColumn, ElTag } }
   })
   await flushPromises()
   await flushPromises()
@@ -123,9 +128,13 @@ async function mountDetailView(path = '/projects/8/shots/41') {
   })
   await router.push(path)
   await router.isReady()
-  const wrapper = mount(ShotDetailView, { global: { plugins: [router], components: { ElButton, ElIcon } } })
+  const wrapper = mount(ShotDetailView, { global: { plugins: [router], components: { ...formComponents, ElTag } } })
   await flushPromises()
   return { wrapper, router }
+}
+
+function findTag(wrapper, text) {
+  return wrapper.findAllComponents(ElTag).find(tag => tag.text() === text)
 }
 
 function shotDetail(projectId, shotId, shotCode, description) {
@@ -165,9 +174,26 @@ describe('镜头管理真实列表页', () => {
 
   it('在项目范围内展示同一真实结果的三种视图与写入入口', async () => {
     const { wrapper } = await mountView()
+    const projectForm = wrapper.findAllComponents(ElForm).find(form => form.classes().includes('project-context'))
     const filterForm = wrapper.findAllComponents(ElForm).find(form => form.classes().includes('shot-filters'))
+    expect(projectForm.props('model')).toMatchObject({ projectId: '8', scope: '' })
+    expect(projectForm.props('rules')).toHaveProperty('projectId')
+    expect(projectForm.findAllComponents(ElFormItem).map(item => item.props('prop'))).toEqual(['projectId'])
     expect(filterForm.props('model')).toMatchObject({ keyword: '', episodeId: '', sceneId: '', shotStatus: '', assigneeUserId: '' })
+    expect(filterForm.props('rules')).toMatchObject({
+      keyword: expect.any(Array),
+      episodeId: expect.any(Array),
+      sceneId: expect.any(Array),
+      shotStatus: expect.any(Array),
+      assigneeUserId: expect.any(Array)
+    })
     expect(filterForm.findAllComponents(ElFormItem)).toHaveLength(6)
+    const queryButton = filterForm.findAllComponents(ElButton).find(button => button.text() === '查询')
+    expect(queryButton.props('nativeType')).toBe('button')
+    getShotPage.mockClear()
+    await queryButton.trigger('click')
+    await flushPromises()
+    expect(getShotPage).toHaveBeenCalledWith(8, expect.objectContaining({ pageNum: 1 }), expect.anything())
     expect(wrapper.text()).toContain('LCFR · 罗刹夫人')
     expect(wrapper.text()).toContain('EP001 / 001 / S001')
     expect(wrapper.text()).toContain('镜头缓慢推进动力舱')
@@ -178,6 +204,10 @@ describe('镜头管理真实列表页', () => {
     expect(wrapper.text()).toContain('保持画面压迫感')
     expect(wrapper.text()).toContain('导入 Excel')
     expect(wrapper.text()).toContain('新建镜头')
+    expect(findTag(wrapper, '场景 · 动力舱').props()).toMatchObject({ type: 'primary', size: 'small', effect: 'plain', round: true })
+    expect(findTag(wrapper, '制作中').props()).toMatchObject({ type: 'warning', effect: 'light', round: true })
+    expect(findTag(wrapper, '目录就绪').props()).toMatchObject({ type: 'success', effect: 'plain', round: true })
+    expect(wrapper.find('.shot-chip').exists()).toBe(false)
 
     const viewSwitch = wrapper.findComponent(ElRadioGroup)
     viewSwitch.vm.$emit('update:modelValue', 'card')
@@ -186,6 +216,26 @@ describe('镜头管理真实列表页', () => {
     viewSwitch.vm.$emit('update:modelValue', 'storyboard')
     await flushPromises()
     expect(wrapper.find('.story-frame').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('项目存储状态使用统一映射并覆盖迁移中标签', async () => {
+    getProjectDetail.mockResolvedValueOnce({ data: {
+      ...projectRow,
+      projectTypeName: 'AI 影视短片',
+      aspectRatio: '16:9',
+      projectStatus: 'active',
+      storageStatus: 'migrating',
+      myProjectRole: 'director'
+    } })
+
+    const { wrapper } = await mountView()
+    expect(findTag(wrapper, '存储迁移中').props()).toMatchObject({
+      type: 'warning',
+      size: 'small',
+      effect: 'plain',
+      round: true
+    })
     wrapper.unmount()
   })
 
@@ -303,10 +353,15 @@ describe('镜头管理真实列表页', () => {
     await batchAssignButton.trigger('click')
     await flushPromises()
     expect(document.body.textContent).toContain('其中包含已分配镜头')
-    wrapper.vm.batchAssigneeUserId = '7'
-    await wrapper.vm.$nextTick()
+    const batchAssignForm = wrapper.findAllComponents(ElForm).find(form => form.attributes('aria-label') === '镜头批量分配表单')
+    expect(batchAssignForm.props('rules')).toHaveProperty('assigneeUserId')
     const confirmButton = [...document.body.querySelectorAll('button')]
       .find(button => button.textContent.includes('确认重新分配'))
+    confirmButton.click()
+    await flushPromises()
+    expect(batchAssignShotTasks).not.toHaveBeenCalled()
+
+    await setElSelectValue(batchAssignForm.findComponent(ElSelect), '7')
     confirmButton.click()
     await flushPromises()
 
@@ -523,11 +578,158 @@ describe('镜头管理真实列表页', () => {
   })
 })
 
+describe('镜头 Element Plus 表单契约', () => {
+  beforeEach(() => {
+    getScenePage.mockResolvedValue({ rows: [{ sceneId: 31, sceneCode: '001', sceneName: '动力舱' }], total: 1, hasNext: false })
+    createShot.mockReset()
+    createShot.mockResolvedValue({ data: { ...shotRow, shotId: 45, shotCode: 'S005' } })
+    updateShot.mockReset()
+    assignShotTask.mockReset()
+    assignShotTask.mockResolvedValue({ data: { taskId: 71 } })
+  })
+
+  it('新建镜头由按钮点击触发 Form 校验，失败时拦截请求，通过后提交并可重置', async () => {
+    const wrapper = mount(ShotFormDialog, {
+      props: {
+        projectId: 8,
+        operationGeneration: 1,
+        episodes: [{ episodeId: 21, episodeCode: 'EP001', episodeName: '第一集' }],
+        members: [{ userId: 7, nickName: '杨景锋', projectRole: 'creator' }]
+      },
+      global: { components: formComponents }
+    })
+    const form = wrapper.findComponent(ElForm)
+    const formItems = form.findAllComponents(ElFormItem)
+    const formItem = prop => formItems.find(item => item.props('prop') === prop)
+    const submitButton = wrapper.findAllComponents(ElButton).find(button => button.text() === '创建镜头')
+
+    expect(form.props('model')).toMatchObject({ episodeId: '', sceneId: '', shotNo: null, sortOrder: 0, durationSeconds: 0 })
+    expect(form.props('rules')).toMatchObject({
+      episodeId: expect.any(Array),
+      sceneId: expect.any(Array),
+      shotNo: expect.any(Array),
+      sortOrder: expect.any(Array),
+      durationSeconds: expect.any(Array),
+      description: expect.any(Array)
+    })
+    expect(formItems.every(item => Boolean(item.props('prop')))).toBe(true)
+    expect(submitButton.props('nativeType')).toBe('button')
+
+    await submitButton.trigger('click')
+    await flushPromises()
+    expect(createShot).not.toHaveBeenCalled()
+
+    await setElSelectValue(formItem('episodeId').findComponent(ElSelect), '21')
+    await flushPromises()
+    formItem('shotNo').findComponent(ElInputNumber).vm.$emit('update:modelValue', 5)
+    formItem('sortOrder').findComponent(ElInputNumber).vm.$emit('update:modelValue', 2)
+    formItem('durationSeconds').findComponent(ElInputNumber).vm.$emit('update:modelValue', 1.25)
+    formItem('description').findComponent(ElInput).vm.$emit('update:modelValue', '  动力舱推进镜头  ')
+    await flushPromises()
+    await submitButton.trigger('click')
+    await flushPromises()
+
+    expect(createShot).toHaveBeenCalledWith(8, expect.objectContaining({
+      sceneId: 31,
+      shotNo: 5,
+      durationMs: 1250,
+      description: '动力舱推进镜头',
+      sortOrder: 2,
+      assetIds: []
+    }))
+    expect(wrapper.emitted('saved')).toHaveLength(1)
+
+    await wrapper.findAllComponents(ElButton).find(button => button.text() === '取消').trigger('click')
+    await flushPromises()
+    expect(form.props('model')).toMatchObject({ episodeId: '', sceneId: '', shotNo: null, sortOrder: 0, durationSeconds: 0, description: '' })
+    expect(wrapper.emitted('close')).toHaveLength(1)
+    wrapper.unmount()
+  })
+
+  it('镜头任务分配由按钮点击触发 Form 校验，并保留加载与重置契约', async () => {
+    const wrapper = mount(ShotAssignDialog, {
+      props: {
+        projectId: 8,
+        operationGeneration: 2,
+        shot: { ...shotRow, task: null },
+        members: [{ userId: 7, nickName: '杨景锋', projectRole: 'creator' }]
+      },
+      global: { components: formComponents }
+    })
+    const form = wrapper.findComponent(ElForm)
+    const formItems = form.findAllComponents(ElFormItem)
+    const formItem = prop => formItems.find(item => item.props('prop') === prop)
+    const submitButton = wrapper.findAllComponents(ElButton).find(button => button.text() === '创建并分配任务')
+
+    expect(form.props('rules')).toMatchObject({ assigneeUserId: expect.any(Array), priority: expect.any(Array), dueDate: expect.any(Array) })
+    expect(formItems.map(item => item.props('prop'))).toEqual(['assigneeUserId', 'priority', 'dueDate', 'taskDescription'])
+    expect(submitButton.props('nativeType')).toBe('button')
+
+    await submitButton.trigger('click')
+    await flushPromises()
+    expect(assignShotTask).not.toHaveBeenCalled()
+
+    await setElSelectValue(formItem('assigneeUserId').findComponent(ElSelect), '7')
+    formItem('dueDate').findComponent(ElDatePicker).vm.$emit('update:modelValue', '2026-09-01')
+    formItem('taskDescription').findComponent(ElInput).vm.$emit('update:modelValue', '完成镜头视频制作')
+    await flushPromises()
+    await submitButton.trigger('click')
+    await flushPromises()
+
+    expect(assignShotTask).toHaveBeenCalledWith(8, 41, {
+      assigneeUserId: 7,
+      taskDescription: '完成镜头视频制作',
+      priority: 'normal',
+      dueDate: '2026-09-01'
+    })
+    expect(wrapper.emitted('assigned')).toHaveLength(1)
+
+    await wrapper.findAllComponents(ElButton).find(button => button.text() === '取消').trigger('click')
+    await flushPromises()
+    expect(form.props('model')).toMatchObject({ assigneeUserId: '', dueDate: '', priority: 'normal' })
+    expect(wrapper.emitted('close')).toHaveLength(1)
+    wrapper.unmount()
+  })
+})
+
 describe('镜头详情跨项目请求隔离', () => {
   beforeEach(() => {
     getEpisodePage.mockResolvedValue({ rows: [{ episodeId: 21, episodeCode: 'EP001' }], total: 1, hasNext: false })
     getScenePage.mockResolvedValue({ rows: [{ sceneId: 31, sceneCode: '001' }], total: 1, hasNext: false })
     listShotAssignees.mockResolvedValue({ rows: [{ userId: 7, nickName: '杨景锋', projectRole: 'creator', producerCode: 'YJF' }], total: 1, hasNext: false })
+  })
+
+  it('镜头详情的状态、目录、优先级、版本和关联资产使用 ElTag 动态类型', async () => {
+    getShotDetail.mockResolvedValueOnce({ data: {
+      ...shotDetail(8, 41, 'S001', '动力舱推进镜头'),
+      status: 'revision',
+      directoryStatus: 'failed',
+      task: {
+        assignee: { userId: 7, nickName: '杨景锋' },
+        taskStatus: 'pending_review',
+        priority: 'urgent',
+        dueDate: '2026-09-01',
+        lockVersion: 3
+      },
+      latestVersion: { versionNumber: 'V002', businessFileName: 'LCFR_S001_V002.mp4', status: 'rejected' },
+      assets: [
+        { assetId: 2, assetName: '动力舱', assetType: 'Environment' },
+        { assetId: 3, assetName: '女主', assetType: 'Character' },
+        { assetId: 4, assetName: '手电筒', assetType: 'Prop' }
+      ]
+    } })
+
+    const { wrapper } = await mountDetailView()
+    expect(findTag(wrapper, '修改中').props()).toMatchObject({ type: 'danger', effect: 'light', round: true })
+    expect(findTag(wrapper, '目录失败').props()).toMatchObject({ type: 'danger', effect: 'plain', round: true })
+    expect(findTag(wrapper, '待审核').props()).toMatchObject({ type: 'warning', effect: 'light', round: true })
+    expect(findTag(wrapper, '紧急').props()).toMatchObject({ type: 'danger', effect: 'plain', round: true })
+    expect(findTag(wrapper, '已退回').props()).toMatchObject({ type: 'danger', effect: 'light', round: true })
+    expect(findTag(wrapper, '场景 · 动力舱').props()).toMatchObject({ type: 'primary', effect: 'plain', round: true })
+    expect(findTag(wrapper, '角色 · 女主').props()).toMatchObject({ type: 'warning', effect: 'plain', round: true })
+    expect(findTag(wrapper, '道具 · 手电筒').props()).toMatchObject({ type: 'success', effect: 'plain', round: true })
+    expect(wrapper.find('.status-chip').exists()).toBe(false)
+    wrapper.unmount()
   })
 
   it('快速切换项目和镜头时立即清理旧详情并丢弃过期响应', async () => {

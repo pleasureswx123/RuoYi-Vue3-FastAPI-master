@@ -1,4 +1,4 @@
-import { ElAlert, ElButton, ElIcon, ElMessageBox, ElOption, ElSelect, ElSkeleton } from 'element-plus'
+import { ElAlert, ElButton, ElIcon, ElMessageBox, ElOption, ElSelect, ElSkeleton, ElTag } from 'element-plus'
 import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -29,7 +29,7 @@ const file = {
   fileSize: 2048
 }
 const version = { versionId: 33, taskId: 21, versionNumber: 'V003', changelog: '当前版本', files: [file] }
-const components = { ElAlert, ElButton, ElIcon, ElOption, ElSelect, ElSkeleton }
+const components = { ElAlert, ElButton, ElIcon, ElOption, ElSelect, ElSkeleton, ElTag }
 
 describe('审核媒体工作区', () => {
   beforeEach(() => {
@@ -120,6 +120,8 @@ describe('审核媒体工作区', () => {
       signal: expect.any(AbortSignal)
     })
     expect(wrapper.text()).toContain('网页代理')
+    const proxyTag = wrapper.findAllComponents(ElTag).find(tag => tag.text() === '网页代理')
+    expect(proxyTag.props()).toMatchObject({ type: 'success', effect: 'plain', size: 'small', round: true })
     wrapper.unmount()
   })
 

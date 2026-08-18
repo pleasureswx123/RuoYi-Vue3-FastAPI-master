@@ -17,16 +17,33 @@ const operationContext = Object.freeze({
 })
 const saving = ref(false)
 const requestError = ref(null)
+const formRef = ref(null)
 const form = reactive({
   requirements: props.task.requirements || '',
   priority: props.task.priority || 'normal',
   dueDate: props.task.dueDate || ''
 })
+const formRules = {
+  priority: [{ required: true, message: '请选择优先级', trigger: 'change' }],
+  requirements: [{ max: 4000, message: '制作要求不能超过 4000 个字符', trigger: 'blur' }]
+}
+
+function detailsText(details) {
+  if (!details) return ''
+  if (typeof details === 'string') return details
+  try { return JSON.stringify(details) } catch { return '后端返回了额外诊断信息' }
+}
 
 async function submit() {
+  if (saving.value) return
   requestError.value = null
   saving.value = true
   try {
+    let valid = false
+    await formRef.value?.validate(result => {
+      valid = result
+    })
+    if (!valid) return
     const response = await updateTask(operationContext.taskId, {
       requirements: form.requirements.trim() || null,
       priority: form.priority,
@@ -49,40 +66,34 @@ async function submit() {
     :busy="saving"
     @close="emit('close')"
   >
-    <form class="task-edit-form" aria-label="编辑任务" @submit.prevent="submit">
-      <label>
-        <span>优先级</span>
+    <el-form ref="formRef" :model="form" :rules="formRules" class="task-edit-form" size="large" label-position="top" aria-label="编辑任务">
+      <el-form-item label="优先级" prop="priority">
         <el-select v-model="form.priority" class="sg-select" :disabled="saving">
           <el-option label="低" value="low" />
           <el-option label="普通" value="normal" />
           <el-option label="高" value="high" />
           <el-option label="紧急" value="urgent" />
         </el-select>
-      </label>
-      <label>
-        <span>截止日期</span>
-        <input v-model="form.dueDate" type="date" :disabled="saving" />
-      </label>
-      <label class="task-edit-form__wide">
-        <span>制作要求</span>
-        <textarea v-model="form.requirements" rows="7" maxlength="4000" :disabled="saving" placeholder="可留空" />
-      </label>
+      </el-form-item>
+      <el-form-item label="截止日期" prop="dueDate">
+        <el-date-picker v-model="form.dueDate" class="task-edit-form__control" type="date" value-format="YYYY-MM-DD" format="YYYY-MM-DD" clearable :disabled="saving" placeholder="选择截止日期" />
+      </el-form-item>
+      <el-form-item class="task-edit-form__wide" label="制作要求" prop="requirements">
+        <el-input v-model="form.requirements" type="textarea" :rows="7" maxlength="4000" show-word-limit resize="vertical" :disabled="saving" placeholder="可留空" />
+      </el-form-item>
 
-      <div v-if="requestError" class="task-edit-form__error" role="alert">
-        <strong>{{ requestError.title }}</strong>
-        <span>{{ requestError.message }}</span>
-        <code v-if="requestError.errorKey">{{ requestError.errorKey }}</code>
-        <button v-if="requestError.status === 409" type="button" @click="emit('refresh', operationContext)">刷新任务后重试</button>
-      </div>
+      <el-alert v-if="requestError" class="task-edit-form__alert" type="error" :closable="false" show-icon :title="requestError.title">
+        <div class="form-alert-content"><p>{{ requestError.message }}</p><code v-if="requestError.errorKey">{{ requestError.errorKey }}</code><small v-if="requestError.details">{{ detailsText(requestError.details) }}</small><el-button v-if="requestError.status === 409" link type="primary" @click="emit('refresh', operationContext)">刷新任务后重试</el-button></div>
+      </el-alert>
 
       <footer>
         <el-button :disabled="saving" @click="emit('close')">取消</el-button>
-        <el-button type="primary" native-type="submit" :loading="saving">保存任务</el-button>
+        <el-button type="primary" :loading="saving" @click="submit">保存任务</el-button>
       </footer>
-    </form>
+    </el-form>
   </ProjectModal>
 </template>
 
 <style scoped>
-.task-edit-form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.task-edit-form label{display:grid;gap:7px}.task-edit-form label>span{color:var(--sg-text-muted);font-size:11px}.task-edit-form input,.task-edit-form select,.task-edit-form textarea{width:100%;box-sizing:border-box;padding:10px 11px;color:var(--sg-text);background:#11151a;border:1px solid var(--sg-border);border-radius:8px}.task-edit-form textarea{resize:vertical}.task-edit-form__wide,.task-edit-form__error,footer{grid-column:1/-1}.task-edit-form__error{display:grid;gap:5px;padding:14px;color:#ffb4b4;font-size:12px;background:rgba(255,107,107,.08);border-radius:10px}.task-edit-form__error code{font-size:10px}.task-edit-form__error button{width:max-content;padding:0;color:var(--sg-accent);cursor:pointer;background:transparent;border:0}footer{display:flex;gap:10px;justify-content:flex-end}@media(max-width:640px){.task-edit-form{grid-template-columns:1fr}.task-edit-form__wide,.task-edit-form__error,footer{grid-column:auto}}
+.task-edit-form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.task-edit-form :deep(.el-form-item){margin-bottom:0}.task-edit-form__control{width:100%}.task-edit-form__wide,.task-edit-form__alert,footer{grid-column:1/-1}.form-alert-content{display:grid;gap:5px}.form-alert-content p{margin:0}.form-alert-content code,.form-alert-content small{color:var(--sg-text-muted);font-size:10px}.form-alert-content .el-button{width:max-content;padding:0}footer{display:flex;gap:10px;justify-content:flex-end}@media(max-width:640px){.task-edit-form{grid-template-columns:1fr}.task-edit-form__wide,.task-edit-form__alert,footer{grid-column:auto}}
 </style>

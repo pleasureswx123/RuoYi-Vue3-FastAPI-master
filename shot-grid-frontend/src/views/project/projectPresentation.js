@@ -21,15 +21,28 @@ const PHASE_LABELS = Object.freeze({
   completed: '已完成'
 })
 
-const OPERATION_STATUS_LABELS = Object.freeze({
-  pending: '等待执行',
-  processing: '执行中',
-  succeeded: '已成功',
-  retry_wait: '等待重试',
-  failed: '执行失败',
-  compensation_pending: '等待补偿',
-  compensated: '已补偿',
-  compensation_failed: '补偿失败'
+const PROJECT_ROLE_META = Object.freeze({
+  director: Object.freeze({ label: '项目管理人', type: 'primary' }),
+  creator: Object.freeze({ label: '制作人员', type: 'info' })
+})
+
+const OPERATION_STATUS_META = Object.freeze({
+  pending: { label: '等待执行', tone: 'warning' },
+  processing: { label: '执行中', tone: 'primary' },
+  succeeded: { label: '已成功', tone: 'success' },
+  retry_wait: { label: '等待重试', tone: 'warning' },
+  failed: { label: '执行失败', tone: 'danger' },
+  compensation_pending: { label: '等待补偿', tone: 'warning' },
+  compensated: { label: '已补偿', tone: 'success' },
+  compensation_failed: { label: '补偿失败', tone: 'danger' }
+})
+
+const OPERATION_TYPE_META = Object.freeze({
+  initialize_project: Object.freeze({ label: '项目初始化', tone: 'primary' }),
+  ensure_episode_directory: Object.freeze({ label: '集目录', tone: 'info' }),
+  ensure_shot_directory: Object.freeze({ label: '镜头目录', tone: 'info' }),
+  ensure_asset_directory: Object.freeze({ label: '资产目录', tone: 'success' }),
+  reconcile_directory: Object.freeze({ label: '目录对账', tone: 'warning' })
 })
 
 export function statusMeta(status) {
@@ -44,8 +57,24 @@ export function phaseLabel(phase) {
   return PHASE_LABELS[phase] || phase || '未设置'
 }
 
+export function projectRoleMeta(role) {
+  if (Object.hasOwn(PROJECT_ROLE_META, role)) return PROJECT_ROLE_META[role]
+  if (role === null || role === undefined || role === '') {
+    return { label: '跨项目管理员', type: 'info' }
+  }
+  return { label: '未知项目角色', type: 'info' }
+}
+
 export function operationStatusLabel(status) {
-  return OPERATION_STATUS_LABELS[status] || status || '未知'
+  return operationStatusMeta(status).label
+}
+
+export function operationStatusMeta(status) {
+  return OPERATION_STATUS_META[status] || { label: status || '未知', tone: 'muted' }
+}
+
+export function operationTypeMeta(type) {
+  return OPERATION_TYPE_META[type] || { label: type || '未知类型', tone: 'muted' }
 }
 
 export function canRetryDynamicStorageOperation(operation) {
