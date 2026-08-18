@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import Path, Request, Response
+from fastapi import Path, Query, Request, Response
 from sqlalchemy import ColumnElement
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -18,6 +18,7 @@ from module_shot_grid.entity.vo.project_member_vo import (
     ShotGridProjectMemberAddModel,
     ShotGridProjectMemberListResponseModel,
     ShotGridProjectMemberModel,
+    ShotGridProjectMemberQueryModel,
     ShotGridProjectMemberUpdateModel,
 )
 from module_shot_grid.service.project_member_service import ShotGridProjectMemberService
@@ -40,10 +41,15 @@ project_member_controller = APIRouterPro(
 async def get_shot_grid_project_members(
     request: Request,
     project_id: Annotated[int, Path(alias='projectId', gt=0)],
+    member_query: Annotated[ShotGridProjectMemberQueryModel, Query()],
     query_db: Annotated[AsyncSession, DBSessionDependency()],
     access: Annotated[ShotGridProjectAccessModel, ProjectAccessDependency()],
 ) -> Response:
-    result = await ShotGridProjectMemberService.get_members(query_db, project_id)
+    result = await ShotGridProjectMemberService.get_members(
+        query_db,
+        project_id,
+        member_query.project_role,
+    )
     return ResponseUtil.success(msg='查询成功', rows=result)
 
 
@@ -74,7 +80,7 @@ async def add_shot_grid_project_member(
 
 @project_member_controller.put(
     '/{projectId}/members/{userId}',
-    summary='修改项目成员角色或制作人缩写',
+    summary='修改项目成员角色',
     response_model=DataResponseModel[ShotGridProjectMemberModel],
     dependencies=[UserInterfaceAuthDependency('shotgrid:member:edit')],
 )

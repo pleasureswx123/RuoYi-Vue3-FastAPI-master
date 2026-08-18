@@ -16,8 +16,9 @@ describe('受保护镜头缩略图', () => {
   it('通过统一请求层取得 blob，并在卸载时中止请求和释放 object URL', async () => {
     downloadProtectedThumbnail.mockResolvedValue(new Blob(['image'], { type: 'image/jpeg' }))
     const thumbnail = { fileId: 'file-1', url: '/shot-grid/versions/31/files/file-1/download' }
+    const video = { fileId: 'file-3', url: '/shot-grid/versions/31/files/file-3/download' }
     const wrapper = mount(ProtectedThumbnail, {
-      props: { thumbnail, alt: 'S001 缩略图' },
+      props: { thumbnail, video, alt: 'S001 缩略图' },
       global: { components: { ElIcon } }
     })
     await flushPromises()
@@ -25,6 +26,15 @@ describe('受保护镜头缩略图', () => {
     const options = downloadProtectedThumbnail.mock.calls[0][1]
     expect(options.signal.aborted).toBe(false)
     expect(wrapper.find('img').attributes()).toMatchObject({ src: 'blob:shot-thumbnail', alt: 'S001 缩略图' })
+    expect(wrapper.find('.protected-thumbnail__video-trigger').attributes('aria-label')).toContain('点击预览视频')
+
+    await wrapper.find('.protected-thumbnail__video-trigger').trigger('click')
+    await flushPromises()
+    expect(downloadProtectedThumbnail).toHaveBeenCalledWith(
+      video.url,
+      expect.objectContaining({ signal: expect.any(AbortSignal) })
+    )
+    expect(document.body.querySelector('.shot-video-preview__player')?.getAttribute('src')).toBe('blob:shot-thumbnail')
     wrapper.unmount()
     expect(options.signal.aborted).toBe(true)
     expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:shot-thumbnail')

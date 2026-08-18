@@ -27,6 +27,7 @@ ReviewActionType = Literal['approve', 'reject', 'defer']
 ReviewListStatus = Literal['draft', 'active', 'completed', 'archived']
 ReviewListMode = Literal['auto_single', 'manual_batch']
 NoteStatus = Literal['open', 'resolved']
+IssueVerificationResult = Literal['resolved', 'still_present']
 
 
 def _reject_embedded_payload(value: str, *, field_name: str) -> str:
@@ -287,82 +288,142 @@ class ShotGridManualReviewListOrderModel(ShotGridLockVersionModel):
         return value
 
 
-class ShotGridNoteListQueryModel(ShotGridPageQueryModel):
-    """版本意见分页查询。"""
-
-    note_status: NoteStatus | None = Field(default=None)
-    is_mandatory: bool | None = Field(default=None)
-    order_by_column: Literal['createTime'] = Field(default='createTime')
-
-
 class ShotGridNoteCreateModel(ShotGridApiModel):
-    """创建版本审核意见。"""
+    """创建绑定当前版本的修改问题。"""
 
     model_config = ConfigDict(extra='forbid')
 
-    content: str = Field(min_length=1, max_length=10_000)
+    content: str | None = Field(default=None, max_length=10_000)
     media_time_ms: int | None = Field(default=None, ge=0, le=SQL_BIGINT_MAX)
     annotations: ShotGridAnnotationsModel | None = None
-    is_mandatory: bool = Field(default=False)
 
     @field_validator('content', mode='before')
     @classmethod
     def normalize_content(cls, value: object) -> object:
+        if value is None:
+            return None
         if not isinstance(value, str):
             raise ValueError('审核意见必须是字符串')
-        return value.strip()
+        return value.strip() or None
+
+    @model_validator(mode='after')
+    def require_content_or_annotations(self) -> 'ShotGridNoteCreateModel':
+        if self.content or (self.annotations is not None and self.annotations.items):
+            return self
+        raise ValueError('修改问题必须填写文字内容或至少添加一项画面标注')
 
 
 class ShotGridNoteModel(ShotGridApiModel):
-    """版本审核意见。"""
+    """兼容内部命名的跨版本修改问题。"""
 
     note_id: int
     project_id: int
     version_id: int
+    origin_version_number: str
     reviewer_user_id: int
     reviewer_name: str | None = None
-    content: str
+    content: str | None = None
     media_time_ms: int | None = None
     annotations: ShotGridAnnotationsModel | None = None
-    is_mandatory: bool
     note_status: NoteStatus
-    reply_count: int = 0
+    resolved_in_version_id: int | None = None
+    resolved_in_version_number: str | None = None
     create_time: datetime
     update_time: datetime
 
 
-class ShotGridNoteReplyListQueryModel(ShotGridPageQueryModel):
-    """意见回复分页查询。"""
+class ShotGridIssueResponseModel(ShotGridApiModel):
+    """某个正式版本随提交保存的问题处理说明。"""
 
-    order_by_column: Literal['createTime'] = Field(default='createTime')
-    is_asc: Literal['ascending', 'descending'] = Field(default='ascending')
+    response_id: int
+    submission_id: int
+    version_id: int | None = None
+    version_number: str | None = None
+    response_text: str
+    responded_by: int
+    responder_name: str | None = None
+    create_time: datetime
 
 
-class ShotGridNoteReplyCreateModel(ShotGridApiModel):
-    """新增不可变意见回复。"""
+class ShotGridIssueVerificationModel(ShotGridApiModel):
+    """审核人对某版是否修复问题的不可变确认。"""
+
+    verification_id: int
+    checked_version_id: int
+    checked_version_number: str
+    result: IssueVerificationResult
+    comment: str | None = None
+    reviewer_user_id: int
+    reviewer_name: str | None = None
+    create_time: datetime
+
+
+class ShotGridIssueDetailModel(ShotGridApiModel):
+    """包含处理说明与确认历史的完整问题。"""
+
+    issue_id: int
+    project_id: int
+    origin_version_id: int
+    origin_version_number: str
+    reviewer_user_id: int
+    reviewer_name: str | None = None
+    content: str | None = None
+    media_time_ms: int | None = None
+    annotations: ShotGridAnnotationsModel | None = None
+    status: NoteStatus
+    resolved_in_version_id: int | None = None
+    resolved_in_version_number: str | None = None
+    pending_version_id: int | None = None
+    pending_version_number: str | None = None
+    create_time: datetime
+    update_time: datetime
+    responses: list[ShotGridIssueResponseModel] = Field(default_factory=list)
+    verifications: list[ShotGridIssueVerificationModel] = Field(default_factory=list)
+
+
+class ShotGridReviewVersionSummaryModel(ShotGridApiModel):
+    version_id: int
+    version_no: int
+    version_number: str
+    version_status: VersionStatus
+    lock_version: int
+
+
+class ShotGridCarriedIssueModel(ShotGridIssueDetailModel):
+    current_version_response: ShotGridIssueResponseModel
+
+
+class ShotGridReviewContextModel(ShotGridApiModel):
+    """审核当前版本所需的历史问题与本版新问题。"""
+
+    current_version: ShotGridReviewVersionSummaryModel
+    carried_issues: list[ShotGridCarriedIssueModel] = Field(default_factory=list)
+    current_version_issues: list[ShotGridIssueDetailModel] = Field(default_factory=list)
+
+
+class ShotGridIssueVerificationInputModel(ShotGridApiModel):
+    """审核动作中的逐条问题确认。"""
 
     model_config = ConfigDict(extra='forbid')
 
-    content: str = Field(min_length=1, max_length=10_000)
+    issue_id: int = Field(gt=0, le=SQL_BIGINT_MAX)
+    result: IssueVerificationResult
+    comment: str | None = Field(default=None, max_length=1000)
 
-    @field_validator('content', mode='before')
+    @field_validator('comment', mode='before')
     @classmethod
-    def normalize_content(cls, value: object) -> object:
+    def normalize_comment(cls, value: object) -> object:
+        if value is None:
+            return None
         if not isinstance(value, str):
-            raise ValueError('回复内容必须是字符串')
-        return value.strip()
+            raise ValueError('问题确认说明必须是字符串')
+        return value.strip() or None
 
-
-class ShotGridNoteReplyModel(ShotGridApiModel):
-    """不可变意见回复。"""
-
-    reply_id: int
-    project_id: int
-    note_id: int
-    reply_user_id: int
-    reply_user_name: str | None = None
-    content: str
-    create_time: datetime
+    @model_validator(mode='after')
+    def validate_comment_for_result(self) -> 'ShotGridIssueVerificationInputModel':
+        if self.result == 'resolved':
+            self.comment = None
+        return self
 
 
 class ShotGridReviewActionCreateModel(ShotGridLockVersionModel):
@@ -372,6 +433,7 @@ class ShotGridReviewActionCreateModel(ShotGridLockVersionModel):
 
     action_type: ReviewActionType
     reason: str | None = Field(default=None, max_length=1000)
+    issue_verifications: list[ShotGridIssueVerificationInputModel] = Field(default_factory=list, max_length=200)
 
     @field_validator('reason', mode='before')
     @classmethod
@@ -382,6 +444,15 @@ class ShotGridReviewActionCreateModel(ShotGridLockVersionModel):
             raise ValueError('审核原因必须是字符串')
         normalized = value.strip()
         return normalized or None
+
+    @model_validator(mode='after')
+    def validate_issue_verifications(self) -> 'ShotGridReviewActionCreateModel':
+        issue_ids = [item.issue_id for item in self.issue_verifications]
+        if len(issue_ids) != len(set(issue_ids)):
+            raise ValueError('issueVerifications 不能包含重复问题')
+        if self.action_type == 'defer' and self.issue_verifications:
+            raise ValueError('稍后决定不能提交问题确认结果')
+        return self
 
 
 class ShotGridReviewActionQueryModel(ShotGridPageQueryModel):

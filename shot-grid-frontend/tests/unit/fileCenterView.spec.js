@@ -1,4 +1,4 @@
-import { ElButton, ElIcon, ElImage } from 'element-plus'
+import { ElButton, ElCard, ElEmpty, ElForm, ElFormItem, ElIcon, ElImage, ElInput, ElPagination, ElSkeleton, ElTag } from 'element-plus'
 import { createPinia, setActivePinia } from 'pinia'
 import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -8,6 +8,7 @@ import { getProjectPage } from '@/api/shot-grid/projects'
 import { downloadProtectedVersionFile } from '@/api/shot-grid/versions'
 import { useSessionStore } from '@/store/modules/session'
 import FileCenterView from '@/views/file/FileCenterView.vue'
+import { setElSelectValue } from '../helpers/elementPlus'
 
 vi.mock('@/api/shot-grid/files', () => ({ getProjectFilePage: vi.fn() }))
 vi.mock('@/api/shot-grid/projects', () => ({
@@ -58,7 +59,7 @@ async function mountView(permissions = ['shotgrid:storage:path', 'shotgrid:file:
   const wrapper = mount(FileCenterView, {
     global: {
       plugins: [pinia],
-      components: { ElButton, ElIcon },
+      components: { ElButton, ElCard, ElEmpty, ElForm, ElFormItem, ElIcon, ElImage, ElInput, ElPagination, ElSkeleton, ElTag },
       stubs: { ProjectStoragePanel: { template: '<div class="storage-panel-stub">存储诊断</div>' } }
     }
   })
@@ -78,6 +79,14 @@ describe('文件与 NAS 一级页', () => {
   it('按项目读取可追溯正式版本文件并展示 NAS 相对路径', async () => {
     const wrapper = await mountView()
 
+    const toolbarForm = wrapper.find('form.file-toolbar')
+    const filterForm = wrapper.find('form.file-filters')
+    const toolbarFormComponent = wrapper.findAllComponents(ElForm).find(form => form.classes().includes('file-toolbar'))
+    expect(toolbarForm.classes()).toContain('el-form')
+    expect(toolbarForm.findAll('.el-form-item')).toHaveLength(2)
+    expect(toolbarFormComponent.props('labelPosition')).toBe('top')
+    expect(filterForm.classes()).toContain('el-form')
+    expect(filterForm.findAll('.el-form-item')).toHaveLength(4)
     expect(getProjectFilePage).toHaveBeenCalledWith('8', expect.objectContaining({
       pageNum: 1,
       fileRole: undefined,
@@ -86,6 +95,8 @@ describe('文件与 NAS 一级页', () => {
     expect(wrapper.text()).toContain('LCFR_EP001_001_S001_YJF_V003_1786.mp4')
     expect(wrapper.text()).toContain('动力舱合成 · V003 · 审核文件')
     expect(wrapper.text()).toContain('EP01/SHOT/S001/LCFR_V003.mp4')
+    expect(wrapper.find('.file-card.el-card').exists()).toBe(true)
+    expect(wrapper.findAll('.file-card .el-tag')).toHaveLength(2)
     expect(downloadProtectedVersionFile).toHaveBeenCalledWith(
       33,
       '018f1e40-2222-4222-8222-222222222222',
@@ -107,6 +118,48 @@ describe('文件与 NAS 一级页', () => {
     expect(wrapper.find('.storage-panel-stub').exists()).toBe(true)
     wrapper.unmount()
     expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:file-thumbnail')
+  })
+
+  it('搜索与分页使用 Element Plus 组件协议并提交真实查询模型', async () => {
+    getProjectFilePage.mockResolvedValue({ rows: [file], total: 21 })
+    const wrapper = await mountView()
+
+    await wrapper.find('input[aria-label="搜索业务文件"]').setValue('动力舱')
+    await wrapper.find('form.file-toolbar').trigger('submit')
+    await flushPromises()
+    expect(getProjectFilePage).toHaveBeenLastCalledWith('8', expect.objectContaining({ keyword: '动力舱', pageNum: 1 }), expect.anything())
+
+    expect(wrapper.find('.file-pagination.el-pagination').exists()).toBe(true)
+    await wrapper.find('.file-pagination .btn-next').trigger('click')
+    await flushPromises()
+    expect(getProjectFilePage).toHaveBeenLastCalledWith('8', expect.objectContaining({ keyword: '动力舱', pageNum: 2 }), expect.anything())
+    wrapper.unmount()
+  })
+
+  it('通过两个 Element Plus Form 重置完整文件查询且保留当前项目', async () => {
+    const wrapper = await mountView()
+    const toolbarForm = wrapper.findAllComponents(ElForm).find(form => form.classes().includes('file-toolbar'))
+    const filterForm = wrapper.findAllComponents(ElForm).find(form => form.classes().includes('file-filters'))
+    await toolbarForm.find('input[aria-label="搜索业务文件"]').setValue('动力舱')
+    const filterSelects = filterForm.findAllComponents({ name: 'ElSelect' })
+    await setElSelectValue(filterSelects[0], 'review_media')
+    await setElSelectValue(filterSelects[1], 'shot_video')
+    await setElSelectValue(filterSelects[2], 'pending_review')
+    getProjectFilePage.mockClear()
+
+    await filterForm.findAllComponents(ElButton).find(button => button.text() === '重置').trigger('click')
+    await flushPromises()
+
+    expect(toolbarForm.props('model')).toMatchObject({ projectId: '8', keyword: '' })
+    expect(filterForm.props('model')).toMatchObject({ fileRole: '', taskKind: '', versionStatus: '', pageNum: 1 })
+    expect(getProjectFilePage).toHaveBeenLastCalledWith('8', expect.objectContaining({
+      keyword: undefined,
+      fileRole: undefined,
+      taskKind: undefined,
+      versionStatus: undefined,
+      pageNum: 1
+    }), expect.anything())
+    wrapper.unmount()
   })
 
   it('图片文件点击缩略图时保留大图预览能力', async () => {

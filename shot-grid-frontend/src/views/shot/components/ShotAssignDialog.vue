@@ -27,14 +27,14 @@ const form = reactive({
   priority: props.shot.task?.priority || 'normal',
   dueDate: props.shot.task?.dueDate || ''
 })
-const candidates = computed(() => props.members.filter(member => member.producerCode))
+const candidates = computed(() => props.members.filter(member => member.projectRole === 'creator'))
 const isReassign = computed(() => Boolean(props.shot.task))
 
 async function submit() {
   validationMessage.value = ''
   requestError.value = null
   const userId = Number(form.assigneeUserId)
-  if (!Number.isSafeInteger(userId) || userId <= 0) { validationMessage.value = '请选择具有制作人缩写的项目成员'; return }
+  if (!Number.isSafeInteger(userId) || userId <= 0) { validationMessage.value = '请选择制作人员'; return }
   const payload = {
     assigneeUserId: userId
   }
@@ -58,7 +58,7 @@ async function submit() {
 <template>
   <ProjectModal :title="isReassign ? `改派 ${shot.shotCode}` : `分配 ${shot.shotCode}`" description="首次分配会创建唯一镜头视频任务；改派更新同一任务，不创建第二条任务。" :busy="busy" @close="emit('close')">
     <form class="assign-form" @submit.prevent="submit">
-      <label><span>主制作人 *</span><el-select v-model="form.assigneeUserId" class="sg-select" placeholder="请选择项目成员"><el-option label="请选择项目成员" value="" /><el-option v-for="member in candidates" :key="member.userId" :label="`${member.nickName}（${member.producerCode}）`" :value="String(member.userId)" /></el-select><small v-if="!candidates.length">暂无已配置制作人缩写的有效项目成员。</small></label>
+      <label><span>主制作人 *</span><el-select v-model="form.assigneeUserId" class="sg-select" placeholder="请选择项目成员"><el-option label="请选择项目成员" value="" /><el-option v-for="member in candidates" :key="member.userId" :label="member.userName ? `${member.nickName}（${member.userName}）` : member.nickName" :value="String(member.userId)" /></el-select><small v-if="!candidates.length">当前项目暂无有效制作人员。</small></label>
       <template v-if="!isReassign">
         <label><span>任务优先级</span><el-select v-model="form.priority" class="sg-select"><el-option label="低" value="low" /><el-option label="普通" value="normal" /><el-option label="高" value="high" /><el-option label="紧急" value="urgent" /></el-select></label>
         <label><span>截止日期</span><input v-model="form.dueDate" type="date" /></label>

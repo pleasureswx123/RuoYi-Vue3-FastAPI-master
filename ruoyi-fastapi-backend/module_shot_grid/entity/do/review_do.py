@@ -41,11 +41,11 @@ class ShotGridNote(Base):
         nullable=False,
         comment='审核用户ID',
     )
-    content = Column(Text, nullable=False, comment='审核意见正文')
+    content = Column(Text, nullable=True, comment='审核问题正文；与画面标注至少存在一项')
     media_time_ms = Column(BigInteger, nullable=True, comment='视频时间点（毫秒）')
     annotations = Column(SHOT_GRID_JSON, nullable=True, comment='结构化批注数组')
-    is_mandatory = Column(CHAR(1), nullable=False, server_default='0', comment='是否必须修改')
     note_status = Column(String(20), nullable=False, server_default='open', comment='处理状态')
+    resolved_in_version_id = Column(BigInteger, nullable=True, comment='实际解决该问题的版本ID')
     create_time = Column(SHOT_GRID_DATETIME, nullable=False, default=datetime.now, comment='创建时间')
     update_time = Column(
         SHOT_GRID_DATETIME,
@@ -62,45 +62,101 @@ class ShotGridNote(Base):
             name='fk_sg_note_version_project',
             ondelete='RESTRICT',
         ),
+        ForeignKeyConstraint(
+            ['resolved_in_version_id', 'project_id'],
+            ['sg_version.version_id', 'sg_version.project_id'],
+            name='fk_sg_note_resolved_version_project',
+            ondelete='RESTRICT',
+        ),
         UniqueConstraint('note_id', 'project_id', name='uk_sg_note_id_project'),
-        CheckConstraint("btrim(content) <> ''", name='ck_sg_note_content'),
+        CheckConstraint(
+            "btrim(coalesce(content, '')) <> '' or "
+            "(annotations is not null and jsonb_typeof(annotations -> 'items') = 'array' "
+            "and jsonb_array_length(annotations -> 'items') > 0)",
+            name='ck_sg_note_content_or_annotations',
+        ),
         CheckConstraint('media_time_ms is null or media_time_ms >= 0', name='ck_sg_note_media_time'),
-        CheckConstraint("is_mandatory in ('0', '1')", name='ck_sg_note_mandatory'),
         CheckConstraint("note_status in ('open', 'resolved')", name='ck_sg_note_status'),
         Index('idx_sg_note_version_status_time', 'version_id', 'note_status', 'create_time'),
         {'comment': 'Shot Grid版本级审核意见表'},
     )
 
 
-class ShotGridNoteReply(Base):
-    """
-    Shot Grid 审核意见不可变回复历史表。
-    """
+class ShotGridVersionIssueResponse(Base):
+    """制作人随版本提交保存的逐条问题处理说明。"""
 
-    __tablename__ = 'sg_note_reply'
+    __tablename__ = 'sg_version_issue_response'
 
-    reply_id = Column(BigInteger, primary_key=True, nullable=False, autoincrement=True, comment='回复ID')
+    response_id = Column(BigInteger, primary_key=True, nullable=False, autoincrement=True, comment='处理说明ID')
     project_id = Column(BigInteger, nullable=False, comment='项目ID')
-    note_id = Column(BigInteger, nullable=False, comment='审核意见ID')
-    reply_user_id = Column(
+    submission_id = Column(
+        BigInteger,
+        ForeignKey('sg_version_submission.submission_id', ondelete='RESTRICT'),
+        nullable=False,
+        comment='版本提交ID',
+    )
+    note_id = Column(BigInteger, nullable=False, comment='来源问题ID')
+    response_text = Column(Text, nullable=False, comment='本版处理说明')
+    responded_by = Column(
         BigInteger,
         ForeignKey('sys_user.user_id', ondelete='RESTRICT'),
         nullable=False,
-        comment='回复用户ID',
+        comment='提交用户ID',
     )
-    content = Column(Text, nullable=False, comment='回复内容')
-    create_time = Column(SHOT_GRID_DATETIME, nullable=False, default=datetime.now, comment='回复时间')
+    create_time = Column(SHOT_GRID_DATETIME, nullable=False, default=datetime.now, comment='创建时间')
 
     __table_args__ = (
         ForeignKeyConstraint(
             ['note_id', 'project_id'],
             ['sg_note.note_id', 'sg_note.project_id'],
-            name='fk_sg_note_reply_note_project',
+            name='fk_sg_issue_response_note_project',
             ondelete='RESTRICT',
         ),
-        CheckConstraint("btrim(content) <> ''", name='ck_sg_note_reply_content'),
-        Index('idx_sg_note_reply_note_time', 'note_id', 'create_time', 'reply_id'),
-        {'comment': 'Shot Grid审核意见不可变回复历史表'},
+        UniqueConstraint('submission_id', 'note_id', name='uk_sg_issue_response_submission_note'),
+        CheckConstraint("btrim(response_text) <> ''", name='ck_sg_issue_response_text'),
+        Index('idx_sg_issue_response_note_time', 'note_id', 'create_time', 'response_id'),
+        {'comment': 'Shot Grid版本提交逐条问题处理说明表'},
+    )
+
+
+class ShotGridIssueVerification(Base):
+    """审核人在新版本上对历史问题作出的不可变确认记录。"""
+
+    __tablename__ = 'sg_issue_verification'
+
+    verification_id = Column(BigInteger, primary_key=True, nullable=False, autoincrement=True, comment='确认记录ID')
+    project_id = Column(BigInteger, nullable=False, comment='项目ID')
+    note_id = Column(BigInteger, nullable=False, comment='来源问题ID')
+    checked_version_id = Column(BigInteger, nullable=False, comment='执行确认的版本ID')
+    result = Column(String(20), nullable=False, comment='确认结果')
+    comment = Column(String(1000), nullable=True, comment='本次确认补充说明')
+    reviewer_user_id = Column(
+        BigInteger,
+        ForeignKey('sys_user.user_id', ondelete='RESTRICT'),
+        nullable=False,
+        comment='审核用户ID',
+    )
+    create_time = Column(SHOT_GRID_DATETIME, nullable=False, default=datetime.now, comment='创建时间')
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ['note_id', 'project_id'],
+            ['sg_note.note_id', 'sg_note.project_id'],
+            name='fk_sg_issue_verification_note_project',
+            ondelete='RESTRICT',
+        ),
+        ForeignKeyConstraint(
+            ['checked_version_id', 'project_id'],
+            ['sg_version.version_id', 'sg_version.project_id'],
+            name='fk_sg_issue_verification_version_project',
+            ondelete='RESTRICT',
+        ),
+        UniqueConstraint('note_id', 'checked_version_id', name='uk_sg_issue_verification_note_version'),
+        CheckConstraint("result in ('resolved', 'still_present')", name='ck_sg_issue_verification_result'),
+        CheckConstraint("comment is null or btrim(comment) <> ''", name='ck_sg_issue_verification_comment'),
+        Index('idx_sg_issue_verification_version_time', 'checked_version_id', 'create_time'),
+        Index('idx_sg_issue_verification_note_time', 'note_id', 'create_time'),
+        {'comment': 'Shot Grid跨版本问题审核确认表'},
     )
 
 

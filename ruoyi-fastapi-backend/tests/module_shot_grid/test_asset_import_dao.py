@@ -38,6 +38,7 @@ async def test_assignable_members_only_include_active_members_and_users() -> Non
     compiled = str(db.statement.compile(compile_kwargs={'literal_binds': True}))
 
     assert "sg_project_member.member_status = 'active'" in compiled
+    assert "sg_project_member.project_role = 'creator'" in compiled
     assert "sys_user.status = '0'" in compiled
     assert "sys_user.del_flag = '0'" in compiled
 

@@ -8,11 +8,13 @@ import pytest
 from module_shot_grid.dao.import_batch_dao import ShotGridImportBatchDao
 from module_shot_grid.dao.project_audit_dao import ShotGridProjectAuditDao
 from module_shot_grid.dao.shot_import_dao import ShotGridShotImportDao
-from module_shot_grid.entity.vo.import_common_vo import ImportPreviewTokenPayloadModel, ImportSelectedRowModel
+from module_shot_grid.entity.vo.import_common_vo import ImportPreviewTokenPayloadModel
 from module_shot_grid.entity.vo.shot_import_vo import (
     ShotImportCommitRequestModel,
     ShotImportCommitResultModel,
+    ShotImportNormalizedRowModel,
     ShotImportPreviewRowModel,
+    ShotImportSelectedRowModel,
 )
 from module_shot_grid.exceptions import ShotGridDomainException
 from module_shot_grid.service.import_preview_store import ImportPreviewStore
@@ -21,6 +23,7 @@ from module_shot_grid.service.shot_import_service import ShotGridShotImportServi
 CONFLICT_STATUS = 409
 UNPROCESSABLE_STATUS = 422
 IMPORT_BUSINESS_TYPE = 6
+ASSIGNEE_USER_ID = 7
 
 
 def _preview_row(sheet_name: str, row_number: int, *, can_import: bool = True) -> ShotImportPreviewRowModel:
@@ -76,8 +79,8 @@ def test_row_key_and_selection_hash_are_stable_and_sheet_sensitive() -> None:
 def test_selected_rows_use_sheet_and_row_and_keep_workbook_order() -> None:
     rows = [_preview_row('EP001', 2), _preview_row('EP001', 3), _preview_row('EP002', 2)]
     selections = [
-        ImportSelectedRowModel(sheetName='EP002', rowNumber=2),
-        ImportSelectedRowModel(sheetName='EP001', rowNumber=2),
+        ShotImportSelectedRowModel(sheetName='EP002', rowNumber=2),
+        ShotImportSelectedRowModel(sheetName='EP001', rowNumber=2),
     ]
 
     selected = ShotGridShotImportService._select_rows(_payload(rows), selections)
@@ -90,14 +93,14 @@ def test_selected_rows_reject_unknown_or_invalid_preview_rows() -> None:
     with pytest.raises(ShotGridDomainException) as invalid_exc:
         ShotGridShotImportService._select_rows(
             payload,
-            [ImportSelectedRowModel(sheetName='EP001', rowNumber=2)],
+            [ShotImportSelectedRowModel(sheetName='EP001', rowNumber=2)],
         )
     assert invalid_exc.value.error_key == 'SG_IMPORT_HAS_ERRORS'
 
     with pytest.raises(ShotGridDomainException) as missing_exc:
         ShotGridShotImportService._select_rows(
             payload,
-            [ImportSelectedRowModel(sheetName='EP002', rowNumber=2)],
+            [ShotImportSelectedRowModel(sheetName='EP002', rowNumber=2)],
         )
     assert missing_exc.value.error_key == 'SG_IMPORT_SELECTED_ROW_INVALID'
 
@@ -108,6 +111,44 @@ def test_idempotency_lock_id_is_stable_and_scoped() -> None:
     assert first != ShotGridShotImportService._idempotency_lock_id(2, 2, 'same-key')
     assert first != ShotGridShotImportService._idempotency_lock_id(1, 3, 'same-key')
     assert -(2**63) <= first < 2**63
+
+
+def test_assignee_override_repairs_only_assignee_errors_and_changes_selection_hash() -> None:
+    row = _preview_row('EP001', 2, can_import=False)
+    row.normalized = ShotImportNormalizedRowModel(
+        episodeNo=1,
+        episodeCode='EP001',
+        sceneNo=1,
+        sceneCode='001',
+        sortOrder=10,
+        shotNo=1,
+        shotCode='S001',
+        durationMs=1000,
+        assigneeUserName='旧制作人',
+        description='建立镜头',
+        assetRequirements=[],
+    )
+    row.errors = [{'errorKey': 'SG_TASK_ASSIGNEE_INVALID', 'fieldName': 'assigneeUserName', 'message': '制作人无效'}]
+    without_override = ShotImportSelectedRowModel(sheetName='EP001', rowNumber=2)
+    with_override = ShotImportSelectedRowModel(sheetName='EP001', rowNumber=2, assigneeUserId=ASSIGNEE_USER_ID)
+    with_unassigned = ShotImportSelectedRowModel(sheetName='EP001', rowNumber=2, assigneeUserId=None)
+
+    selected = ShotGridShotImportService._select_rows(_payload([row]), [with_override])
+
+    assert selected[0].can_import is True
+    assert selected[0].normalized is not None
+    assert selected[0].normalized.assignee_user_id == ASSIGNEE_USER_ID
+    assert ShotGridShotImportService._selection_hash_from_request(
+        'a' * 64, [without_override]
+    ) != ShotGridShotImportService._selection_hash_from_request('a' * 64, [with_override])
+    unassigned = ShotGridShotImportService._select_rows(_payload([row]), [with_unassigned])
+    assert unassigned[0].can_import is True
+    assert unassigned[0].normalized is not None
+    assert unassigned[0].normalized.assignee_user_id is None
+    assert unassigned[0].normalized.assignee_user_name is None
+    assert ShotGridShotImportService._selection_hash_from_request(
+        'a' * 64, [without_override]
+    ) != ShotGridShotImportService._selection_hash_from_request('a' * 64, [with_unassigned])
 
 
 @pytest.mark.parametrize('file_name', ['bad\x00.xlsx', 'bad\x1f.xlsx'])
@@ -131,7 +172,7 @@ def test_existing_committed_result_is_replayed_from_snapshot() -> None:
 @pytest.mark.asyncio
 async def test_idempotent_replay_releases_advisory_transaction_lock(monkeypatch: pytest.MonkeyPatch) -> None:
     token = 'same-token'
-    selection = ImportSelectedRowModel(sheetName='EP001', rowNumber=2)
+    selection = ShotImportSelectedRowModel(sheetName='EP001', rowNumber=2)
     existing = SimpleNamespace(
         preview_token_hash=ImportPreviewStore.token_hash(token),
         file_sha256='a' * 64,

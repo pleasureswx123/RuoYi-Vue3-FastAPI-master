@@ -24,10 +24,15 @@ from module_shot_grid.entity.vo.asset_import_vo import (
     AssetImportCommitResultModel,
     AssetImportPreviewResponseModel,
     AssetImportPreviewRowModel,
+    AssetImportSelectedRowModel,
 )
 from module_shot_grid.entity.vo.import_common_vo import ImportIssueModel, ImportPreviewTokenPayloadModel
 from module_shot_grid.exceptions import ShotGridDomainException, shot_grid_error
 from module_shot_grid.service.asset_excel_parser import AssetExcelParser
+from module_shot_grid.service.asset_task_rules import (
+    is_asset_production_item_ready,
+    require_asset_production_item,
+)
 from module_shot_grid.service.excel_security_service import ExcelSecurityService
 from module_shot_grid.service.import_preview_store import ImportPreviewStore
 from module_shot_grid.service.project_access_service import ShotGridProjectAccessService
@@ -209,6 +214,7 @@ class AssetImportService:
                 dept_name=dept_name,
                 selection_hash=selection_hash,
                 current_user=current_user,
+                assignee_overrides=cls._assignee_overrides(command.selected_rows),
             )
         except IntegrityError as exc:
             await db.rollback()
@@ -298,6 +304,7 @@ class AssetImportService:
         dept_name: str | None,
         selection_hash: str,
         current_user: CurrentUserModel,
+        assignee_overrides: dict[tuple[str, int], int | None] | None = None,
     ) -> AssetImportCommitResultModel:
         await cls._require_ready_storage(
             db,
@@ -306,7 +313,8 @@ class AssetImportService:
             current_user=current_user,
         )
         cls._validate_storage_segments(rows)
-        await cls._resolve_assignees(db, project_id, rows)
+        assignee_overrides = assignee_overrides or {}
+        await cls._resolve_assignees(db, project_id, rows, assignee_overrides)
         cls._raise_selected_row_errors(rows)
         result = await cls._persist_selected_rows(
             db,
@@ -327,7 +335,18 @@ class AssetImportService:
             oper_param={
                 'projectId': project_id,
                 'batchId': batch.batch_id,
-                'selectedRows': [{'sheetName': row.sheet_name, 'rowNumber': row.row_number} for row in rows],
+                'selectedRows': [
+                    {
+                        'sheetName': row.sheet_name,
+                        'rowNumber': row.row_number,
+                        **(
+                            {'assigneeUserId': assignee_overrides[(row.sheet_name, row.row_number)]}
+                            if (row.sheet_name, row.row_number) in assignee_overrides
+                            else {}
+                        ),
+                    }
+                    for row in rows
+                ],
             },
             result=result.model_dump(mode='json', by_alias=True),
         )
@@ -560,7 +579,8 @@ class AssetImportService:
                 ),
             )
             if normalized.assignee_user_id is not None:
-                task_suffix = normalized.production_item or '待补制作分项'
+                require_asset_production_item(normalized.production_item, action='在导入时分配任务')
+                task_suffix = normalized.production_item
                 await AssetImportDao.add_task(
                     db,
                     ShotGridTask(
@@ -636,13 +656,50 @@ class AssetImportService:
         db: AsyncSession,
         project_id: int,
         rows: list[AssetImportPreviewRowModel],
+        assignee_overrides: dict[tuple[str, int], int | None] | None = None,
     ) -> None:
+        assignee_overrides = assignee_overrides or {}
         names = {
-            row.normalized.assignee_user_name for row in rows if row.normalized.assignee_user_name and not row.errors
+            row.normalized.assignee_user_name
+            for row in rows
+            if row.normalized.assignee_user_name
+            and not row.errors
+            and (row.sheet_name, row.row_number) not in assignee_overrides
         }
         candidates = await AssetImportDao.get_member_candidates(db, project_id, names)
+        override_candidates = await AssetImportDao.get_member_candidates_by_ids(
+            db,
+            project_id,
+            (user_id for user_id in assignee_overrides.values() if user_id is not None),
+        )
+        override_by_id = {candidate['user_id']: candidate for candidate in override_candidates}
         for row in rows:
             normalized = row.normalized
+            normalized.assignee_user_id = None
+            normalized.producer_code = None
+            identity = (row.sheet_name, row.row_number)
+            if identity in assignee_overrides:
+                override_user_id = assignee_overrides[identity]
+                if override_user_id is None:
+                    normalized.assignee_user_name = None
+                    row.refresh_can_import()
+                    continue
+                candidate = override_by_id.get(override_user_id)
+                if candidate is None:
+                    cls._append_issue(
+                        row,
+                        'SG_TASK_ASSIGNEE_INVALID',
+                        '选择的制作人不存在、已停用或不是项目制作人员',
+                        'assigneeUserName',
+                    )
+                elif not candidate['producer_code']:
+                    cls._append_issue(row, 'SG_PRODUCER_CODE_REQUIRED', '制作人尚未设置用户昵称', 'assigneeUserName')
+                else:
+                    normalized.assignee_user_id = candidate['user_id']
+                    normalized.assignee_user_name = candidate['user_name']
+                    normalized.producer_code = candidate['producer_code']
+                row.refresh_can_import()
+                continue
             name = normalized.assignee_user_name
             if not name or row.errors:
                 row.refresh_can_import()
@@ -657,12 +714,25 @@ class AssetImportService:
                 cls._append_issue(
                     row,
                     'SG_PRODUCER_CODE_REQUIRED',
-                    '制作人尚未设置项目内制作人缩写',
+                    '制作人尚未设置用户昵称',
                     'assigneeUserName',
                 )
             else:
                 normalized.assignee_user_id = matches[0]['user_id']
                 normalized.producer_code = matches[0]['producer_code']
+            row.refresh_can_import()
+
+        for row in rows:
+            if (
+                row.normalized.assignee_user_id is not None
+                and not is_asset_production_item_ready(row.normalized.production_item)
+            ):
+                cls._append_issue(
+                    row,
+                    'SG_ASSET_PRODUCTION_ITEM_REQUIRED',
+                    '制作分项为空时不能分配制作人；请补齐制作分项或改为未分配',
+                    'assigneeUserName',
+                )
             row.refresh_can_import()
 
     @classmethod
@@ -805,10 +875,15 @@ class AssetImportService:
         by_identity = {(row.sheet_name, row.row_number): row for row in rows}
         selected: list[AssetImportPreviewRowModel] = []
         invalid: list[dict[str, Any]] = []
-        for identity in command.selected_rows:
-            row = by_identity.get(identity.key())
+        for selection in command.selected_rows:
+            row = by_identity.get(selection.key())
+            if row is not None and 'assignee_user_id' in selection.model_fields_set:
+                non_assignee_errors = [issue for issue in row.errors if issue.field_name != 'assigneeUserName']
+                if not non_assignee_errors:
+                    row.errors = []
+                    row.can_import = True
             if row is None or not row.can_import or row.errors:
-                invalid.append({'sheetName': identity.sheet_name, 'rowNumber': identity.row_number})
+                invalid.append({'sheetName': selection.sheet_name, 'rowNumber': selection.row_number})
             else:
                 selected.append(row)
         if invalid:
@@ -1033,12 +1108,25 @@ class AssetImportService:
 
     @staticmethod
     def _selection_hash(command: AssetImportCommitRequestModel) -> str:
-        selected = sorted(
-            ({'sheetName': item.sheet_name, 'rowNumber': item.row_number} for item in command.selected_rows),
-            key=lambda item: (item['sheetName'], item['rowNumber']),
-        )
+        selected = []
+        for item in command.selected_rows:
+            value: dict[str, Any] = {'sheetName': item.sheet_name, 'rowNumber': item.row_number}
+            if 'assignee_user_id' in item.model_fields_set:
+                value['assigneeUserId'] = item.assignee_user_id
+            selected.append(value)
+        selected.sort(key=lambda item: (item['sheetName'], item['rowNumber']))
         canonical = json.dumps(selected, ensure_ascii=False, separators=(',', ':'), sort_keys=True)
         return hashlib.sha256(canonical.encode('utf-8')).hexdigest()
+
+    @staticmethod
+    def _assignee_overrides(
+        selected_rows: list[AssetImportSelectedRowModel],
+    ) -> dict[tuple[str, int], int | None]:
+        return {
+            row.key(): row.assignee_user_id
+            for row in selected_rows
+            if 'assignee_user_id' in row.model_fields_set
+        }
 
     @classmethod
     def _commit_hashes(cls, command: AssetImportCommitRequestModel) -> tuple[str, str]:

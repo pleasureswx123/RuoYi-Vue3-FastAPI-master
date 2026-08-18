@@ -5,9 +5,12 @@ import pytest
 from openpyxl import Workbook, load_workbook
 
 from module_shot_grid.config import ShotGridImportConfig
+from module_shot_grid.entity.vo.import_common_vo import ImportIssueModel
 from module_shot_grid.entity.vo.shot_import_vo import ShotImportCommitRequestModel
 from module_shot_grid.exceptions import ShotGridDomainException
 from module_shot_grid.service.shot_excel_parser import ShotExcelParser
+
+ASSIGNEE_USER_ID = 7
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SHOT_SAMPLE = REPO_ROOT / 'shot-grid-frontend' / 'docs' / '镜头-样表.xlsx'
@@ -57,6 +60,27 @@ def test_real_sample_has_frozen_structure_and_exact_counts() -> None:
     assert result.rows[3].normalized is not None
     assert result.rows[3].normalized.focal_length == '24/18'
     assert [warning.error_key for warning in result.workbook_warnings] == ['SG_IMPORT_READONLY_COLUMNS_IGNORED']
+
+
+def test_summary_keeps_parsed_structure_when_assignee_matching_fails() -> None:
+    result = ShotExcelParser().parse(SHOT_SAMPLE.read_bytes())
+    for row in result.rows[2:]:
+        row.errors.append(
+            ImportIssueModel(
+                errorKey='SG_IMPORT_ASSIGNEE_NOT_FOUND',
+                message='制作人无法匹配',
+                fieldName='assigneeUserName',
+                sheetName=row.sheet_name,
+                rowNumber=row.row_number,
+            )
+        )
+        row.can_import = False
+
+    summary = ShotExcelParser.build_summary(result.rows)
+
+    assert summary.valid_rows == 2
+    assert summary.error_rows == 22
+    assert (summary.distinct_episodes, summary.distinct_scenes, summary.distinct_shots) == (2, 8, 24)
 
 
 def test_parser_ignores_auxiliary_columns_after_first_blank_header() -> None:
@@ -197,6 +221,12 @@ def test_commit_selection_uses_sheet_and_row_composite_identity() -> None:
         ],
     )
     assert [row.key() for row in request.selected_rows] == [('EP001', 2), ('EP002', 2)]
+
+    override_request = ShotImportCommitRequestModel(
+        importToken='token',
+        selectedRows=[{'sheetName': 'EP001', 'rowNumber': 2, 'assigneeUserId': ASSIGNEE_USER_ID}],
+    )
+    assert override_request.selected_rows[0].assignee_user_id == ASSIGNEE_USER_ID
 
     with pytest.raises(ValueError):
         ShotImportCommitRequestModel(

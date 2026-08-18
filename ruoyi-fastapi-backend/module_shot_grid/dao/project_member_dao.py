@@ -8,6 +8,7 @@ from module_admin.entity.do.dept_do import SysDept
 from module_admin.entity.do.user_do import SysUser
 from module_shot_grid.entity.do.project_do import ShotGridProjectMember
 from module_shot_grid.entity.do.task_do import ShotGridTask
+from module_shot_grid.entity.vo.project_member_vo import ProjectRole
 
 
 class ShotGridProjectMemberDao:
@@ -99,29 +100,38 @@ class ShotGridProjectMemberDao:
         )
 
     @classmethod
-    async def list_members(cls, db: AsyncSession, project_id: int) -> list[dict[str, Any]]:
+    async def list_members(
+        cls,
+        db: AsyncSession,
+        project_id: int,
+        project_role: ProjectRole | None = None,
+    ) -> list[dict[str, Any]]:
+        statement = (
+            select(
+                SysUser.user_id,
+                SysUser.user_name,
+                SysUser.nick_name,
+                SysUser.avatar,
+                SysUser.dept_id,
+                SysDept.dept_name,
+                ShotGridProjectMember.project_role,
+                ShotGridProjectMember.producer_code,
+                ShotGridProjectMember.joined_time,
+                SysUser.status.label('account_status'),
+            )
+            .select_from(ShotGridProjectMember)
+            .join(SysUser, SysUser.user_id == ShotGridProjectMember.user_id)
+            .outerjoin(SysDept, SysDept.dept_id == SysUser.dept_id)
+            .where(
+                ShotGridProjectMember.project_id == project_id,
+                ShotGridProjectMember.member_status == 'active',
+            )
+        )
+        if project_role is not None:
+            statement = statement.where(ShotGridProjectMember.project_role == project_role)
         rows = (
             await db.execute(
-                select(
-                    SysUser.user_id,
-                    SysUser.user_name,
-                    SysUser.nick_name,
-                    SysUser.avatar,
-                    SysUser.dept_id,
-                    SysDept.dept_name,
-                    ShotGridProjectMember.project_role,
-                    ShotGridProjectMember.producer_code,
-                    ShotGridProjectMember.joined_time,
-                    SysUser.status.label('account_status'),
-                )
-                .select_from(ShotGridProjectMember)
-                .join(SysUser, SysUser.user_id == ShotGridProjectMember.user_id)
-                .outerjoin(SysDept, SysDept.dept_id == SysUser.dept_id)
-                .where(
-                    ShotGridProjectMember.project_id == project_id,
-                    ShotGridProjectMember.member_status == 'active',
-                )
-                .order_by(
+                statement.order_by(
                     case((ShotGridProjectMember.project_role == 'director', 0), else_=1),
                     ShotGridProjectMember.joined_time,
                     ShotGridProjectMember.user_id,

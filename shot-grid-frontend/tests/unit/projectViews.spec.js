@@ -1,4 +1,4 @@
-import { ElButton, ElIcon } from 'element-plus'
+import { ElButton, ElCard, ElEmpty, ElForm, ElFormItem, ElIcon, ElInput, ElPagination, ElProgress, ElSkeleton, ElTag } from 'element-plus'
 import { createPinia, setActivePinia } from 'pinia'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
@@ -46,7 +46,7 @@ async function mountProjectList(permissions = []) {
   await router.push('/projects')
   await router.isReady()
   const wrapper = mount(ProjectListView, {
-    global: { plugins: [pinia, router], components: { ElButton, ElIcon } }
+    global: { plugins: [pinia, router], components: { ElButton, ElCard, ElEmpty, ElForm, ElFormItem, ElIcon, ElInput, ElPagination, ElProgress, ElSkeleton, ElTag } }
   })
   await flushPromises()
   return { wrapper, router }
@@ -58,11 +58,57 @@ describe('项目管理页面', () => {
   })
 
   it('展示真实范围列表并按接口权限显示创建入口', async () => {
-    const { wrapper } = await mountProjectList(['shotgrid:project:add'])
+    getProjectPage.mockResolvedValue({ rows: [projectRow], total: 13, hasNext: true })
+    const { wrapper } = await mountProjectList(['shotgrid:project:add', 'shotgrid:project:all'])
 
+    const filterForm = wrapper.findComponent(ElForm)
+    expect(filterForm.classes()).toContain('el-form')
+    expect(filterForm.props('model')).toMatchObject({
+      keyword: '',
+      projectStatus: '',
+      scope: '',
+      orderByColumn: 'createTime',
+      isAsc: 'descending',
+      pageNum: 1,
+      pageSize: 12
+    })
+    expect(filterForm.findAllComponents(ElFormItem).map(item => item.props('prop'))).toEqual([
+      'keyword',
+      'projectStatus',
+      'scope',
+      'orderByColumn',
+      'isAsc',
+      undefined
+    ])
     expect(wrapper.text()).toContain('罗刹夫人')
     expect(wrapper.text()).toContain('创建项目')
     expect(wrapper.text()).toContain('12/30')
+    expect(wrapper.find('.project-card.el-card').exists()).toBe(true)
+    expect(wrapper.find('.project-card .el-progress').exists()).toBe(true)
+    expect(wrapper.find('.project-pagination.el-pagination').exists()).toBe(true)
+    await wrapper.find('.project-pagination .btn-next').trigger('click')
+    await flushPromises()
+    expect(getProjectPage).toHaveBeenLastCalledWith(
+      expect.objectContaining({ pageNum: 2 }),
+      expect.objectContaining({ signal: expect.any(AbortSignal) })
+    )
+    wrapper.unmount()
+  })
+
+  it('Element Plus Form model 驱动项目查询参数', async () => {
+    const { wrapper } = await mountProjectList(['shotgrid:project:list'])
+    const filterForm = wrapper.findComponent(ElForm)
+    getProjectPage.mockClear()
+
+    await filterForm.find('input[aria-label="搜索项目名称或代号"]').setValue('LCFR')
+    await filterForm.trigger('submit')
+    await flushPromises()
+
+    expect(filterForm.props('model')).toMatchObject({ keyword: 'LCFR', pageNum: 1 })
+    expect(getProjectPage).toHaveBeenLastCalledWith(
+      expect.objectContaining({ keyword: 'LCFR', pageNum: 1 }),
+      expect.objectContaining({ signal: expect.any(AbortSignal) })
+    )
     wrapper.unmount()
   })
 

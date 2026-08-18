@@ -68,7 +68,6 @@ const canUseSearch = computed(() => {
 })
 const passwordNotice = computed(() => {
   if (sessionStore.passwordNotice === 'expired') return '当前密码已过期，请尽快在管理平台修改密码。'
-  if (sessionStore.passwordNotice === 'default') return '当前仍为初始密码，请尽快在管理平台修改密码。'
   return ''
 })
 

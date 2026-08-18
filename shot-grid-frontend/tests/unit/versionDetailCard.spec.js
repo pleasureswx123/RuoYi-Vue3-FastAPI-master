@@ -8,7 +8,12 @@ import VersionDetailCard from '@/components/version/VersionDetailCard.vue'
 vi.mock('@/api/shot-grid/versions', () => ({ downloadProtectedVersionFile: vi.fn() }))
 
 const fileId = '550e8400-e29b-41d4-a716-446655440000'
-const mountOptions = { global: { components: { ElButton, ElIcon, ElTag } } }
+const mountOptions = {
+  global: {
+    components: { ElButton, ElIcon, ElTag },
+    stubs: { ProtectedVersionPreview: true }
+  }
+}
 
 function version(versionId = 7, overrides = {}) {
   return {

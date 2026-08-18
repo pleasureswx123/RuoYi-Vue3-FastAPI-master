@@ -12,6 +12,7 @@ IMPORT_ROUTER_ORDER = 43
 EXPECTED_ROUTES = {
     ('GET', '/shot-grid/projects/{projectId}/shots'): 'shotgrid:shot:list',
     ('POST', '/shot-grid/projects/{projectId}/shots'): 'shotgrid:shot:add',
+    ('POST', '/shot-grid/projects/{projectId}/shots/batch-delete'): 'shotgrid:shot:archive',
     ('GET', '/shot-grid/projects/{projectId}/shots/{shotId}'): 'shotgrid:shot:query',
     ('PUT', '/shot-grid/projects/{projectId}/shots/{shotId}'): 'shotgrid:shot:edit',
     ('POST', '/shot-grid/projects/{projectId}/shots/{shotId}/archive'): 'shotgrid:shot:archive',
@@ -50,5 +51,8 @@ def test_import_static_router_is_registered_before_dynamic_shot_id_router() -> N
     paths = [route.path for route in app.routes]
 
     assert paths.index('/shot-grid/projects/{projectId}/shots/import/preview') < paths.index(
+        '/shot-grid/projects/{projectId}/shots/{shotId}'
+    )
+    assert paths.index('/shot-grid/projects/{projectId}/shots/batch-delete') < paths.index(
         '/shot-grid/projects/{projectId}/shots/{shotId}'
     )

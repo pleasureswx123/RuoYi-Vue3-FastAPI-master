@@ -121,10 +121,11 @@ export function archiveProject(projectId, data) {
   })
 }
 
-export function getProjectMembers(projectId, options = {}) {
+export function getProjectMembers(projectId, params = {}, options = {}) {
   return request({
     url: projectUrl(projectId, '/members'),
     method: 'get',
+    params,
     signal: options.signal,
     silentError: true
   })

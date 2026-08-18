@@ -1,4 +1,4 @@
-import { ElButton, ElIcon } from 'element-plus'
+import { ElButton, ElCard, ElDialog, ElDrawer, ElEmpty, ElForm, ElFormItem, ElIcon, ElInput, ElPagination, ElRadioButton, ElRadioGroup, ElTable, ElTableColumn, ElTag } from 'element-plus'
 import { createPinia, setActivePinia } from 'pinia'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
@@ -27,6 +27,8 @@ vi.mock('@/api/shot-grid/assets', () => ({
   archiveAsset: vi.fn(),
   archiveAssetItem: vi.fn(),
   assignAssetItemTask: vi.fn(),
+  batchAssignAssetItemTasks: vi.fn(),
+  batchDeleteAssets: vi.fn(),
   commitAssetImport: vi.fn(),
   createAsset: vi.fn(),
   createAssetItem: vi.fn(),
@@ -116,7 +118,7 @@ async function mountList(permissions = ['shotgrid:asset:list', 'shotgrid:asset:a
   })
   await router.push('/assets?projectId=8')
   await router.isReady()
-  const wrapper = mount(AssetListView, { global: { plugins: [pinia, router], components: { ElButton, ElIcon } } })
+  const wrapper = mount(AssetListView, { global: { plugins: [pinia, router], components: { ElButton, ElCard, ElDialog, ElDrawer, ElEmpty, ElForm, ElFormItem, ElIcon, ElInput, ElPagination, ElRadioButton, ElRadioGroup, ElTable, ElTableColumn, ElTag } } })
   await flushPromises()
   await flushPromises()
   return { wrapper, router }
@@ -144,14 +146,19 @@ describe('资产管理真实列表页', () => {
     getProjectDetail.mockResolvedValue({ data: { ...projectRow, projectTypeName: 'AI 影视短片', aspectRatio: '16:9', projectStatus: 'active', storageStatus: 'ready', myProjectRole: 'director', allowedActions: ['asset.create', 'asset.import'] } })
     listAssetAssignees.mockResolvedValue({ rows: [memberRow], total: 1, hasNext: false })
     getAssetPage.mockResolvedValue({ rows: [assetRow], total: 1, hasNext: false })
+    getAssetDetail.mockResolvedValue({ data: assetDetail() })
   })
 
   it('展示真实资产结果、四类筛选、分页与三种视图', async () => {
     const { wrapper } = await mountList()
+    const filterForm = wrapper.findAllComponents(ElForm).find(form => form.classes().includes('asset-filters'))
+    expect(filterForm.props('model')).toMatchObject({ keyword: '', assetType: '', assetStatus: '', assigneeUserId: '' })
+    expect(filterForm.findAllComponents(ElFormItem)).toHaveLength(5)
+    expect(filterForm.findComponent(ElInput).classes()).toContain('sg-input')
     expect(wrapper.text()).toContain('LCFR · 罗刹夫人')
     expect(wrapper.text()).toContain('动力舱室内')
     expect(wrapper.text()).toContain('12')
-    expect(wrapper.find('.asset-table-wrap').text()).toContain('杨景锋（YJF）')
+    expect(wrapper.find('.asset-table-wrap').text()).toContain('杨景锋')
     expect(wrapper.text()).toContain('导入 Excel')
     expect(wrapper.text()).toContain('新建资产')
 
@@ -167,10 +174,70 @@ describe('资产管理真实列表页', () => {
       assigneeUserId: '7'
     }), expect.anything())
 
-    await wrapper.findAll('button').find(button => button.text().includes('卡片')).trigger('click')
+    const viewSwitch = wrapper.findComponent(ElRadioGroup)
+    viewSwitch.vm.$emit('update:modelValue', 'card')
+    await flushPromises()
     expect(wrapper.find('.asset-card').exists()).toBe(true)
-    await wrapper.findAll('button').find(button => button.text().includes('类型看板')).trigger('click')
+    viewSwitch.vm.$emit('update:modelValue', 'type')
+    await flushPromises()
     expect(wrapper.find('.type-board').text()).toContain('场景')
+    wrapper.unmount()
+  })
+
+  it('资产下拉筛选 change 后立即查询第一页', async () => {
+    const { wrapper } = await mountList()
+    const filterForm = wrapper.findAllComponents(ElForm).find(form => form.classes().includes('asset-filters'))
+    const filterSelects = filterForm.findAllComponents({ name: 'ElSelect' })
+    getAssetPage.mockClear()
+
+    await setElSelectValue(filterSelects[0], 'Environment')
+    await flushPromises()
+    expect(getAssetPage).toHaveBeenLastCalledWith(8, expect.objectContaining({ assetType: 'Environment', pageNum: 1 }), expect.anything())
+
+    await setElSelectValue(filterSelects[1], 'in_progress')
+    await flushPromises()
+    expect(getAssetPage).toHaveBeenLastCalledWith(8, expect.objectContaining({ assetType: 'Environment', assetStatus: 'in_progress', pageNum: 1 }), expect.anything())
+
+    await setElSelectValue(filterSelects[2], '7')
+    await flushPromises()
+    expect(getAssetPage).toHaveBeenLastCalledWith(8, expect.objectContaining({ assetType: 'Environment', assetStatus: 'in_progress', assigneeUserId: '7', pageNum: 1 }), expect.anything())
+    wrapper.unmount()
+  })
+
+  it('通过 Element Plus Form 重置全部资产筛选并重新查询第一页', async () => {
+    const { wrapper } = await mountList()
+    const filterForm = wrapper.findAllComponents(ElForm).find(form => form.classes().includes('asset-filters'))
+    await filterForm.find('input[aria-label="按资产名称或描述搜索"]').setValue('动力舱')
+    const filterSelects = filterForm.findAllComponents({ name: 'ElSelect' })
+    await setElSelectValue(filterSelects[0], 'Environment')
+    await setElSelectValue(filterSelects[1], 'in_progress')
+    await setElSelectValue(filterSelects[2], '7')
+    getAssetPage.mockClear()
+
+    await filterForm.findAllComponents(ElButton).find(button => button.text() === '重置').trigger('click')
+    await flushPromises()
+
+    expect(filterForm.props('model')).toMatchObject({ keyword: '', assetType: '', assetStatus: '', assigneeUserId: '', pageNum: 1 })
+    expect(getAssetPage).toHaveBeenLastCalledWith(8, expect.objectContaining({
+      keyword: undefined,
+      assetType: undefined,
+      assetStatus: undefined,
+      assigneeUserId: undefined,
+      pageNum: 1
+    }), expect.anything())
+    wrapper.unmount()
+  })
+
+  it('点击详情在当前列表页右侧抽屉展示完整资产详情', async () => {
+    const { wrapper, router } = await mountList()
+    await wrapper.findAll('button').find(button => button.text() === '详情').trigger('click')
+    await flushPromises()
+
+    const detail = wrapper.findComponent(AssetDetailView)
+    expect(detail.exists()).toBe(true)
+    expect(detail.props()).toMatchObject({ embedded: true, targetProjectId: 8, targetAssetId: 31 })
+    expect(detail.text()).toContain('动力舱室内')
+    expect(router.currentRoute.value.path).toBe('/assets')
     wrapper.unmount()
   })
 

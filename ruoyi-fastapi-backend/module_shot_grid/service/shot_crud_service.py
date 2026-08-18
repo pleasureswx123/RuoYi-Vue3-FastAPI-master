@@ -19,12 +19,15 @@ from module_shot_grid.entity.vo.shot_crud_vo import (
     ShotGridShotArchiveResultModel,
     ShotGridShotAssetSummaryModel,
     ShotGridShotAssigneeModel,
+    ShotGridShotBatchDeleteModel,
+    ShotGridShotBatchDeleteResultModel,
     ShotGridShotCreateModel,
     ShotGridShotDetailModel,
     ShotGridShotLatestFeedbackModel,
     ShotGridShotLatestVersionModel,
     ShotGridShotListItemModel,
     ShotGridShotListQueryModel,
+    ShotGridShotProxyMediaModel,
     ShotGridShotSceneSummaryModel,
     ShotGridShotTaskSummaryModel,
     ShotGridShotThumbnailModel,
@@ -369,10 +372,16 @@ class ShotGridShotCrudService:
             if shot.lock_version != command.lock_version:
                 raise shot_grid_error(409, 'SG_OPTIMISTIC_LOCK_CONFLICT', '镜头已被其他用户修改')
             task = await ShotGridShotCrudDao.get_task_for_update(db, project_id, shot_id)
-            if task is not None and task.task_status != 'completed':
-                raise shot_grid_error(409, 'SG_INVALID_STATE_TRANSITION', '镜头仍有活动任务，不能归档')
+            cls._require_deletable_task(task)
 
             now = cls._now()
+            if task is not None and not await ShotGridShotCrudDao.delete_not_started_task(
+                db,
+                task_id=task.task_id,
+                actor_name=actor_name,
+                now=now,
+            ):
+                raise shot_grid_error(409, 'SG_OPTIMISTIC_LOCK_CONFLICT', '镜头任务状态已发生变化')
             new_lock_version = await ShotGridShotCrudDao.archive_shot(
                 db,
                 project_id=project_id,
@@ -410,11 +419,85 @@ class ShotGridShotCrudService:
             raise
 
     @classmethod
+    async def batch_delete_shots(
+        cls,
+        db: AsyncSession,
+        project_id: int,
+        command: ShotGridShotBatchDeleteModel,
+        current_user: CurrentUserModel,
+        access: ShotGridProjectAccessModel,
+    ) -> ShotGridShotBatchDeleteResultModel:
+        actor_user_id, actor_name, dept_name = cls._actor(current_user)
+        try:
+            cls._require_write_access(access, project_id, actor_user_id)
+            await cls._lock_writable_project(db, project_id, require_storage_ready=False)
+            now = cls._now()
+            deleted_shot_ids: list[int] = []
+            for item in sorted(command.items, key=lambda value: value.shot_id):
+                shot = await ShotGridShotCrudDao.get_shot_for_update(db, project_id, item.shot_id)
+                if shot is None:
+                    raise shot_grid_error(404, 'SG_SHOT_NOT_FOUND', '镜头不存在或不属于当前项目')
+                if shot.lifecycle_status != 'active':
+                    raise shot_grid_error(409, 'SG_INVALID_STATE_TRANSITION', '镜头已经删除')
+                if shot.lock_version != item.lock_version:
+                    raise shot_grid_error(409, 'SG_OPTIMISTIC_LOCK_CONFLICT', '镜头已被其他用户修改')
+                task = await ShotGridShotCrudDao.get_task_for_update(db, project_id, item.shot_id)
+                cls._require_deletable_task(task)
+                if task is not None and not await ShotGridShotCrudDao.delete_not_started_task(
+                    db,
+                    task_id=task.task_id,
+                    actor_name=actor_name,
+                    now=now,
+                ):
+                    raise shot_grid_error(409, 'SG_OPTIMISTIC_LOCK_CONFLICT', '镜头任务状态已发生变化')
+                new_lock_version = await ShotGridShotCrudDao.archive_shot(
+                    db,
+                    project_id=project_id,
+                    shot_id=item.shot_id,
+                    expected_lock_version=item.lock_version,
+                    actor_name=actor_name,
+                    now=now,
+                )
+                if new_lock_version is None:
+                    raise shot_grid_error(409, 'SG_OPTIMISTIC_LOCK_CONFLICT', '镜头已被其他用户修改')
+                deleted_shot_ids.append(item.shot_id)
+
+            await cls._audit(
+                db,
+                business_type=3,
+                method='batch_delete_shots',
+                request_method='POST',
+                actor_name=actor_name,
+                dept_name=dept_name,
+                project_id=project_id,
+                shot_id=None,
+                payload={'items': [item.model_dump(by_alias=True) for item in command.items]},
+                result={'deletedShotIds': deleted_shot_ids},
+            )
+            frozen = ShotGridShotBatchDeleteResultModel(
+                deletedShotIds=deleted_shot_ids,
+                deletedCount=len(deleted_shot_ids),
+            )
+            await db.commit()
+            return frozen
+        except ShotGridDomainException:
+            await db.rollback()
+            raise
+        except Exception:
+            await db.rollback()
+            raise
+
+    @staticmethod
+    def _require_deletable_task(task: Any | None) -> None:
+        if task is not None and task.task_status != 'not_started':
+            raise shot_grid_error(409, 'SG_SHOT_TASK_ALREADY_STARTED', '任务已经开始，镜头不能删除')
+
+    @classmethod
     async def _freeze_detail(
         cls,
         db: AsyncSession,
         project_id: int,
-        shot_id: int,
+        shot_id: int | None,
         current_user: CurrentUserModel,
         access: ShotGridProjectAccessModel,
     ) -> ShotGridShotDetailModel:
@@ -484,7 +567,7 @@ class ShotGridShotCrudService:
                 '制作人必须是账号可用的有效项目成员',
             )
         if not member.get('producer_code'):
-            raise shot_grid_error(422, 'SG_PRODUCER_CODE_REQUIRED', '制作人尚未设置项目内制作人缩写')
+            raise shot_grid_error(422, 'SG_PRODUCER_CODE_REQUIRED', '制作人尚未设置用户昵称')
         return member
 
     @classmethod
@@ -509,6 +592,7 @@ class ShotGridShotCrudService:
             'character_assets': [asset for asset in assets if asset.asset_type == 'Character'],
             'assignee': assignee,
             'thumbnail': cls._thumbnail(projection),
+            'proxy_media': cls._proxy_media(projection),
             'latest_version': cls._latest_version(projection),
             'latest_feedback': cls._latest_feedback(projection),
             'asset_count': len(assets),
@@ -604,6 +688,22 @@ class ShotGridShotCrudService:
         )
 
     @staticmethod
+    def _proxy_media(projection: dict[str, Any] | None) -> ShotGridShotProxyMediaModel | None:
+        if (
+            projection is None
+            or projection.get('latest_version_id') is None
+            or projection.get('proxy_media_file_id') is None
+        ):
+            return None
+        version_id = projection['latest_version_id']
+        file_id = projection['proxy_media_file_id']
+        return ShotGridShotProxyMediaModel(
+            fileId=file_id,
+            name=projection['proxy_media_business_file_name'],
+            url=f'/shot-grid/versions/{version_id}/files/{file_id}/download',
+        )
+
+    @staticmethod
     def _latest_feedback(projection: dict[str, Any] | None) -> ShotGridShotLatestFeedbackModel | None:
         if projection is None or projection.get('latest_feedback_note_id') is None:
             return None
@@ -640,11 +740,12 @@ class ShotGridShotCrudService:
             or row.get('storage_status') != 'ready'
         ):
             return []
-        candidates = (
+        candidates = [
             ('shot.edit', 'shotgrid:shot:edit'),
-            ('shot.archive', 'shotgrid:shot:archive'),
             ('task.assign', 'shotgrid:task:assign'),
-        )
+        ]
+        if row.get('task_status') in {None, 'not_started'}:
+            candidates.append(('shot.archive', 'shotgrid:shot:archive'))
         return [action for action, permission in candidates if cls._has_permission(current_user, permission)]
 
     @staticmethod
@@ -695,6 +796,14 @@ class ShotGridShotCrudService:
         payload: dict[str, Any],
         result: dict[str, Any],
     ) -> None:
+        operation_url = (
+            f'/shot-grid/projects/{project_id}/shots/{shot_id}'
+            if shot_id is not None
+            else f'/shot-grid/projects/{project_id}/shots/batch-delete'
+        )
+        operation_context = {'projectId': project_id}
+        if shot_id is not None:
+            operation_context['shotId'] = shot_id
         await ShotGridProjectAuditDao.add_success_log(
             db,
             title='Shot Grid 镜头管理',
@@ -703,9 +812,9 @@ class ShotGridShotCrudService:
             request_method=request_method,
             oper_name=actor_name,
             dept_name=dept_name,
-            oper_url=f'/shot-grid/projects/{project_id}/shots/{shot_id}',
-            oper_param={'projectId': project_id, 'shotId': shot_id, **payload},
-            result={'projectId': project_id, 'shotId': shot_id, **result},
+            oper_url=operation_url,
+            oper_param={**operation_context, **payload},
+            result={**operation_context, **result},
         )
 
     @staticmethod

@@ -76,7 +76,7 @@ class ShotGridShotCrudDao:
                 task.lock_version.label('task_lock_version'),
                 task.assignee_user_id,
                 assignee.nick_name.label('assignee_nick_name'),
-                ShotGridProjectMember.producer_code.label('assignee_producer_code'),
+                func.upper(assignee.nick_name).label('assignee_producer_code'),
                 ShotGridShot.create_by,
                 ShotGridShot.create_time,
                 ShotGridShot.update_by,
@@ -290,6 +290,19 @@ class ShotGridShotCrudDao:
             .limit(1)
             .lateral('shot_latest_thumbnail')
         )
+        proxy_media = (
+            select(
+                ShotGridVersionFile.file_id,
+                ShotGridVersionFile.business_file_name,
+            )
+            .where(
+                ShotGridVersionFile.version_id == latest_version.c.version_id,
+                ShotGridVersionFile.file_role == 'proxy_media',
+            )
+            .order_by(ShotGridVersionFile.sort_order, ShotGridVersionFile.file_id)
+            .limit(1)
+            .lateral('shot_latest_proxy_media')
+        )
         latest_feedback = (
             select(
                 ShotGridNote.note_id,
@@ -319,6 +332,8 @@ class ShotGridShotCrudDao:
                 primary_review_media.c.business_file_name.label('latest_business_file_name'),
                 thumbnail.c.file_id.label('thumbnail_file_id'),
                 thumbnail.c.business_file_name.label('thumbnail_business_file_name'),
+                proxy_media.c.file_id.label('proxy_media_file_id'),
+                proxy_media.c.business_file_name.label('proxy_media_business_file_name'),
                 latest_feedback.c.note_id.label('latest_feedback_note_id'),
                 latest_feedback.c.content.label('latest_feedback_content'),
                 latest_feedback.c.note_status.label('latest_feedback_status'),
@@ -337,6 +352,7 @@ class ShotGridShotCrudDao:
             .outerjoin(latest_version, true())
             .outerjoin(primary_review_media, true())
             .outerjoin(thumbnail, true())
+            .outerjoin(proxy_media, true())
             .outerjoin(latest_feedback, true())
             .where(
                 ShotGridShot.project_id == project_id,
@@ -431,7 +447,7 @@ class ShotGridShotCrudDao:
                 await db.execute(
                     select(
                         ShotGridProjectMember.user_id,
-                        ShotGridProjectMember.producer_code,
+                        func.upper(SysUser.nick_name).label('producer_code'),
                         SysUser.nick_name,
                     )
                     .join(SysUser, SysUser.user_id == ShotGridProjectMember.user_id)
@@ -439,6 +455,7 @@ class ShotGridShotCrudDao:
                         ShotGridProjectMember.project_id == project_id,
                         ShotGridProjectMember.user_id == user_id,
                         ShotGridProjectMember.member_status == 'active',
+                        ShotGridProjectMember.project_role == 'creator',
                         SysUser.status == '0',
                         SysUser.del_flag == '0',
                     )
@@ -612,6 +629,7 @@ class ShotGridShotCrudDao:
             )
             .values(
                 lifecycle_status='archived',
+                del_flag='2',
                 update_by=actor_name,
                 update_time=now,
                 lock_version=ShotGridShot.lock_version + 1,
@@ -619,6 +637,30 @@ class ShotGridShotCrudDao:
             .returning(ShotGridShot.lock_version)
         )
         return result.scalar_one_or_none()
+
+    @staticmethod
+    async def delete_not_started_task(
+        db: AsyncSession,
+        *,
+        task_id: int,
+        actor_name: str,
+        now: datetime,
+    ) -> bool:
+        result = await db.execute(
+            update(ShotGridTask)
+            .where(
+                ShotGridTask.task_id == task_id,
+                ShotGridTask.task_status == 'not_started',
+                ShotGridTask.del_flag == '0',
+            )
+            .values(
+                del_flag='2',
+                update_by=actor_name,
+                update_time=now,
+                lock_version=ShotGridTask.lock_version + 1,
+            )
+        )
+        return bool(result.rowcount)
 
     @staticmethod
     def _latest_operation_status() -> Any:

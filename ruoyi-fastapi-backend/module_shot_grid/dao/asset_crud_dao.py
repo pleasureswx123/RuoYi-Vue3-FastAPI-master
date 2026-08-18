@@ -1,6 +1,6 @@
 from typing import Any
 
-from sqlalchemy import asc, case, desc, exists, func, or_, select
+from sqlalchemy import asc, case, desc, exists, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from module_admin.entity.do.user_do import SysUser
@@ -244,7 +244,7 @@ class ShotGridAssetCrudDao:
                     ShotGridTask.task_id,
                     ShotGridTask.assignee_user_id,
                     SysUser.nick_name.label('assignee_name'),
-                    ShotGridProjectMember.producer_code,
+                    func.upper(SysUser.nick_name).label('producer_code'),
                     ShotGridTask.task_status,
                     ShotGridTask.priority,
                     ShotGridTask.due_date,
@@ -449,6 +449,80 @@ class ShotGridAssetCrudDao:
         return {int(asset_id) for asset_id in rows}
 
     @classmethod
+    async def get_assets_with_delete_blockers(
+        cls,
+        db: AsyncSession,
+        project_id: int,
+        asset_ids: list[int],
+    ) -> set[int]:
+        """返回存在已开始任务或版本的活动制作分项资产。"""
+
+        if not asset_ids:
+            return set()
+        rows = (
+            await db.execute(
+                select(ShotGridAssetItem.asset_id)
+                .join(ShotGridTask, ShotGridTask.asset_item_id == ShotGridAssetItem.asset_item_id)
+                .outerjoin(ShotGridVersion, ShotGridVersion.task_id == ShotGridTask.task_id)
+                .where(
+                    ShotGridAssetItem.project_id == project_id,
+                    ShotGridAssetItem.asset_id.in_(asset_ids),
+                    ShotGridAssetItem.lifecycle_status == 'active',
+                    ShotGridAssetItem.del_flag == '0',
+                    ShotGridTask.del_flag == '0',
+                    or_(
+                        ShotGridTask.task_status != 'not_started',
+                        ShotGridVersion.version_id.is_not(None),
+                    ),
+                )
+                .distinct()
+            )
+        ).scalars()
+        return {int(asset_id) for asset_id in rows}
+
+    @classmethod
+    async def get_assets_with_assignment_blockers(
+        cls,
+        db: AsyncSession,
+        project_id: int,
+        asset_ids: list[int],
+    ) -> set[int]:
+        """返回包含未命名分项、已完成任务或未完成版本提交的资产。"""
+
+        if not asset_ids:
+            return set()
+        has_uncommitted_submission = exists(
+            select(1).where(
+                ShotGridVersionSubmission.task_id == ShotGridTask.task_id,
+                ShotGridVersionSubmission.submission_status != 'committed',
+            )
+        )
+        rows = (
+            await db.execute(
+                select(ShotGridAssetItem.asset_id)
+                .outerjoin(
+                    ShotGridTask,
+                    (ShotGridTask.asset_item_id == ShotGridAssetItem.asset_item_id)
+                    & (ShotGridTask.del_flag == '0'),
+                )
+                .where(
+                    ShotGridAssetItem.project_id == project_id,
+                    ShotGridAssetItem.asset_id.in_(asset_ids),
+                    ShotGridAssetItem.lifecycle_status == 'active',
+                    ShotGridAssetItem.del_flag == '0',
+                    or_(
+                        ShotGridAssetItem.production_item.is_(None),
+                        func.btrim(ShotGridAssetItem.production_item) == '',
+                        ShotGridTask.task_status == 'completed',
+                        has_uncommitted_submission,
+                    ),
+                )
+                .distinct()
+            )
+        ).scalars()
+        return {int(asset_id) for asset_id in rows}
+
+    @classmethod
     async def get_usage_shot_count(cls, db: AsyncSession, project_id: int, asset_id: int) -> int:
         return int(
             (
@@ -536,6 +610,54 @@ class ShotGridAssetCrudDao:
         return (await db.execute(statement)).scalar_one_or_none()
 
     @staticmethod
+    async def get_active_items_for_update(
+        db: AsyncSession,
+        project_id: int,
+        asset_id: int,
+    ) -> list[ShotGridAssetItem]:
+        return list(
+            (
+                await db.execute(
+                    select(ShotGridAssetItem)
+                    .where(
+                        ShotGridAssetItem.project_id == project_id,
+                        ShotGridAssetItem.asset_id == asset_id,
+                        ShotGridAssetItem.lifecycle_status == 'active',
+                        ShotGridAssetItem.del_flag == '0',
+                    )
+                    .order_by(ShotGridAssetItem.asset_item_id)
+                    .with_for_update()
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+    @staticmethod
+    async def delete_not_started_task(
+        db: AsyncSession,
+        *,
+        task_id: int,
+        actor_name: str,
+        now: Any,
+    ) -> bool:
+        result = await db.execute(
+            update(ShotGridTask)
+            .where(
+                ShotGridTask.task_id == task_id,
+                ShotGridTask.task_status == 'not_started',
+                ShotGridTask.del_flag == '0',
+            )
+            .values(
+                del_flag='2',
+                update_by=actor_name,
+                update_time=now,
+                lock_version=ShotGridTask.lock_version + 1,
+            )
+        )
+        return bool(result.rowcount)
+
+    @staticmethod
     async def get_assignable_member(db: AsyncSession, project_id: int, user_id: int) -> dict[str, Any] | None:
         """只返回活动项目成员且平台账号仍正常的制作人。"""
 
@@ -544,7 +666,7 @@ class ShotGridAssetCrudDao:
                 await db.execute(
                     select(
                         ShotGridProjectMember.user_id,
-                        ShotGridProjectMember.producer_code,
+                        func.upper(SysUser.nick_name).label('producer_code'),
                         SysUser.nick_name,
                     )
                     .join(SysUser, SysUser.user_id == ShotGridProjectMember.user_id)
@@ -552,6 +674,7 @@ class ShotGridAssetCrudDao:
                         ShotGridProjectMember.project_id == project_id,
                         ShotGridProjectMember.user_id == user_id,
                         ShotGridProjectMember.member_status == 'active',
+                        ShotGridProjectMember.project_role == 'creator',
                         SysUser.status == '0',
                         SysUser.del_flag == '0',
                     )

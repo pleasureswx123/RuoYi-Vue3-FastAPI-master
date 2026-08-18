@@ -3,11 +3,13 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { Download, Document, WarningFilled } from '@element-plus/icons-vue'
 
 import { downloadProtectedVersionFile } from '@/api/shot-grid/versions'
+import ProtectedVersionPreview from './ProtectedVersionPreview.vue'
 import { formatFileSize, formatVersionDateTime, versionErrorState, versionStatusMeta } from './versionPresentation'
 
 const props = defineProps({
   version: { type: Object, required: true },
-  canDownload: { type: Boolean, default: false }
+  canDownload: { type: Boolean, default: false },
+  showPreview: { type: Boolean, default: true }
 })
 
 const downloadingFileId = ref(null)
@@ -94,6 +96,8 @@ onBeforeUnmount(() => {
       </div>
       <span class="version-state" :data-tone="statusMeta.tone">{{ statusMeta.label }}</span>
     </header>
+
+    <ProtectedVersionPreview v-if="showPreview" :version="version" :can-preview="canDownload" />
 
     <dl class="version-facts">
       <div><dt>提交人</dt><dd>{{ version.submitterName || `用户 #${version.submittedBy}` }}</dd></div>

@@ -4,10 +4,10 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 版本 | v2.0 |
-| 状态 | 普通管理、Excel 导入、资产需求人工处理、两类匿名模板、独立任务、版本发布与审核后端已落地；独立业务前端已接项目、镜头、资产、任务/版本、审核和文件 API，审核列表/详情已接受保护缩略图、网页代理优先、原始媒体降级、视频时间点、四类批注、A/B 对比和退回再提交入口；目录/版本/媒体 Worker 默认关闭，真实 FFmpeg 视频派生、Range 真分段及真实 UNC/完整 E2E 仍待验证 |
+| 版本 | v2.1 |
+| 状态 | 2026-08-14 已实现“来源版本修改问题 → 制作人随新版本逐条处理说明 → 审核人逐条确认 → 未关闭问题继续跨版本”的功能代码、PostgreSQL 迁移、API 和前端闭环；旧 `isMandatory + reply + resolve` 模型及旧数据直接移除。尚未执行用户手动业务旅程，不能描述为完整验收通过；目录/版本/媒体 Worker、真实 FFmpeg 视频派生、Range 真分段及真实 UNC/完整 E2E 仍属独立验收范围 |
 | 建立日期 | 2026-08-07 |
-| 最近修订 | 2026-08-12 |
+| 最近修订 | 2026-08-14 |
 | 数据库 | PostgreSQL |
 | 业务前端 | 独立 `shot-grid-frontend`，工程配置参考 `ruoyi-fastapi-frontend` |
 | 管理后台 | `ruoyi-fastapi-frontend` |
@@ -15,7 +15,7 @@
 | 产品来源 | `项目需求规格与业务规则.md`、`需求.md` |
 | 历史参考 | `参考项目评估.md` |
 
-本契约冻结“真实登录 → 选择受控 NAS 根目录并创建项目 → 初始化项目目录 → 创建集、场次和镜头/资产 → 分配制作人并生成唯一任务 → 线下制作 → 上传产出物 → NAS 发布 → 自动生成版本和审核单 → 审核退回或确认完成”的主闭环。
+本契约冻结“真实登录 → 选择受控 NAS 根目录并创建项目 → 初始化项目目录 → 创建集、场次和镜头/资产 → 分配制作人并生成唯一任务 → 线下制作 → 上传产出物 → NAS 发布 → 自动生成版本和审核单 → 审核人提出来源版本问题 → 退回后制作人随新版本逐条说明处理方式 → 审核人逐条确认历史问题并检查新问题 → 全部问题关闭后确认完成”的主闭环。
 
 若后续代码与本文冲突，必须先评审并更新契约，不能由前端页面或临时数据库字段自行改变业务定义。
 
@@ -60,7 +60,7 @@
 - 不可覆盖的版本；
 - 版本提交暂存与 NAS 发布；
 - 版本文件用途；
-- 版本级审核意见和结构化批注；
+- 跨版本修改问题、结构化批注、逐版本处理说明和逐条确认；
 - 审核动作历史；
 - 审核单和有序版本列表。
 
@@ -106,7 +106,9 @@ sys_user ──< sg_project_member >── sg_project ── sg_project_storage 
                                              └──< sg_version
                                                     │
                                                     ├──< sg_version_file >── sys_file_info
-                                                    ├──< sg_note ──< sg_note_reply
+                                                    ├──< sg_note（问题来源版本）
+                                                    │       ├──< sg_version_issue_response >── sg_version_submission ── sg_version
+                                                    │       └──< sg_issue_verification >── sg_version（确认版本）
                                                     ├──< sg_review_action
                                                     └──< sg_review_list_version >── sg_review_list
 
@@ -124,8 +126,10 @@ sg_project / sg_shot / sg_asset / sg_version / sg_note
 → 暂存提交并发布到 NAS
 → 版本
 → 自动审核单
-→ 审核意见和审核动作
-→ 退回后上传下一版本，或确认最终版本并完成任务
+→ 当前版本修改问题（文字和/或画面标注）
+→ 退回后逐条填写问题处理说明并上传下一版本
+→ 审核人逐条确认历史问题，并可提出当前版本新问题
+→ 全部问题关闭后确认最终版本并完成任务
 ```
 
 ## 5. 通用数据规则
@@ -177,7 +181,7 @@ sg_project / sg_shot / sg_asset / sg_version / sg_note
 - 审核单使用 `review_status = 'archived'`。
 - 项目、集、场次、镜头、资产、任务和审核单不向普通用户提供物理删除。
 - 已有关联任务、版本、审核或文件的对象不得直接级联物理删除。
-- 已提交版本、审核动作历史和已形成审计意义的意见不得覆盖。
+- 已提交版本、修改问题、逐版本处理说明、逐版本确认结果和审核动作历史不得覆盖。
 - 物理清理属于单独的管理员治理流程，不包含在普通 CRUD。
 
 ### 5.5 乐观并发
@@ -198,7 +202,7 @@ sg_project / sg_shot / sg_asset / sg_version / sg_note
 
 只新增 DO、只修改初始化 SQL 或只写设计文档，都不算数据库交付完成。JSONB、部分唯一索引等 PostgreSQL 专用实现必须明确限制在 PostgreSQL 路径，不得无意影响仓库保留的 MySQL 兼容模块。
 
-当前 Shot Grid Alembic head 为 `20260812_07`。06 增加任务/版本/审核完整性约束；07 增加 `sg_media_derivation`、领取租约/重试状态，以及每版本唯一 `thumbnail`/`proxy_media` 部分索引，并为已有主审核媒体回填待派生任务。媒体 Worker 默认关闭：图片使用 Pillow 生成 JPEG 缩略图和网页代理，视频使用显式配置的 FFmpeg 生成 JPEG 缩略图和 H.264/AAC faststart MP4；工具缺失或解码失败必须持久化安全错误并让前端降级原媒体，不得将原文件登记为代理。生成物继续进入 `sys_file_info`、`sys_file_reference` 和 `sg_version_file`，成功提交前清理半成品。该增量链仍不是完整 RuoYi 空库 Alembic baseline。
+当前 Shot Grid Alembic head 为 `20260813_09`。06 增加任务/版本/审核完整性约束；07 增加 `sg_media_derivation`、领取租约/重试状态，以及每版本唯一 `thumbnail`/`proxy_media` 部分索引；08 增加平台 NAS 根目录管理菜单；09 将可安全释放编号的历史误删镜头统一为归档加逻辑删除。媒体 Worker 默认关闭：图片使用 Pillow 生成 JPEG 缩略图和网页代理，视频使用显式配置的 FFmpeg 生成 JPEG 缩略图和 H.264/AAC faststart MP4；工具缺失或解码失败必须持久化安全错误并让前端降级原媒体，不得将原文件登记为代理。生成物继续进入 `sys_file_info`、`sys_file_reference` 和 `sg_version_file`，成功提交前清理半成品。该增量链仍不是完整 RuoYi 空库 Alembic baseline。
 
 媒体派生配置使用 `SHOT_GRID_MEDIA_WORKER_` 前缀；至少需要显式设置 `ENABLED=true` 才注册 Application Leader 内部任务，视频环境还需通过 `FFMPEG_PATH` 提供可执行文件。默认缩略图最长边 480、图片代理最长边 1920、视频代理最大宽度 1280；转换期间按 `HEARTBEAT_SECONDS` 续租，数据库回写继续使用 version + owner + attempt fencing。审核列表返回 `thumbnail` 和 `mediaDerivationStatus`，版本详情返回完整派生文件角色及同名状态；前端只能优先使用真实 `proxy_media`，代理加载失败时回退主 `review_media`。
 
@@ -272,7 +276,7 @@ MVP 项目角色：
 | 代码 | 中文 | 说明 |
 | --- | --- | --- |
 | `director` | 项目总监 | 项目管理、任务分配、审核、锁版 |
-| `creator` | 制作人员 | 执行任务、提交版本、处理意见 |
+| `creator` | 制作人员 | 执行任务、查看 open 问题、逐条说明处理方式并提交版本 |
 
 规则：
 
@@ -399,7 +403,7 @@ MVP 项目角色：
 | 16 | 音效 | `soundEffect` | `sg_shot.sound_effect` | 可编辑 |
 | 17 | 色调参考 | `colorReference` | `sg_shot.color_reference` | 可编辑；参考图片另走文件关系 |
 | 18 | 备注 | `remark` | 通用审计字段 `remark` | 可编辑 |
-| 19 | 当前最新反馈 | `latestFeedback` | 当前最新版本最近一条用户可见的 `sg_note` | 只读 |
+| 19 | 当前最新反馈 | `latestFeedback` | 当前任务最近一条 open 修改问题；没有 open 问题时为空 | 只读 |
 | 20 | 镜头状态 | `status` | 按第 7.1 节从唯一任务和版本聚合 | 只读 |
 
 补充规则：
@@ -409,7 +413,7 @@ MVP 项目角色：
 - `durationSec` 接受最多三位小数，后端使用十进制定点运算换算为 `duration_ms`，不得通过二进制浮点直接计算。
 - “制作人”不存在直接的 `sg_shot.assignee_user_id`；直接显示镜头唯一视频任务的负责人。
 - “当前最新版本”按镜头唯一任务中的 `version_no DESC` 确定。
-- “当前最新反馈”优先取当前最新版本的未解决意见；没有未解决意见时取该版本最近一条可见意见，没有意见时返回 `null`。
+- “当前最新反馈”从任务全部版本关联的 open 修改问题中按 `create_time DESC, note_id DESC` 取一条，并返回来源版本摘要；没有 open 问题时返回 `null`。完整问题列表必须走独立接口。
 - 缩略图只取当前最新版本中 `file_role = 'thumbnail'` 且按 `sort_order ASC, file_id ASC` 排序的首个文件；`is_primary` 只用于 `review_media`，不用于缩略图。当前版本没有缩略图时返回 `null`，不得静默回退到旧版本图片。
 - 缩略图返回稳定 `fileId` 和 Shot Grid 专用授权访问地址，不保存 Blob URL、本机路径或未经授权的公开 URL；访问时仍按第 17 节实时校验项目、任务和平台文件 deny 决策。
 
@@ -456,7 +460,7 @@ MVP 项目角色：
 | --- | --- | --- | --- | --- |
 | 1 | 类型 | `assetType` | `sg_asset.asset_type` | 创建时选择，创建后普通编辑不可修改 |
 | 2 | 名称 | `assetName` | `sg_asset.asset_name` | 创建时填写，创建后普通编辑不可修改 |
-| 3 | 制作分项 | `productionItem` | `sg_asset_item.production_item` | 可空；版本提交前必须补齐 |
+| 3 | 制作分项 | `productionItem` | `sg_asset_item.production_item` | 草稿可空；分配负责人前必须补齐 |
 | 4 | 资产描述 | `description` | `sg_asset.description` | 可编辑 |
 | 5 | 任务描述 | `taskDescription` | 当前制作分项唯一任务的 `requirements` | 通过任务分配或任务编辑动作修改 |
 | 6 | 备注 | `remark` | 通用审计字段 `remark` | 可编辑 |
@@ -472,7 +476,7 @@ MVP 项目角色：
 | `asset_item_id` | bigint | 是 | 主键 |
 | `project_id` | bigint | 是 | 所属项目，用于权限和高频查询 |
 | `asset_id` | bigint | 是 | 所属资产 |
-| `production_item` | varchar(240) | 否 | 制作分项名称；允许导入后补充，版本提交前必填 |
+| `production_item` | varchar(240) | 否 | 制作分项名称；允许以未分配草稿导入后补充，分配负责人前必填 |
 | `production_item_key` | varchar(240) | 否 | 制作分项规范化匹配键，不向前端展示 |
 | `description` | text | 否 | 制作分项描述 |
 | `sort_order` | integer | 是 | 资产内稳定顺序，导入时按明细行生成 |
@@ -579,6 +583,7 @@ CHECK (
 - 负责人必须是当前项目成员且账号有效。
 - 负责人必须已设置当前项目唯一的 `producer_code`。
 - 任务与目标对象必须属于同一个项目。
+- 资产制作分项名称为空时只允许保存为未分配草稿；首次分配、改派、批量分配、导入分配、开始任务和提交版本均失败关闭。
 - 镜头或资产制作分项首次分配主制作人时创建任务；未分配的目标不提前创建空负责人任务。
 - 每个镜头最多一个 `shot_video` 任务，每个资产制作分项最多一个 `asset_image` 任务，使用 PostgreSQL 部分唯一索引保证。
 - `assignee_user_id` 只保存一名主制作人；导入中的 `蒋浩/春霞` 等复合制作人值必须报错，不得静默选择或创建多人负责人文本。
@@ -712,7 +717,7 @@ businessId   = versionId 的字符串形式
 镜头视频：
 
 ```text
-{projectCode}_EP{episodeNo:至少3位}_{sceneNo:至少3位}_S{shotNo:至少3位}_{producerCode}_V{versionNo:至少3位}_{generatedAtMs}.{extension}
+{projectCode}_EP{episodeNo:至少3位}_{sceneNo:至少3位}_S{shotNo:至少3位}_{producerNickName}_V{versionNo:至少3位}_{generatedAtMs}.{extension}
 ```
 
 示例：
@@ -726,7 +731,7 @@ WGZR_EP001_001_S001_YJF_V001_1786094626499.mp4
 资产图片：
 
 ```text
-{projectCode}_Asset_{assetType}_{safeAssetName}_{safeProductionItem}_{producerCode}_V{versionNo:至少3位}_{generatedAtMs}.{extension}
+{projectCode}_Asset_{assetType}_{safeAssetName}_{safeProductionItem}_{producerNickName}_V{versionNo:至少3位}_{generatedAtMs}.{extension}
 ```
 
 示例：
@@ -738,13 +743,13 @@ WGZR_Asset_Environment_动力舱室内_动力舱恐怖气氛主视角_YJF_V001_1
 生成规则：
 
 1. `projectCode` 取版本提交暂存时项目已保存的 `sg_project.project_code`。
-2. `producerCode` 取任务负责人在当前项目中的 `sg_project_member.producer_code`，不根据版本提交时的昵称临时推导。
+2. `producerNickName` 取任务负责人当前平台用户的 `sys_user.nick_name`；任务分配、Excel 匹配和版本文件名生成均使用该昵称，Shot Grid 不再采集项目级制作人缩写。兼容响应中的 `producerCode` 也由该昵称派生。
 3. 镜头文件只允许 `.mp4`、`.mov`；资产文件只允许 `.jpg`、`.png`。扩展名根据服务端校验后的真实文件类型确定并转为小写，不能只相信客户端文件名。
 4. 镜头文件名中的 `episodeNo`、`sceneNo`、`shotNo` 和 `versionNo` 左侧补零至至少 3 位，超过 999 时保留全部数字；集增加 `EP` 前缀，镜头增加 `S` 前缀，版本增加 `V` 前缀。资产文件名中的 `versionNo` 同样左侧补零至至少 3 位。
 5. `generatedAtMs` 是服务端 Unix 毫秒时间戳，与 `sg_version.generated_at_ms` 一致。
 6. `safeAssetName` 和 `safeProductionItem` 都使用 Unicode NFC 规范化，去除首尾空白，把控制字符和 `<>:"/\|?*` 替换为 `_`，合并连续空白或下划线；制作分项允许在导入时为空，但版本提交时规范化后为空必须拒绝。
 7. `safeProductionItem` 取版本提交时任务所属 `sg_asset_item.production_item`，不允许上传者临时输入另一个值。
-8. 文件名超过平台或文件系统安全长度时，在保留可辨识前缀的前提下按确定性规则缩短 `safeAssetName` 和 `safeProductionItem`，并追加资产 ID 的短哈希；不得截断项目、类型、制作人、版本或时间戳部分。
+8. 文件名超过平台或文件系统安全长度时，在保留可辨识前缀的前提下按确定性规则缩短 `safeAssetName` 和 `safeProductionItem`，并追加资产 ID 的短哈希；不得截断项目、类型、制作人昵称、版本或时间戳部分。
 9. 业务文件名在版本事务内只生成一次并保持不可变。项目名、成员名、资产名或制作分项后续修改不追改历史版本文件名。
 10. 同一 `X-Idempotency-Key` 重试必须返回第一次创建的版本和业务文件名，不得生成新版本号或新时间戳。
 
@@ -769,19 +774,19 @@ ASSET\{asset.asset_type}\{asset.storage_dir_name}\{business_file_name}
 
 ### 6.11 `sg_note`
 
-版本级审核意见。
+跨版本修改问题主表。面向用户的正式名称是“修改问题（Review Issue）”；为兼容当前表名、权限码和部分 API，协议迁移期继续使用 `note/sg_note`，但其业务语义不再是聊天评论。
 
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
 | `note_id` | bigint | 是 | 主键 |
 | `project_id` | bigint | 是 | 所属项目 |
-| `version_id` | bigint | 是 | 绑定版本 |
+| `version_id` | bigint | 是 | 问题首次提出时的来源版本，创建后不可变 |
 | `reviewer_user_id` | bigint | 是 | 审核人 |
-| `content` | text | 是 | 文字意见 |
+| `content` | text | 否 | 文字问题；与 `annotations` 至少一项有效 |
 | `media_time_ms` | bigint | 否 | 视频时间点 |
 | `annotations` | jsonb | 否 | 结构化批注数组 |
-| `is_mandatory` | char(1) | 是 | 是否必须修改：`1` 是、`0` 否 |
 | `note_status` | varchar(20) | 是 | 处理状态 |
+| `resolved_in_version_id` | bigint | 否 | 审核人确认问题已修复的后续版本 |
 | `create_time` | timestamp(0) | 是 | 创建时间 |
 | `update_time` | timestamp(0) | 是 | 更新时间 |
 
@@ -794,29 +799,63 @@ ASSET\{asset.asset_type}\{asset.storage_dir_name}\{business_file_name}
 
 规则：
 
-- 意见和版本必须属于同一个项目。
-- `is_mandatory` 只允许 `0` 或 `1`。
+- 问题和来源版本必须属于同一个项目；只能在当前 `pending_review` 版本上创建，审核动作完成后不得补写问题。
+- `content` 规范化后非空，或 `annotations.items` 至少包含一项有效标注；两者都为空时返回 `SG_ISSUE_CONTENT_REQUIRED`。
+- 新问题统一为阻塞审核的 `open` 问题。旧字段 `is_mandatory` 不进入新产品契约；迁移期如暂时保留该列，新写入统一为 `1`，通过门禁不得再按该列筛选。
 - `media_time_ms >= 0` 且不能超过已知媒体时长。
 - 版本切换后必须以请求中的 `versionId` 为准重新校验。
-- 已提交意见不保存整张 Canvas Data URL。
-- 已提交意见正文、版本、时间点和批注不可覆盖；`note_status` 只能通过解决动作修改。
+- 已提交问题不保存整张 Canvas Data URL。
+- 已提交问题正文、来源版本、时间点和批注不可覆盖。
+- 新建时必须为 `open` 且 `resolved_in_version_id IS NULL`；只有后续版本的审核确认结果为 `resolved` 时，才能在同一事务改为 `resolved` 并写入该确认版本。
+- 问题详情 API 为 open 问题返回派生字段 `pendingVersionId/pendingVersionNumber`：无确认时等于来源版本，最近一次确认是 `still_present` 时等于该确认版本；resolved 问题返回空。该字段只表达当前工作归属，不修改 `sg_note.version_id`。
+- `resolved` 问题不可重新打开。后续版本如果出现相似问题，应创建绑定该后续版本的新问题，不能篡改旧问题。
 
-#### 6.11.1 `sg_note_reply`
+#### 6.11.1 `sg_version_issue_response`
 
-审核意见回复的不可变历史，避免使用单个 `reply_content` 字段覆盖前一条回复。
+制作人随修订版本提交的逐条问题处理说明。响应先绑定版本提交；只有该提交达到 `committed` 后，才通过 `sg_version.submission_id` 成为对业务用户可见的版本处理记录，避免在版本尚未创建时保存可空或重复的 `version_id`。
 
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
-| `reply_id` | bigint | 是 | 主键 |
+| `response_id` | bigint | 是 | 主键 |
 | `project_id` | bigint | 是 | 所属项目 |
-| `note_id` | bigint | 是 | 所属审核意见 |
-| `reply_user_id` | bigint | 是 | 回复用户 |
-| `content` | text | 是 | 回复内容 |
-| `create_time` | timestamp(0) | 是 | 回复时间 |
+| `submission_id` | bigint | 是 | 所属 `sg_version_submission` |
+| `note_id` | bigint | 是 | 被处理的 open 修改问题 |
+| `response_text` | text | 是 | 本版如何处理该问题 |
+| `responded_by` | bigint | 是 | 实际提交人 |
+| `create_time` | timestamp(0) | 是 | 创建时间 |
 
-- 回复只能由有权访问该任务的制作人员、项目总监或管理员提交。
-- 回复创建后不可编辑或覆盖；更正通过新增回复表达。
-- `(note_id, create_time, reply_id)` 用于稳定时间顺序，并建立 `note_id` 索引。
+- `UNIQUE(submission_id, note_id)`；同一新版本对同一问题只有一条处理说明。
+- `response_text` 规范化后必须非空，限制 2000 字符并按纯文本输出。
+- create 锁定任务后，提交中的问题集合必须与该任务当时全部 open 问题精确一致：不得缺少、重复、夹带已关闭问题或跨任务引用。
+- 首版提交没有历史 open 问题，不创建处理说明；修订提交至少存在一条 open 问题并为其逐条创建记录。
+- 处理说明与 `sg_version_submission` 在同一短事务创建；正式版本事务不复制记录，只通过一对一 `submission_id` 关联。
+- 提交达到 `committed` 后处理说明不可编辑或覆盖；提交失败时只在提交恢复界面内部可见，不作为正式版本历史展示。
+
+#### 6.11.2 `sg_issue_verification`
+
+审核人在后续版本上对历史 open 问题作出的逐条确认记录。
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `verification_id` | bigint | 是 | 主键 |
+| `project_id` | bigint | 是 | 所属项目 |
+| `note_id` | bigint | 是 | 被确认的修改问题 |
+| `checked_version_id` | bigint | 是 | 实际检查问题的后续版本 |
+| `verification_result` | varchar(20) | 是 | `resolved` 或 `still_present` |
+| `comment` | varchar(1000) | 条件必填 | `still_present` 时必须说明未解决原因；`resolved` 时为空 |
+| `reviewer_user_id` | bigint | 是 | 审核人 |
+| `create_time` | timestamp(0) | 是 | 确认时间 |
+
+- `UNIQUE(note_id, checked_version_id)`；同一问题在同一被审核版本上只能确认一次。
+- 问题来源版本、确认版本必须属于同一任务和项目，且确认版本序号必须大于来源版本序号。
+- 确认记录创建后不可编辑或覆盖。
+- `resolved` 必须在同一事务把问题改为 `resolved` 并写入 `resolved_in_version_id=checked_version_id`。
+- `still_present` 必须携带非空 `comment`，保持问题为 `open`；退回后问题的派生 `pendingVersion` 等于 `checked_version_id`，来源版本只保留“已处理但未通过”历史。
+- 当前版本新建的问题不在当前版本自我确认；它在下一次修订版本中才进入确认列表。
+
+#### 6.11.3 旧 `sg_note_reply` 移除边界
+
+旧回复表、旧意见数据与 `/notes/{noteId}/replies|reply|resolve` API 不属于新 MVP，迁移直接清理并删除，不提供兼容读写路径。制作人的处理说明只写入 `sg_version_issue_response`，审核人的逐条确认只写入 `sg_issue_verification`。
 
 ### 6.12 `sg_review_action`
 
@@ -847,10 +886,11 @@ ASSET\{asset.asset_type}\{asset.storage_dir_name}\{business_file_name}
 
 规则：
 
-- 每次审核动作与版本、自动审核单和任务状态更新处于同一事务，并按 `project → task → version → auto_single review list → note` 顺序加锁。
-- 请求必须携带 `X-Idempotency-Key` 和版本 `lockVersion`；`UNIQUE(version_id, reviewer_user_id, idempotency_key)` 防止重复动作。同键同一规范命令返回 `result_snapshot`，同键不同命令返回 `SG_IDEMPOTENCY_CONFLICT`。
-- `approve` 必须拒绝仍存在的 open mandatory 意见。
-- `reject` 必须提供原因或至少存在一条 open mandatory 意见。
+- 每次审核动作与版本、自动审核单、问题确认、问题状态和任务状态更新处于同一事务，并按 `project → task → version → auto_single review list → note → issue verification` 顺序加锁。
+- 请求必须携带 `X-Idempotency-Key` 和版本 `lockVersion`；规范命令哈希必须包含按 `issueId` 稳定排序的完整 `issueVerifications`。`UNIQUE(version_id, reviewer_user_id, idempotency_key)` 防止重复动作。同键同一规范命令返回 `result_snapshot`，同键不同审核动作或不同逐条确认集合返回 `SG_IDEMPOTENCY_CONFLICT`。
+- `approve` 必须确认所有带入当前版本的问题都已有 `resolved` 确认，并拒绝任务范围内任何 open 问题；不再按 `is_mandatory` 筛选。
+- `reject` 必须确认所有带入当前版本的问题都已有 `resolved` 或 `still_present` 结果，并且至少存在一条 `still_present` 问题或绑定当前版本的新 open 问题。`reason` 只能作总述，不能替代结构化问题。
+- `reject` 中确认 `resolved` 的问题也必须在本事务关闭；退回只继续携带 `still_present` 和当前版本新建的 open 问题。
 - `defer` 记录动作但不伪造新状态。
 - `approve` 同时把自动审核单改为 `completed`，把任务改为 `completed`。
 - `reject` 同时把自动审核单改为 `completed`，把任务改为 `revision`；制作人员修改后上传下一不可覆盖版本。
@@ -1087,6 +1127,7 @@ pending → publishing → published → committing → committed
 - 每个任务同时最多一个 `pending/publishing/published/committing/failed` 未解决提交，使用 PostgreSQL 部分唯一索引保证；失败后必须重试原提交，不能通过新建提交跳过保留版本号。
 - `publishing/committing` 必须同时具有非空租约 owner 和到期时间，其余状态必须同时为空；`failed` 必须同时具有非空安全错误键和摘要，其余状态必须同时为空，由两个 `CHECK` 保证。
 - 暂存创建时锁定任务并保留版本号；任务仍保持 `in_progress` 或 `revision`，直到正式版本提交成功。
+- 首版任务不存在 open 问题；修订任务暂存时必须在同一事务为锁内重查的每条 open 问题创建一条 `sg_version_issue_response`，不得缺少或多出。问题集合或处理说明属于幂等命令哈希的一部分。
 - 暂存事务同时为源文件创建 `businessType=shotgrid_version_submission` 临时平台文件引用；失败提交仍受引用保护，不作为无引用文件清理。正式版本事务把引用切换为 `businessType=shotgrid_version` 并绑定版本。
 - 暂存和正式版本事务在锁任务、提交与版本资源前，必须先锁定所属项目行并复核项目未归档；统一锁序为 `project → task/submission → version`。这是防止首个版本与项目类型/画幅修改并发穿透冻结规则的上线门禁。
 - 每次领取 `publishing` attempt 都生成含 `submissionId`、attempt 和随机值的同目录唯一临时名，例如 `.sgtmp-8004-a2-{random}.part`；以独占创建写入，校验真实大小和 SHA-256 后执行无覆盖原子发布。目标已存在且真实大小、摘要均一致才视为幂等成功，不一致返回冲突，禁止覆盖。
@@ -1198,7 +1239,7 @@ CREATE UNIQUE INDEX uk_sg_project_code_active
 ON sg_project (lower(project_code))
 WHERE project_status <> 'archived' AND del_flag = '0';
 
--- 项目内制作人缩写大小写不敏感唯一
+-- 历史项目内制作人缩写字段仍保留唯一索引，仅用于兼容存量数据
 CREATE UNIQUE INDEX uk_sg_project_member_producer_code
 ON sg_project_member (project_id, lower(producer_code))
 WHERE producer_code IS NOT NULL AND member_status = 'active';
@@ -1259,7 +1300,10 @@ ON sg_shot_asset_requirement (shot_id, asset_type, normalized_name);
 - `sg_asset_item(project_id, asset_id, lifecycle_status, sort_order)`；
 - `sg_task(project_id, assignee_user_id, task_status, due_date)`；
 - `sg_version(task_id, version_no DESC)`；
-- `sg_note(version_id, note_status, create_time DESC)`；
+- `sg_note(version_id, note_status, create_time DESC)`，按来源版本查询问题；
+- `sg_note(project_id, note_status, note_id)`，按任务联结版本后查询全部 open 问题；
+- `sg_version_issue_response(submission_id, note_id)` 唯一，并增加 `note_id` 查询索引；
+- `sg_issue_verification(note_id, checked_version_id)` 唯一，并增加 `checked_version_id` 查询索引；
 - `sg_review_list(project_id, review_status, create_time DESC)`；
 - `sg_storage_operation(operation_status, next_retry_time, lease_until)`；
 - `sg_storage_operation(project_id, aggregate_type, aggregate_id, operation_id DESC)`，用于按业务对象取得最新目录操作；
@@ -1311,7 +1355,8 @@ revision
 - 任务存在活动 `sg_version_submission` 时禁止创建第二次提交；NAS 发布期间任务仍保持原 `in_progress` 或 `revision`。
 - 创建版本、业务文件名、文件引用、自动审核单和任务转为 `pending_review` 在同一业务事务完成。
 - 审核确认通过后版本直接转为 `final`，任务转为 `completed`。
-- 审核退回后版本转为 `rejected`，任务转为 `revision`，旧版本不可覆盖。
+- 审核确认通过前必须逐条确认全部带入问题已在当前版本解决，且任务不存在任何 open 问题。
+- 审核退回前必须逐条确认全部带入问题，并至少保留一条 `still_present` 问题或创建一条绑定当前版本的新问题；版本转为 `rejected`，任务转为 `revision`，旧版本不可覆盖。
 
 ### 7.3 版本状态流转
 
@@ -1327,6 +1372,25 @@ rejected
 final
   └─MVP 中不可回退
 ```
+
+### 7.3.1 修改问题跨版本状态机
+
+```text
+来源版本提出问题
+  └─创建──────────────→ open（originVersionId 固定）
+
+open
+  └─制作人提交后续版本──→ open + 该版本处理说明
+       ├─审核确认 resolved──────→ resolved（记录 resolvedInVersionId）
+       └─审核确认 still_present─→ open（继续带入下一版本）
+
+resolved
+  └─不可重新打开；相似问题必须在当时版本新建问题
+```
+
+- 处理说明不会改变问题状态；制作人无权自行关闭问题。
+- 一个问题跨 V001、V002、V003 仍是同一 `note_id`，通过不同版本的处理说明和确认记录展示过程，不复制问题主记录。
+- 当前版本新建的问题不在同一版本自我确认；退回并形成下一版本后才进入历史问题确认列表。
 
 ### 7.4 版本提交与 NAS 发布状态机
 
@@ -1512,10 +1576,8 @@ AND 当前项目角色允许该业务动作
 | `shotgrid:version:add` | 上传并提交任务版本 |
 | `shotgrid:version:retry` | 重试本人失败的版本提交 |
 | `shotgrid:version:review` | 审核版本 |
-| `shotgrid:note:list` | 查看版本审核意见 |
-| `shotgrid:note:add` | 添加审核意见 |
-| `shotgrid:note:reply` | 回复有权访问任务的意见 |
-| `shotgrid:note:resolve` | 解决审核意见 |
+| `shotgrid:note:list` | 查看修改问题、处理说明和确认记录（兼容权限码） |
+| `shotgrid:note:add` | 在当前待审核版本提出修改问题（兼容权限码） |
 | `shotgrid:reviewList:list` | 查看审核单 |
 | `shotgrid:reviewList:query` | 查看审核单详情 |
 | `shotgrid:reviewList:add` | 创建人工批量审核单 |
@@ -1555,11 +1617,13 @@ shotgrid:<resource>:<domain-action>
 | 导入镜头和资产表 | 允许 | 允许 | 禁止 |
 | 解决或忽略资产待匹配需求 | 允许 | 允许 | 禁止 |
 | 分配任务 | 允许 | 允许 | 禁止 |
-| 查看所属项目任务、版本和审核意见 | 允许 | 允许 | 允许只读查看 |
+| 查看所属项目任务、版本和修改问题 | 允许 | 允许 | 允许只读查看；本人任务可见完整来源标注与处理历史 |
 | 开始任务 | 允许代操作并审计 | 允许代操作并审计 | 仅本人任务 |
 | 提交版本 | 允许 | 允许 | 对本人任务允许 |
 | 重试失败提交 | 允许 | 允许 | 仅本人提交且仍为本人任务 |
-| 添加意见 | 允许 | 允许 | 允许回复本人任务意见，不可创建总监审核结论 |
+| 提出修改问题 | 允许 | 允许 | 禁止 |
+| 随新版本提交逐条处理说明 | 允许代操作并审计 | 允许代操作并审计 | 仅本人任务 |
+| 在当前版本逐条确认问题 | 允许 | 允许 | 禁止 |
 | 审核版本 | 允许 | 允许 | 禁止 |
 | 确认版本并完成任务 | 允许 | 允许 | 禁止 |
 | 创建和组织人工审核单 | 允许 | 允许 | 禁止 |
@@ -1581,7 +1645,7 @@ Shot Grid 后端必须分层完成授权：
 
 任务动作与文件还要增加资源关系校验：
 
-- 项目成员可以只读查看所属项目的镜头、资产、任务、版本、审核意见和文件，满足局域网项目协作；写动作仍按角色和任务负责人限制。
+- 项目成员可以只读查看所属项目的镜头、资产、任务、版本、修改问题、处理说明、确认记录和文件，满足局域网项目协作；写动作仍按角色和任务负责人限制。
 - 成员移除后立即失去项目读取和文件访问权；任务改派后旧负责人仍可作为项目成员只读查看，但立即失去开始、提交和重试该任务的动作权，历史提交人身份和审计记录保留。
 - 开始任务、提交版本和重试提交必须执行 `TaskAssigneeDependency` 或等价 Service 校验；项目总监和管理员代操作必须记录实际操作人。
 - Shot Grid 文件下载接口在项目/任务授权通过后复用平台流式下载和 Range 能力；显式 deny ACL 仍优先，不能由项目权限绕过。
@@ -1596,8 +1660,8 @@ Shot Grid 后端必须分层完成授权：
 
 | 权限包 | 建议包含 | 适用对象 |
 | --- | --- | --- |
-| Shot Grid 制作人员 | 项目/成员/集/场次/镜头/资产/任务/版本/意见/审核单只读，`task:start`、`version:add`、`version:retry`、`note:reply`、`file:download`、`storage:path` | 普通制作账号 |
-| Shot Grid 项目总监 | 制作人员权限，加项目编辑、成员管理、业务对象 CRUD、任务分配、意见管理、版本审核、审核单管理、项目启动/完成/归档和存储重试 | 可担任项目总监的账号 |
+| Shot Grid 制作人员 | 项目/成员/集/场次/镜头/资产/任务/版本/修改问题/处理与确认历史/审核单只读，`task:start`、`version:add`、`version:retry`、`file:download`、`storage:path` | 普通制作账号 |
+| Shot Grid 项目总监 | 制作人员权限，加项目编辑、成员管理、业务对象 CRUD、任务分配、问题创建与逐条确认、版本审核、审核单管理、项目启动/完成/归档和存储重试 | 可担任项目总监的账号 |
 | Shot Grid 存储管理员 | NAS 根目录查询、新增、修改、探测及跨项目存储诊断 | 少量平台管理员 |
 
 - `shotgrid:project:all` 只分配给确需跨项目数据范围的平台管理员，不包含在普通项目总监权限包。
@@ -1961,7 +2025,7 @@ Header: X-Idempotency-Key
   "storageRootId": 10,
   "directorUserIds": [1],
   "members": [
-    {"userId": 2, "projectRole": "creator", "producerCode": "YJF"}
+    {"userId": 2, "projectRole": "creator"}
   ],
   "remark": ""
 }
@@ -2162,13 +2226,19 @@ Project role: director
 }
 ```
 
-响应不得包含密码、手机号、邮箱、登录 IP、盐、Token 或其他认证字段。候选查询只解决安全选人；项目创建和添加/恢复成员事务继续应用同一 `DataScope(SysUser)`，重新校验账号状态、项目角色与项目内制作人缩写唯一性。成员添加、修改和移除在锁定项目行后还必须重新校验操作者仍为 `director`，不能只依赖 Controller 进入时的角色结果。
+响应不得包含密码、手机号、邮箱、登录 IP、盐、Token 或其他认证字段。候选查询只解决安全选人；项目创建和添加/恢复成员事务继续应用同一 `DataScope(SysUser)`，重新校验账号状态与项目角色。成员添加、修改和移除在锁定项目行后还必须重新校验操作者仍为 `director`，不能只依赖 Controller 进入时的角色结果。
 
 ### 11.1 成员列表
 
 ```http
 GET /shot-grid/projects/{projectId}/members
 Permission: shotgrid:member:list
+```
+
+可选查询参数：`projectRole=director|creator`。传入时只返回指定项目角色的活动成员；不传时返回该项目全部活动成员。例如，制作人员列表使用：
+
+```http
+GET /shot-grid/projects/{projectId}/members?projectRole=creator
 ```
 
 返回：
@@ -2204,14 +2274,13 @@ Permission: shotgrid:member:add
 ```json
 {
   "userId": 2,
-  "projectRole": "creator",
-  "producerCode": "YJF"
+  "projectRole": "creator"
 }
 ```
 
 重复添加同一用户返回冲突，不静默覆盖其项目角色。
 
-### 11.3 修改成员角色或制作人缩写
+### 11.3 修改成员角色
 
 ```http
 PUT /shot-grid/projects/{projectId}/members/{userId}
@@ -2222,12 +2291,11 @@ Permission: shotgrid:member:edit
 
 ```json
 {
-  "projectRole": "creator",
-  "producerCode": "YJF"
+  "projectRole": "creator"
 }
 ```
 
-两个字段至少提供一个；`projectRole` 显式 `null` 非法，`producerCode` 可在成员没有活动任务时显式 `null` 清空。仍负责活动任务的成员不得清空制作人缩写。
+`projectRole` 显式 `null` 非法。当前 Shot Grid 前端不提交独立 `producerCode`；同名响应字段不得作为分配、匹配或文件命名依据。
 
 ### 11.4 移除成员
 
@@ -2364,7 +2432,7 @@ Project access: required
 }
 ```
 
-服务端只返回 `memberStatus=active` 的项目成员、状态正常且未删除的平台账号，以及非空项目内 `producerCode`；`keyword` 只匹配登录账号、昵称和制作人缩写。该接口是分页安全选项，不返回联系方式、认证字段或完整用户实体，也不替代创建、编辑、导入或任务改派事务内对账号、成员、项目与制作人缩写的重新校验。
+服务端只返回 `projectRole=creator`、`memberStatus=active` 的项目成员以及状态正常且未删除的平台账号；`keyword` 只匹配登录账号和昵称。兼容字段 `producerCode` 由 `sys_user.nick_name` 派生。该接口是分页安全选项，不返回联系方式、认证字段或完整用户实体，也不替代创建、编辑、导入或任务改派事务内对账号、成员、项目角色和用户昵称的重新校验。镜头 Excel 预检、用户手动覆盖制作人和正式提交时都按相同规则重新校验，项目管理人员不能作为镜头制作人。
 
 ### 13.1 镜头列表
 
@@ -2488,7 +2556,7 @@ Permission: shotgrid:shot:add
 3. 创建镜头。
 4. 创建镜头资产关系。
 5. 创建 `ensure_shot_directory` Outbox。
-6. 如果请求提供 `assigneeUserId`，校验其为有效项目成员且具有 `producerCode`，并创建唯一 `shot_video` 任务。
+6. 如果请求提供 `assigneeUserId`，校验其为有效项目制作人员且平台用户昵称非空，并创建唯一 `shot_video` 任务。
 7. 如果未提供制作人，只创建状态为 `unassigned` 的镜头，不创建空负责人任务。
 8. 写操作日志并提交。
 
@@ -2511,7 +2579,7 @@ Permission: shotgrid:shot:query
 - 聚合状态；
 - 当前用户允许动作。
 
-完整历史版本和审核意见使用独立分页接口，不在一个详情请求中无界返回。
+完整历史版本、修改问题、逐版本处理说明和确认记录使用独立分页接口，不在一个详情请求中无界返回。
 
 ### 13.4 修改镜头
 
@@ -2522,22 +2590,53 @@ Permission: shotgrid:shot:edit
 
 请求包含可修改字段、完整 `assetIds` 和 `lockVersion`。镜头更新与资产关系同步处于同一事务。
 
-### 13.5 归档镜头
+### 13.5 删除镜头
 
 ```http
 POST /shot-grid/projects/{projectId}/shots/{shotId}/archive
 Permission: shotgrid:shot:archive
 ```
 
-已有版本或受保护文件引用时不物理删除。活动任务必须先关闭或通过明确的级联归档操作处理。
+单条删除与批量删除都只允许尚无任务或唯一任务状态为 `not_started` 的镜头；任务一旦进入 `in_progress`、`pending_review`、`revision` 或 `completed` 就必须拒绝。删除采用逻辑归档，不物理删除镜头；存在的 `not_started` 任务在同一事务中软删除。
 
-归档成功时设置 `lifecycle_status = 'archived'`，保留 `del_flag = '0'`。创建镜头时 `lifecycle_status` 默认是 `active`。
+删除成功时同时设置 `lifecycle_status = 'archived'` 和 `del_flag = '2'`，从而释放 `(episode_id, shot_no)` 的活动唯一索引；创建镜头时 `lifecycle_status` 默认是 `active`。`20260813_09` 只回填没有活动任务且没有正式版本的历史误删镜头，已有制作历史的归档镜头不自动释放编号。
 
-### 13.6 独立业务端已实现交互边界
+```http
+POST /shot-grid/projects/{projectId}/shots/batch-delete
+Permission: shotgrid:shot:archive
+```
+
+请求为 `items[{shotId,lockVersion}]`，最多 200 项，不允许重复镜头；服务端按镜头 ID 固定顺序加锁，任何一项不存在、锁版本冲突或任务已经开始时整批回滚。
+
+### 13.6 批量分配镜头制作人
+
+```http
+POST /shot-grid/projects/{projectId}/shots/batch-assign
+Permission: shotgrid:task:assign
+Project role: director
+```
+
+请求：
+
+```json
+{
+  "assigneeUserId": 2,
+  "items": [
+    {"shotId": 3001, "taskLockVersion": null},
+    {"shotId": 3002, "taskLockVersion": 4}
+  ]
+}
+```
+
+`items` 最多 200 项且镜头 ID 不得重复。尚未创建任务的镜头传 `taskLockVersion=null`，已有任务必须提交列表响应中的当前 `taskLockVersion`。服务端按镜头 ID 固定顺序锁定目标，逐项复用单镜头分配的制作人员资格、任务状态、未完成版本提交和乐观锁规则；首次分配创建唯一 `shot_video` 任务，改派更新原任务。整批只写一条批量审计并在一个事务中提交，任一项失败时全部回滚。
+
+响应返回 `assignedShotIds`、`assignedCount`、`createdTaskCount` 和 `reassignedTaskCount`。
+
+### 13.7 独立业务端已实现交互边界
 
 - `/shots` 先选择可访问项目，再加载项目详情、集列表和第 13.0 节制作人选项；集选择驱动场次分页。关键字、集、场次、聚合状态、制作人、排序和服务端分页统一传给第 13.1 节列表。
 - 表格、卡片和故事板只切换同一批 `rows` 的表现形式，不发出三套语义不同的查询。项目切换、筛选变化、预检完成后的刷新和组件卸载会中止旧请求，迟到响应不得污染新项目上下文；切换项目还必须关闭创建/导入弹窗，清空旧项目的预检 Token、幂等键、选中行和问题明细。创建、导入、编辑和分配弹窗在项目/镜头 ID 之外还冻结单调递增的 `operationGeneration`；同一 ID 切走再返回并重开同类弹窗时，旧实例的迟到 `saved/imported/assigned/refresh` 事件不得关闭新弹窗或刷新当前上下文。
-- `/projects/{projectId}/shots/{shotId}` 使用真实详情；创建/编辑弹窗、分配/改派弹窗和归档动作调用第 13.2、13.4、13.5、15.1 节接口。按钮同时参考平台权限、项目角色、存储状态、项目状态和后端 `allowedActions`，但不替代服务端授权。
+- `/projects/{projectId}/shots/{shotId}` 使用真实详情并保留独立深链。表格、卡片和故事板中的详情入口在当前列表右侧打开可调整宽度的抽屉，复用同一详情组件和接口；关闭抽屉销毁实例并中止详情请求，编辑、分配或删除成功后同步刷新列表，不丢失当前筛选与分页。表格行同时提供编辑和删除，首列可选择当前页中允许分配或删除的镜头；列表上方提供制作人下拉、批量分配和批量删除。批量分配只提交用户当前明确勾选的镜头，不隐式修改筛选结果的其他页；创建/编辑弹窗、分配/改派弹窗、批量分配和删除动作调用第 13.2、13.4、13.6、15.1、13.5 节接口。按钮同时参考平台权限、项目角色、存储状态、项目状态和后端 `allowedActions`，但不替代服务端授权。
 - 镜头时长在界面按秒输入时最多保留三位小数，转换为安全整数毫秒后提交，不用浮点字符串或格式化文本作为持久值。
 - `thumbnail.url` 只接受 `/shot-grid/versions/{versionId}/files/{fileId}/download` 形式的受保护相对路径。前端必须通过统一请求层获取 Blob 并创建临时 Object URL；403/404 显示安全占位，取消、项目/镜头切换和卸载时中止请求并释放 Object URL。禁止直接用 `<img src>` 绕过 Bearer Token，也禁止持久化 Blob。
 - 导入弹窗下载本节冻结模板，上传 `.xlsx` 后展示工作簿级与行级错误/警告，并按 Sheet 管理 `selectedRows[{sheetName,rowNumber}]`。明文 `importToken` 与稳定 `X-Idempotency-Key` 只存在当前组件内存；同一次 commit 重试复用该键，重新选择文件会建立新预检会话。页面显示后端的创建/复用/任务/资产需求/目录操作统计，不从选中行数猜测结果。
@@ -2592,7 +2691,7 @@ Permission: shotgrid:shot:import
 | A | 场次 | `sceneNo`、`sceneName` | `序` 固定映射为 `0`、`000`、`序`；`01场` 等映射为正整数场次号 |
 | B | 镜头号 | `shotNo` | 接受 `S001` 等格式，规范化为正整数；在当前集内唯一 |
 | C | 时长(s) | `durationMs` | 秒值精确换算为整数毫秒 |
-| D | 制作人 | `assigneeUserName` | 匹配项目成员，并取得项目内制作人缩写 |
+| D | 制作人 | `assigneeUserName` | 按账号或平台用户昵称匹配项目制作人员，并取得用户昵称 |
 | E | 镜头缩略图 | — | 只读列，导入忽略 |
 | F | 制作内容描述 | `description` | 镜头制作内容 |
 | G | 景别 | `shotSize` | 文本 |
@@ -2676,7 +2775,7 @@ Permission: shotgrid:shot:import
 - 规范化后出现多个资产候选或历史同名脏数据时返回冲突错误，禁止自动选择。
 - 重复集和场次可以映射同一规范实体，但名称字段冲突必须报错。
 - 同一集内重复镜头号必须报错；切换场次不能重新使用该集已经出现的镜头号。
-- 总集数按有效业务 Sheet 派生的不同 `episodeNo` 统计，总场次数按不同 `(episodeNo, sceneNo)` 统计，总镜头数按不同 `(episodeNo, shotNo)` 统计；不能使用 Excel 原始行数替代。
+- 总集数、总场次数和总镜头数按已生成 `normalized` 结构的行去重统计，分别使用 `episodeNo`、`(episodeNo, sceneNo)` 和 `(episodeNo, shotNo)`；制作人或资产数据库匹配产生的行错误只影响 `validRows/errorRows`，不得缩减结构统计，也不能使用 Excel 原始行数替代。
 - Token 明文及完整规范化行数据只存入 Redis，具有短 TTL，并绑定用户、项目、导入类型、批次、模板版本、原文件摘要和可提交行集合；数据库只保存 Token 哈希。
 - 预检查创建 `sg_import_batch(status=previewed)`，数据库只保存来源摘要和统计；逐行规范化数据与错误明细按短 TTL 存入 Redis。
 
@@ -2694,8 +2793,8 @@ Header: X-Idempotency-Key
 {
   "importToken": "b1f84d62-...",
   "selectedRows": [
-    {"sheetName": "EP001", "rowNumber": 2},
-    {"sheetName": "EP002", "rowNumber": 2}
+    {"sheetName": "EP001", "rowNumber": 2, "assigneeUserId": 2},
+    {"sheetName": "EP002", "rowNumber": 2, "assigneeUserId": null}
   ]
 }
 ```
@@ -2704,7 +2803,8 @@ Header: X-Idempotency-Key
 
 - 重新验证 Token 的用户、项目、TTL 和文件摘要。
 - 锁定导入批次和项目后重新验证项目仍非 `completed/archived`；预检后状态变化也必须拒绝并回滚，不能依赖预检时的旧状态。
-- 只允许提交 `canImport=true` 的行。
+- 只允许提交 `canImport=true` 的行，或仅包含制作人匹配问题且已通过 `assigneeUserId` 明确改选/清空的行。
+- `assigneeUserId` 为正整数时覆盖 Excel 匹配结果，显式 `null` 表示以未分配状态导入；不提供该字段时沿用预检中的 Excel 匹配结果。覆盖值在正式事务中按项目制作人员重新校验，并计入幂等选择摘要。
 - Sheet 内物理行号不是工作簿全局标识；服务端以 `sheetName + rowNumber` 定位选择，并据此计算 `selection_hash`。
 - 提交前重新检查数据库唯一性，不能只相信预览结果。
 - MVP 采用全选行事务：任一选中行失败，全部回滚。
@@ -2743,18 +2843,18 @@ Permission: shotgrid:asset:import
 | --- | --- | --- | --- |
 | `assetType` | 类型、资产类型 | 是 | `Character`、`Environment`、`Prop` 或角色、场景、道具 |
 | `assetName` | 名称、资产名称 | 是 | 项目内同类型规范化名称唯一 |
-| `productionItem` | 制作分项 | 否 | 允许暂缺并返回警告；版本提交前必须补齐 |
+| `productionItem` | 制作分项 | 否 | 允许暂缺并返回警告；只能以未分配草稿导入，分配负责人前必须补齐 |
 | `assetDescription` | 资产描述 | 否 | 资产主数据描述；当前样表没有独立列 |
 | `itemDescription` | 描述、制作分项描述 | 否 | 当前样表 C 列；按明细行写入 `sg_asset_item.description`，合并时各分项继承相同值 |
 | `taskDescription` | 任务描述、制作要求 | 否 | 当前样表没有此列；未来模板提供时写入制作分项唯一任务 |
 | `remark` | 备注 | 否 | 业务备注 |
-| `assigneeUserName` | 制作人、制作人账号 | 否 | 有效项目成员且已设置制作人缩写 |
+| `assigneeUserName` | 制作人、制作人账号 | 否 | 有效项目制作人员且平台用户昵称非空 |
 
 规则：
 
 - MVP 不静默更新已有字段；同一合并区域或连续规范化键相同的明细行映射为一个资产及多个制作分项，不按物理行重复创建资产。数据库已有同类型同名称资产时可复用父资产并新增尚不存在的分项，但资产字段冲突必须报错；
 - 文件内同一资产的非空制作分项名称重复时返回所有相关行错误；数据库已有同资产同制作分项时返回冲突，不静默覆盖；
-- 制作分项为空时返回行警告并允许提交，创建可后续编辑的 `sg_asset_item`；缺失制作分项不能生成业务文件名，因此版本提交必须失败关闭；
+- 制作分项为空时返回行警告并允许按“未分配”提交，创建可后续编辑的 `sg_asset_item`；若该行解析或人工覆盖为具体制作人，则预检/提交必须失败关闭；
 - “制作人”每行最多匹配一名主制作人；包含 `/`、`、`、逗号或其他多人分隔符的复合值返回行错误；
 - “根据资产表决定有多少类型”只统计三种允许类型中本文件实际包含的类型和数量，不允许 Excel 创建新类型代码；
 - 预检查返回每种类型的有效、警告、错误数量，以及预计可解决的镜头资产需求数量；
@@ -2770,7 +2870,7 @@ Permission: shotgrid:asset:import
 Header: X-Idempotency-Key
 ```
 
-请求继续使用 `importToken` 和 `selectedRows[{sheetName,rowNumber}]`。合并单元格解析后每个预览行都是自包含记录，允许只选择同一父资产下的部分可导入分项；未选择行不落库。锁定批次后的一个业务事务包含：
+请求继续使用 `importToken` 和 `selectedRows[{sheetName,rowNumber,assigneeUserId?}]`。制作人覆盖语义与镜头导入一致：用户 ID 表示改选，显式 `null` 表示未分配，不提供则沿用 Excel 预检结果。合并单元格解析后每个预览行都是自包含记录，允许只选择同一父资产下的部分可导入分项；未选择行不落库。锁定批次后的一个业务事务包含：
 
 `X-Idempotency-Key`、Token 和 `selection_hash` 保护同一预览与提交请求，不把语义相近但文件摘要已经变化的新工作簿视为同一请求；未命名分项的跨文件逻辑去重仍受上一节所述边界限制。
 
@@ -2832,8 +2932,9 @@ Permission: shotgrid:task:assign
 
 规则：
 
-- 负责人必须是有效项目成员并已设置当前项目唯一的 `producerCode`。
+- 负责人必须是有效项目制作人员且平台用户昵称非空；内部兼容字段 `producerCode` 由该昵称派生。
 - 镜头创建 `taskKind=shot_video`，资产制作分项创建 `taskKind=asset_image`。
+- 资产制作分项名称为空时不得首次分配或改派；后端返回 HTTP 422 / `SG_ASSET_PRODUCTION_ITEM_REQUIRED`，批量分配任一目标不完整时整批回滚。
 - 目标尚无任务时创建 `not_started` 任务，此时 `taskLockVersion` 必须为空；已有未完成任务时必须携带当前 `taskLockVersion`，执行受控改派并记录审计，不创建第二个任务。
 - 已有任务存在任何非 `committed` 版本提交时禁止改派，`failed` 也属于未解决提交；必须重试原提交或使用后续明确治理动作。
 - 已完成任务默认禁止改派；如需返工，必须新增明确的重新开启动作。
@@ -2869,11 +2970,17 @@ Permission: shotgrid:version:add
   "fileName": "shot-final-v4.mp4",
   "fileSize": 10485760,
   "changelog": "根据上一轮意见加快人物起身动作",
-  "aiParams": null
+  "aiParams": null,
+  "issueResponses": [
+    {
+      "issueId": 7101,
+      "responseText": "已调整起身动作节奏，并在当前版本重新检查衔接。"
+    }
+  ]
 }
 ```
 
-`fileSize` 必须大于 0 且不超过平台上传上限。成功响应至少返回 `ready=true`、`taskId`、`taskKind`、`taskStatus`、`fileExtension` 和 `allowedActions=["version.add"]`。预检是无锁、无写库、无文件副作用的尽早拒绝，只读取并验证任务存在、项目访问、负责人/总监权限、完整任务上下文、项目/目录就绪、未解决提交、扩展名、业务文件名、目标相对路径可生成和目录快照字段完整；它不访问 NAS、不检查实际目标文件、不保留版本号、不创建提交或文件引用，也不承诺后续 create 必然成功。实际目标文件已存在的摘要冲突只由 Worker 无覆盖发布阶段处理。
+`fileSize` 必须大于 0 且不超过平台上传上限。首版 `issueResponses=[]`；修订版必须恰好覆盖当前任务全部 open 问题，每项 `issueId` 唯一且 `responseText` 非空。成功响应至少返回 `ready=true`、`taskId`、`taskKind`、`taskStatus`、`fileExtension`、`openIssueSnapshotHash` 和 `allowedActions=["version.add"]`。预检是无锁、无写库、无文件副作用的尽早拒绝，只读取并验证任务存在、项目访问、负责人/总监权限、完整任务上下文、项目/目录就绪、open 问题集合与逐条处理说明、未解决提交、扩展名、业务文件名、目标相对路径可生成和目录快照字段完整；它不访问 NAS、不检查实际目标文件、不保留版本号、不创建提交或文件引用，也不承诺后续 create 必然成功。实际目标文件已存在的摘要冲突只由 Worker 无覆盖发布阶段处理。
 
 预检失败、权限撤销、任务上下文切换或用户换文件时不得执行上传。预检只能校验文件名和声明大小；真实字节签名、容器品牌和摘要仍只能在上传后校验。上传已经成功但业务提交尚未建立引用即失败时，孤儿私有文件由平台保留、对账和回收机制治理，前端不得盲删。
 
@@ -2889,15 +2996,24 @@ Header: X-Idempotency-Key
 {
   "fileId": "5ed39e04-2f29-45ab-a58c-4f8168f5131a",
   "changelog": "根据上一轮意见加快人物起身动作",
-  "aiParams": null
+  "aiParams": null,
+  "openIssueSnapshotHash": "8d5c...省略...e41a",
+  "issueResponses": [
+    {
+      "issueId": 7101,
+      "responseText": "已调整起身动作节奏，并在当前版本重新检查衔接。"
+    }
+  ]
 }
 ```
 
 提交前必须验证：
 
 - 当前用户是任务负责人，或拥有项目总监/平台管理员代提交权限；
-- 已存在任务的负责人仍是活动项目成员、平台账号有效且 `producerCode` 可用；若该持久状态在任务创建后失效，返回 `SG_TASK_ASSIGNEE_STATE_INVALID`/409，而不是把它当作新分配请求参数错误；
+- 已存在任务的负责人仍是活动项目制作人员、平台账号有效且用户昵称可用；若该持久状态在任务创建后失效，返回 `SG_TASK_ASSIGNEE_STATE_INVALID`/409，而不是把它当作新分配请求参数错误；
 - 任务状态是 `in_progress` 或 `revision`；
+- `in_progress` 首版不得携带问题处理说明；`revision` 必须存在 open 问题，且 `issueResponses` 与锁内重查的 open 问题集合完全一致；
+- create 必须回传 preflight 返回的 `openIssueSnapshotHash`；后端按稳定 `issueId + originVersionId` 集合重新计算并比较，不一致返回 `SG_ISSUE_SNAPSHOT_CONFLICT`，随后仍逐项校验处理说明，不能只相信哈希；
 - `fileId` 对应受保护、有效且当前用户有权使用的文件；
 - 文件尚未被其他版本作为主产出物引用；
 - 项目存储、所属集/镜头目录或资产目录已经 `ready`；
@@ -2915,8 +3031,9 @@ create 不能信任预检结果。后端必须在上传后重新锁定项目与�
 2. 生成 `generated_at_ms` 和不可变 `business_file_name`；
 3. 计算并保存 NAS 正式相对路径和同目录临时路径；
 4. 创建 `sg_version_submission(status=pending)`；
-5. 为源文件创建 `businessType=shotgrid_version_submission` 临时平台文件引用；
-6. 提交事务并返回 HTTP 202。
+5. 为每条 open 问题创建不可变 `sg_version_issue_response`；
+6. 为源文件创建 `businessType=shotgrid_version_submission` 临时平台文件引用；
+7. 提交事务并返回 HTTP 202。
 
 初始响应至少返回：
 
@@ -2939,10 +3056,11 @@ Worker 按第 7.4 节完成 NAS 发布后，在一个短数据库事务中：
 1. 创建 `sg_version`；
 2. 创建主 `sg_version_file` 并写入 NAS 相对路径、摘要、大小和发布时间；
 3. 将源文件引用从 `shotgrid_version_submission` 切换为正式 `shotgrid_version` 引用；
-4. 创建 `review_mode=auto_single`、`review_status=active` 的审核单和版本关系；
-5. 把任务改为 `pending_review`；
-6. 把提交改为 `committed`；正式版本通过 `sg_version.submission_id` 反向关联，不在提交表重复保存 `version_id`；
-7. 提交事务。
+4. 通过 `submission_id` 将本次逐条问题处理说明关联到新版本；
+5. 创建 `review_mode=auto_single`、`review_status=active` 的审核单和版本关系；
+6. 把任务改为 `pending_review`；
+7. 把提交改为 `committed`；正式版本通过 `sg_version.submission_id` 反向关联，不在提交表重复保存 `version_id`；
+8. 提交事务。
 
 提交状态接口：
 
@@ -2965,20 +3083,87 @@ Permissions:
 
 ### 15.4 审核与循环修改
 
+制作人任务页读取当前问题：
+
+```http
+GET /shot-grid/tasks/{taskId}/issues?status=open
+Permission: shotgrid:note:list
+```
+
+响应按来源版本号、问题创建时间稳定排序，返回每条问题的 `issueId/originVersionId/originVersionNumber/content/mediaTimeMs/annotations/status/resolvedInVersionId`，以及已提交版本上的 `responses[]` 和 `verifications[]`。制作人员只能读取有权访问任务的数据，不能在该接口回复、解决或确认问题。
+
+审核页读取当前版本上下文：
+
+```http
+GET /shot-grid/versions/{versionId}/review-context
+Permission: shotgrid:version:review
+```
+
+响应至少分为：
+
+```json
+{
+  "currentVersion": { "versionId": 5002, "versionNumber": "V002" },
+  "carriedIssues": [
+    {
+      "issueId": 7101,
+      "originVersionId": 5001,
+      "originVersionNumber": "V001",
+      "content": "起身动作节奏过慢",
+      "annotations": null,
+      "currentVersionResponse": {
+        "responseText": "已调整起身节奏并检查前后衔接。"
+      }
+    }
+  ],
+  "currentVersionIssues": []
+}
+```
+
+`carriedIssues` 只包含来源版本早于当前版本、提交当前版本时仍 open 且具有本版处理说明的问题；`currentVersionIssues` 是审核人在当前版本新建的问题。接口必须同时验证同任务、同项目和当前版本状态，不能由前端拼接多个版本列表推断审核上下文。
+
+审核人在当前版本创建问题：
+
+```http
+POST /shot-grid/versions/{versionId}/issues
+Permission: shotgrid:note:add
+```
+
+请求可携带 `content`、`mediaTimeMs` 和 `annotations`，但 `content` 规范化后非空或 `annotations.items` 至少一项有效，二者必须满足其一。新问题统一为阻塞审核的 `open`，来源版本固定为路径中的当前版本；接口不接收 `isMandatory`，旧 `/versions/{versionId}/notes` 路径已移除。
+
+最终审核动作：
+
 ```http
 POST /shot-grid/versions/{versionId}/review-actions
 Permission: shotgrid:version:review
 Header: X-Idempotency-Key
 ```
 
-请求体示例：`{ "actionType": "approve", "reason": null, "lockVersion": 0 }`。
+V002 及后续版本请求体示例：
+
+```json
+{
+  "actionType": "reject",
+  "reason": "仍有一项需要继续修改",
+  "lockVersion": 0,
+  "issueVerifications": [
+    {
+      "issueId": 7101,
+      "result": "still_present",
+      "comment": "节奏仍偏慢，请继续压缩。"
+    }
+  ]
+}
+```
 
 - 审核动作必须使用持久幂等键；同一审核人、版本和幂等键的同一规范请求重放首次结果，同键异请求返回 `SG_IDEMPOTENCY_CONFLICT`。
-- `reject`：必须填写退回原因或至少存在一条 open mandatory 意见；版本变为 `rejected`，自动审核单完成，任务变为 `revision`。
-- 制作人员收到意见后在线下修改，再执行 15.3；系统创建下一版本号和新的自动审核单。
-- `approve`：只有不存在 open mandatory 意见时才允许；版本直接变为 `final`，自动审核单完成，任务变为 `completed`。
+- 对 V002 及后续版本，`approve/reject` 的 `issueVerifications` 必须恰好覆盖 `review-context.carriedIssues`，不得遗漏、重复、夹带当前版本新问题或其他任务问题；V001 没有带入问题时必须为空。
+- `reject`：逐条确认结果与审核动作在同一事务保存；`still_present` 必须填写未解决原因；至少一条结果为 `still_present`，或当前版本已经存在新建 open 问题。版本变为 `rejected`，自动审核单完成，任务变为 `revision`，全部未关闭问题在任务页归属当前被退回版本。总述 `reason` 可空，不能替代修改问题。
+- 制作人员收到全部 open 问题后在线下修改，再按 15.3 逐条填写 `issueResponses` 并提交；系统创建下一版本号和新的自动审核单。
+- `approve`：所有带入问题的结果必须都是 `resolved`，并且当前版本不存在新建 open 问题；同一事务关闭这些问题、记录 `resolvedInVersionId`、把版本改为 `final`、完成自动审核单和任务。
 - `defer`：保留待审核状态，只记录动作。
-- 每轮版本和审核意见永久绑定，不能把上一版本意见迁移成新版本意见或覆盖旧版本文件。
+- 每个问题永久绑定来源版本并可跨多版保持 open；后续版本通过处理说明和确认记录与问题关联，不能迁移问题、复制问题或覆盖旧版本文件。任务页通过派生 `pendingVersion` 把当前待处理工作展示在最近被退回版本下，来源版本只展示历史结果。
+- 旧的 `/notes/{noteId}/replies|reply|resolve` 已移除；问题只能通过后续版本审核动作中的逐条确认解决。
 
 ### 15.5 其余资源路径
 
@@ -2988,22 +3173,22 @@ Header: X-Idempotency-Key
 /shot-grid/projects/{projectId}/assets
 /shot-grid/projects/{projectId}/tasks
 /shot-grid/projects/{projectId}/versions
-/shot-grid/projects/{projectId}/notes
 /shot-grid/projects/{projectId}/review-actions
 /shot-grid/projects/{projectId}/review-lists
 /shot-grid/projects/{projectId}/files
 /shot-grid/tasks/mine
 /shot-grid/tasks/{taskId}
+/shot-grid/tasks/{taskId}/issues
 /shot-grid/tasks/{taskId}/versions
 /shot-grid/tasks/{taskId}/version-submissions/preflight
 /shot-grid/tasks/{taskId}/version-submissions
 /shot-grid/tasks/{taskId}/version-submissions/current
 /shot-grid/version-submissions/{submissionId}
 /shot-grid/versions/{versionId}
-/shot-grid/versions/{versionId}/notes
+/shot-grid/versions/{versionId}/review-context
+/shot-grid/versions/{versionId}/issues
 /shot-grid/versions/{versionId}/review-actions
 /shot-grid/review-lists/{reviewListId}
-/shot-grid/notes/{noteId}/replies
 ```
 
 动作接口：
@@ -3013,13 +3198,13 @@ POST /shot-grid/tasks/{taskId}/start
 POST /shot-grid/tasks/{taskId}/version-submissions/preflight
 POST /shot-grid/tasks/{taskId}/version-submissions
 POST /shot-grid/version-submissions/{submissionId}/retry
+POST /shot-grid/versions/{versionId}/issues
 POST /shot-grid/versions/{versionId}/review-actions
-GET  /shot-grid/notes/{noteId}/replies
-POST /shot-grid/notes/{noteId}/reply
-POST /shot-grid/notes/{noteId}/resolve
 POST /shot-grid/review-lists/{reviewListId}/versions
 PUT  /shot-grid/review-lists/{reviewListId}/versions/order
 ```
+
+旧 `/projects/{projectId}/notes`、`/versions/{versionId}/notes` 和 `/notes/{noteId}/replies|reply|resolve` 路径全部移除，不再提供兼容读取或写入动作。
 
 ### 15.6 资产 API
 
@@ -3038,7 +3223,7 @@ Permissions:
   shotgrid:asset:list|add|query|edit|archive
 ```
 
-`asset-assignee-options` 要求 `shotgrid:asset:list` 与项目访问，支持 `pageNum/pageSize/keyword`；只返回活动项目成员、有效未删除平台账号且具有非空项目内 `producerCode` 的 `userId/userName/nickName/avatar/deptId/deptName/projectRole/producerCode` 安全摘要。关键字只匹配账号、昵称和制作人缩写；候选响应不是写入授权，创建、编辑、导入、首次分配和改派事务仍重新校验成员状态。
+`asset-assignee-options` 要求 `shotgrid:asset:list` 与项目访问，支持 `pageNum/pageSize/keyword`；只返回 `projectRole=creator` 的活动项目成员及有效未删除平台账号的 `userId/userName/nickName/avatar/deptId/deptName/projectRole/producerCode` 安全摘要，其中兼容字段 `producerCode` 由 `sys_user.nick_name` 派生。关键字只匹配账号和昵称；候选响应不是写入授权，创建、编辑、导入、首次分配和改派事务仍重新校验成员状态、项目角色和用户昵称。
 
 列表支持 `assetType`、`assetStatus`、`assigneeUserId`、`keyword`、分页和白名单排序。资产列表、详情和制作分项响应分别包含：
 
@@ -3097,27 +3282,25 @@ Permissions:
 
 独立业务前端工作台真实调用 `/tasks/mine`，支持任务类型、状态、优先级、截止区间、关键字、排序和服务端分页；行项进入 `/tasks/:taskId`。任务详情展示项目、归属对象、要求、负责人、锁版本及版本摘要，并仅在平台权限与 `allowedActions` 同时满足时开放开始、编辑或版本提交。
 
-### 15.8 版本与意见查询 API
+### 15.8 版本与修改问题查询 API
 
 ```http
 GET  /shot-grid/tasks/{taskId}/versions
 GET  /shot-grid/versions/{versionId}
-GET  /shot-grid/versions/{versionId}/notes
-POST /shot-grid/versions/{versionId}/notes
-GET  /shot-grid/notes/{noteId}/replies
-POST /shot-grid/notes/{noteId}/reply
-POST /shot-grid/notes/{noteId}/resolve
+GET  /shot-grid/tasks/{taskId}/issues
+GET  /shot-grid/versions/{versionId}/review-context
+POST /shot-grid/versions/{versionId}/issues
 Permissions:
   shotgrid:version:list|query
-  shotgrid:note:list|add|reply|resolve
+  shotgrid:note:list|add
 ```
 
-- 版本和意见列表必须分页，默认按版本号或创建时间倒序。
+- 版本和问题列表必须分页；版本默认按版本号倒序，open 问题按来源版本号和创建时间稳定排序。
 - 任务详情内的版本历史和版本详情使用真实查询 API；`/versions/:versionId` 归属 `reviews` 路由范围。下载必须调用第 15.10 节专用授权接口，不得拼接平台存储地址。
-- 所属项目成员可以只读访问版本和意见；创建、回复、解决或审核动作仍按第 8 节角色和任务关系判定。
-- `resolve` 只允许意见创建者、项目总监或管理员；制作人员的回复不能自动把必须修改意见标记为已解决。
-- 添加意见可以携带 `content`、`mediaTimeMs`、`annotations` 和 `isMandatory`，并按第 16 节校验。
-- 镜头视频意见的 `mediaTimeMs` 不能超过镜头 `durationMs`；资产图片意见禁止携带 `mediaTimeMs`。意见与回复创建后不可覆盖，解决动作只修改意见状态。
+- 所属项目成员可以只读访问版本、问题、处理说明和确认历史；制作人员只能随本人任务版本提交写入逐条处理说明，不能创建或确认问题。
+- 新建问题只接受 `content/mediaTimeMs/annotations`，不接受 `isMandatory`；文字或标注必须至少一项有效，并按第 16 节校验。
+- 镜头视频问题的 `mediaTimeMs` 不能超过镜头 `durationMs`；资产图片问题禁止携带 `mediaTimeMs`。问题创建后不可覆盖，状态只由后续版本审核动作改变。
+- 旧 `/versions/{versionId}/notes` 与 `/notes/{noteId}/replies|reply|resolve` 全部移除。
 
 ### 15.9 人工批量审核单 API
 
@@ -3159,7 +3342,7 @@ Permission:
 ```
 
 - 项目文件分页使用 `shotgrid:storage:path` 与项目访问双门禁，只查询活动 `sg_version_file → sg_version → sg_task → sys_file_info` 正式关系。支持 `keyword`、`fileRole`、`versionStatus`、`taskKind`、分页及 `submittedTime|businessFileName|fileSize` 白名单排序；关键字只匹配业务文件名、原文件名和任务名。
-- 文件项返回 `fileId/projectId/versionId/taskId/taskName/taskKind/versionNo/versionNumber/versionStatus/originalName/businessFileName/role/isPrimary/contentType/fileSize/nasRelativePath/publishedTime/submittedTime/downloadUrl`。不得返回 `storedName`、`storageKey`、平台物理路径、文件哈希、NAS 凭据或内部路径键；镜头/资产归属继续通过任务详情推导，不在文件关系重复维护。
+- 文件项返回 `fileId/projectId/versionId/taskId/taskName/taskKind/versionNo/versionNumber/versionStatus/originalName/businessFileName/role/isPrimary/contentType/fileSize/nasRelativePath/publishedTime/submittedTime/downloadUrl/thumbnail`。`thumbnail` 只投影同一版本中活动的首个 `file_role=thumbnail` 文件，结构为 `{fileId,url}`；没有派生缩略图时返回 `null`，不得回退旧版本、原始大文件或公开地址。不得返回 `storedName`、`storageKey`、平台物理路径、文件哈希、NAS 凭据或内部路径键；镜头/资产归属继续通过任务详情推导，不在文件关系重复维护。
 - 下载接口先执行版本、任务、项目角色、`sg_version_file` 与 `sys_file_reference(businessType=shotgrid_version)` 双重文件关系校验，再复用平台流式下载与 HTTP Range 能力，并以净化后的 `business_file_name` 设置安全下载名；平台显式 `deny` ACL 始终优先于业务成员授权。
 - 原生视频播放器使用 `POST /shot-grid/versions/{versionId}/files/{fileId}/playback-ticket` 领取短期票据，再访问 `GET /shot-grid/playback/{ticket}/versions/{versionId}/files/{fileId}`。Redis 只保存票据哈希、用户/会话哈希和资源绑定，不保存明文登录 Token；播放请求每次校验登录会话仍有效，并从数据库重建用户权限后重新执行项目范围、文件关系与 ACL 决策。Redis 不可用时失败关闭，不回退为公开文件 URL。
 - 路径接口只返回经权限校验的目录/文件路径快照和复制文本，不返回 NAS 凭据或平台 `storageKey`。
@@ -3274,11 +3457,11 @@ failed
 | 导入镜头 | 导入批次、集、场次、镜头、稳定目录快照、目录 Outbox、已匹配资产关系、待匹配资产需求、可选唯一任务、操作审计 |
 | 导入资产 | 导入批次、去重资产、逐行制作分项、稳定目录快照、目录 Outbox、分项可选唯一任务、待匹配需求解析、镜头资产关系、操作审计 |
 | 分配目标 | 锁定项目和目标；新建唯一任务，或携带任务锁版本受控改派现有任务；存在任何非 committed 提交时整体拒绝 |
-| 暂存版本提交 | 锁定项目与任务、保留版本号、生成业务文件名和 NAS 目标、创建 `sg_version_submission`、建立 `shotgrid_version_submission` 临时文件引用 |
+| 暂存版本提交 | 锁定项目与任务、重查全部 open 问题、校验逐条处理说明覆盖、保留版本号、生成业务文件名和 NAS 目标、创建 `sg_version_submission` 与 `sg_version_issue_response`、建立 `shotgrid_version_submission` 临时文件引用 |
 | 正式提交版本 | 版本、版本文件及 NAS 摘要、切换为 `shotgrid_version` 主文件引用、自动审核单、任务状态、提交状态；版本通过 `submission_id` 反向关联 |
-| 新增意见/回复/解决 | 版本绑定意见、不可变回复或意见状态、操作审计；遵循统一资源锁序 |
-| 审核退回 | 审核动作幂等记录/请求哈希/结果快照、版本状态、自动审核单状态、任务修改状态 |
-| 审核通过 | open mandatory 门禁、最终唯一性、审核动作幂等记录/请求哈希/结果快照、版本状态、自动审核单状态、任务完成状态 |
+| 新增修改问题 | 当前待审核版本绑定的问题、文字/标注至少一项门禁、操作审计；遵循统一资源锁序 |
+| 审核退回 | 带入问题逐条确认、问题状态与解决版本、审核动作幂等记录/请求哈希/结果快照、版本状态、自动审核单状态、任务修改状态 |
+| 审核通过 | 带入问题全部 `resolved` 且任务无 open 问题门禁、问题状态与解决版本、最终唯一性、审核动作幂等记录/请求哈希/结果快照、版本状态、自动审核单状态、任务完成状态 |
 | 创建人工审核单 | 审核单、有序版本关系 |
 | 修改业务附件 | 领域文件关系、平台业务引用 |
 
@@ -3308,11 +3491,12 @@ NAS I/O 不得在数据库事务内执行。`sg_storage_operation` 和 `sg_versi
 | `SG_MEMBER_NOT_FOUND` | 404 | 项目成员不存在 |
 | `SG_MEMBER_USER_INVALID` | 422 | 待添加用户不存在、已停用或不满足成员条件 |
 | `SG_MEMBER_HAS_ACTIVE_TASKS` | 409 | 成员仍有活动任务 |
-| `SG_PRODUCER_CODE_REQUIRED` | 422 | 被分配制作任务的成员缺少制作人缩写 |
-| `SG_PRODUCER_CODE_CONFLICT` | 409 | 同一项目制作人缩写重复 |
+| `SG_PRODUCER_CODE_REQUIRED` | 422 | 被分配制作任务的成员缺少平台用户昵称（错误键为兼容保留） |
+| `SG_PRODUCER_CODE_CONFLICT` | 409 | 历史兼容的项目制作人缩写重复 |
 | `SG_EPISODE_NO_CONFLICT` | 409 | 项目内集号重复 |
 | `SG_EPISODE_NOT_FOUND` | 404 | 集不存在、不属于目标项目或不可见 |
 | `SG_EPISODE_HAS_ACTIVE_SCENES` | 409 | 集仍有活动场次，不能归档 |
+| `SG_SHOT_TASK_ALREADY_STARTED` | 409 | 镜头任务已经开始，禁止单条或批量删除 |
 | `SG_STORAGE_ROOT_NOT_FOUND` | 404 | NAS 根目录配置不存在或不可见 |
 | `SG_STORAGE_ROOT_DISABLED` | 409 | NAS 根目录已停用，不能创建新项目 |
 | `SG_STORAGE_ROOT_UNAVAILABLE` | 503 | NAS 根目录不可达或不可写 |
@@ -3334,7 +3518,7 @@ NAS I/O 不得在数据库事务内执行。`sg_storage_operation` 和 `sg_versi
 | `SG_ASSET_VERSIONED_METADATA_IMMUTABLE` | 409 | 资产制作分项已有版本，禁止普通修改其主数据 |
 | `SG_ASSET_PRODUCTION_ITEM_INVALID` | 422 | 已填写的制作分项安全规范化后不可用 |
 | `SG_ASSET_PRODUCTION_ITEM_CONFLICT` | 409 | 同一资产内非空制作分项名称重复 |
-| `SG_ASSET_PRODUCTION_ITEM_REQUIRED` | 422 | 提交资产图片版本时制作分项仍为空 |
+| `SG_ASSET_PRODUCTION_ITEM_REQUIRED` | 422 | 资产制作分项为空，禁止分配、改派、开始任务或提交版本 |
 | `SG_TASK_ASSIGNEE_INVALID` | 422 | 普通创建任务时，制作人不是活动项目成员或平台账号已停用/删除 |
 | `SG_TASK_ASSIGNEE_AMBIGUOUS` | 422 | 制作人字段包含多名候选，无法确定唯一主制作人 |
 | `SG_TASK_ASSIGNEE_STATE_INVALID` | 409 | 已存在任务的当前负责人已被移除、停用或删除，版本提交前必须治理任务状态或改派 |
@@ -3399,10 +3583,15 @@ NAS I/O 不得在数据库事务内执行。`sg_storage_operation` 和 `sg_versi
 | `SG_FINAL_VERSION_CONFLICT` | 409 | 已存在最终版本 |
 | `SG_REVIEW_LIST_NOT_FOUND` | 404 | 自动单版本审核单不存在或不可见 |
 | `SG_AUTO_REVIEW_LIST_INTEGRITY_CONFLICT` | 409 | 自动审核单与唯一版本关系不完整 |
-| `SG_NOTE_NOT_FOUND` | 404 | 审核意见不存在或不可见 |
-| `SG_NOTE_MEDIA_TIME_INVALID` | 422 | 资产意见携带时间点，或视频时间点超过镜头时长 |
-| `SG_REVIEW_MANDATORY_NOTES_OPEN` | 409 | 仍有 open mandatory 意见，不能确认通过 |
-| `SG_REVIEW_REASON_REQUIRED` | 422 | 退回修改既没有原因，也没有 open mandatory 意见 |
+| `SG_NOTE_NOT_FOUND` | 404 | 修改问题不存在或不可见（兼容错误键） |
+| `SG_NOTE_MEDIA_TIME_INVALID` | 422 | 资产问题携带时间点，或视频时间点超过镜头时长（兼容错误键） |
+| `SG_ISSUE_CONTENT_REQUIRED` | 422 | 修改问题的文字和画面标注同时为空 |
+| `SG_ISSUE_RESPONSE_COVERAGE_INVALID` | 422 | 修订提交没有逐条覆盖全部 open 问题，或包含重复、已关闭、跨任务问题 |
+| `SG_ISSUE_SNAPSHOT_CONFLICT` | 409 | preflight 后 open 问题集合变化，必须重新确认逐条处理说明 |
+| `SG_ISSUE_VERIFICATION_COVERAGE_INVALID` | 422 | 审核动作没有逐条确认全部带入问题，或确认项重复、越界 |
+| `SG_ISSUE_VERIFICATION_COMMENT_REQUIRED` | 422 | 问题确认选择 `still_present` 但未填写具体未解决原因 |
+| `SG_REVIEW_OPEN_ISSUES_EXIST` | 409 | 仍有 open 修改问题，不能确认通过 |
+| `SG_REVIEW_REJECT_ISSUE_REQUIRED` | 422 | 退回修改时不存在 `still_present` 历史问题或当前版本新问题 |
 | `SG_INVALID_STATE_TRANSITION` | 409 | 非法状态流转 |
 | `SG_FILE_ACCESS_DENIED` | 403 | 项目、任务或平台文件访问决策拒绝下载 |
 
@@ -3569,14 +3758,14 @@ commit 结果中的复用集/场均为 0、资产关系为 0。数据库终态�
 - 不能将其他项目的场次或资产关联到当前镜头。
 - 相同 `lockVersion` 并发修改时只有一个成功。
 - 同一镜头或资产制作分项不能创建第二个正式任务。
-- 资产制作分项允许缺失名称并导入，预检查只产生警告；名称缺失时仍可后续编辑，但不能提交图片版本。
+- 资产制作分项允许缺失名称并以未分配草稿导入，预检查产生警告；名称缺失时可后续编辑，但不能分配、改派、开始任务或提交图片版本。
 - 每个制作分项只允许一名主制作人，复合制作人值不能静默选取第一人。
 - 视频任务不能提交图片，图片任务不能提交视频。
 - 同一任务存在活动或失败待处理提交时不能创建第二个提交。
 - NAS 发布失败时不能生成正式版本、审核单或把任务改为待审核。
 - NAS 目标文件摘要冲突时不能覆盖原文件。
 - 正式版本事务失败时不能留下半成品版本或审核单，并必须复用原保留版本号重试。
-- 业务文件名必须使用保存的项目缩写、主制作人缩写、服务端版本号和时间戳；资产文件名还必须使用制作分项中保存的名称；镜头与资产文件名都包含对应版本号，重试时所有已生成值不得变化。
+- 业务文件名必须使用保存的项目缩写、主制作人的平台用户昵称、服务端版本号和时间戳；资产文件名还必须使用制作分项中保存的名称；镜头与资产文件名都包含对应版本号，重试时所有已生成值不得变化。
 - 资产主产出物文件名各段顺序必须为“项目、`Asset`、类型、资产名称、制作分项、制作人、版本、时间戳”，示例必须生成 `WGZR_Asset_Environment_动力舱室内_动力舱恐怖气氛主视角_YJF_V001_1786094626499.jpg`。
 - 导入预览不能随机生成缺失镜头号。
 - 导入预览后数据库被其他用户修改时，提交必须重新检查冲突。
@@ -3599,6 +3788,6 @@ commit 结果中的复用集/场均为 0、资产关系为 0。数据库终态�
 6. 决定已完成任务是否需要“重新打开”；MVP 当前禁止，未来动作必须有原因和审计。
 7. 两类样表、模板版本、默认最大行数、文件大小、预览 TTL 和资产名称规范化已冻结；镜头与资产下载模板均使用冻结 SHA-256 的匿名包内副本，资产模板已按规定通过 `artifact_tool` 匿名化重建、渲染和复核。上传原文件仅临时解析、不长期留存，确需留存时必须另走受保护文件引用。
 8. 决定资产模板是否增加跨重新保存仍保留的稳定 `sourceRowId/rowUid`；未引入前需冻结人工去重治理流程。
-9. 23 张基础表、`20260810_01 → 20260812_07` 迁移链、种子、项目/成员/集/场次/镜头/资产/制作分项普通管理、两类导入 API/匿名模板、资产需求人工处理、项目内镜头/资产制作人选项、资产/分项动作与缩略图聚合、独立任务管理、默认关闭的版本发布 Worker、正式版本/主文件引用/审核闭环，以及默认关闭的 NAS 目录和媒体派生 Worker 已转化为代码；独立业务前端也已实现审核缩略图、网页代理优先和原媒体降级。四个既有子集浏览器旅程不覆盖本批媒体派生；真实 FFmpeg 视频派生、Range 真分段、审核/文件浏览器旅程、UNC/NAS 部署验收和完整系统 E2E 继续按本契约分批实现。
+9. 基础表、`20260810_01 → 20260814_10` 迁移链、种子、项目/成员/集/场次/镜头/资产/制作分项普通管理、两类导入、资产需求、独立任务、版本发布、跨版本修改问题闭环、人工批量审核，以及默认关闭的 NAS 目录和媒体派生 Worker 已转化为代码；独立业务前端也已实现制作人逐条处理说明、审核人逐条确认、审核缩略图、网页代理优先和原媒体降级。既有浏览器旅程不覆盖本次新闭环；真实 FFmpeg 视频派生、Range 真分段、审核/文件浏览器旅程、UNC/NAS 部署验收和完整系统 E2E 继续按本契约分批验收。
 
 上述 1—8 是评审、部署或数据治理参数，不得由页面开发临时猜测。第 9 项只说明当前第一批实现边界，未落地的契约章节仍是设计，不是已实现能力。

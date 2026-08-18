@@ -11,6 +11,7 @@ from module_shot_grid.schema import (
     SHOT_GRID_PERMISSION_CODES,
     SHOT_GRID_REPAIR_SCHEMA_REVISION,
     SHOT_GRID_SCHEMA_REVISION,
+    SHOT_GRID_SHOT_DELETE_SCHEMA_REVISION,
     SHOT_GRID_STORAGE_WORKER_SCHEMA_REVISION,
     SHOT_GRID_TABLE_NAMES,
     SHOT_GRID_TASK_VERSION_REVIEW_SCHEMA_REVISION,
@@ -262,6 +263,17 @@ def test_postgresql_baseline_is_stamped_at_the_current_head() -> None:
     assert (
         "CREATE UNIQUE INDEX uk_sg_scene_no_active ON sg_scene (episode_id, scene_no) WHERE del_flag = '0'" in baseline
     )
+
+
+def test_deleted_shot_number_release_migration_is_safely_scoped() -> None:
+    migration = _migration_namespace(SHOT_GRID_SHOT_DELETE_SCHEMA_REVISION)
+    source = Path(migration['__file__']).read_text(encoding='utf-8')
+
+    assert migration['down_revision'] == '20260812_08'
+    assert "SET del_flag = '2'" in source
+    assert "shot.lifecycle_status = 'archived'" in source
+    assert 'active_task.del_flag = \'0\'' in source
+    assert 'JOIN sg_task AS historical_task' in source
 
 
 def test_migration_ddl_contains_every_named_metadata_constraint_and_index() -> None:

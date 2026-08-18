@@ -1,11 +1,13 @@
-import { ElButton, ElIcon } from 'element-plus'
+import { ElButton, ElCard, ElDialog, ElDrawer, ElForm, ElFormItem, ElIcon, ElInput, ElMessageBox, ElPagination, ElRadioButton, ElRadioGroup, ElTable, ElTableColumn, ElTag } from 'element-plus'
 import { createPinia, setActivePinia } from 'pinia'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { getProjectDetail, getProjectPage } from '@/api/shot-grid/projects'
+import { getProjectDetail, getProjectMembers, getProjectPage } from '@/api/shot-grid/projects'
 import {
+  batchAssignShotTasks,
+  batchDeleteShots,
   commitShotImport,
   getEpisodePage,
   getScenePage,
@@ -29,11 +31,14 @@ vi.mock('@/api/shot-grid/projects', () => ({
     return result
   },
   getProjectDetail: vi.fn(),
+  getProjectMembers: vi.fn(),
   getProjectPage: vi.fn()
 }))
 vi.mock('@/api/shot-grid/shots', () => ({
   archiveShot: vi.fn(),
   assignShotTask: vi.fn(),
+  batchAssignShotTasks: vi.fn(),
+  batchDeleteShots: vi.fn(),
   commitShotImport: vi.fn(),
   createShot: vi.fn(),
   downloadProtectedThumbnail: vi.fn(),
@@ -67,6 +72,10 @@ const shotRow = {
   cameraMovement: '推进',
   focalLength: '35/25',
   description: '镜头缓慢推进动力舱',
+  dialogue: '动力系统恢复了吗？',
+  soundEffect: '设备低频轰鸣声',
+  colorReference: '冷蓝色调',
+  remark: '保持画面压迫感',
   environmentAssets: [{ assetId: 2, assetName: '动力舱', assetType: 'Environment' }],
   characterAssets: [],
   sortOrder: 1,
@@ -76,10 +85,11 @@ const shotRow = {
   latestVersion: null,
   latestFeedback: null,
   assetCount: 1,
-  lockVersion: 0
+  lockVersion: 0,
+  taskLockVersion: 4
 }
 
-async function mountView(permissions = ['shotgrid:shot:list', 'shotgrid:shot:add', 'shotgrid:shot:import'], configureRouter = null) {
+async function mountView(permissions = ['shotgrid:shot:list', 'shotgrid:shot:add', 'shotgrid:shot:import', 'shotgrid:member:list'], configureRouter = null) {
   const pinia = createPinia()
   setActivePinia(pinia)
   const session = useSessionStore()
@@ -95,7 +105,9 @@ async function mountView(permissions = ['shotgrid:shot:list', 'shotgrid:shot:add
   configureRouter?.(router)
   await router.push('/shots?projectId=8')
   await router.isReady()
-  const wrapper = mount(ShotListView, { global: { plugins: [pinia, router], components: { ElButton, ElIcon } } })
+  const wrapper = mount(ShotListView, {
+    global: { plugins: [pinia, router], components: { ElButton, ElCard, ElDialog, ElDrawer, ElForm, ElFormItem, ElIcon, ElInput, ElPagination, ElRadioButton, ElRadioGroup, ElTable, ElTableColumn, ElTag } }
+  })
   await flushPromises()
   await flushPromises()
   return { wrapper, router }
@@ -141,24 +153,167 @@ describe('镜头管理真实列表页', () => {
   beforeEach(() => {
     getProjectPage.mockResolvedValue({ rows: [projectRow], total: 1, hasNext: false })
     getProjectDetail.mockResolvedValue({ data: { ...projectRow, projectTypeName: 'AI 影视短片', aspectRatio: '16:9', projectStatus: 'active', storageStatus: 'ready', myProjectRole: 'director' } })
+    getProjectMembers.mockResolvedValue({ rows: [{ userId: 7, nickName: '杨景锋', projectRole: 'creator', producerCode: 'YJF' }] })
     getEpisodePage.mockResolvedValue({ rows: [{ episodeId: 21, episodeCode: 'EP001', episodeName: '第一集' }], total: 1, hasNext: false })
     getScenePage.mockResolvedValue({ rows: [{ sceneId: 31, sceneCode: '001', sceneName: '动力舱' }], total: 1, hasNext: false })
-    listShotAssignees.mockResolvedValue({ rows: [{ userId: 7, nickName: '杨景锋', producerCode: 'YJF' }], total: 1, hasNext: false })
+    listShotAssignees.mockResolvedValue({ rows: [{ userId: 7, nickName: '杨景锋', projectRole: 'creator', producerCode: 'YJF' }], total: 1, hasNext: false })
     getShotPage.mockResolvedValue({ rows: [shotRow], total: 1, hasNext: false })
+    getShotDetail.mockResolvedValue({ data: shotDetail(8, 41, 'S001', '镜头缓慢推进动力舱') })
+    batchAssignShotTasks.mockResolvedValue({ data: { assignedShotIds: [41], assignedCount: 1 } })
+    batchDeleteShots.mockResolvedValue({ data: { deletedShotIds: [41], deletedCount: 1 } })
   })
 
   it('在项目范围内展示同一真实结果的三种视图与写入入口', async () => {
     const { wrapper } = await mountView()
+    const filterForm = wrapper.findAllComponents(ElForm).find(form => form.classes().includes('shot-filters'))
+    expect(filterForm.props('model')).toMatchObject({ keyword: '', episodeId: '', sceneId: '', shotStatus: '', assigneeUserId: '' })
+    expect(filterForm.findAllComponents(ElFormItem)).toHaveLength(6)
     expect(wrapper.text()).toContain('LCFR · 罗刹夫人')
     expect(wrapper.text()).toContain('EP001 / 001 / S001')
     expect(wrapper.text()).toContain('镜头缓慢推进动力舱')
+    expect(wrapper.text()).toContain('台词 / 对白')
+    expect(wrapper.text()).toContain('动力系统恢复了吗？')
+    expect(wrapper.text()).toContain('设备低频轰鸣声')
+    expect(wrapper.text()).toContain('冷蓝色调')
+    expect(wrapper.text()).toContain('保持画面压迫感')
     expect(wrapper.text()).toContain('导入 Excel')
     expect(wrapper.text()).toContain('新建镜头')
 
-    await wrapper.findAll('button').find(button => button.text().includes('卡片')).trigger('click')
+    const viewSwitch = wrapper.findComponent(ElRadioGroup)
+    viewSwitch.vm.$emit('update:modelValue', 'card')
+    await flushPromises()
     expect(wrapper.find('.shot-card').exists()).toBe(true)
-    await wrapper.findAll('button').find(button => button.text().includes('故事板')).trigger('click')
+    viewSwitch.vm.$emit('update:modelValue', 'storyboard')
+    await flushPromises()
     expect(wrapper.find('.story-frame').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('镜头下拉筛选 change 后立即查询，并在切换集时清空旧场次', async () => {
+    const { wrapper } = await mountView()
+    const filterForm = wrapper.findAllComponents(ElForm).find(form => form.classes().includes('shot-filters'))
+    const filterSelects = filterForm.findAllComponents({ name: 'ElSelect' })
+    getShotPage.mockClear()
+    getScenePage.mockClear()
+
+    await setElSelectValue(filterSelects[0], '21')
+    await flushPromises()
+    expect(getScenePage).toHaveBeenLastCalledWith(8, 21, expect.anything(), expect.anything())
+    expect(getShotPage).toHaveBeenLastCalledWith(8, expect.objectContaining({ episodeId: '21', sceneId: undefined, pageNum: 1 }), expect.anything())
+
+    await setElSelectValue(filterSelects[1], '31')
+    await flushPromises()
+    expect(getShotPage).toHaveBeenLastCalledWith(8, expect.objectContaining({ episodeId: '21', sceneId: '31', pageNum: 1 }), expect.anything())
+
+    await setElSelectValue(filterSelects[2], 'in_progress')
+    await flushPromises()
+    expect(getShotPage).toHaveBeenLastCalledWith(8, expect.objectContaining({ shotStatus: 'in_progress', pageNum: 1 }), expect.anything())
+
+    await setElSelectValue(filterSelects[3], '7')
+    await flushPromises()
+    expect(getShotPage).toHaveBeenLastCalledWith(8, expect.objectContaining({ assigneeUserId: '7', pageNum: 1 }), expect.anything())
+
+    await setElSelectValue(filterSelects[0], '')
+    await flushPromises()
+    expect(filterForm.props('model')).toMatchObject({ episodeId: '', sceneId: '' })
+    expect(getShotPage).toHaveBeenLastCalledWith(8, expect.objectContaining({ episodeId: undefined, sceneId: undefined, pageNum: 1 }), expect.anything())
+    wrapper.unmount()
+  })
+
+  it('通过 Element Plus Form 重置全部筛选并重新查询第一页', async () => {
+    const { wrapper } = await mountView()
+    const filterForm = wrapper.findAllComponents(ElForm).find(form => form.classes().includes('shot-filters'))
+    await filterForm.find('input[aria-label="搜索镜头"]').setValue('动力舱')
+    const filterSelects = filterForm.findAllComponents({ name: 'ElSelect' })
+    await setElSelectValue(filterSelects[0], '21')
+    await setElSelectValue(filterSelects[2], 'in_progress')
+    await setElSelectValue(filterSelects[3], '7')
+    await flushPromises()
+    getShotPage.mockClear()
+
+    await filterForm.findAllComponents(ElButton).find(button => button.text() === '重置').trigger('click')
+    await flushPromises()
+
+    expect(filterForm.props('model')).toMatchObject({ keyword: '', episodeId: '', sceneId: '', shotStatus: '', assigneeUserId: '', pageNum: 1 })
+    expect(getShotPage).toHaveBeenLastCalledWith(8, expect.objectContaining({
+      keyword: undefined,
+      episodeId: undefined,
+      sceneId: undefined,
+      shotStatus: undefined,
+      assigneeUserId: undefined,
+      pageNum: 1
+    }), expect.anything())
+    wrapper.unmount()
+  })
+
+  it('点击详情在当前列表右侧打开可销毁的镜头详情抽屉', async () => {
+    const { wrapper, router } = await mountView(['shotgrid:shot:list'])
+
+    await wrapper.findAll('button').find(button => button.text() === '详情').trigger('click')
+    await flushPromises()
+
+    expect(router.currentRoute.value.path).toBe('/shots')
+    expect(document.body.textContent).toContain('镜头详情 · S001')
+    expect(document.body.textContent).toContain('制作信息')
+    expect(getShotDetail).toHaveBeenCalledWith(8, 41, expect.objectContaining({ signal: expect.any(AbortSignal) }))
+    wrapper.unmount()
+  })
+
+  it('未开始镜头可勾选、编辑和批量删除，已开始镜头禁止删除', async () => {
+    const notStartedShot = { ...shotRow, status: 'not_started' }
+    getShotPage.mockResolvedValue({ rows: [notStartedShot], total: 1, hasNext: false })
+    getShotDetail.mockResolvedValue({ data: shotDetail(8, 41, 'S001', '镜头缓慢推进动力舱') })
+    const confirmSpy = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm')
+    const { wrapper } = await mountView([
+      'shotgrid:shot:list',
+      'shotgrid:shot:edit',
+      'shotgrid:shot:archive'
+    ])
+
+    const checkbox = wrapper.findAllComponents({ name: 'ElCheckbox' }).find(item => item.attributes('aria-label') === '选择 S001')
+    expect(checkbox.props('disabled')).toBe(false)
+    expect(wrapper.text()).toContain('编辑')
+    expect(wrapper.text()).toContain('删除')
+    checkbox.vm.$emit('change', true)
+    await flushPromises()
+    await wrapper.findAll('button').find(button => button.text().includes('批量删除')).trigger('click')
+    await flushPromises()
+    expect(batchDeleteShots).toHaveBeenCalledWith(8, [{ shotId: 41, lockVersion: 0 }])
+
+    getShotPage.mockResolvedValue({ rows: [{ ...shotRow, status: 'in_progress' }], total: 1, hasNext: false })
+    await wrapper.find('button[aria-label="刷新镜头"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.findAllComponents({ name: 'ElCheckbox' }).find(item => item.attributes('aria-label') === '选择 S001').props('disabled')).toBe(true)
+    confirmSpy.mockRestore()
+    wrapper.unmount()
+  })
+
+  it('可将当前页选中的镜头批量分配给项目制作人', async () => {
+    const confirmSpy = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm')
+    const { wrapper } = await mountView([
+      'shotgrid:shot:list',
+      'shotgrid:task:assign'
+    ])
+
+    wrapper.findAllComponents({ name: 'ElCheckbox' }).find(item => item.attributes('aria-label') === '选择 S001').vm.$emit('change', true)
+    await flushPromises()
+    const batchAssignButton = wrapper.findAll('button').find(button => button.text().includes('批量重新分配'))
+    expect(batchAssignButton.element.disabled).toBe(false)
+    expect(wrapper.find('[aria-label="批量分配制作人"]').exists()).toBe(false)
+    await batchAssignButton.trigger('click')
+    await flushPromises()
+    expect(document.body.textContent).toContain('其中包含已分配镜头')
+    wrapper.vm.batchAssigneeUserId = '7'
+    await wrapper.vm.$nextTick()
+    const confirmButton = [...document.body.querySelectorAll('button')]
+      .find(button => button.textContent.includes('确认重新分配'))
+    confirmButton.click()
+    await flushPromises()
+
+    expect(batchAssignShotTasks).toHaveBeenCalledWith(8, 7, [
+      { shotId: 41, taskLockVersion: 4 }
+    ])
+    confirmSpy.mockRestore()
     wrapper.unmount()
   })
 
@@ -372,7 +527,7 @@ describe('镜头详情跨项目请求隔离', () => {
   beforeEach(() => {
     getEpisodePage.mockResolvedValue({ rows: [{ episodeId: 21, episodeCode: 'EP001' }], total: 1, hasNext: false })
     getScenePage.mockResolvedValue({ rows: [{ sceneId: 31, sceneCode: '001' }], total: 1, hasNext: false })
-    listShotAssignees.mockResolvedValue({ rows: [{ userId: 7, nickName: '杨景锋', producerCode: 'YJF' }], total: 1, hasNext: false })
+    listShotAssignees.mockResolvedValue({ rows: [{ userId: 7, nickName: '杨景锋', projectRole: 'creator', producerCode: 'YJF' }], total: 1, hasNext: false })
   })
 
   it('快速切换项目和镜头时立即清理旧详情并丢弃过期响应', async () => {

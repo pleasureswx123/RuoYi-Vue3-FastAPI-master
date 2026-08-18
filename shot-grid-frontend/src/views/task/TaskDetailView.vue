@@ -5,6 +5,7 @@ import { ElMessage } from 'element-plus'
 import { ArrowLeft, Edit, Refresh, VideoPlay } from '@element-plus/icons-vue'
 
 import { assertPositiveId } from '@/api/shot-grid/projects'
+import { getTaskIssues } from '@/api/shot-grid/reviews'
 import { getTaskDetail, startTask } from '@/api/shot-grid/tasks'
 import VersionWorkspace from '@/components/version/VersionWorkspace.vue'
 import { useSessionStore } from '@/store/modules/session'
@@ -25,6 +26,7 @@ const route = useRoute()
 const router = useRouter()
 const sessionStore = useSessionStore()
 const task = ref(null)
+const openIssues = ref([])
 const loading = ref(false)
 const errorState = ref(null)
 const actionError = ref(null)
@@ -49,6 +51,9 @@ const hasPermission = permission => wildcard.value || sessionStore.permissions.i
 const allowedActions = computed(() => new Set(task.value?.allowedActions || []))
 const canEdit = computed(() => allowedActions.value.has('task.edit') && hasPermission('shotgrid:task:edit'))
 const canStart = computed(() => allowedActions.value.has('task.start') && hasPermission('shotgrid:task:start'))
+const assetTargetIncomplete = computed(() => (
+  task.value?.taskKind === 'asset_image' && !String(task.value?.target?.productionItem || '').trim()
+))
 const isStarting = computed(() => isCurrentRouteOperation(startingOperation.value))
 const targetRoute = computed(() => {
   if (!task.value?.project?.projectId || !task.value?.target) return null
@@ -96,6 +101,7 @@ async function loadDetail() {
   controller?.abort()
   closeEditDialog()
   task.value = null
+  openIssues.value = []
   errorState.value = null
   actionError.value = null
   const targetTaskId = taskId.value
@@ -127,9 +133,15 @@ async function loadDetail() {
     taskId.value === targetTaskId
   )
   try {
-    const response = await getTaskDetail(targetTaskId, { signal: requestController.signal })
+    const [response, issueResponse] = await Promise.all([
+      getTaskDetail(targetTaskId, { signal: requestController.signal }),
+      hasPermission('shotgrid:note:list')
+        ? getTaskIssues(targetTaskId, { status: 'open' }, { signal: requestController.signal })
+        : Promise.resolve({ data: [] })
+    ])
     if (!isCurrent()) return
     task.value = response.data
+    openIssues.value = issueResponse.data || []
   } catch (error) {
     if (error?.code !== 'ERR_CANCELED' && isCurrent()) {
       errorState.value = taskErrorState(error, '任务详情加载失败')
@@ -259,6 +271,13 @@ onBeforeUnmount(() => {
         @retry="loadDetail"
       />
 
+      <ProjectStatePanel
+        v-if="assetTargetIncomplete"
+        compact
+        title="资产任务资料不完整"
+        message="该任务尚未填写制作分项，因此不能开始或提交版本。请联系项目管理人员进入资产详情补齐制作分项；无需重新创建任务。"
+      />
+
       <section class="task-detail-grid">
         <article class="task-card task-card--wide">
           <header><div><p class="sg-eyebrow">BRIEF</p><h3>制作要求</h3></div><span class="priority-chip" :data-tone="taskPriorityMeta(task.priority).tone">{{ taskPriorityMeta(task.priority).label }}优先级</span></header>
@@ -301,6 +320,8 @@ onBeforeUnmount(() => {
           <VersionWorkspace
             :task-id="task.taskId"
             :task-kind="task.taskKind"
+            :task-status="task.taskStatus"
+            :open-issues="openIssues"
             :allowed-actions="task.allowedActions"
             :has-uncommitted-submission="task.hasUncommittedSubmission"
             :operation-generation="routeContext.operationGeneration"

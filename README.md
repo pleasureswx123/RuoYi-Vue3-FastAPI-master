@@ -200,6 +200,127 @@ RuoYi-Vue3-FastAPI是一套全部开源的快速开发平台，毫无保留给�
 
 ## 项目开发及发布相关
 
+### 当前项目本地启动（推荐）
+
+当前本地开发拓扑为：Docker Compose 只启动 PostgreSQL 和 Redis，后端与前端都在 Windows 宿主机运行。这样后端代码修改后可直接由 Uvicorn 热更新，也能直接访问 Windows UNC/SMB/NAS 路径。
+
+#### 1. 环境要求
+
+- Docker Desktop（需要启用 Docker Compose）；
+- Python `>=3.10`（建议团队统一使用 Python 3.11.x，并先执行 `python --version` 确认版本）；
+- FFmpeg（启用 Shot Grid 缩略图或代理媒体 Worker 时需要，并确保 `ffmpeg` 已加入 `PATH`）；
+- Node.js `^18.0.0 || ^20.0.0 || >=22.0.0`；
+- npm；
+- Windows PowerShell。
+
+本地后端需要安装 Python，启用媒体派生时还需要安装 FFmpeg。Python 依赖安装在项目虚拟环境中，不会污染系统 Python；日常修改代码不需要重复安装依赖。
+
+首次创建本地数据库时，确认 `ruoyi-fastapi-backend/.env.dev` 使用 Docker 映射到宿主机的端口。Compose 默认创建数据库 `ruoyi-fastapi`，默认开发账号为 `postgres/root`。这些默认值只允许用于本地开发，不得用于生产环境。
+
+```dotenv
+DB_TYPE = 'postgresql'
+DB_HOST = '127.0.0.1'
+DB_PORT = 15432
+DB_USERNAME = 'postgres'
+DB_PASSWORD = 'root'
+DB_DATABASE = 'ruoyi-fastapi'
+REDIS_HOST = '127.0.0.1'
+REDIS_PORT = 16379
+REDIS_DATABASE = 0
+```
+
+已有本地环境可以继续使用自己的数据库名和 Redis DB，但对应数据库必须已经存在。
+
+#### 2. 只用 Docker 启动 PostgreSQL 和 Redis
+
+在仓库根目录执行：
+
+```powershell
+docker compose -f docker-compose.dev.yml up -d postgres redis
+docker compose -f docker-compose.dev.yml ps
+```
+
+#### 3. 在宿主机启动后端
+
+首次启动时，在新的 PowerShell 窗口创建虚拟环境并安装 PostgreSQL 依赖：
+
+```powershell
+cd ruoyi-fastapi-backend
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements-pg.txt
+```
+
+如果 PowerShell 禁止执行激活脚本，也可以不激活虚拟环境，直接将后续命令中的 `python` 替换为 `.\.venv\Scripts\python.exe`。
+
+首次建库或拉取到新迁移后执行：
+
+```powershell
+python -m alembic upgrade head
+```
+
+启动后端开发服务器：
+
+```powershell
+python -m uvicorn server:create_app --factory --host 127.0.0.1 --port 9099 --reload
+```
+
+`--reload` 会监控后端源码并在文件变化后自动重启进程。新增或修改 Python 依赖时才需要重新执行 `python -m pip install -r requirements-pg.txt`。
+
+后端地址：
+
+```text
+http://127.0.0.1:9099
+http://127.0.0.1:9099/docs
+```
+
+启用 Shot Grid 媒体派生 Worker 前，确认 FFmpeg 可用：
+
+```powershell
+ffmpeg -version
+```
+
+如果 FFmpeg 未加入 `PATH`，可在 `.env.dev` 中通过 `SHOT_GRID_MEDIA_WORKER_FFMPEG_PATH` 配置可执行文件的绝对路径。
+
+#### 4. 启动 Shot Grid 前端
+
+另开一个 PowerShell 窗口：
+
+```powershell
+cd shot-grid-frontend
+npm.cmd ci
+npm.cmd run dev
+```
+
+浏览器访问：
+
+```text
+http://127.0.0.1:5174
+```
+
+开发服务器会把 `/dev-api` 转发到 `http://127.0.0.1:9099`。
+
+如需启动 RuoYi 系统管理前端，另开窗口执行：
+
+```powershell
+cd ruoyi-fastapi-frontend
+npm.cmd install
+npm.cmd run dev
+```
+
+#### 5. 停止本地服务
+
+先在后端和前端窗口按 `Ctrl+C`，再在仓库根目录停止基础设施：
+
+```powershell
+docker compose -f docker-compose.dev.yml down
+```
+
+不要附加 `-v`，否则会删除本地 PostgreSQL 和 Redis 命名卷。
+
+如需验证完整 Linux 容器拓扑，可按 [后端 Docker 本地开发指南](./ruoyi-fastapi-backend/docs/docker_dev_guide.md) 单独执行；它属于集成验证方式，不是日常本地开发的默认启动方式。Linux 容器不能直接执行 Windows UNC/SMB 目录操作，因此真实 NAS 开发与验收应使用本节的宿主机后端。
+
 ### 传输层加解密配置说明
 
 后端密钥配置与轮换说明：[ruoyi-fastapi-backend/docs/transport_crypto_config.md](./ruoyi-fastapi-backend/docs/transport_crypto_config.md)

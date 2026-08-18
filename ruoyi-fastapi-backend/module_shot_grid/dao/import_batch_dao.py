@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any, Literal
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, null, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from module_shot_grid.entity.do.import_do import ShotGridImportBatch
@@ -121,6 +121,9 @@ class ShotGridImportBatchDao:
     ) -> None:
         now = datetime.now()
         batch.batch_status = 'committed'
+        # 预检后允许用户修正“制作人”这类可处理错误。正式提交重新校验通过后，
+        # 已提交行可能多于预检时的直接有效行，需要同步最终有效数以保持批次计数一致。
+        batch.valid_rows = max(batch.valid_rows, committed_rows)
         batch.committed_rows = committed_rows
         batch.selection_hash = selection_hash
         batch.result_summary = result_summary
@@ -151,7 +154,9 @@ class ShotGridImportBatchDao:
                 committed_by=committed_by,
                 idempotency_key=idempotency_key,
                 selection_hash=selection_hash,
-                result_summary=None,
+                # JSONB 列直接赋 Python None 会写成 JSON null，不是 SQL NULL，
+                # 会违反 ck_sg_import_batch_result_lifecycle。
+                result_summary=null(),
                 committed_time=None,
                 last_error_key=error_key[:100],
                 last_error_message=error_message[:500],

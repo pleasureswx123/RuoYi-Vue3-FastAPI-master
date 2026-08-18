@@ -8,8 +8,10 @@ EXPECTED_ROUTES = {
     ('GET', '/shot-grid/projects/{projectId}/tasks'): 'shotgrid:task:list',
     ('GET', '/shot-grid/tasks/{taskId}'): 'shotgrid:task:query',
     ('PUT', '/shot-grid/tasks/{taskId}'): 'shotgrid:task:edit',
+    ('POST', '/shot-grid/projects/{projectId}/shots/batch-assign'): 'shotgrid:task:assign',
     ('POST', '/shot-grid/projects/{projectId}/shots/{shotId}/assign'): 'shotgrid:task:assign',
     ('POST', '/shot-grid/projects/{projectId}/asset-items/{assetItemId}/assign'): 'shotgrid:task:assign',
+    ('POST', '/shot-grid/projects/{projectId}/asset-items/batch-assign'): 'shotgrid:task:assign',
     ('POST', '/shot-grid/tasks/{taskId}/start'): 'shotgrid:task:start',
 }
 

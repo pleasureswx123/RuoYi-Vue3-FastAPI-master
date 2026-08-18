@@ -113,6 +113,8 @@ def _latest_read_projection() -> dict[str, Any]:
         'latest_business_file_name': 'WGZR_EP001_001_S001_YJF_V004_1786094626499.mp4',
         'thumbnail_file_id': '5ed39e04-2f29-45ab-a58c-4f8168f5131a',
         'thumbnail_business_file_name': 'WGZR_EP001_001_S001_YJF_V004_thumbnail.jpg',
+        'proxy_media_file_id': '5ed39e04-2f29-45ab-a58c-4f8168f5131b',
+        'proxy_media_business_file_name': 'WGZR_EP001_001_S001_YJF_V004_proxy.mp4',
         'latest_feedback_note_id': LATEST_FEEDBACK_NOTE_ID,
         'latest_feedback_content': '人物起身动作需要更快',
         'latest_feedback_status': 'open',
@@ -134,6 +136,8 @@ def test_read_projection_maps_latest_version_thumbnail_feedback_and_historical_a
     assert item.latest_version.business_file_name.endswith('.mp4')
     assert item.thumbnail is not None
     assert item.thumbnail.url == ('/shot-grid/versions/9004/files/5ed39e04-2f29-45ab-a58c-4f8168f5131a/download')
+    assert item.proxy_media is not None
+    assert item.proxy_media.url == ('/shot-grid/versions/9004/files/5ed39e04-2f29-45ab-a58c-4f8168f5131b/download')
     assert item.latest_feedback is not None
     assert item.latest_feedback.note_id == LATEST_FEEDBACK_NOTE_ID
     assert item.latest_feedback.note_status == 'open'
@@ -171,6 +175,19 @@ def test_completed_or_archived_project_hides_all_shot_actions(project_status: st
     actions = ShotGridShotCrudService._allowed_actions(row, _current_user(), _access())
 
     assert actions == []
+
+
+def test_delete_action_is_only_exposed_before_task_starts() -> None:
+    row = _shot_projection_row()
+    row['task_status'] = 'not_started'
+    assert 'shot.archive' in ShotGridShotCrudService._allowed_actions(row, _current_user(), _access())
+
+    row['task_status'] = 'in_progress'
+    assert 'shot.archive' not in ShotGridShotCrudService._allowed_actions(row, _current_user(), _access())
+
+    with pytest.raises(ShotGridDomainException) as exc_info:
+        ShotGridShotCrudService._require_deletable_task(SimpleNamespace(task_status='completed'))
+    assert exc_info.value.error_key == 'SG_SHOT_TASK_ALREADY_STARTED'
 
 
 @pytest.mark.asyncio

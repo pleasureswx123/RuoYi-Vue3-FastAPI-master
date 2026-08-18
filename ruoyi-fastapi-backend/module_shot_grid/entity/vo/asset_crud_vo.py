@@ -135,6 +135,43 @@ class ShotGridAssetArchiveModel(ShotGridLockVersionModel):
         return value.strip()
 
 
+class ShotGridAssetBatchDeleteItemModel(ShotGridApiModel):
+    """批量删除中的资产及其锁版本。"""
+
+    model_config = ConfigDict(extra='forbid')
+
+    asset_id: int = Field(gt=0, le=SQL_BIGINT_MAX)
+    lock_version: int = Field(ge=0)
+
+
+class ShotGridAssetBatchDeleteModel(ShotGridApiModel):
+    """批量删除未开始制作的资产。"""
+
+    model_config = ConfigDict(extra='forbid')
+
+    items: list[ShotGridAssetBatchDeleteItemModel] = Field(min_length=1, max_length=200)
+    reason: str = Field(default='资产列表批量删除', min_length=1, max_length=500)
+
+    @field_validator('reason', mode='before')
+    @classmethod
+    def normalize_reason(cls, value: object) -> object:
+        return ShotGridAssetArchiveModel.normalize_reason(value)
+
+    @model_validator(mode='after')
+    def validate_unique_assets(self) -> 'ShotGridAssetBatchDeleteModel':
+        asset_ids = [item.asset_id for item in self.items]
+        if len(asset_ids) != len(set(asset_ids)):
+            raise ValueError('批量删除不能包含重复资产')
+        return self
+
+
+class ShotGridAssetBatchDeleteResultModel(ShotGridApiModel):
+    """资产批量删除结果。"""
+
+    deleted_asset_ids: list[int]
+    deleted_count: int = Field(ge=1)
+
+
 class ShotGridAssetItemCreateModel(ShotGridAssetItemWriteModel):
     """为已有资产新增制作分项。"""
 

@@ -80,7 +80,7 @@ export function resolveAssetThumbnail(asset) {
 export function memberLabel(member) {
   if (!member) return '未分配'
   const name = member.nickName || member.userName || `用户 ${member.userId}`
-  return member.producerCode ? `${name}（${member.producerCode}）` : name
+  return name
 }
 
 export function assetAssigneeSummary(assigneeUserIds, members = []) {

@@ -22,7 +22,7 @@ describe('任务展示契约', () => {
   it('截止日期与制作人摘要不依赖中文状态进行流转判断', () => {
     expect(taskDueState('2026-08-10', new Date('2026-08-11T12:00:00')).overdue).toBe(true)
     expect(taskDueState('2026-08-12', new Date('2026-08-11T12:00:00')).overdue).toBe(false)
-    expect(taskAssigneeLabel({ userId: 7, nickName: '杨景锋', producerCode: 'YJF' })).toBe('杨景锋（YJF）')
+    expect(taskAssigneeLabel({ userId: 7, nickName: 'YJF', producerCode: 'OLD' })).toBe('YJF')
   })
 
   it('区分 403、404、409 和 5xx，不把服务失败伪装为空数据', () => {

@@ -9,6 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from module_admin.entity.vo.user_vo import CurrentUserModel, UserInfoModel
 from module_shot_grid.entity.vo.access_vo import ShotGridProjectAccessModel
 from module_shot_grid.entity.vo.task_vo import (
+    ShotGridShotTaskBatchAssignModel,
     ShotGridTaskAssignModel,
     ShotGridTaskListQueryModel,
     ShotGridTaskStartModel,
@@ -360,6 +361,84 @@ async def test_assign_shot_rechecks_director_after_project_lock_and_rolls_back_w
     target_lock.assert_not_awaited()
     db.commit.assert_not_awaited()
     db.rollback.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_batch_assign_shots_assigns_all_selected_shots_in_one_transaction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first_shot_id = SHOT_ID
+    second_shot_id = SHOT_ID + 1
+    monkeypatch.setattr(
+        'module_shot_grid.service.task_service.ShotGridTaskService._lock_mutable_project',
+        AsyncMock(),
+    )
+    _patch_locked_access(monkeypatch, _access())
+    target_lock = AsyncMock(
+        side_effect=[
+            (
+                SimpleNamespace(storage_dir_name='S001'),
+                SimpleNamespace(episode_no=1),
+                SimpleNamespace(scene_no=1),
+            ),
+            (
+                SimpleNamespace(storage_dir_name='S002'),
+                SimpleNamespace(episode_no=1),
+                SimpleNamespace(scene_no=1),
+            ),
+        ]
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.task_service.ShotGridTaskDao.lock_shot_target',
+        target_lock,
+    )
+    existing_task = _task(assignee_user_id=9, lock_version=INITIAL_TASK_LOCK_VERSION)
+    task_lock = AsyncMock(side_effect=[None, existing_task])
+    monkeypatch.setattr(
+        'module_shot_grid.service.task_service.ShotGridTaskDao.get_task_for_shot_update',
+        task_lock,
+    )
+    assign_task = AsyncMock(
+        side_effect=[
+            (_task(assignee_user_id=ASSIGNEE_USER_ID, lock_version=0), None),
+            (_task(assignee_user_id=ASSIGNEE_USER_ID, lock_version=UPDATED_TASK_LOCK_VERSION), 9),
+        ]
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.task_service.ShotGridTaskService._assign_task',
+        assign_task,
+    )
+    audit = AsyncMock()
+    monkeypatch.setattr(
+        'module_shot_grid.service.task_service.ShotGridTaskService._audit',
+        audit,
+    )
+    db = AsyncMock()
+
+    result = await ShotGridTaskService.batch_assign_shots(
+        db,
+        PROJECT_ID,
+        ShotGridShotTaskBatchAssignModel(
+            assigneeUserId=ASSIGNEE_USER_ID,
+            items=[
+                {'shotId': second_shot_id, 'taskLockVersion': INITIAL_TASK_LOCK_VERSION},
+                {'shotId': first_shot_id, 'taskLockVersion': None},
+            ],
+        ),
+        _current_user(),
+        _access(),
+    )
+
+    expected_count = 2
+    assert result.assigned_shot_ids == [first_shot_id, second_shot_id]
+    assert result.assigned_count == expected_count
+    assert result.created_task_count == 1
+    assert result.reassigned_task_count == 1
+    assert [call.args[2] for call in target_lock.await_args_list] == [first_shot_id, second_shot_id]
+    assert assign_task.await_count == expected_count
+    audit.assert_awaited_once()
+    db.commit.assert_awaited_once()
+    db.rollback.assert_not_awaited()
 
 
 @pytest.mark.asyncio

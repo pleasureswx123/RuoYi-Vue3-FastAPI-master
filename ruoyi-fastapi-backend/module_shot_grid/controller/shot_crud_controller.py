@@ -14,6 +14,8 @@ from module_shot_grid.entity.vo.access_vo import ShotGridProjectAccessModel
 from module_shot_grid.entity.vo.shot_crud_vo import (
     ShotGridShotArchiveModel,
     ShotGridShotArchiveResultModel,
+    ShotGridShotBatchDeleteModel,
+    ShotGridShotBatchDeleteResultModel,
     ShotGridShotCreateModel,
     ShotGridShotDetailModel,
     ShotGridShotListItemModel,
@@ -66,6 +68,30 @@ async def create_shot_grid_shot(
     access: Annotated[ShotGridProjectAccessModel, ProjectRoleDependency('director')],
 ) -> Response:
     result = await ShotGridShotCrudService.create_shot(
+        query_db,
+        project_id,
+        command,
+        current_user,
+        access,
+    )
+    return ResponseUtil.success(data=result)
+
+
+@shot_crud_controller.post(
+    '/batch-delete',
+    summary='批量删除未开始制作的镜头',
+    response_model=DataResponseModel[ShotGridShotBatchDeleteResultModel],
+    dependencies=[UserInterfaceAuthDependency('shotgrid:shot:archive')],
+)
+async def batch_delete_shot_grid_shots(
+    request: Request,
+    project_id: Annotated[int, Path(alias='projectId', gt=0, le=SQL_BIGINT_MAX)],
+    command: ShotGridShotBatchDeleteModel,
+    query_db: Annotated[AsyncSession, DBSessionDependency()],
+    current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
+    access: Annotated[ShotGridProjectAccessModel, ProjectRoleDependency('director')],
+) -> Response:
+    result = await ShotGridShotCrudService.batch_delete_shots(
         query_db,
         project_id,
         command,

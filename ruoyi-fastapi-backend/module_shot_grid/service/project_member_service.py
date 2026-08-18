@@ -10,6 +10,7 @@ from module_shot_grid.dao.project_dao import ShotGridProjectDao
 from module_shot_grid.dao.project_member_dao import ShotGridProjectMemberDao
 from module_shot_grid.entity.do.project_do import ShotGridProject, ShotGridProjectMember
 from module_shot_grid.entity.vo.project_member_vo import (
+    ProjectRole,
     ShotGridProjectMemberAddModel,
     ShotGridProjectMemberModel,
     ShotGridProjectMemberUpdateModel,
@@ -23,8 +24,13 @@ class ShotGridProjectMemberService:
     """项目成员查询和同事务管理服务。"""
 
     @classmethod
-    async def get_members(cls, db: AsyncSession, project_id: int) -> list[ShotGridProjectMemberModel]:
-        rows = await ShotGridProjectMemberDao.list_members(db, project_id)
+    async def get_members(
+        cls,
+        db: AsyncSession,
+        project_id: int,
+        project_role: ProjectRole | None = None,
+    ) -> list[ShotGridProjectMemberModel]:
+        rows = await ShotGridProjectMemberDao.list_members(db, project_id, project_role)
         return [ShotGridProjectMemberModel.model_validate(row) for row in rows]
 
     @classmethod

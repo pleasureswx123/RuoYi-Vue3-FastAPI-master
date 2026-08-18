@@ -52,7 +52,7 @@ describe('资产展示模型', () => {
     expect(resolveAssetThumbnail({ thumbnail, items: [] })).toBe(thumbnail)
     expect(resolveAssetThumbnail({ items: [{ thumbnail }] })).toBeNull()
     expect(resolveAssetThumbnail({ items: [{ latestVersion: { versionId: 1 } }] })).toBeNull()
-    expect(memberLabel({ userId: 7, nickName: '杨景锋', producerCode: 'YJF' })).toBe('杨景锋（YJF）')
+    expect(memberLabel({ userId: 7, nickName: 'YJF', producerCode: 'OLD' })).toBe('YJF')
     expect(memberLabel({ userId: 8, userName: 'producer' })).toBe('producer')
   })
 

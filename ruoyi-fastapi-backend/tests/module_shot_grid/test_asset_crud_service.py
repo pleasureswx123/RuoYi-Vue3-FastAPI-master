@@ -448,7 +448,7 @@ def test_missing_directory_operation_is_contract_error() -> None:
 
 
 @pytest.mark.asyncio
-async def test_asset_archive_rejects_active_items_and_rolls_back(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_asset_archive_rejects_started_item_task_and_rolls_back(monkeypatch: pytest.MonkeyPatch) -> None:
     asset = SimpleNamespace(
         asset_id=ASSET_ID,
         project_id=PROJECT_ID,
@@ -456,28 +456,24 @@ async def test_asset_archive_rejects_active_items_and_rolls_back(monkeypatch: py
         lock_version=0,
     )
     monkeypatch.setattr(
-        'module_shot_grid.service.asset_crud_service.ShotGridProjectDao.get_project_by_id',
-        AsyncMock(return_value=SimpleNamespace(project_status='active')),
+        'module_shot_grid.service.asset_crud_service.ShotGridAssetCrudService._lock_writable_project',
+        AsyncMock(),
     )
     monkeypatch.setattr(
-        'module_shot_grid.service.asset_crud_service.ShotGridAssetCrudDao.get_project_storage_status',
-        AsyncMock(return_value='ready'),
-    )
-    monkeypatch.setattr(
-        'module_shot_grid.service.asset_crud_service.ShotGridProjectAccessService.resolve_access',
-        AsyncMock(return_value=_access()),
-    )
-    monkeypatch.setattr(
-        'module_shot_grid.service.asset_crud_service.ShotGridAssetCrudDao.get_asset',
+        'module_shot_grid.service.asset_crud_service.ShotGridAssetCrudService._lock_active_asset',
         AsyncMock(return_value=asset),
     )
     monkeypatch.setattr(
-        'module_shot_grid.service.asset_crud_service.ShotGridAssetCrudDao.has_active_tasks_for_asset',
-        AsyncMock(return_value=False),
+        'module_shot_grid.service.asset_crud_service.ShotGridAssetCrudDao.get_usage_shot_count',
+        AsyncMock(return_value=0),
     )
     monkeypatch.setattr(
-        'module_shot_grid.service.asset_crud_service.ShotGridAssetCrudDao.has_active_items',
-        AsyncMock(return_value=True),
+        'module_shot_grid.service.asset_crud_service.ShotGridAssetCrudDao.get_active_items_for_update',
+        AsyncMock(return_value=[SimpleNamespace(asset_item_id=ASSET_ITEM_ID)]),
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.asset_crud_service.ShotGridAssetCrudDao.get_task_for_item',
+        AsyncMock(return_value=SimpleNamespace(task_status='in_progress')),
     )
     db = AsyncMock()
 
@@ -491,7 +487,7 @@ async def test_asset_archive_rejects_active_items_and_rolls_back(monkeypatch: py
             _access(),
         )
 
-    assert exc_info.value.error_key == 'SG_INVALID_STATE_TRANSITION'
+    assert exc_info.value.error_key == 'SG_ASSET_TASK_ALREADY_STARTED'
     db.commit.assert_not_awaited()
     db.rollback.assert_awaited_once()
 
@@ -601,8 +597,8 @@ def test_asset_and_item_allowed_actions_are_server_side_state_mirrors() -> None:
         project_status='active',
         storage_status='ready',
         lifecycle_status='active',
-        has_active_items=False,
-        has_active_tasks=False,
+        has_archive_blockers=False,
+        can_assign_items=True,
     )
     item_actions = ShotGridAssetCrudService._item_allowed_actions(
         _current_user(),
@@ -617,7 +613,7 @@ def test_asset_and_item_allowed_actions_are_server_side_state_mirrors() -> None:
         has_uncommitted_submission=False,
     )
 
-    assert asset_actions == ['asset.edit', 'asset.archive', 'assetItem.add']
+    assert asset_actions == ['asset.edit', 'asset.archive', 'assetItem.add', 'task.assign']
     assert item_actions == ['assetItem.edit', 'assetItem.archive', 'task.assign']
 
     assert (
@@ -628,8 +624,8 @@ def test_asset_and_item_allowed_actions_are_server_side_state_mirrors() -> None:
             project_status='completed',
             storage_status='ready',
             lifecycle_status='active',
-            has_active_items=False,
-            has_active_tasks=False,
+            has_archive_blockers=False,
+            can_assign_items=False,
         )
         == []
     )

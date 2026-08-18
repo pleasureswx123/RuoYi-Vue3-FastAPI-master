@@ -79,9 +79,9 @@ export function transitionManualReviewList(reviewListId, action, data, options =
   })
 }
 
-export function getVersionNotes(versionId, params = {}, options = {}) {
+export function getTaskIssues(taskId, params = {}, options = {}) {
   return request({
-    url: `/shot-grid/versions/${assertPositiveId(versionId, '版本')}/notes`,
+    url: `/shot-grid/tasks/${assertPositiveId(taskId, '任务')}/issues`,
     method: 'get',
     params,
     signal: options.signal,
@@ -89,42 +89,20 @@ export function getVersionNotes(versionId, params = {}, options = {}) {
   })
 }
 
-export function addVersionNote(versionId, data, options = {}) {
+export function getVersionReviewContext(versionId, options = {}) {
   return request({
-    url: `/shot-grid/versions/${assertPositiveId(versionId, '版本')}/notes`,
-    method: 'post',
-    data,
-    headers: { repeatSubmit: false },
-    signal: options.signal,
-    silentError: true
-  })
-}
-
-export function getNoteReplies(noteId, params = {}, options = {}) {
-  return request({
-    url: `/shot-grid/notes/${assertPositiveId(noteId, '审核意见')}/replies`,
+    url: `/shot-grid/versions/${assertPositiveId(versionId, '版本')}/review-context`,
     method: 'get',
-    params,
     signal: options.signal,
     silentError: true
   })
 }
 
-export function addNoteReply(noteId, data, options = {}) {
+export function addVersionIssue(versionId, data, options = {}) {
   return request({
-    url: `/shot-grid/notes/${assertPositiveId(noteId, '审核意见')}/reply`,
+    url: `/shot-grid/versions/${assertPositiveId(versionId, '版本')}/issues`,
     method: 'post',
     data,
-    headers: { repeatSubmit: false },
-    signal: options.signal,
-    silentError: true
-  })
-}
-
-export function resolveNote(noteId, options = {}) {
-  return request({
-    url: `/shot-grid/notes/${assertPositiveId(noteId, '审核意见')}/resolve`,
-    method: 'post',
     headers: { repeatSubmit: false },
     signal: options.signal,
     silentError: true

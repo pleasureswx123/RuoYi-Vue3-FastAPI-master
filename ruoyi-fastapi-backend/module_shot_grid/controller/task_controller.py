@@ -12,7 +12,11 @@ from module_admin.entity.vo.user_vo import CurrentUserModel
 from module_shot_grid.dependencies.project_access import ProjectAccessDependency, ProjectRoleDependency
 from module_shot_grid.entity.vo.access_vo import ShotGridProjectAccessModel
 from module_shot_grid.entity.vo.task_vo import (
+    ShotGridAssetItemTaskBatchAssignModel,
+    ShotGridAssetItemTaskBatchAssignResultModel,
     ShotGridMineTaskListQueryModel,
+    ShotGridShotTaskBatchAssignModel,
+    ShotGridShotTaskBatchAssignResultModel,
     ShotGridTaskAssignModel,
     ShotGridTaskDetailModel,
     ShotGridTaskListItemModel,
@@ -108,6 +112,30 @@ async def update_shot_grid_task(
 
 
 @task_controller.post(
+    '/projects/{projectId}/shots/batch-assign',
+    summary='批量首次分配或改派镜头任务',
+    response_model=DataResponseModel[ShotGridShotTaskBatchAssignResultModel],
+    dependencies=[UserInterfaceAuthDependency('shotgrid:task:assign')],
+)
+async def batch_assign_shot_grid_shot_tasks(
+    request: Request,
+    project_id: Annotated[int, Path(alias='projectId', gt=0, le=SQL_BIGINT_MAX)],
+    command: ShotGridShotTaskBatchAssignModel,
+    query_db: Annotated[AsyncSession, DBSessionDependency()],
+    current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
+    access: Annotated[ShotGridProjectAccessModel, ProjectRoleDependency('director')],
+) -> Response:
+    result = await ShotGridTaskService.batch_assign_shots(
+        query_db,
+        project_id,
+        command,
+        current_user,
+        access,
+    )
+    return ResponseUtil.success(data=result)
+
+
+@task_controller.post(
     '/projects/{projectId}/shots/{shotId}/assign',
     summary='首次分配或改派镜头任务',
     response_model=DataResponseModel[ShotGridTaskDetailModel],
@@ -126,6 +154,30 @@ async def assign_shot_grid_shot_task(
         query_db,
         project_id,
         shot_id,
+        command,
+        current_user,
+        access,
+    )
+    return ResponseUtil.success(data=result)
+
+
+@task_controller.post(
+    '/projects/{projectId}/asset-items/batch-assign',
+    summary='批量首次分配或改派资产制作分项任务',
+    response_model=DataResponseModel[ShotGridAssetItemTaskBatchAssignResultModel],
+    dependencies=[UserInterfaceAuthDependency('shotgrid:task:assign')],
+)
+async def batch_assign_shot_grid_asset_item_tasks(
+    request: Request,
+    project_id: Annotated[int, Path(alias='projectId', gt=0, le=SQL_BIGINT_MAX)],
+    command: ShotGridAssetItemTaskBatchAssignModel,
+    query_db: Annotated[AsyncSession, DBSessionDependency()],
+    current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
+    access: Annotated[ShotGridProjectAccessModel, ProjectRoleDependency('director')],
+) -> Response:
+    result = await ShotGridTaskService.batch_assign_asset_items(
+        query_db,
+        project_id,
         command,
         current_user,
         access,

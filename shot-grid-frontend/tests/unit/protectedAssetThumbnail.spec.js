@@ -1,4 +1,4 @@
-import { ElIcon } from 'element-plus'
+import { ElIcon, ElImage } from 'element-plus'
 import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -20,6 +20,12 @@ describe('资产受保护缩略图', () => {
     const wrapper = mount(ProtectedAssetThumbnail, { props: { thumbnail: first }, global: { components: { ElIcon } } })
     await flushPromises()
     expect(wrapper.find('img').attributes('src')).toBe('blob:asset-thumbnail')
+    expect(wrapper.findComponent(ElImage).props()).toMatchObject({
+      fit: 'contain',
+      previewSrcList: ['blob:asset-thumbnail'],
+      previewTeleported: true,
+      hideOnClickModal: true
+    })
     expect(downloadAssetThumbnail).toHaveBeenCalledWith(first.url, expect.objectContaining({ signal: expect.any(AbortSignal) }))
 
     await wrapper.setProps({ thumbnail: second })

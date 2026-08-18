@@ -67,7 +67,7 @@ export function taskDueState(value, now = new Date()) {
 export function taskAssigneeLabel(assignee) {
   if (!assignee) return '未分配'
   const name = assignee.nickName || `用户 ${assignee.userId || '—'}`
-  return assignee.producerCode ? `${name}（${assignee.producerCode}）` : name
+  return name
 }
 
 export function taskErrorState(error, fallbackTitle = '任务加载失败') {

@@ -2,7 +2,8 @@
 -- 0、Shot Grid 业务表逆序清理（必须先于 sys_user、sys_file_info 等平台表）
 -- ----------------------------
 drop table if exists sg_review_list_version;
-drop table if exists sg_note_reply;
+drop table if exists sg_issue_verification;
+drop table if exists sg_version_issue_response;
 drop table if exists sg_media_derivation;
 drop table if exists sg_version_file;
 drop table if exists sg_review_list;
@@ -2274,6 +2275,7 @@ CREATE TABLE sg_version_submission (
 	source_file_size BIGINT NOT NULL,
 	changelog TEXT NOT NULL,
 	ai_params JSONB,
+	open_issue_snapshot_hash CHAR(64) NOT NULL,
 	submission_status VARCHAR(20) DEFAULT 'pending' NOT NULL,
 	submitted_by BIGINT NOT NULL,
 	idempotency_key VARCHAR(100) NOT NULL,
@@ -2297,6 +2299,7 @@ CREATE TABLE sg_version_submission (
 	CONSTRAINT ck_sg_submission_distinct_paths CHECK (temporary_relative_path <> target_relative_path),
 	CONSTRAINT ck_sg_submission_file_size CHECK (source_file_size >= 0),
 	CONSTRAINT ck_sg_submission_changelog CHECK (btrim(changelog) <> ''),
+	CONSTRAINT ck_sg_submission_issue_snapshot_hash CHECK (open_issue_snapshot_hash ~ '^[0-9a-f]{64}$'),
 	CONSTRAINT ck_sg_submission_status CHECK (submission_status in ('pending', 'publishing', 'published', 'committing', 'committed', 'failed')),
 	CONSTRAINT ck_sg_submission_idempotency CHECK (btrim(idempotency_key) <> ''),
 	CONSTRAINT ck_sg_submission_attempt_count CHECK (attempt_count >= 0),
@@ -2323,6 +2326,7 @@ COMMENT ON COLUMN sg_version_submission.source_sha256 IS '源文件SHA-256摘要
 COMMENT ON COLUMN sg_version_submission.source_file_size IS '源文件大小';
 COMMENT ON COLUMN sg_version_submission.changelog IS '本轮修改说明';
 COMMENT ON COLUMN sg_version_submission.ai_params IS 'AI生成参数快照';
+COMMENT ON COLUMN sg_version_submission.open_issue_snapshot_hash IS '提交时未关闭问题集合SHA-256';
 COMMENT ON COLUMN sg_version_submission.submission_status IS '提交编排状态';
 COMMENT ON COLUMN sg_version_submission.submitted_by IS '提交用户ID';
 COMMENT ON COLUMN sg_version_submission.idempotency_key IS '客户端幂等键';
@@ -2382,19 +2386,19 @@ CREATE TABLE sg_note (
 	project_id BIGINT NOT NULL,
 	version_id BIGINT NOT NULL,
 	reviewer_user_id BIGINT NOT NULL,
-	content TEXT NOT NULL,
+	content TEXT,
 	media_time_ms BIGINT,
 	annotations JSONB,
-	is_mandatory CHAR(1) DEFAULT '0' NOT NULL,
 	note_status VARCHAR(20) DEFAULT 'open' NOT NULL,
+	resolved_in_version_id BIGINT,
 	create_time TIMESTAMP(0) WITHOUT TIME ZONE NOT NULL,
 	update_time TIMESTAMP(0) WITHOUT TIME ZONE NOT NULL,
 	PRIMARY KEY (note_id),
 	CONSTRAINT fk_sg_note_version_project FOREIGN KEY(version_id, project_id) REFERENCES sg_version (version_id, project_id) ON DELETE RESTRICT,
+	CONSTRAINT fk_sg_note_resolved_version_project FOREIGN KEY(resolved_in_version_id, project_id) REFERENCES sg_version (version_id, project_id) ON DELETE RESTRICT,
 	CONSTRAINT uk_sg_note_id_project UNIQUE (note_id, project_id),
-	CONSTRAINT ck_sg_note_content CHECK (btrim(content) <> ''),
+	CONSTRAINT ck_sg_note_content_or_annotations CHECK (btrim(coalesce(content, '')) <> '' or (annotations is not null and jsonb_typeof(annotations -> 'items') = 'array' and jsonb_array_length(annotations -> 'items') > 0)),
 	CONSTRAINT ck_sg_note_media_time CHECK (media_time_ms is null or media_time_ms >= 0),
-	CONSTRAINT ck_sg_note_mandatory CHECK (is_mandatory in ('0', '1')),
 	CONSTRAINT ck_sg_note_status CHECK (note_status in ('open', 'resolved')),
 	FOREIGN KEY(reviewer_user_id) REFERENCES sys_user (user_id) ON DELETE RESTRICT
 );
@@ -2404,13 +2408,52 @@ COMMENT ON COLUMN sg_note.note_id IS '审核意见ID';
 COMMENT ON COLUMN sg_note.project_id IS '项目ID';
 COMMENT ON COLUMN sg_note.version_id IS '版本ID';
 COMMENT ON COLUMN sg_note.reviewer_user_id IS '审核用户ID';
-COMMENT ON COLUMN sg_note.content IS '审核意见正文';
+COMMENT ON COLUMN sg_note.content IS '审核问题正文；与画面标注至少存在一项';
 COMMENT ON COLUMN sg_note.media_time_ms IS '视频时间点（毫秒）';
 COMMENT ON COLUMN sg_note.annotations IS '结构化批注数组';
-COMMENT ON COLUMN sg_note.is_mandatory IS '是否必须修改';
 COMMENT ON COLUMN sg_note.note_status IS '处理状态';
+COMMENT ON COLUMN sg_note.resolved_in_version_id IS '实际解决该问题的版本ID';
 COMMENT ON COLUMN sg_note.create_time IS '创建时间';
 COMMENT ON COLUMN sg_note.update_time IS '更新时间';
+
+-- sg_version_issue_response
+CREATE TABLE sg_version_issue_response (
+	response_id BIGSERIAL PRIMARY KEY,
+	project_id BIGINT NOT NULL,
+	submission_id BIGINT NOT NULL,
+	note_id BIGINT NOT NULL,
+	response_text TEXT NOT NULL,
+	responded_by BIGINT NOT NULL,
+	create_time TIMESTAMP(0) WITHOUT TIME ZONE NOT NULL,
+	CONSTRAINT fk_sg_issue_response_submission FOREIGN KEY(submission_id) REFERENCES sg_version_submission (submission_id) ON DELETE RESTRICT,
+	CONSTRAINT fk_sg_issue_response_note_project FOREIGN KEY(note_id, project_id) REFERENCES sg_note (note_id, project_id) ON DELETE RESTRICT,
+	CONSTRAINT uk_sg_issue_response_submission_note UNIQUE (submission_id, note_id),
+	CONSTRAINT ck_sg_issue_response_text CHECK (btrim(response_text) <> ''),
+	FOREIGN KEY(responded_by) REFERENCES sys_user (user_id) ON DELETE RESTRICT
+);
+CREATE INDEX idx_sg_issue_response_note_time ON sg_version_issue_response (note_id, create_time, response_id);
+COMMENT ON TABLE sg_version_issue_response IS 'Shot Grid版本提交逐条问题处理说明表';
+
+-- sg_issue_verification
+CREATE TABLE sg_issue_verification (
+	verification_id BIGSERIAL PRIMARY KEY,
+	project_id BIGINT NOT NULL,
+	note_id BIGINT NOT NULL,
+	checked_version_id BIGINT NOT NULL,
+	result VARCHAR(20) NOT NULL,
+	comment VARCHAR(1000),
+	reviewer_user_id BIGINT NOT NULL,
+	create_time TIMESTAMP(0) WITHOUT TIME ZONE NOT NULL,
+	CONSTRAINT fk_sg_issue_verification_note_project FOREIGN KEY(note_id, project_id) REFERENCES sg_note (note_id, project_id) ON DELETE RESTRICT,
+	CONSTRAINT fk_sg_issue_verification_version_project FOREIGN KEY(checked_version_id, project_id) REFERENCES sg_version (version_id, project_id) ON DELETE RESTRICT,
+	CONSTRAINT uk_sg_issue_verification_note_version UNIQUE (note_id, checked_version_id),
+	CONSTRAINT ck_sg_issue_verification_result CHECK (result in ('resolved', 'still_present')),
+	CONSTRAINT ck_sg_issue_verification_comment CHECK (comment is null or btrim(comment) <> ''),
+	FOREIGN KEY(reviewer_user_id) REFERENCES sys_user (user_id) ON DELETE RESTRICT
+);
+CREATE INDEX idx_sg_issue_verification_version_time ON sg_issue_verification (checked_version_id, create_time);
+CREATE INDEX idx_sg_issue_verification_note_time ON sg_issue_verification (note_id, create_time);
+COMMENT ON TABLE sg_issue_verification IS 'Shot Grid跨版本问题审核确认表';
 
 -- sg_review_action
 CREATE TABLE sg_review_action (
@@ -2567,28 +2610,6 @@ CREATE TABLE sg_media_derivation (
 );
 CREATE INDEX idx_sg_media_derivation_due ON sg_media_derivation (derivation_status, next_retry_time, update_time);
 COMMENT ON TABLE sg_media_derivation IS 'Shot Grid媒体派生任务';
-
--- sg_note_reply
-CREATE TABLE sg_note_reply (
-	reply_id BIGSERIAL NOT NULL,
-	project_id BIGINT NOT NULL,
-	note_id BIGINT NOT NULL,
-	reply_user_id BIGINT NOT NULL,
-	content TEXT NOT NULL,
-	create_time TIMESTAMP(0) WITHOUT TIME ZONE NOT NULL,
-	PRIMARY KEY (reply_id),
-	CONSTRAINT fk_sg_note_reply_note_project FOREIGN KEY(note_id, project_id) REFERENCES sg_note (note_id, project_id) ON DELETE RESTRICT,
-	CONSTRAINT ck_sg_note_reply_content CHECK (btrim(content) <> ''),
-	FOREIGN KEY(reply_user_id) REFERENCES sys_user (user_id) ON DELETE RESTRICT
-);
-CREATE INDEX idx_sg_note_reply_note_time ON sg_note_reply (note_id, create_time, reply_id);
-COMMENT ON TABLE sg_note_reply IS 'Shot Grid审核意见不可变回复历史表';
-COMMENT ON COLUMN sg_note_reply.reply_id IS '回复ID';
-COMMENT ON COLUMN sg_note_reply.project_id IS '项目ID';
-COMMENT ON COLUMN sg_note_reply.note_id IS '审核意见ID';
-COMMENT ON COLUMN sg_note_reply.reply_user_id IS '回复用户ID';
-COMMENT ON COLUMN sg_note_reply.content IS '回复内容';
-COMMENT ON COLUMN sg_note_reply.create_time IS '回复时间';
 
 -- sg_review_list_version
 CREATE TABLE sg_review_list_version (
@@ -2787,14 +2808,12 @@ values
     ('reviews', 5, '审核版本', 'shotgrid:version:review'),
     ('reviews', 6, '查看版本审核意见', 'shotgrid:note:list'),
     ('reviews', 7, '添加审核意见', 'shotgrid:note:add'),
-    ('reviews', 8, '回复有权访问任务的意见', 'shotgrid:note:reply'),
-    ('reviews', 9, '解决审核意见', 'shotgrid:note:resolve'),
-    ('reviews', 10, '查看审核单详情', 'shotgrid:reviewList:query'),
-    ('reviews', 11, '创建人工批量审核单', 'shotgrid:reviewList:add'),
-    ('reviews', 12, '修改草稿审核单和顺序', 'shotgrid:reviewList:edit'),
-    ('reviews', 13, '激活人工审核单', 'shotgrid:reviewList:activate'),
-    ('reviews', 14, '完成人工审核单', 'shotgrid:reviewList:complete'),
-    ('reviews', 15, '归档审核单', 'shotgrid:reviewList:archive'),
+    ('reviews', 9, '查看审核单详情', 'shotgrid:reviewList:query'),
+    ('reviews', 10, '创建人工批量审核单', 'shotgrid:reviewList:add'),
+    ('reviews', 11, '修改草稿审核单和顺序', 'shotgrid:reviewList:edit'),
+    ('reviews', 12, '激活人工审核单', 'shotgrid:reviewList:activate'),
+    ('reviews', 13, '完成人工审核单', 'shotgrid:reviewList:complete'),
+    ('reviews', 14, '归档审核单', 'shotgrid:reviewList:archive'),
     ('files', 7, '通过 Shot Grid 授权接口预览或下载版本文件', 'shotgrid:file:download'),
     ('projects', 13, '平台管理员跨项目管理', 'shotgrid:project:all')
 ),
@@ -2876,7 +2895,7 @@ create table if not exists alembic_version (
     constraint alembic_version_pkc primary key (version_num)
 );
 delete from alembic_version;
-insert into alembic_version(version_num) values ('20260812_08');
+insert into alembic_version(version_num) values ('20260814_10');
 
 
 CREATE OR REPLACE FUNCTION "find_in_set"(int8, varchar)

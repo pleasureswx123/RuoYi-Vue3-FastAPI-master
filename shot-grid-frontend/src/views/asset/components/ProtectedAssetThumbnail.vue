@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { Box, Lock, Picture } from '@element-plus/icons-vue'
+import { ElImage } from 'element-plus'
 
 import { downloadAssetThumbnail } from '@/api/shot-grid/assets'
 
@@ -58,7 +59,17 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="asset-thumbnail" :data-state="state">
-    <img v-if="state === 'ready'" :src="objectUrl" :alt="alt" />
+    <div v-if="state === 'ready'" class="asset-thumbnail__preview" @click.stop>
+      <ElImage
+        class="asset-thumbnail__image"
+        :src="objectUrl"
+        :preview-src-list="[objectUrl]"
+        :alt="alt"
+        fit="contain"
+        hide-on-click-modal
+        preview-teleported
+      />
+    </div>
     <div v-else class="asset-thumbnail__placeholder" :title="message">
       <el-icon v-if="state === 'forbidden'"><Lock /></el-icon>
       <el-icon v-else-if="state === 'missing' || state === 'error'"><Picture /></el-icon>
@@ -69,5 +80,5 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.asset-thumbnail{display:grid;width:100%;height:100%;overflow:hidden;background:linear-gradient(135deg,#242830,#11151a);place-items:center}.asset-thumbnail img{width:100%;height:100%;object-fit:cover}.asset-thumbnail__placeholder{display:grid;width:100%;height:100%;gap:5px;align-content:center;color:var(--sg-text-muted);font-size:10px;text-align:center;place-items:center}.asset-thumbnail__placeholder .el-icon{font-size:23px}.asset-thumbnail[data-state=loading] .el-icon{animation:asset-thumbnail-pulse 1s ease-in-out infinite}@keyframes asset-thumbnail-pulse{50%{opacity:.35}}
+.asset-thumbnail{position:relative;width:100%;height:100%;overflow:hidden;background:linear-gradient(135deg,#242830,#11151a)}.asset-thumbnail__preview,.asset-thumbnail__image{position:absolute;inset:0;width:100%;height:100%}.asset-thumbnail__image{cursor:zoom-in}.asset-thumbnail__image:deep(.el-image__inner){width:100%;height:100%;object-position:center}.asset-thumbnail__placeholder{position:absolute;inset:0;display:grid;gap:5px;align-content:center;color:var(--sg-text-muted);font-size:10px;text-align:center;place-items:center}.asset-thumbnail__placeholder .el-icon{font-size:23px}.asset-thumbnail[data-state=loading] .el-icon{animation:asset-thumbnail-pulse 1s ease-in-out infinite}@keyframes asset-thumbnail-pulse{50%{opacity:.35}}
 </style>

@@ -1,0 +1,21 @@
+FROM python:3.11-slim@sha256:cdbd05fb6f457ca275ff51ce00d93d865ca0b6a25f5ffb08262d94f6835771e5
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+WORKDIR /app
+
+# psycopg2 构建需要编译工具和 libpq 头文件；运行期只保留 libpq 与 FFmpeg。
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential libpq-dev libpq5 ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY . .
+RUN python -m pip install --no-cache-dir -r requirements-pg.lock.txt \
+    && apt-get purge -y --auto-remove build-essential libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+EXPOSE 9099
+
+CMD ["python", "-m", "uvicorn", "server:create_app", "--factory", "--host", "0.0.0.0", "--port", "9099", "--reload"]

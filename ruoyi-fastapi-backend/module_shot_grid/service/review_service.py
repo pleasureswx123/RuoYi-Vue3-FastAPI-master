@@ -15,8 +15,8 @@ from module_shot_grid.dao.project_dao import ShotGridProjectDao
 from module_shot_grid.dao.project_member_dao import ShotGridProjectMemberDao
 from module_shot_grid.dao.review_dao import ShotGridReviewDao
 from module_shot_grid.entity.do.review_do import (
+    ShotGridIssueVerification,
     ShotGridNote,
-    ShotGridNoteReply,
     ShotGridReviewAction,
     ShotGridReviewList,
     ShotGridReviewListVersion,
@@ -25,16 +25,16 @@ from module_shot_grid.entity.vo.access_vo import ShotGridProjectAccessModel
 from module_shot_grid.entity.vo.common_vo import ShotGridLockVersionModel
 from module_shot_grid.entity.vo.review_vo import (
     ShotGridAutoReviewListSummaryModel,
+    ShotGridCarriedIssueModel,
+    ShotGridIssueDetailModel,
+    ShotGridIssueResponseModel,
+    ShotGridIssueVerificationModel,
     ShotGridManualReviewListCreateModel,
     ShotGridManualReviewListOrderModel,
     ShotGridManualReviewListUpdateModel,
     ShotGridManualReviewListVersionsModel,
     ShotGridNoteCreateModel,
-    ShotGridNoteListQueryModel,
-    ShotGridNoteModel,
-    ShotGridNoteReplyCreateModel,
-    ShotGridNoteReplyListQueryModel,
-    ShotGridNoteReplyModel,
+    ShotGridReviewContextModel,
     ShotGridReviewActionCreateModel,
     ShotGridReviewActionModel,
     ShotGridReviewActionQueryModel,
@@ -42,6 +42,7 @@ from module_shot_grid.entity.vo.review_vo import (
     ShotGridReviewListDetailModel,
     ShotGridReviewListItemModel,
     ShotGridReviewListQueryModel,
+    ShotGridReviewVersionSummaryModel,
     ShotGridVersionDetailModel,
     ShotGridVersionFileModel,
     ShotGridVersionListItemModel,
@@ -497,36 +498,71 @@ class ShotGridReviewService:
             raise
 
     @classmethod
-    async def get_notes(
+    async def get_task_issues(
+        cls,
+        db: AsyncSession,
+        task_id: int,
+        status: str | None,
+        current_user: CurrentUserModel,
+    ) -> list[ShotGridIssueDetailModel]:
+        context, _ = await cls._resolve_task_access(db, task_id, current_user)
+        rows = await ShotGridReviewDao.get_task_issues(
+            db,
+            int(context['project_id']),
+            task_id,
+            status=status,
+        )
+        return await cls._hydrate_issues(db, rows)
+
+    @classmethod
+    async def get_review_context(
         cls,
         db: AsyncSession,
         version_id: int,
-        query: ShotGridNoteListQueryModel,
         current_user: CurrentUserModel,
-    ) -> PageModel[ShotGridNoteModel]:
-        context, _ = await cls._resolve_version_access(db, version_id, current_user)
-        rows, total = await ShotGridReviewDao.get_notes(
+    ) -> ShotGridReviewContextModel:
+        context, access = await cls._resolve_version_access(db, version_id, current_user)
+        cls._require_director(access)
+        rows = await ShotGridReviewDao.get_task_issues(
             db,
             int(context['project_id']),
-            version_id,
-            query,
+            int(context['task_id']),
         )
-        return PageModel[ShotGridNoteModel](
-            rows=[cls._note_model(row) for row in rows],
-            pageNum=query.page_num,
-            pageSize=query.page_size,
-            total=total,
-            hasNext=(query.page_num * query.page_size) < total,
+        issues = await cls._hydrate_issues(db, rows)
+        carried: list[ShotGridCarriedIssueModel] = []
+        current: list[ShotGridIssueDetailModel] = []
+        for issue in issues:
+            if issue.origin_version_id == version_id:
+                current.append(issue)
+                continue
+            response = next((item for item in issue.responses if item.version_id == version_id), None)
+            if response is not None and issue.status == 'open':
+                carried.append(
+                    ShotGridCarriedIssueModel(
+                        **issue.model_dump(),
+                        currentVersionResponse=response,
+                    )
+                )
+        return ShotGridReviewContextModel(
+            currentVersion=ShotGridReviewVersionSummaryModel(
+                versionId=version_id,
+                versionNo=int(context['version_no']),
+                versionNumber=f'V{int(context["version_no"]):03d}',
+                versionStatus=context['version_status'],
+                lockVersion=int(context['lock_version']),
+            ),
+            carriedIssues=carried,
+            currentVersionIssues=current,
         )
 
     @classmethod
-    async def add_note(
+    async def add_issue(
         cls,
         db: AsyncSession,
         version_id: int,
         command: ShotGridNoteCreateModel,
         current_user: CurrentUserModel,
-    ) -> ShotGridNoteModel:
+    ) -> ShotGridIssueDetailModel:
         user_id, actor_name, actor_display_name, dept_name = cls._actor(current_user)
         context, access = await cls._resolve_version_access(db, version_id, current_user)
         try:
@@ -555,171 +591,40 @@ class ShotGridReviewService:
                         if command.annotations is not None
                         else None
                     ),
-                    is_mandatory='1' if command.is_mandatory else '0',
                     note_status='open',
+                    resolved_in_version_id=None,
                 ),
             )
-            result = ShotGridNoteModel(
-                noteId=note.note_id,
+            result = ShotGridIssueDetailModel(
+                issueId=note.note_id,
                 projectId=project_id,
-                versionId=version_id,
+                originVersionId=version_id,
+                originVersionNumber=f'V{int(version.version_no):03d}',
                 reviewerUserId=user_id,
                 reviewerName=actor_display_name,
                 content=note.content,
                 mediaTimeMs=note.media_time_ms,
                 annotations=note.annotations,
-                isMandatory=note.is_mandatory == '1',
-                noteStatus=note.note_status,
-                replyCount=0,
+                status=note.note_status,
+                resolvedInVersionId=None,
+                resolvedInVersionNumber=None,
+                pendingVersionId=version_id,
+                pendingVersionNumber=f'V{int(version.version_no):03d}',
                 createTime=note.create_time,
                 updateTime=note.update_time,
+                responses=[],
+                verifications=[],
             )
             await cls._audit(
                 db,
                 actor_name=actor_name,
                 dept_name=dept_name,
                 business_type=BusinessType.INSERT.value,
-                method='add_note',
-                oper_url=f'/shot-grid/versions/{version_id}/notes',
-                payload={'versionId': version_id, 'isMandatory': command.is_mandatory},
-                result={'noteId': note.note_id},
+                method='add_issue',
+                oper_url=f'/shot-grid/versions/{version_id}/issues',
+                payload={'versionId': version_id, 'hasAnnotations': command.annotations is not None},
+                result={'issueId': note.note_id},
             )
-            await db.commit()
-            return result
-        except ShotGridDomainException:
-            await db.rollback()
-            raise
-        except Exception:
-            await db.rollback()
-            raise
-
-    @classmethod
-    async def get_note_replies(
-        cls,
-        db: AsyncSession,
-        note_id: int,
-        query: ShotGridNoteReplyListQueryModel,
-        current_user: CurrentUserModel,
-    ) -> PageModel[ShotGridNoteReplyModel]:
-        context, _ = await cls._resolve_note_access(db, note_id, current_user)
-        rows, total = await ShotGridReviewDao.get_note_replies(
-            db,
-            int(context['project_id']),
-            note_id,
-            query,
-        )
-        return PageModel[ShotGridNoteReplyModel](
-            rows=[ShotGridNoteReplyModel.model_validate(row) for row in rows],
-            pageNum=query.page_num,
-            pageSize=query.page_size,
-            total=total,
-            hasNext=(query.page_num * query.page_size) < total,
-        )
-
-    @classmethod
-    async def add_note_reply(
-        cls,
-        db: AsyncSession,
-        note_id: int,
-        command: ShotGridNoteReplyCreateModel,
-        current_user: CurrentUserModel,
-    ) -> ShotGridNoteReplyModel:
-        user_id, actor_name, actor_display_name, dept_name = cls._actor(current_user)
-        context, access = await cls._resolve_note_access(db, note_id, current_user)
-        version_context = await ShotGridReviewDao.get_version_context(db, int(context['version_id']))
-        if version_context is None:
-            raise shot_grid_error(404, 'SG_VERSION_NOT_FOUND', '版本不存在或不可见')
-        try:
-            project_id, task, version, access = await cls._lock_version_graph(
-                db,
-                version_context,
-                current_user,
-                access,
-            )
-            note = await ShotGridReviewDao.get_note_for_update(db, project_id, version.version_id, note_id)
-            if note is None:
-                raise shot_grid_error(404, 'SG_NOTE_NOT_FOUND', '审核意见不存在或不可见')
-            if not (access.has_all_scope or access.project_role == 'director' or task.assignee_user_id == user_id):
-                raise shot_grid_error(403, 'SG_PROJECT_ACCESS_DENIED', '只有当前任务负责人或项目总监可以回复')
-            reply = await ShotGridReviewDao.add_reply(
-                db,
-                ShotGridNoteReply(
-                    project_id=project_id,
-                    note_id=note_id,
-                    reply_user_id=user_id,
-                    content=command.content,
-                ),
-            )
-            result = ShotGridNoteReplyModel(
-                replyId=reply.reply_id,
-                projectId=project_id,
-                noteId=note_id,
-                replyUserId=user_id,
-                replyUserName=actor_display_name,
-                content=reply.content,
-                createTime=reply.create_time,
-            )
-            await cls._audit(
-                db,
-                actor_name=actor_name,
-                dept_name=dept_name,
-                business_type=BusinessType.INSERT.value,
-                method='add_note_reply',
-                oper_url=f'/shot-grid/notes/{note_id}/reply',
-                payload={'noteId': note_id},
-                result={'replyId': reply.reply_id},
-            )
-            await db.commit()
-            return result
-        except ShotGridDomainException:
-            await db.rollback()
-            raise
-        except Exception:
-            await db.rollback()
-            raise
-
-    @classmethod
-    async def resolve_note(
-        cls,
-        db: AsyncSession,
-        note_id: int,
-        current_user: CurrentUserModel,
-    ) -> ShotGridNoteModel:
-        user_id, actor_name, _, dept_name = cls._actor(current_user)
-        context, access = await cls._resolve_note_access(db, note_id, current_user)
-        version_context = await ShotGridReviewDao.get_version_context(db, int(context['version_id']))
-        if version_context is None:
-            raise shot_grid_error(404, 'SG_VERSION_NOT_FOUND', '版本不存在或不可见')
-        try:
-            project_id, _, version, access = await cls._lock_version_graph(
-                db,
-                version_context,
-                current_user,
-                access,
-            )
-            note = await ShotGridReviewDao.get_note_for_update(db, project_id, version.version_id, note_id)
-            if note is None:
-                raise shot_grid_error(404, 'SG_NOTE_NOT_FOUND', '审核意见不存在或不可见')
-            if not (access.has_all_scope or access.project_role == 'director' or int(note.reviewer_user_id) == user_id):
-                raise shot_grid_error(403, 'SG_PROJECT_ACCESS_DENIED', '无权解决该审核意见')
-            if note.note_status == 'open':
-                note.note_status = 'resolved'
-                note.update_time = datetime.now()
-                await cls._audit(
-                    db,
-                    actor_name=actor_name,
-                    dept_name=dept_name,
-                    business_type=BusinessType.UPDATE.value,
-                    method='resolve_note',
-                    oper_url=f'/shot-grid/notes/{note_id}/resolve',
-                    payload={'noteId': note_id},
-                    result={'noteStatus': 'resolved'},
-                )
-                await db.flush()
-            row = await ShotGridReviewDao.get_note_row(db, project_id, note_id)
-            if row is None:
-                raise shot_grid_error(404, 'SG_NOTE_NOT_FOUND', '审核意见不存在或不可见')
-            result = cls._note_model(row)
             await db.commit()
             return result
         except ShotGridDomainException:
@@ -776,7 +681,7 @@ class ShotGridReviewService:
             )
             if existing is not None:
                 return await cls._replay_review_action(db, existing, request_hash)
-            review_list, to_status = await cls._validate_review_action_state(
+            review_list, to_status, carried_issues = await cls._validate_review_action_state(
                 db,
                 task=task,
                 version=version,
@@ -784,6 +689,32 @@ class ShotGridReviewService:
                 project_id=project_id,
                 command=command,
             )
+            verification_by_issue = {item.issue_id: item for item in command.issue_verifications}
+            if command.action_type != 'defer':
+                now = datetime.now()
+                verification_rows: list[ShotGridIssueVerification] = []
+                for issue in carried_issues:
+                    verification = verification_by_issue[int(issue.note_id)]
+                    verification_rows.append(
+                        ShotGridIssueVerification(
+                            project_id=project_id,
+                            note_id=issue.note_id,
+                            checked_version_id=version_id,
+                            result=verification.result,
+                            comment=verification.comment,
+                            reviewer_user_id=user_id,
+                            create_time=now,
+                        )
+                    )
+                    if verification.result == 'resolved':
+                        issue.note_status = 'resolved'
+                        issue.resolved_in_version_id = version_id
+                        issue.update_time = now
+                await ShotGridReviewDao.add_issue_verifications(db, verification_rows)
+                if command.action_type == 'approve' and await ShotGridReviewDao.has_open_task_issue(
+                    db, int(task.task_id)
+                ):
+                    raise shot_grid_error(409, 'SG_REVIEW_ISSUES_OPEN', '任务仍有未关闭问题，不能确认通过')
             from_status = str(version.version_status)
             cls._apply_review_action_transition(task, version, review_list, command, to_status, actor_name)
             action = await ShotGridReviewDao.add_review_action(
@@ -879,7 +810,7 @@ class ShotGridReviewService:
         version_id: int,
         project_id: int,
         command: ShotGridReviewActionCreateModel,
-    ) -> tuple[Any, str]:
+    ) -> tuple[Any, str, list[ShotGridNote]]:
         cls._ensure_lock_version(version.lock_version, command.lock_version)
         if version.version_status != 'pending_review' or task.task_status != 'pending_review':
             raise cls._invalid_transition('版本或任务已不处于待审核状态')
@@ -890,26 +821,64 @@ class ShotGridReviewService:
         if review_list is None or review_list.review_status != 'active':
             raise cls._auto_review_integrity_error()
         await cls._ensure_auto_review_relation(db, review_list.review_list_id, version_id)
-        has_open_mandatory = await ShotGridReviewDao.has_open_mandatory_note(db, version_id)
+        carried_issues = await ShotGridReviewDao.get_carried_issues_for_update(
+            db,
+            project_id=project_id,
+            task_id=int(task.task_id),
+            version_id=version_id,
+            submission_id=int(version.submission_id),
+        )
+        current_version_issues = await ShotGridReviewDao.get_current_version_open_issues_for_update(
+            db,
+            project_id=project_id,
+            version_id=version_id,
+        )
+        expected_issue_ids = {int(issue.note_id) for issue in carried_issues}
+        provided_issue_ids = {item.issue_id for item in command.issue_verifications}
+        if command.action_type in {'approve', 'reject'} and provided_issue_ids != expected_issue_ids:
+            raise shot_grid_error(
+                422,
+                'SG_ISSUE_VERIFICATIONS_INCOMPLETE',
+                '必须逐条确认本版带入的全部历史问题',
+                details={
+                    'missingIssueIds': sorted(expected_issue_ids - provided_issue_ids),
+                    'unexpectedIssueIds': sorted(provided_issue_ids - expected_issue_ids),
+                },
+            )
+        missing_comment_issue_ids = [
+            item.issue_id
+            for item in command.issue_verifications
+            if item.result == 'still_present' and not item.comment
+        ]
+        if missing_comment_issue_ids:
+            raise shot_grid_error(
+                422,
+                'SG_ISSUE_VERIFICATION_COMMENT_REQUIRED',
+                '确认问题仍然存在时必须填写具体未解决原因',
+                details={'issueIds': sorted(missing_comment_issue_ids)},
+            )
         if command.action_type == 'approve':
-            if has_open_mandatory:
-                raise shot_grid_error(
-                    409,
-                    'SG_REVIEW_MANDATORY_NOTES_OPEN',
-                    '仍有未解决的必须修改意见，不能确认通过',
-                )
-            if await ShotGridReviewDao.has_other_final_version(db, task.task_id, version_id):
-                raise shot_grid_error(409, 'SG_FINAL_VERSION_CONFLICT', '任务已经存在最终版本')
-            return review_list, 'final'
-        if command.action_type == 'reject':
-            if command.reason is None and not has_open_mandatory:
+            if any(item.result != 'resolved' for item in command.issue_verifications):
                 raise shot_grid_error(
                     422,
-                    'SG_REVIEW_REASON_REQUIRED',
-                    '退回修改必须填写原因或至少存在一条未解决的必须修改意见',
+                    'SG_REVIEW_ISSUES_NOT_RESOLVED',
+                    '确认通过前必须将全部带入问题标记为已修复',
                 )
-            return review_list, 'rejected'
-        return review_list, 'pending_review'
+            if current_version_issues:
+                raise shot_grid_error(409, 'SG_REVIEW_ISSUES_OPEN', '当前版本仍有新问题，不能确认通过')
+            if await ShotGridReviewDao.has_other_final_version(db, task.task_id, version_id):
+                raise shot_grid_error(409, 'SG_FINAL_VERSION_CONFLICT', '任务已经存在最终版本')
+            return review_list, 'final', carried_issues
+        if command.action_type == 'reject':
+            has_still_present = any(item.result == 'still_present' for item in command.issue_verifications)
+            if not has_still_present and not current_version_issues:
+                raise shot_grid_error(
+                    422,
+                    'SG_REVIEW_REJECT_ISSUE_REQUIRED',
+                    '退回修改必须至少存在一条仍未修复问题或当前版本新问题',
+                )
+            return review_list, 'rejected', carried_issues
+        return review_list, 'pending_review', carried_issues
 
     @staticmethod
     def _apply_review_action_transition(
@@ -1144,11 +1113,87 @@ class ShotGridReviewService:
         review_list.update_by = actor_name
         review_list.update_time = datetime.now()
 
-    @staticmethod
-    def _note_model(row: dict[str, Any]) -> ShotGridNoteModel:
-        values = dict(row)
-        values['is_mandatory'] = values.get('is_mandatory') == '1'
-        return ShotGridNoteModel.model_validate(values)
+    @classmethod
+    async def _hydrate_issues(
+        cls,
+        db: AsyncSession,
+        rows: list[dict[str, Any]],
+    ) -> list[ShotGridIssueDetailModel]:
+        issue_ids = [int(row['issue_id']) for row in rows]
+        response_rows = await ShotGridReviewDao.get_issue_responses(db, issue_ids)
+        verification_rows = await ShotGridReviewDao.get_issue_verifications(db, issue_ids)
+        responses_by_issue: dict[int, list[ShotGridIssueResponseModel]] = {issue_id: [] for issue_id in issue_ids}
+        verifications_by_issue: dict[int, list[ShotGridIssueVerificationModel]] = {
+            issue_id: [] for issue_id in issue_ids
+        }
+        for row in response_rows:
+            version_no = row.get('version_no')
+            responses_by_issue[int(row['issue_id'])].append(
+                ShotGridIssueResponseModel(
+                    responseId=row['response_id'],
+                    submissionId=row['submission_id'],
+                    versionId=row.get('version_id'),
+                    versionNumber=f'V{int(version_no):03d}' if version_no is not None else None,
+                    responseText=row['response_text'],
+                    respondedBy=row['responded_by'],
+                    responderName=row.get('responder_name'),
+                    createTime=row['create_time'],
+                )
+            )
+        for row in verification_rows:
+            verifications_by_issue[int(row['issue_id'])].append(
+                ShotGridIssueVerificationModel(
+                    verificationId=row['verification_id'],
+                    checkedVersionId=row['checked_version_id'],
+                    checkedVersionNumber=f'V{int(row["checked_version_no"]):03d}',
+                    result=row['result'],
+                    comment=row.get('comment'),
+                    reviewerUserId=row['reviewer_user_id'],
+                    reviewerName=row.get('reviewer_name'),
+                    createTime=row['create_time'],
+                )
+            )
+        hydrated: list[ShotGridIssueDetailModel] = []
+        for row in rows:
+            issue_id = int(row['issue_id'])
+            verifications = verifications_by_issue[issue_id]
+            pending_version_id: int | None = None
+            pending_version_number: str | None = None
+            if row['status'] == 'open':
+                latest_verification = verifications[-1] if verifications else None
+                if latest_verification is not None and latest_verification.result == 'still_present':
+                    pending_version_id = latest_verification.checked_version_id
+                    pending_version_number = latest_verification.checked_version_number
+                else:
+                    pending_version_id = int(row['origin_version_id'])
+                    pending_version_number = f'V{int(row["origin_version_no"]):03d}'
+            hydrated.append(
+                ShotGridIssueDetailModel(
+                    issueId=row['issue_id'],
+                    projectId=row['project_id'],
+                    originVersionId=row['origin_version_id'],
+                    originVersionNumber=f'V{int(row["origin_version_no"]):03d}',
+                    reviewerUserId=row['reviewer_user_id'],
+                    reviewerName=row.get('reviewer_name'),
+                    content=row.get('content'),
+                    mediaTimeMs=row.get('media_time_ms'),
+                    annotations=row.get('annotations'),
+                    status=row['status'],
+                    resolvedInVersionId=row.get('resolved_in_version_id'),
+                    resolvedInVersionNumber=(
+                        f'V{int(row["resolved_in_version_no"]):03d}'
+                        if row.get('resolved_in_version_no') is not None
+                        else None
+                    ),
+                    pendingVersionId=pending_version_id,
+                    pendingVersionNumber=pending_version_number,
+                    createTime=row['create_time'],
+                    updateTime=row['update_time'],
+                    responses=responses_by_issue[issue_id],
+                    verifications=verifications,
+                )
+            )
+        return hydrated
 
     @staticmethod
     def _ensure_lock_version(actual: int, expected: int) -> None:
@@ -1198,8 +1243,13 @@ class ShotGridReviewService:
 
     @staticmethod
     def _review_action_request_hash(command: ShotGridReviewActionCreateModel) -> str:
+        payload = command.model_dump(mode='json', by_alias=True)
+        payload['issueVerifications'] = sorted(
+            payload.get('issueVerifications', []),
+            key=lambda item: item['issueId'],
+        )
         canonical = json.dumps(
-            command.model_dump(mode='json', by_alias=True),
+            payload,
             ensure_ascii=False,
             sort_keys=True,
             separators=(',', ':'),

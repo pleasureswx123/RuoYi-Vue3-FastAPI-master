@@ -8,6 +8,8 @@ import VersionSubmissionPanel from './VersionSubmissionPanel.vue'
 const props = defineProps({
   taskId: { type: Number, required: true },
   taskKind: { type: String, required: true },
+  taskStatus: { type: String, required: true },
+  openIssues: { type: Array, default: () => [] },
   allowedActions: { type: Array, default: () => [] },
   hasUncommittedSubmission: { type: Boolean, default: false },
   operationGeneration: { type: Number, default: 0 }
@@ -16,6 +18,7 @@ const emit = defineEmits(['committed', 'submission-change', 'version-selected'])
 
 const sessionStore = useSessionStore()
 const historyRefreshKey = ref(0)
+const historyPanel = ref(null)
 const wildcard = computed(() => sessionStore.permissions.includes('*:*:*'))
 const hasPermission = permission => wildcard.value || sessionStore.permissions.includes(permission)
 const canAdd = computed(() => props.allowedActions.includes('version.add') && hasPermission('shotgrid:version:add'))
@@ -23,6 +26,7 @@ const canQuery = computed(() => hasPermission('shotgrid:version:query'))
 const canRetry = computed(() => wildcard.value || sessionStore.permissions.includes('shotgrid:version:retry'))
 const canList = computed(() => hasPermission('shotgrid:version:list'))
 const canDownload = computed(() => hasPermission('shotgrid:file:download'))
+const canListNotes = computed(() => hasPermission('shotgrid:note:list'))
 
 function contextMatches(context) {
   return Number(context?.taskId) === Number(props.taskId) &&
@@ -44,13 +48,30 @@ function handleVersionSelected(version, context) {
   if (!contextMatches(context)) return
   emit('version-selected', version, context)
 }
+
+function focusIssue(issue) {
+  historyPanel.value?.focusIssue(issue)
+}
 </script>
 
 <template>
   <div class="version-workspace">
+    <VersionHistoryPanel
+      ref="historyPanel"
+      :task-id="taskId"
+      :operation-generation="operationGeneration"
+      :refresh-key="historyRefreshKey"
+      :can-list="canList"
+      :can-query="canQuery"
+      :can-download="canDownload"
+      :can-list-notes="canListNotes"
+      @version-selected="handleVersionSelected"
+    />
     <VersionSubmissionPanel
       :task-id="taskId"
       :task-kind="taskKind"
+      :task-status="taskStatus"
+      :open-issues="openIssues"
       :allowed-actions="allowedActions"
       :has-uncommitted-submission="hasUncommittedSubmission"
       :has-add-permission="canAdd"
@@ -59,15 +80,7 @@ function handleVersionSelected(version, context) {
       :operation-generation="operationGeneration"
       @committed="handleCommitted"
       @submission-change="handleSubmissionChange"
-    />
-    <VersionHistoryPanel
-      :task-id="taskId"
-      :operation-generation="operationGeneration"
-      :refresh-key="historyRefreshKey"
-      :can-list="canList"
-      :can-query="canQuery"
-      :can-download="canDownload"
-      @version-selected="handleVersionSelected"
+      @focus-issue="focusIssue"
     />
   </div>
 </template>

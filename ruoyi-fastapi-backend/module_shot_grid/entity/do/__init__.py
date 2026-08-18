@@ -18,11 +18,12 @@ from module_shot_grid.entity.do.project_do import (
     ShotGridShot,
 )
 from module_shot_grid.entity.do.review_do import (
+    ShotGridIssueVerification,
     ShotGridNote,
-    ShotGridNoteReply,
     ShotGridReviewAction,
     ShotGridReviewList,
     ShotGridReviewListVersion,
+    ShotGridVersionIssueResponse,
 )
 from module_shot_grid.entity.do.storage_do import (
     ShotGridProjectStorage,
@@ -42,9 +43,9 @@ __all__ = [
     'ShotGridAssetItem',
     'ShotGridEpisode',
     'ShotGridImportBatch',
+    'ShotGridIssueVerification',
     'ShotGridMediaDerivation',
     'ShotGridNote',
-    'ShotGridNoteReply',
     'ShotGridProject',
     'ShotGridProjectMember',
     'ShotGridProjectStorage',
@@ -60,5 +61,6 @@ __all__ = [
     'ShotGridTask',
     'ShotGridVersion',
     'ShotGridVersionFile',
+    'ShotGridVersionIssueResponse',
     'ShotGridVersionSubmission',
 ]

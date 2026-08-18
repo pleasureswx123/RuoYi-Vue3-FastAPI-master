@@ -17,12 +17,9 @@ from module_shot_grid.entity.vo.review_vo import (
     ShotGridManualReviewListOrderModel,
     ShotGridManualReviewListUpdateModel,
     ShotGridManualReviewListVersionsModel,
+    ShotGridIssueDetailModel,
     ShotGridNoteCreateModel,
-    ShotGridNoteListQueryModel,
-    ShotGridNoteModel,
-    ShotGridNoteReplyCreateModel,
-    ShotGridNoteReplyListQueryModel,
-    ShotGridNoteReplyModel,
+    ShotGridReviewContextModel,
     ShotGridReviewActionCreateModel,
     ShotGridReviewActionModel,
     ShotGridReviewActionQueryModel,
@@ -294,86 +291,52 @@ async def archive_shot_grid_manual_review_list(
 
 
 @review_controller.get(
-    '/versions/{versionId}/notes',
-    summary='分页查询版本审核意见',
-    response_model=PageResponseModel[ShotGridNoteModel],
+    '/tasks/{taskId}/issues',
+    summary='查询任务跨版本修改问题',
+    response_model=DataResponseModel[list[ShotGridIssueDetailModel]],
     dependencies=[UserInterfaceAuthDependency('shotgrid:note:list')],
 )
-async def get_shot_grid_version_notes(
+async def get_shot_grid_task_issues(
+    request: Request,
+    task_id: Annotated[int, Path(alias='taskId', gt=0, le=SQL_BIGINT_MAX)],
+    query_db: Annotated[AsyncSession, DBSessionDependency()],
+    current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
+    status: Annotated[str | None, Query(pattern='^(open|resolved)$')] = None,
+) -> Response:
+    result = await ShotGridReviewService.get_task_issues(query_db, task_id, status, current_user)
+    return ResponseUtil.success(data=result)
+
+
+@review_controller.get(
+    '/versions/{versionId}/review-context',
+    summary='获取当前版本跨版本审核上下文',
+    response_model=DataResponseModel[ShotGridReviewContextModel],
+    dependencies=[UserInterfaceAuthDependency('shotgrid:version:review')],
+)
+async def get_shot_grid_version_review_context(
     request: Request,
     version_id: Annotated[int, Path(alias='versionId', gt=0, le=SQL_BIGINT_MAX)],
-    note_query: Annotated[ShotGridNoteListQueryModel, Query()],
     query_db: Annotated[AsyncSession, DBSessionDependency()],
     current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
 ) -> Response:
-    result = await ShotGridReviewService.get_notes(query_db, version_id, note_query, current_user)
-    return ResponseUtil.success(msg='查询成功', model_content=result)
+    result = await ShotGridReviewService.get_review_context(query_db, version_id, current_user)
+    return ResponseUtil.success(data=result)
 
 
 @review_controller.post(
-    '/versions/{versionId}/notes',
-    summary='添加版本审核意见',
-    response_model=DataResponseModel[ShotGridNoteModel],
+    '/versions/{versionId}/issues',
+    summary='添加绑定当前版本的修改问题',
+    response_model=DataResponseModel[ShotGridIssueDetailModel],
     dependencies=[UserInterfaceAuthDependency('shotgrid:note:add')],
 )
-async def add_shot_grid_version_note(
+async def add_shot_grid_version_issue(
     request: Request,
     version_id: Annotated[int, Path(alias='versionId', gt=0, le=SQL_BIGINT_MAX)],
     command: ShotGridNoteCreateModel,
     query_db: Annotated[AsyncSession, DBSessionDependency()],
     current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
 ) -> Response:
-    result = await ShotGridReviewService.add_note(query_db, version_id, command, current_user)
-    return ResponseUtil.success(data=result)
-
-
-@review_controller.get(
-    '/notes/{noteId}/replies',
-    summary='分页查询审核意见回复',
-    response_model=PageResponseModel[ShotGridNoteReplyModel],
-    dependencies=[UserInterfaceAuthDependency('shotgrid:note:list')],
-)
-async def get_shot_grid_note_replies(
-    request: Request,
-    note_id: Annotated[int, Path(alias='noteId', gt=0, le=SQL_BIGINT_MAX)],
-    reply_query: Annotated[ShotGridNoteReplyListQueryModel, Query()],
-    query_db: Annotated[AsyncSession, DBSessionDependency()],
-    current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
-) -> Response:
-    result = await ShotGridReviewService.get_note_replies(query_db, note_id, reply_query, current_user)
-    return ResponseUtil.success(msg='查询成功', model_content=result)
-
-
-@review_controller.post(
-    '/notes/{noteId}/reply',
-    summary='回复审核意见',
-    response_model=DataResponseModel[ShotGridNoteReplyModel],
-    dependencies=[UserInterfaceAuthDependency('shotgrid:note:reply')],
-)
-async def add_shot_grid_note_reply(
-    request: Request,
-    note_id: Annotated[int, Path(alias='noteId', gt=0, le=SQL_BIGINT_MAX)],
-    command: ShotGridNoteReplyCreateModel,
-    query_db: Annotated[AsyncSession, DBSessionDependency()],
-    current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
-) -> Response:
-    result = await ShotGridReviewService.add_note_reply(query_db, note_id, command, current_user)
-    return ResponseUtil.success(data=result)
-
-
-@review_controller.post(
-    '/notes/{noteId}/resolve',
-    summary='解决审核意见',
-    response_model=DataResponseModel[ShotGridNoteModel],
-    dependencies=[UserInterfaceAuthDependency('shotgrid:note:resolve')],
-)
-async def resolve_shot_grid_note(
-    request: Request,
-    note_id: Annotated[int, Path(alias='noteId', gt=0, le=SQL_BIGINT_MAX)],
-    query_db: Annotated[AsyncSession, DBSessionDependency()],
-    current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
-) -> Response:
-    result = await ShotGridReviewService.resolve_note(query_db, note_id, current_user)
+    result = await ShotGridReviewService.add_issue(query_db, version_id, command, current_user)
     return ResponseUtil.success(data=result)
 
 

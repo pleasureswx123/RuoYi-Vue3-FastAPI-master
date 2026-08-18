@@ -13,6 +13,8 @@ from module_shot_grid.dependencies.project_access import ProjectAccessDependency
 from module_shot_grid.entity.vo.access_vo import ShotGridProjectAccessModel
 from module_shot_grid.entity.vo.asset_crud_vo import (
     ShotGridAssetArchiveModel,
+    ShotGridAssetBatchDeleteModel,
+    ShotGridAssetBatchDeleteResultModel,
     ShotGridAssetCreateModel,
     ShotGridAssetDetailModel,
     ShotGridAssetItemCreateModel,
@@ -74,6 +76,30 @@ async def create_shot_grid_asset(
     access: Annotated[ShotGridProjectAccessModel, ProjectRoleDependency('director')],
 ) -> Response:
     result = await ShotGridAssetCrudService.create_asset(query_db, project_id, command, current_user, access)
+    return ResponseUtil.success(data=result)
+
+
+@asset_crud_controller.post(
+    '/{projectId}/assets/batch-delete',
+    summary='批量删除未开始制作的资产',
+    response_model=DataResponseModel[ShotGridAssetBatchDeleteResultModel],
+    dependencies=[UserInterfaceAuthDependency('shotgrid:asset:archive')],
+)
+async def batch_delete_shot_grid_assets(
+    request: Request,
+    project_id: Annotated[int, Path(alias='projectId', gt=0, le=SQL_BIGINT_MAX)],
+    command: ShotGridAssetBatchDeleteModel,
+    query_db: Annotated[AsyncSession, DBSessionDependency()],
+    current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
+    access: Annotated[ShotGridProjectAccessModel, ProjectRoleDependency('director')],
+) -> Response:
+    result = await ShotGridAssetCrudService.batch_delete_assets(
+        query_db,
+        project_id,
+        command,
+        current_user,
+        access,
+    )
     return ResponseUtil.success(data=result)
 
 

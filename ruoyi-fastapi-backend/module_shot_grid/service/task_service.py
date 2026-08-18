@@ -14,7 +14,11 @@ from module_shot_grid.entity.do.storage_do import ShotGridProjectStorage
 from module_shot_grid.entity.do.task_do import ShotGridTask
 from module_shot_grid.entity.vo.access_vo import ShotGridProjectAccessModel
 from module_shot_grid.entity.vo.task_vo import (
+    ShotGridAssetItemTaskBatchAssignModel,
+    ShotGridAssetItemTaskBatchAssignResultModel,
     ShotGridMineTaskListQueryModel,
+    ShotGridShotTaskBatchAssignModel,
+    ShotGridShotTaskBatchAssignResultModel,
     ShotGridTaskAssigneeModel,
     ShotGridTaskAssignModel,
     ShotGridTaskDetailModel,
@@ -27,6 +31,10 @@ from module_shot_grid.entity.vo.task_vo import (
     ShotGridTaskVersionSummaryModel,
 )
 from module_shot_grid.exceptions import ShotGridDomainException, shot_grid_error
+from module_shot_grid.service.asset_task_rules import (
+    is_asset_production_item_ready,
+    require_asset_production_item,
+)
 from module_shot_grid.service.project_access_service import ShotGridProjectAccessService
 from module_shot_grid.service.project_service import ShotGridProjectService
 
@@ -202,6 +210,92 @@ class ShotGridTaskService:
             raise
 
     @classmethod
+    async def batch_assign_shots(
+        cls,
+        db: AsyncSession,
+        project_id: int,
+        command: ShotGridShotTaskBatchAssignModel,
+        current_user: CurrentUserModel,
+        access: ShotGridProjectAccessModel,
+    ) -> ShotGridShotTaskBatchAssignResultModel:
+        actor_user_id, actor_name, dept_name = ShotGridProjectService._actor(current_user)
+        try:
+            cls._require_director_access(access, project_id, actor_user_id)
+            await cls._lock_mutable_project(db, project_id, require_storage_ready=True)
+            access = await ShotGridProjectAccessService.resolve_access(db, current_user, project_id)
+            cls._require_director_access(access, project_id, actor_user_id)
+
+            assigned_shot_ids: list[int] = []
+            created_task_count = 0
+            reassigned_task_count = 0
+            for item in sorted(command.items, key=lambda value: value.shot_id):
+                context = await ShotGridTaskDao.lock_shot_target(db, project_id, item.shot_id)
+                if context is None:
+                    raise shot_grid_error(404, 'SG_SHOT_NOT_FOUND', '镜头不存在、不属于目标项目或不可见')
+                shot, episode, scene = context
+                task = await ShotGridTaskDao.get_task_for_shot_update(db, project_id, item.shot_id)
+                assign_command = ShotGridTaskAssignModel(
+                    assigneeUserId=command.assignee_user_id,
+                    taskLockVersion=item.task_lock_version,
+                )
+                task_name = f'{cls._episode_code(episode.episode_no)}-{cls._scene_code(scene.scene_no)}-'
+                task_name += f'{shot.storage_dir_name} 镜头视频制作'
+                _task, old_assignee = await cls._assign_task(
+                    db,
+                    project_id=project_id,
+                    command=assign_command,
+                    current_task=task,
+                    task_kind='shot_video',
+                    task_name=task_name[:MAX_TASK_NAME_LENGTH],
+                    shot_id=item.shot_id,
+                    asset_item_id=None,
+                    actor_name=actor_name,
+                )
+                created_task_count += int(old_assignee is None)
+                reassigned_task_count += int(old_assignee is not None)
+                assigned_shot_ids.append(item.shot_id)
+
+            await cls._audit(
+                db,
+                business_type=BusinessType.GRANT.value,
+                method='batch_assign_shots',
+                request_method='POST',
+                actor_name=actor_name,
+                dept_name=dept_name,
+                oper_url=f'/shot-grid/projects/{project_id}/shots/batch-assign',
+                payload={
+                    'projectId': project_id,
+                    'assigneeUserId': command.assignee_user_id,
+                    'items': [item.model_dump(by_alias=True) for item in command.items],
+                },
+                result={
+                    'assignedShotIds': assigned_shot_ids,
+                    'createdTaskCount': created_task_count,
+                    'reassignedTaskCount': reassigned_task_count,
+                },
+            )
+            frozen = ShotGridShotTaskBatchAssignResultModel(
+                assignedShotIds=assigned_shot_ids,
+                assignedCount=len(assigned_shot_ids),
+                createdTaskCount=created_task_count,
+                reassignedTaskCount=reassigned_task_count,
+            )
+            await db.commit()
+            return frozen
+        except IntegrityError as exc:
+            await db.rollback()
+            mapped = cls._map_integrity_error(exc)
+            if mapped is None:
+                raise
+            raise mapped from exc
+        except ShotGridDomainException:
+            await db.rollback()
+            raise
+        except Exception:
+            await db.rollback()
+            raise
+
+    @classmethod
     async def assign_asset_item(
         cls,
         db: AsyncSession,
@@ -225,8 +319,9 @@ class ShotGridTaskService:
             item = await ShotGridTaskDao.lock_asset_item(db, project_id, asset_item_id)
             if asset is None or item is None or item.asset_id != asset.asset_id:
                 raise shot_grid_error(404, 'SG_ASSET_ITEM_NOT_FOUND', '资产制作分项不存在或不可见')
+            require_asset_production_item(item.production_item, action='分配或改派任务')
             task = await ShotGridTaskDao.get_task_for_asset_item_update(db, project_id, asset_item_id)
-            task_suffix = item.production_item or '待补制作分项'
+            task_suffix = item.production_item
             task, old_assignee = await cls._assign_task(
                 db,
                 project_id=project_id,
@@ -266,6 +361,104 @@ class ShotGridTaskService:
             raise
 
     @classmethod
+    async def batch_assign_asset_items(
+        cls,
+        db: AsyncSession,
+        project_id: int,
+        command: ShotGridAssetItemTaskBatchAssignModel,
+        current_user: CurrentUserModel,
+        access: ShotGridProjectAccessModel,
+    ) -> ShotGridAssetItemTaskBatchAssignResultModel:
+        actor_user_id, actor_name, dept_name = ShotGridProjectService._actor(current_user)
+        try:
+            cls._require_director_access(access, project_id, actor_user_id)
+            await cls._lock_mutable_project(db, project_id, require_storage_ready=True)
+            access = await ShotGridProjectAccessService.resolve_access(db, current_user, project_id)
+            cls._require_director_access(access, project_id, actor_user_id)
+
+            assigned_item_ids: list[int] = []
+            created_task_count = 0
+            reassigned_task_count = 0
+            for target in sorted(command.items, key=lambda value: value.asset_item_id):
+                item_context = await ShotGridTaskDao.get_asset_item_project_context(
+                    db,
+                    project_id,
+                    target.asset_item_id,
+                )
+                if item_context is None:
+                    raise shot_grid_error(404, 'SG_ASSET_ITEM_NOT_FOUND', '资产制作分项不存在或不可见')
+                asset_id, _ = item_context
+                asset = await ShotGridTaskDao.lock_asset(db, project_id, asset_id)
+                item = await ShotGridTaskDao.lock_asset_item(db, project_id, target.asset_item_id)
+                if asset is None or item is None or item.asset_id != asset.asset_id:
+                    raise shot_grid_error(404, 'SG_ASSET_ITEM_NOT_FOUND', '资产制作分项不存在或不可见')
+                require_asset_production_item(item.production_item, action='批量分配或改派任务')
+                task = await ShotGridTaskDao.get_task_for_asset_item_update(
+                    db,
+                    project_id,
+                    target.asset_item_id,
+                )
+                assign_command = ShotGridTaskAssignModel(
+                    assigneeUserId=command.assignee_user_id,
+                    taskLockVersion=target.task_lock_version,
+                )
+                task_suffix = item.production_item
+                _task, old_assignee = await cls._assign_task(
+                    db,
+                    project_id=project_id,
+                    command=assign_command,
+                    current_task=task,
+                    task_kind='asset_image',
+                    task_name=f'{asset.asset_name} - {task_suffix}'[:MAX_TASK_NAME_LENGTH],
+                    shot_id=None,
+                    asset_item_id=target.asset_item_id,
+                    actor_name=actor_name,
+                )
+                created_task_count += int(old_assignee is None)
+                reassigned_task_count += int(old_assignee is not None)
+                assigned_item_ids.append(target.asset_item_id)
+
+            await cls._audit(
+                db,
+                business_type=BusinessType.GRANT.value,
+                method='batch_assign_asset_items',
+                request_method='POST',
+                actor_name=actor_name,
+                dept_name=dept_name,
+                oper_url=f'/shot-grid/projects/{project_id}/asset-items/batch-assign',
+                payload={
+                    'projectId': project_id,
+                    'assigneeUserId': command.assignee_user_id,
+                    'items': [item.model_dump(by_alias=True) for item in command.items],
+                },
+                result={
+                    'assignedAssetItemIds': assigned_item_ids,
+                    'createdTaskCount': created_task_count,
+                    'reassignedTaskCount': reassigned_task_count,
+                },
+            )
+            result = ShotGridAssetItemTaskBatchAssignResultModel(
+                assignedAssetItemIds=assigned_item_ids,
+                assignedCount=len(assigned_item_ids),
+                createdTaskCount=created_task_count,
+                reassignedTaskCount=reassigned_task_count,
+            )
+            await db.commit()
+            return result
+        except IntegrityError as exc:
+            await db.rollback()
+            mapped = cls._map_integrity_error(exc)
+            if mapped is None:
+                raise
+            raise mapped from exc
+        except ShotGridDomainException:
+            await db.rollback()
+            raise
+        except Exception:
+            await db.rollback()
+            raise
+
+    @classmethod
     async def start_task(
         cls,
         db: AsyncSession,
@@ -288,6 +481,11 @@ class ShotGridTaskService:
             if task.task_status != 'not_started':
                 raise shot_grid_error(409, 'SG_INVALID_STATE_TRANSITION', '只有未开始任务可以执行开始动作')
             cls._require_lock_version(task.lock_version, command.lock_version)
+            if task.task_kind == 'asset_image':
+                item = await ShotGridTaskDao.lock_asset_item(db, project_id, task.asset_item_id)
+                if item is None:
+                    raise shot_grid_error(404, 'SG_ASSET_ITEM_NOT_FOUND', '资产制作分项不存在或不可见')
+                require_asset_production_item(item.production_item, action='开始任务')
 
             now = cls._now()
             task.task_status = 'in_progress'
@@ -362,7 +560,7 @@ class ShotGridTaskService:
         if member is None:
             raise shot_grid_error(422, 'SG_TASK_ASSIGNEE_INVALID', '制作人不是有效的活动项目成员')
         if not member['producer_code']:
-            raise shot_grid_error(422, 'SG_PRODUCER_CODE_REQUIRED', '制作人尚未设置项目内制作人缩写')
+            raise shot_grid_error(422, 'SG_PRODUCER_CODE_REQUIRED', '制作人尚未设置用户昵称')
 
         now = cls._now()
         if current_task is None:
@@ -610,23 +808,30 @@ class ShotGridTaskService:
             return []
         director = access.has_all_scope or access.project_role == 'director'
         owner = row['assignee_user_id'] == access.user_id
+        target_ready = (
+            row['task_kind'] != 'asset_image'
+            or is_asset_production_item_ready(row.get('production_item'))
+        )
         actions: list[str] = []
         if director and cls._has_permission(current_user, 'shotgrid:task:edit'):
             actions.append('task.edit')
         if (
             director
+            and target_ready
             and not row['has_uncommitted_submission']
             and cls._has_permission(current_user, 'shotgrid:task:assign')
         ):
             actions.append('task.assign')
         if (
             row['task_status'] == 'not_started'
+            and target_ready
             and (director or owner)
             and cls._has_permission(current_user, 'shotgrid:task:start')
         ):
             actions.append('task.start')
         if (
             row['task_status'] in {'in_progress', 'revision'}
+            and target_ready
             and (director or owner)
             and not row['has_uncommitted_submission']
             and cls._has_permission(current_user, 'shotgrid:version:add')

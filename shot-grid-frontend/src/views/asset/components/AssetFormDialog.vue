@@ -63,6 +63,7 @@ function validate() {
   if (!Number.isInteger(Number(form.sortOrder)) || Number(form.sortOrder) < 0) return '排序必须是非负整数'
   if (!isEdit.value) {
     if (!form.items.length) return '至少需要一个制作分项'
+    if (form.items.some(item => item.assigneeUserId && !item.productionItem.trim())) return '分配主制作人前必须填写对应制作分项'
     const names = form.items.map(item => item.productionItem.trim().toLocaleLowerCase()).filter(Boolean)
     if (new Set(names).size !== names.length) return '同一资产内制作分项名称不能重复'
     if (form.items.some(item => !Number.isInteger(Number(item.sortOrder)) || Number(item.sortOrder) < 0)) return '制作分项排序必须是非负整数'
@@ -125,13 +126,13 @@ async function submit() {
       </section>
 
       <section v-if="!isEdit" class="asset-items-editor">
-        <header><div><strong>首批制作分项</strong><p>名称允许暂缺，但提交图片版本前必须补齐。</p></div><el-button :icon="Plus" :disabled="saving || form.items.length >= 200" @click="addItem">添加分项</el-button></header>
+        <header><div><strong>首批制作分项</strong><p>未分配的分项名称允许暂缺；选择制作人前必须填写完整。</p></div><el-button :icon="Plus" :disabled="saving || form.items.length >= 200" @click="addItem">添加分项</el-button></header>
         <article v-for="(item,index) in form.items" :key="item.localKey">
           <div class="asset-items-editor__heading"><strong>分项 {{ index + 1 }}</strong><button type="button" :disabled="saving || form.items.length <= 1" @click="removeItem(index)">移除</button></div>
           <div class="asset-items-editor__grid">
             <label><span>制作分项</span><input v-model="item.productionItem" maxlength="240" :disabled="saving" placeholder="允许稍后补齐" /></label>
             <label><span>排序</span><input v-model.number="item.sortOrder" type="number" min="0" step="1" :disabled="saving" /></label>
-            <label><span>主制作人</span><el-select v-model="item.assigneeUserId" class="sg-select" placeholder="暂不分配" :disabled="saving"><el-option label="暂不分配" value="" /><el-option v-for="member in members" :key="member.userId" :label="memberLabel(member)" :value="String(member.userId)" /></el-select></label>
+            <label><span>主制作人</span><el-select v-model="item.assigneeUserId" class="sg-select" :placeholder="item.productionItem.trim() ? '暂不分配' : '请先填写制作分项'" :disabled="saving || !item.productionItem.trim()"><el-option label="暂不分配" value="" /><el-option v-for="member in members" :key="member.userId" :label="memberLabel(member)" :value="String(member.userId)" /></el-select></label>
             <label class="asset-items-editor__wide"><span>分项说明</span><textarea v-model="item.description" rows="2" :disabled="saving" /></label>
             <label class="asset-items-editor__wide"><span>首次任务要求</span><textarea v-model="item.taskDescription" rows="2" :disabled="saving || !item.assigneeUserId" /></label>
             <label class="asset-items-editor__wide"><span>备注</span><input v-model="item.remark" maxlength="500" :disabled="saving" /></label>

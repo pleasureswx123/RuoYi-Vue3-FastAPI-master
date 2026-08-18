@@ -1,6 +1,6 @@
 from collections.abc import Iterable
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from module_admin.entity.do.user_do import SysUser
@@ -53,7 +53,7 @@ class ShotGridShotImportDao:
                 SysUser.user_id,
                 SysUser.user_name,
                 SysUser.nick_name,
-                ShotGridProjectMember.producer_code,
+                func.upper(SysUser.nick_name).label('producer_code'),
             )
             .join(
                 ShotGridProjectMember,
@@ -62,9 +62,41 @@ class ShotGridShotImportDao:
             .where(
                 ShotGridProjectMember.project_id == project_id,
                 ShotGridProjectMember.member_status == 'active',
+                ShotGridProjectMember.project_role == 'creator',
                 SysUser.status == '0',
                 SysUser.del_flag == '0',
                 (SysUser.user_name.in_(names) | SysUser.nick_name.in_(names)),
+            )
+        )
+        return [tuple(row) for row in (await db.execute(statement)).all()]
+
+    @staticmethod
+    async def list_assignable_members_by_ids(
+        db: AsyncSession,
+        project_id: int,
+        user_ids: set[int],
+    ) -> list[tuple[int, str, str, str | None]]:
+        """按用户 ID 重新核验导入界面显式选择的制作人。"""
+        if not user_ids:
+            return []
+        statement = (
+            select(
+                SysUser.user_id,
+                SysUser.user_name,
+                SysUser.nick_name,
+                func.upper(SysUser.nick_name).label('producer_code'),
+            )
+            .join(
+                ShotGridProjectMember,
+                ShotGridProjectMember.user_id == SysUser.user_id,
+            )
+            .where(
+                ShotGridProjectMember.project_id == project_id,
+                ShotGridProjectMember.member_status == 'active',
+                ShotGridProjectMember.project_role == 'creator',
+                SysUser.status == '0',
+                SysUser.del_flag == '0',
+                SysUser.user_id.in_(user_ids),
             )
         )
         return [tuple(row) for row in (await db.execute(statement)).all()]

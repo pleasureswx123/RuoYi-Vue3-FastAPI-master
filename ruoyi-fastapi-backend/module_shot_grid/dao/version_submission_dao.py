@@ -16,7 +16,7 @@ from module_shot_grid.entity.do.project_do import (
     ShotGridScene,
     ShotGridShot,
 )
-from module_shot_grid.entity.do.review_do import ShotGridReviewList
+from module_shot_grid.entity.do.review_do import ShotGridNote, ShotGridReviewList, ShotGridVersionIssueResponse
 from module_shot_grid.entity.do.storage_do import (
     ShotGridProjectStorage,
     ShotGridStorageOperation,
@@ -120,7 +120,7 @@ class ShotGridVersionSubmissionDao:
                 ShotGridProject.project_code,
                 ShotGridProject.project_status,
                 ShotGridProjectMember.project_role.label('assignee_project_role'),
-                ShotGridProjectMember.producer_code,
+                func.upper(SysUser.nick_name).label('producer_code'),
                 ShotGridProjectMember.member_status,
                 SysUser.status.label('assignee_user_status'),
                 SysUser.del_flag.label('assignee_user_del_flag'),
@@ -294,6 +294,61 @@ class ShotGridVersionSubmissionDao:
         db.add(submission)
         await db.flush()
         return submission
+
+    @classmethod
+    async def get_open_issue_identities(
+        cls,
+        db: AsyncSession,
+        task_id: int,
+        *,
+        for_update: bool = False,
+    ) -> list[dict[str, int]]:
+        """按稳定顺序读取任务当前全部未关闭问题；正式提交时锁定问题行。"""
+
+        statement = (
+            select(
+                ShotGridNote.note_id.label('issue_id'),
+                ShotGridNote.version_id.label('origin_version_id'),
+            )
+            .join(ShotGridVersion, ShotGridVersion.version_id == ShotGridNote.version_id)
+            .where(ShotGridVersion.task_id == task_id, ShotGridNote.note_status == 'open')
+            .order_by(ShotGridVersion.version_no, ShotGridNote.create_time, ShotGridNote.note_id)
+        )
+        if for_update:
+            statement = statement.with_for_update(of=ShotGridNote)
+        rows = (await db.execute(statement)).mappings()
+        return [
+            {'issue_id': int(row['issue_id']), 'origin_version_id': int(row['origin_version_id'])}
+            for row in rows
+        ]
+
+    @staticmethod
+    async def add_issue_responses(
+        db: AsyncSession,
+        responses: list[ShotGridVersionIssueResponse],
+    ) -> None:
+        if not responses:
+            return
+        db.add_all(responses)
+        await db.flush()
+
+    @classmethod
+    async def get_submission_issue_responses(
+        cls,
+        db: AsyncSession,
+        submission_id: int,
+    ) -> list[dict[str, Any]]:
+        rows = (
+            await db.execute(
+                select(
+                    ShotGridVersionIssueResponse.note_id.label('issue_id'),
+                    ShotGridVersionIssueResponse.response_text,
+                )
+                .where(ShotGridVersionIssueResponse.submission_id == submission_id)
+                .order_by(ShotGridVersionIssueResponse.note_id)
+            )
+        ).mappings()
+        return [dict(row) for row in rows]
 
     @staticmethod
     def _submission_status_statement() -> Any:

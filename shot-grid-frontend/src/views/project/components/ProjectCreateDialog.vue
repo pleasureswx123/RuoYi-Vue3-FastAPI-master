@@ -30,7 +30,6 @@ const members = ref([
     nickName: props.currentUser.nickName,
     deptName: props.currentUser.dept?.deptName || null,
     projectRole: 'director',
-    producerCode: '',
     isCurrentUser: true
   }
 ])
@@ -123,11 +122,7 @@ function schedulePathPreview() {
 }
 
 function addMember(candidate) {
-  members.value.push({ ...candidate, projectRole: 'creator', producerCode: '' })
-}
-
-function changeMemberRole(member) {
-  if (member.projectRole === 'director') member.producerCode = ''
+  members.value.push({ ...candidate, projectRole: 'creator' })
 }
 
 function buildPayload() {
@@ -137,20 +132,15 @@ function buildPayload() {
   if (!projectName) throw new Error('项目名称不能为空')
   const storageRootId = Number(form.storageRootId)
   if (!Number.isSafeInteger(storageRootId) || storageRootId <= 0) throw new Error('请选择有效的 NAS 根目录')
-  const normalizedMembers = members.value.map((member, index) => {
-    const producerCode = member.projectRole === 'creator' ? member.producerCode.trim().toUpperCase() : ''
-    if (producerCode && !/^[A-Z0-9]{2,12}$/.test(producerCode)) {
-      throw new Error(`第 ${index + 1} 位成员的制作人缩写必须为 2—12 位英文字母或数字`)
-    }
-    return { userId: member.userId, projectRole: member.projectRole, producerCode: producerCode || null }
-  })
+  const normalizedMembers = members.value.map(member => ({
+    userId: member.userId,
+    projectRole: member.projectRole
+  }))
   const directorUserIds = normalizedMembers
     .filter(member => member.projectRole === 'director')
     .map(member => member.userId)
   if (!directorUserIds.length) throw new Error('项目必须至少有一名项目管理者')
   const initialMembers = normalizedMembers.filter(member => member.projectRole !== 'director')
-  const producerCodes = initialMembers.map(member => member.producerCode).filter(Boolean)
-  if (new Set(producerCodes).size !== producerCodes.length) throw new Error('同一项目内制作人缩写不能重复')
   return {
     projectCode, projectName, projectType: 'ai_short_film',
     projectDescription: form.projectDescription.trim() || null, aspectRatio: form.aspectRatio,
@@ -229,8 +219,7 @@ onBeforeUnmount(() => {
         <div class="member-rows">
           <div v-for="(member,index) in members" :key="member.userId" class="member-row">
             <div><strong>{{ member.nickName || member.userName }}</strong><small>{{ member.userName }} · {{ member.deptName || '未分配部门' }}<template v-if="member.isCurrentUser"> · 当前登录账号</template></small></div>
-            <el-select v-model="member.projectRole" class="sg-select" @change="changeMemberRole(member)"><el-option label="制作人员" value="creator" /><el-option label="项目管理者" value="director" /></el-select>
-            <input v-model="member.producerCode" maxlength="12" :disabled="member.projectRole === 'director'" :placeholder="member.projectRole === 'director' ? '管理者无需填写' : '制作人缩写（可空）'" @input="member.producerCode = member.producerCode.toUpperCase()" />
+            <el-select v-model="member.projectRole" class="sg-select"><el-option label="制作人员" value="creator" /><el-option label="项目管理者" value="director" /></el-select>
             <button v-if="!member.isCurrentUser" type="button" @click="members.splice(index,1)">移除</button>
             <span v-else></span>
           </div>
@@ -272,7 +261,7 @@ small, .people-section p, .path-preview p { margin: 0; color: var(--sg-text-mute
 .people-pills span { padding: 7px 10px; color: var(--sg-text-secondary); font-size: 12px; background: var(--sg-accent-soft); border-radius: 999px; }
 .people-pills button { margin-left: 7px; color: var(--sg-danger); cursor: pointer; background: transparent; border: 0; }
 .member-rows { display: grid; gap: 9px; }
-.member-row { display: grid; grid-template-columns: minmax(150px,1fr) 130px minmax(150px,1fr) auto; gap: 9px; align-items: center; }
+.member-row { display: grid; grid-template-columns: minmax(150px,1fr) 150px auto; gap: 9px; align-items: center; }
 .member-row strong, .member-row small { display: block; }
 .member-row strong { font-size: 12px; }
 .member-row button { color: var(--sg-danger); cursor: pointer; background: transparent; border: 0; }

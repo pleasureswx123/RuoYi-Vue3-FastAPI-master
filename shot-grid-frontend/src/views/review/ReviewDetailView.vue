@@ -1,18 +1,15 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ArrowLeft, ChatLineSquare, CircleCheck, Refresh, WarningFilled } from '@element-plus/icons-vue'
+import { ArrowLeft, Refresh, WarningFilled } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 
 import {
-  addNoteReply,
-  addVersionNote,
+  addVersionIssue,
   createReviewAction,
-  getNoteReplies,
   getReviewActions,
   getReviewListDetail,
-  getVersionNotes,
-  resolveNote,
+  getVersionReviewContext,
   transitionManualReviewList
 } from '@/api/shot-grid/reviews'
 import { assertPositiveId } from '@/api/shot-grid/projects'
@@ -35,22 +32,19 @@ const router = useRouter()
 const sessionStore = useSessionStore()
 const review = ref(null)
 const version = ref(null)
-const notes = ref([])
+const reviewContext = ref(null)
 const actions = ref([])
-const repliesByNote = ref({})
 const loading = ref(false)
 const pageError = ref(null)
-const noteBusy = ref(false)
-const resolvingNoteId = ref(null)
-const replyingNoteId = ref(null)
+const issueBusy = ref(false)
 const actionBusy = ref('')
-const actionReason = ref('')
 const manualBusy = ref('')
 const activeManualVersionId = ref(null)
-const selectedNote = ref(null)
+const selectedIssueId = ref(null)
 const mediaWorkspace = ref(null)
-const replyDrafts = reactive({})
-const noteDraft = reactive({ content: '', mediaSeconds: '', annotations: null, isMandatory: false })
+const decisionReason = ref('')
+const issueDraft = reactive({ problem: '', target: '', mediaSeconds: '', annotations: null })
+const verificationDraft = reactive({})
 let pageController = null
 let pageGeneration = 0
 let actionIdempotency = createIdempotencyState('review-action')
@@ -62,40 +56,89 @@ const canDownload = computed(() => hasPermission('shotgrid:file:download'))
 const canQueryReview = computed(() => hasPermission('shotgrid:reviewList:query'))
 const canQueryVersion = computed(() => hasPermission('shotgrid:version:query'))
 const canListVersions = computed(() => hasPermission('shotgrid:version:list'))
-const canListNotes = computed(() => hasPermission('shotgrid:note:list'))
-const canAddNote = computed(() => hasPermission('shotgrid:note:add'))
-const canReply = computed(() => hasPermission('shotgrid:note:reply'))
-const canResolve = computed(() => hasPermission('shotgrid:note:resolve'))
+const canAddIssue = computed(() => hasPermission('shotgrid:note:add') && canSubmitDecision.value)
 const canReview = computed(() => hasPermission('shotgrid:version:review'))
 const canActivateManual = computed(() => hasPermission('shotgrid:reviewList:activate'))
 const canCompleteManual = computed(() => hasPermission('shotgrid:reviewList:complete'))
 const canArchiveManual = computed(() => hasPermission('shotgrid:reviewList:archive'))
-const openMandatoryCount = computed(() => notes.value.filter(item => item.isMandatory && item.noteStatus === 'open').length)
+const carriedIssues = computed(() => reviewContext.value?.carriedIssues || [])
+const currentVersionIssues = computed(() => reviewContext.value?.currentVersionIssues || [])
+const draftAnnotationCount = computed(() => issueDraft.annotations?.items?.length || 0)
+const manualVersions = computed(() => review.value?.versions || [])
 const canSubmitDecision = computed(() => (
   canReview.value && review.value?.reviewStatus === 'active' && version.value?.versionStatus === 'pending_review'
 ))
-const manualVersions = computed(() => review.value?.versions || [])
+const verificationItems = computed(() => carriedIssues.value.map(issue => {
+  const result = verificationDraft[issue.issueId]?.result || ''
+  return {
+    issueId: issue.issueId,
+    result,
+    comment: result === 'still_present' ? verificationDraft[issue.issueId]?.comment?.trim() || null : null
+  }
+}))
+const verificationComplete = computed(() => verificationItems.value.every(item => (
+  item.result && (item.result !== 'still_present' || item.comment)
+)))
+const completedVerificationCount = computed(() => verificationItems.value.filter(item => (
+  item.result && (item.result !== 'still_present' || item.comment)
+)).length)
+const unresolvedVerificationCount = computed(() => verificationItems.value.filter(item => item.result === 'still_present').length)
+const canApprove = computed(() => (
+  canSubmitDecision.value
+  && verificationComplete.value
+  && unresolvedVerificationCount.value === 0
+  && currentVersionIssues.value.length === 0
+))
+const canReject = computed(() => (
+  canSubmitDecision.value
+  && verificationComplete.value
+  && (unresolvedVerificationCount.value > 0 || currentVersionIssues.value.length > 0)
+))
+const mediaIssues = computed(() => [...carriedIssues.value, ...currentVersionIssues.value].map(issue => ({
+  ...issue,
+  noteId: issue.issueId,
+  noteStatus: issue.status,
+  versionId: issue.originVersionId
+})))
+const selectedIssue = computed(() => mediaIssues.value.find(issue => issue.issueId === selectedIssueId.value) || null)
 
 function isCurrent(controller, generation) {
   return pageController === controller && !controller.signal.aborted && pageGeneration === generation
 }
 
-async function loadReplies(noteRows, controller, generation) {
-  if (!canListNotes.value || !noteRows.length) {
-    repliesByNote.value = {}
-    return
+function initializeVerificationDraft() {
+  const activeIds = new Set(carriedIssues.value.map(issue => String(issue.issueId)))
+  Object.keys(verificationDraft).forEach(issueId => {
+    if (!activeIds.has(issueId)) delete verificationDraft[issueId]
+  })
+  carriedIssues.value.forEach(issue => {
+    if (!verificationDraft[issue.issueId]) verificationDraft[issue.issueId] = { result: '', comment: '' }
+  })
+}
+
+async function loadVersionReview(versionId, options = {}) {
+  const [versionResponse, contextResponse, actionResponse] = await Promise.all([
+    getVersionDetail(versionId, options),
+    canReview.value
+      ? getVersionReviewContext(versionId, options)
+      : Promise.resolve({ data: { currentVersion: null, carriedIssues: [], currentVersionIssues: [] } }),
+    getReviewActions(versionId, { pageNum: 1, pageSize: 100, orderByColumn: 'createTime', isAsc: 'descending' }, options)
+  ])
+  return {
+    version: versionResponse.data,
+    context: contextResponse.data,
+    actions: actionResponse.rows || []
   }
-  const settled = await Promise.allSettled(noteRows.map(item => getNoteReplies(item.noteId, {
-    pageNum: 1,
-    pageSize: 100,
-    orderByColumn: 'createTime',
-    isAsc: 'ascending'
-  }, { signal: controller.signal })))
-  if (!isCurrent(controller, generation)) return
-  repliesByNote.value = Object.fromEntries(noteRows.map((item, index) => [
-    item.noteId,
-    settled[index].status === 'fulfilled' ? (settled[index].value.rows || []) : []
-  ]))
+}
+
+function applyVersionReview(payload, versionId) {
+  version.value = payload.version
+  reviewContext.value = payload.context
+  actions.value = payload.actions
+  activeManualVersionId.value = versionId
+  selectedIssueId.value = null
+  decisionReason.value = ''
+  initializeVerificationDraft()
 }
 
 async function loadReview() {
@@ -119,25 +162,14 @@ async function loadReview() {
       if (!isCurrent(controller, generation)) return
       review.value = detail
       version.value = null
-      notes.value = []
+      reviewContext.value = null
       actions.value = []
       return
     }
-    const [versionResponse, noteResponse, actionResponse] = await Promise.all([
-      getVersionDetail(versionId, { signal: controller.signal }),
-      canListNotes.value
-        ? getVersionNotes(versionId, { pageNum: 1, pageSize: 100, orderByColumn: 'createTime', isAsc: 'descending' }, { signal: controller.signal })
-        : Promise.resolve({ rows: [] }),
-      getReviewActions(versionId, { pageNum: 1, pageSize: 100, orderByColumn: 'createTime', isAsc: 'descending' }, { signal: controller.signal })
-    ])
+    const payload = await loadVersionReview(versionId, { signal: controller.signal })
     if (!isCurrent(controller, generation)) return
     review.value = detail
-    version.value = versionResponse.data
-    activeManualVersionId.value = versionId
-    selectedNote.value = null
-    notes.value = noteResponse.rows || []
-    actions.value = actionResponse.rows || []
-    await loadReplies(notes.value, controller, generation)
+    applyVersionReview(payload, versionId)
   } catch (error) {
     if (error?.code !== 'ERR_CANCELED' && !controller.signal.aborted) {
       pageError.value = reviewErrorState(error, '审核单加载失败')
@@ -151,20 +183,12 @@ async function selectManualVersion(item) {
   if (Number(item.versionId) === Number(version.value?.versionId)) return
   loading.value = true
   try {
-    const [versionResponse, noteResponse, actionResponse] = await Promise.all([
-      getVersionDetail(item.versionId),
-      canListNotes.value ? getVersionNotes(item.versionId, { pageNum: 1, pageSize: 100, orderByColumn: 'createTime', isAsc: 'descending' }) : Promise.resolve({ rows: [] }),
-      getReviewActions(item.versionId, { pageNum: 1, pageSize: 100, orderByColumn: 'createTime', isAsc: 'descending' })
-    ])
-    version.value = versionResponse.data
-    activeManualVersionId.value = item.versionId
-    notes.value = noteResponse.rows || []
-    actions.value = actionResponse.rows || []
-    repliesByNote.value = {}
-    selectedNote.value = null
+    applyVersionReview(await loadVersionReview(item.versionId), item.versionId)
   } catch (error) {
     ElMessage.error(reviewErrorState(error, '切换审核版本失败').message)
-  } finally { loading.value = false }
+  } finally {
+    loading.value = false
+  }
 }
 
 async function transitionManual(action) {
@@ -175,111 +199,94 @@ async function transitionManual(action) {
     await loadReview()
   } catch (error) {
     ElMessage.error(reviewErrorState(error, '审核单状态更新失败').message)
-  } finally { manualBusy.value = '' }
+  } finally {
+    manualBusy.value = ''
+  }
 }
 
-async function submitNote() {
-  const content = noteDraft.content.trim()
-  if (!content) {
-    ElMessage.warning('请填写审核意见')
+function issueContent() {
+  const problem = issueDraft.problem.trim()
+  const target = issueDraft.target.trim()
+  return [problem ? `问题：${problem}` : '', target ? `修改目标：${target}` : ''].filter(Boolean).join('\n') || null
+}
+
+async function submitIssue() {
+  const content = issueContent()
+  if (!content && !draftAnnotationCount.value) {
+    ElMessage.warning('请填写修改意见，或在画面上添加至少一个标注')
     return
   }
-  const seconds = noteDraft.mediaSeconds === '' ? null : Number(noteDraft.mediaSeconds)
+  const seconds = issueDraft.mediaSeconds === '' ? null : Number(issueDraft.mediaSeconds)
   if (seconds !== null && (!Number.isFinite(seconds) || seconds < 0)) {
     ElMessage.warning('时间点必须是大于等于 0 的秒数')
     return
   }
-  noteBusy.value = true
+  issueBusy.value = true
   try {
-    await addVersionNote(version.value.versionId, {
+    await addVersionIssue(version.value.versionId, {
       content,
       mediaTimeMs: seconds === null ? null : Math.round(seconds * 1000),
-      annotations: noteDraft.annotations,
-      isMandatory: noteDraft.isMandatory
+      annotations: issueDraft.annotations
     })
-    Object.assign(noteDraft, { content: '', mediaSeconds: '', annotations: null, isMandatory: false })
+    Object.assign(issueDraft, { problem: '', target: '', mediaSeconds: '', annotations: null })
     mediaWorkspace.value?.clearDraft()
-    ElMessage.success('审核意见已添加')
+    ElMessage.success('本版修改问题已添加')
     await loadReview()
   } catch (error) {
-    ElMessage.error(reviewErrorState(error, '添加意见失败').message)
+    ElMessage.error(reviewErrorState(error, '添加修改问题失败').message)
   } finally {
-    noteBusy.value = false
+    issueBusy.value = false
   }
 }
 
 function captureMediaTime(milliseconds) {
-  noteDraft.mediaSeconds = (Number(milliseconds) / 1000).toFixed(3).replace(/\.000$/, '')
+  issueDraft.mediaSeconds = (Number(milliseconds) / 1000).toFixed(3).replace(/\.000$/, '')
 }
 
 function updateAnnotations(annotations) {
-  noteDraft.annotations = annotations
+  issueDraft.annotations = annotations
 }
 
-function focusNote(note) {
-  selectedNote.value = note
+async function focusIssue(issue) {
+  selectedIssueId.value = issue.issueId
+  await nextTick()
   mediaWorkspace.value?.seekToNote()
 }
 
-function openResubmission() {
-  router.push(`/tasks/${review.value.taskId}#version-workspace`)
-}
-
-async function submitReply(note) {
-  const content = String(replyDrafts[note.noteId] || '').trim()
-  if (!content) {
-    ElMessage.warning('请填写回复内容')
-    return
-  }
-  replyingNoteId.value = note.noteId
-  try {
-    await addNoteReply(note.noteId, { content })
-    replyDrafts[note.noteId] = ''
-    ElMessage.success('回复已添加')
-    await loadReview()
-  } catch (error) {
-    ElMessage.error(reviewErrorState(error, '回复失败').message)
-  } finally {
-    replyingNoteId.value = null
-  }
-}
-
-async function markResolved(note) {
-  resolvingNoteId.value = note.noteId
-  try {
-    await resolveNote(note.noteId)
-    ElMessage.success('意见已解决')
-    await loadReview()
-  } catch (error) {
-    ElMessage.error(reviewErrorState(error, '解决意见失败').message)
-  } finally {
-    resolvingNoteId.value = null
-  }
+function openTask() {
+  if (review.value?.taskId) router.push(`/tasks/${review.value.taskId}#version-workspace`)
 }
 
 async function submitDecision(actionType) {
-  if (!canSubmitDecision.value) return
-  const reason = actionReason.value.trim()
-  if (actionType === 'approve' && openMandatoryCount.value) {
-    ElMessage.warning(`仍有 ${openMandatoryCount.value} 条必改意见未解决，暂不能通过`)
+  if (!canSubmitDecision.value || actionBusy.value) return
+  if (draftAnnotationCount.value) {
+    ElMessage.warning(`还有 ${draftAnnotationCount.value} 个画面标注未保存为修改问题`)
     return
   }
-  if (actionType === 'reject' && !reason) {
-    ElMessage.warning('退回修改时请填写原因')
+  if (actionType !== 'defer' && !verificationComplete.value) {
+    ElMessage.warning('请逐条确认上一版问题；选择“仍然存在”时必须填写未解决原因')
+    return
+  }
+  if (actionType === 'approve' && !canApprove.value) {
+    ElMessage.warning('只有上一版问题全部修复且当前版没有新问题时才能通过')
+    return
+  }
+  if (actionType === 'reject' && !canReject.value) {
+    ElMessage.warning('退回前需要存在仍未修复的历史问题，或至少一条当前版新问题')
     return
   }
   const payload = {
     actionType,
-    reason: reason || null,
-    lockVersion: version.value.lockVersion
+    reason: decisionReason.value.trim() || null,
+    lockVersion: reviewContext.value?.currentVersion?.lockVersion ?? version.value.lockVersion,
+    issueVerifications: actionType === 'defer' ? [] : verificationItems.value
   }
   const context = { reviewListId: reviewListId.value, versionId: version.value.versionId, ...payload }
   actionBusy.value = actionType
   try {
     await createReviewAction(version.value.versionId, payload, actionIdempotency.forPayload(context))
     actionIdempotency.reset()
-    actionReason.value = ''
-    ElMessage.success(`${reviewActionMeta(actionType).label}已记录`)
+    ElMessage.success(`${reviewActionMeta(actionType).label}已提交`)
     await loadReview()
   } catch (error) {
     const state = reviewErrorState(error, '审核决定提交失败')
@@ -301,8 +308,8 @@ onBeforeUnmount(() => {
   <section class="sg-page review-detail-page">
     <header class="sg-page-heading">
       <div class="review-detail-heading">
-        <el-button circle :icon="ArrowLeft" aria-label="返回审核列表" @click="router.push('/reviews')" />
-        <div><p class="sg-eyebrow">REVIEW DETAIL</p><h2 class="sg-page-title">{{ review?.reviewListName || '审核单详情' }}</h2><p class="sg-page-description">审核动作与意见固定绑定当前版本，已提交历史不会覆盖。</p></div>
+        <el-button text :icon="ArrowLeft" @click="router.push('/reviews')">返回审核列表</el-button>
+        <div v-if="review"><p class="sg-eyebrow">REVIEW DETAIL</p><h2>{{ review.reviewListName }}</h2><p>审核意见绑定提出时的版本；下一版必须逐条说明修改结果，并由审核人逐条确认。</p></div>
       </div>
       <div class="heading-actions"><span v-if="review" class="review-state" :data-tone="reviewStatusMeta(review.reviewStatus).tone">{{ reviewStatusMeta(review.reviewStatus).label }}</span><el-button :icon="Refresh" :loading="loading" @click="loadReview">刷新</el-button></div>
     </header>
@@ -310,11 +317,11 @@ onBeforeUnmount(() => {
     <ProjectStatePanel v-if="pageError" :title="pageError.title" :message="pageError.message" :retryable="pageError.retryable" @retry="loadReview" />
     <div v-else-if="loading && !version" class="review-detail-loading" role="status">正在加载审核内容…</div>
     <template v-else-if="review">
-      <section class="review-context">
-        <div><span>审核模式</span><strong>{{ review.reviewMode === 'auto_single' ? '自动单版本审核' : '人工批量审核' }}</strong></div>
-        <div><span>审核日期</span><strong>{{ formatReviewDateTime(review.reviewDate) }}</strong></div>
+      <section class="review-context-strip">
+        <div><span>当前版本</span><strong>{{ version?.versionNumber || '—' }}</strong></div>
+        <div><span>历史问题待确认</span><strong>{{ carriedIssues.length }}</strong></div>
+        <div><span>当前版新问题</span><strong :class="{ danger: currentVersionIssues.length }">{{ currentVersionIssues.length }}</strong></div>
         <div><span>关联任务</span><strong>{{ version?.taskId ? `#${version.taskId}` : '批量队列' }}</strong></div>
-        <div><span>未解决必改</span><strong :class="{ danger: openMandatoryCount }">{{ openMandatoryCount }}</strong></div>
       </section>
 
       <section v-if="review.reviewMode === 'manual_batch'" class="manual-strip">
@@ -324,51 +331,70 @@ onBeforeUnmount(() => {
 
       <div v-if="version" class="review-detail-grid">
         <main class="review-main">
-          <ReviewMediaWorkspace ref="mediaWorkspace" :version="version" :selected-note="selectedNote" :can-download="canDownload" :can-compare="canListVersions" :can-annotate="canAddNote" @capture-time="captureMediaTime" @annotations-change="updateAnnotations" />
+          <section class="review-work-step">
+            <header class="work-step-heading"><span class="step-number">1</span><div><strong>查看当前版本</strong><p>先完整查看作品；需要指出具体位置时，再使用画面标注。</p></div></header>
+            <ReviewMediaWorkspace ref="mediaWorkspace" :version="version" :selected-note="selectedIssue" :can-download="canDownload" :can-compare="canListVersions" :can-annotate="canAddIssue" @capture-time="captureMediaTime" @annotations-change="updateAnnotations" @clear-note-focus="selectedIssueId = null" />
+          </section>
 
           <VersionDetailCard :version="version" :can-download="canDownload" />
 
-          <section class="decision-panel">
-            <header><div><p class="sg-eyebrow">DECISION</p><h3>审核决定</h3></div><small v-if="!canSubmitDecision">当前版本已经完成决定，或你没有审核权限。</small></header>
-            <textarea v-model="actionReason" rows="3" maxlength="1000" :disabled="!canSubmitDecision" placeholder="填写审核说明；退回修改时必填" />
-            <div class="decision-actions">
-              <el-button type="success" :loading="actionBusy === 'approve'" :disabled="!canSubmitDecision || openMandatoryCount > 0 || Boolean(actionBusy)" @click="submitDecision('approve')">确认通过</el-button>
-              <el-button type="danger" plain :loading="actionBusy === 'reject'" :disabled="!canSubmitDecision || Boolean(actionBusy)" @click="submitDecision('reject')">退回修改</el-button>
-              <el-button :loading="actionBusy === 'defer'" :disabled="!canSubmitDecision || Boolean(actionBusy)" @click="submitDecision('defer')">稍后决定</el-button>
-            </div>
-            <el-button v-if="version.versionStatus === 'rejected'" class="resubmit-link" type="primary" plain @click="openResubmission">前往任务提交修订版本</el-button>
-            <p v-if="openMandatoryCount" class="decision-warning"><el-icon><WarningFilled /></el-icon>解决全部必改意见后才能确认通过。</p>
-          </section>
-
           <section class="action-history">
             <header><div><p class="sg-eyebrow">HISTORY</p><h3>审核动作记录</h3></div><span>{{ actions.length }} 条</span></header>
-            <div v-if="actions.length" class="action-list">
-              <article v-for="item in actions" :key="item.actionId"><span class="action-dot" :data-tone="reviewActionMeta(item.actionType).tone" /><div><strong>{{ reviewActionMeta(item.actionType).label }}</strong><p>{{ item.reason || '未填写说明' }}</p><small>{{ item.reviewerName || `用户 #${item.reviewerUserId}` }} · {{ formatReviewDateTime(item.createTime) }} · {{ item.fromStatus }} → {{ item.toStatus }}</small></div></article>
-            </div>
+            <div v-if="actions.length" class="action-list"><article v-for="item in actions" :key="item.actionId"><span class="action-dot" :data-tone="reviewActionMeta(item.actionType).tone" /><div><strong>{{ reviewActionMeta(item.actionType).label }}</strong><p>{{ item.reason || '未填写整体说明' }}</p><small>{{ item.reviewerName || `用户 #${item.reviewerUserId}` }} · {{ formatReviewDateTime(item.createTime) }} · {{ item.fromStatus }} → {{ item.toStatus }}</small></div></article></div>
             <p v-else class="empty-block">尚无审核动作。</p>
           </section>
         </main>
 
-        <aside class="notes-panel">
-          <header><div><p class="sg-eyebrow">NOTES</p><h3>审核意见</h3></div><span>{{ notes.length }} 条</span></header>
-          <form v-if="canAddNote" class="note-compose" @submit.prevent="submitNote">
-            <textarea v-model="noteDraft.content" rows="4" maxlength="2000" placeholder="指出需要调整的内容…" />
-            <div><label><span>时间点（秒，可选）</span><input v-model="noteDraft.mediaSeconds" type="number" min="0" step="0.001" placeholder="例如 12.5" /></label><el-checkbox v-model="noteDraft.isMandatory">标记为必改</el-checkbox></div>
-            <el-button native-type="submit" type="primary" :loading="noteBusy">添加意见</el-button>
-          </form>
-          <p v-else-if="!canListNotes" class="permission-hint">你没有查看审核意见的权限。</p>
+        <aside class="review-assistant">
+          <header class="assistant-heading"><div><p class="sg-eyebrow">REVIEW ASSISTANT</p><h3>完成本轮审核</h3></div><span>按顺序完成三步</span></header>
 
-          <div v-if="canListNotes && notes.length" class="note-list">
-            <article v-for="note in notes" :key="note.noteId" class="note-card" :class="{ 'is-selected': selectedNote?.noteId === note.noteId }" :data-status="note.noteStatus" @click="focusNote(note)">
-              <header><div><strong>{{ note.reviewerName || `用户 #${note.reviewerUserId}` }}</strong><span v-if="note.isMandatory" class="mandatory-chip">必改</span><span v-if="note.mediaTimeMs !== null && note.mediaTimeMs !== undefined" class="time-chip">{{ formatMediaTime(note.mediaTimeMs) }}</span></div><span class="note-status">{{ note.noteStatus === 'resolved' ? '已解决' : '待处理' }}</span></header>
-              <p>{{ note.content }}</p>
-              <small>{{ formatReviewDateTime(note.createTime) }}</small>
-              <div v-if="repliesByNote[note.noteId]?.length" class="reply-list"><div v-for="reply in repliesByNote[note.noteId]" :key="reply.replyId"><el-icon><ChatLineSquare /></el-icon><p><strong>{{ reply.replyUserName || `用户 #${reply.replyUserId}` }}</strong>{{ reply.content }}<small>{{ formatReviewDateTime(reply.createTime) }}</small></p></div></div>
-              <form v-if="canReply" class="reply-compose" @submit.prevent="submitReply(note)"><input v-model="replyDrafts[note.noteId]" maxlength="1000" placeholder="回复这条意见…" /><el-button native-type="submit" size="small" :loading="replyingNoteId === note.noteId">回复</el-button></form>
-              <el-button v-if="canResolve && note.noteStatus === 'open'" class="resolve-button" text type="success" :icon="CircleCheck" :loading="resolvingNoteId === note.noteId" @click="markResolved(note)">标记已解决</el-button>
-            </article>
-          </div>
-          <p v-else-if="canListNotes" class="empty-block">当前版本还没有审核意见。</p>
+          <section class="assistant-section carried-panel">
+            <header class="assistant-section-heading"><span class="step-number">2</span><div><h3>确认历史未关闭问题</h3><p>查看制作人的本轮修改说明，并确认每个问题在当前版是否仍然存在。</p></div><strong>{{ carriedIssues.length }} 条</strong></header>
+            <div v-if="carriedIssues.length" class="issue-list carried-list">
+              <article v-for="issue in carriedIssues" :key="issue.issueId" class="issue-card" :class="{ 'is-selected': selectedIssueId === issue.issueId }">
+                <header><span>{{ issue.originVersionNumber }} 问题</span><button type="button" @click="focusIssue(issue)">{{ issue.annotations?.items?.length ? `查看标注 ${issue.annotations.items.length} 处` : '定位原版意见' }}</button></header>
+                <p>{{ issue.content || '该问题仅包含画面标注' }}</p>
+                <div class="maker-response"><span>制作人对 {{ version.versionNumber }} 的处理说明</span><strong>{{ issue.currentVersionResponse.responseText }}</strong></div>
+                <el-radio-group v-model="verificationDraft[issue.issueId].result" class="verification-options">
+                  <el-radio-button value="resolved">已修复</el-radio-button>
+                  <el-radio-button value="still_present">仍然存在</el-radio-button>
+                </el-radio-group>
+                <label v-if="verificationDraft[issue.issueId].result === 'still_present'" class="verification-comment">
+                  <span>说明仍然存在的问题 <em>*</em></span>
+                  <el-input v-model="verificationDraft[issue.issueId].comment" type="textarea" :rows="2" maxlength="1000" show-word-limit placeholder="请具体说明哪里仍未达到要求，方便制作人下一轮准确修改。" />
+                </label>
+              </article>
+            </div>
+            <p v-else class="empty-block compact">这是第一版，或此前没有需要带入确认的问题。</p>
+          </section>
+
+          <section class="assistant-section current-panel">
+            <header class="assistant-section-heading"><span class="step-number">3</span><div><h3>记录当前版新问题</h3><p>文字和画面标注至少填写一项；可以连续添加多条。</p></div><strong>{{ currentVersionIssues.length }} 条</strong></header>
+            <form v-if="canAddIssue" class="issue-compose" @submit.prevent="submitIssue">
+              <el-input v-model="issueDraft.problem" type="textarea" :rows="2" maxlength="1000" show-word-limit placeholder="问题是什么？例如：眼睛红色饱和度仍然过高。" />
+              <el-input v-model="issueDraft.target" type="textarea" :rows="2" maxlength="1000" show-word-limit placeholder="希望如何修改？例如：降低红色饱和度，并保持肤色不变。" />
+              <div class="issue-compose-meta"><el-input v-model="issueDraft.mediaSeconds" type="number" min="0" step="0.001" placeholder="时间点（秒，可选）" /><span :class="{ active: draftAnnotationCount }">{{ draftAnnotationCount ? `已添加 ${draftAnnotationCount} 个画面标注` : '尚未添加画面标注' }}</span></div>
+              <el-button native-type="submit" type="primary" :loading="issueBusy">保存为一条修改问题</el-button>
+            </form>
+            <div v-if="currentVersionIssues.length" class="issue-list current-list"><article v-for="(issue, index) in currentVersionIssues" :key="issue.issueId" class="issue-card"><header><span>当前版问题 #{{ index + 1 }}</span><button type="button" @click="focusIssue(issue)">{{ issue.annotations?.items?.length ? `查看标注 ${issue.annotations.items.length} 处` : '查看对应作品' }}</button></header><p>{{ issue.content || '该问题仅包含画面标注' }}</p><small>{{ formatReviewDateTime(issue.createTime) }}</small></article></div>
+          </section>
+
+          <section class="assistant-section decision-panel">
+            <header class="assistant-section-heading"><span class="step-number">4</span><div><h3>提交审核结果</h3><p>审核结论与上面的逐条确认一起保存。</p></div></header>
+            <div class="decision-summary">
+              <span>历史问题 {{ carriedIssues.length }} 条，已完整确认 {{ completedVerificationCount }} 条</span>
+              <strong v-if="unresolvedVerificationCount || currentVersionIssues.length" class="danger">仍需修改 {{ unresolvedVerificationCount + currentVersionIssues.length }} 条</strong>
+              <strong v-else-if="verificationComplete" class="success">当前没有待修改问题</strong>
+            </div>
+            <el-input v-model="decisionReason" type="textarea" :rows="2" maxlength="1000" placeholder="本轮审核整体说明（可选）" />
+            <p v-if="!verificationComplete" class="decision-warning"><el-icon><WarningFilled /></el-icon>请先逐条确认全部历史问题；“仍然存在”必须说明未解决原因。</p>
+            <div class="decision-actions">
+              <el-button type="success" :loading="actionBusy === 'approve'" :disabled="!canApprove || Boolean(actionBusy)" @click="submitDecision('approve')">全部符合，确认通过</el-button>
+              <el-button type="danger" plain :loading="actionBusy === 'reject'" :disabled="!canReject || Boolean(actionBusy)" @click="submitDecision('reject')">按问题退回修改</el-button>
+              <el-button :loading="actionBusy === 'defer'" :disabled="!canSubmitDecision || Boolean(actionBusy)" @click="submitDecision('defer')">稍后决定</el-button>
+            </div>
+            <el-button v-if="version.versionStatus === 'rejected'" text type="primary" @click="openTask">查看制作任务</el-button>
+          </section>
         </aside>
       </div>
     </template>
@@ -376,6 +402,12 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.review-detail-page{display:grid;gap:18px}.review-detail-heading,.heading-actions{display:flex;gap:13px;align-items:center}.review-detail-heading h2{margin:3px 0}.review-detail-heading p{margin:0;color:var(--sg-text-muted);font-size:11px}.review-state{padding:6px 10px;color:var(--sg-text-secondary);font-size:11px;background:rgba(255,255,255,.05);border-radius:999px}.review-state[data-tone=warning]{color:var(--sg-accent);background:var(--sg-accent-soft)}.review-state[data-tone=success]{color:var(--sg-success);background:rgba(98,212,155,.1)}.review-detail-loading{display:grid;min-height:320px;color:var(--sg-text-muted);background:var(--sg-surface);border:1px dashed var(--sg-border-strong);border-radius:var(--sg-radius-lg);place-items:center}
+.review-context-strip{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.review-context-strip>div{display:grid;gap:6px;padding:13px 15px;background:var(--sg-surface);border:1px solid var(--sg-border);border-radius:10px}.review-context-strip span{color:var(--sg-text-muted);font-size:10px}.review-context-strip strong{font-size:13px}.danger{color:var(--sg-danger)!important}.success{color:var(--sg-success)!important}
 .manual-strip{display:grid;gap:14px;padding:18px;background:var(--sg-surface);border:1px solid var(--sg-border);border-radius:var(--sg-radius-md)}.manual-strip>header{display:flex;gap:14px;align-items:center;justify-content:space-between}.manual-strip h3{margin:3px 0 0;font-size:16px}.manual-strip>header>div:last-child,.manual-version-list{display:flex;gap:8px;flex-wrap:wrap}
-.review-detail-page{display:grid;gap:18px}.review-detail-heading,.heading-actions{display:flex;gap:13px;align-items:center}.review-state{padding:6px 10px;color:var(--sg-text-secondary);font-size:11px;background:rgba(255,255,255,.05);border-radius:999px}.review-state[data-tone=warning]{color:var(--sg-accent);background:var(--sg-accent-soft)}.review-state[data-tone=success]{color:var(--sg-success);background:rgba(98,212,155,.1)}.review-detail-loading{display:grid;min-height:320px;color:var(--sg-text-muted);background:var(--sg-surface);border:1px dashed var(--sg-border-strong);border-radius:var(--sg-radius-lg);place-items:center}.review-context{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.review-context>div{display:grid;gap:6px;padding:13px 15px;background:var(--sg-surface);border:1px solid var(--sg-border);border-radius:10px}.review-context span{color:var(--sg-text-muted);font-size:10px}.review-context strong{font-size:12px}.review-context strong.danger{color:var(--sg-danger)}.review-detail-grid{display:grid;grid-template-columns:minmax(0,1.65fr) minmax(330px,.75fr);gap:18px;align-items:start}.review-main{display:grid;gap:18px}.decision-panel,.action-history,.notes-panel{padding:20px;background:var(--sg-surface);border:1px solid var(--sg-border);border-radius:var(--sg-radius-md)}.decision-panel>header,.action-history>header,.notes-panel>header{display:flex;justify-content:space-between;gap:14px;align-items:flex-start}.decision-panel h3,.action-history h3,.notes-panel h3{margin:3px 0 0;font-size:16px}.decision-panel header small,.action-history header>span,.notes-panel header>span{color:var(--sg-text-muted);font-size:10px}.decision-panel textarea,.note-compose textarea,.note-compose input,.reply-compose input{box-sizing:border-box;width:100%;color:var(--sg-text);font:inherit;background:rgba(255,255,255,.03);border:1px solid var(--sg-border-strong);border-radius:9px;outline:none}.decision-panel textarea,.note-compose textarea{padding:11px;margin-top:15px;resize:vertical}.decision-panel textarea:focus,.note-compose textarea:focus,.note-compose input:focus,.reply-compose input:focus{border-color:var(--sg-accent)}.decision-actions{display:flex;gap:9px;margin-top:10px;flex-wrap:wrap}.resubmit-link{margin-top:10px}.decision-warning{display:flex;gap:6px;align-items:center;margin:10px 0 0;color:var(--sg-danger);font-size:10px}.action-list{display:grid;gap:12px;margin-top:15px}.action-list article{display:grid;grid-template-columns:auto 1fr;gap:10px}.action-dot{width:9px;height:9px;margin-top:4px;background:var(--sg-text-muted);border-radius:50%}.action-dot[data-tone=success]{background:var(--sg-success)}.action-dot[data-tone=danger]{background:var(--sg-danger)}.action-dot[data-tone=warning]{background:var(--sg-accent)}.action-list strong,.action-list p,.action-list small{display:block;margin:0}.action-list p{margin:4px 0;color:var(--sg-text-secondary);font-size:11px}.action-list small{color:var(--sg-text-muted);font-size:9px}.notes-panel{position:sticky;top:18px}.note-compose{display:grid;gap:10px;padding:12px;margin-top:15px;background:rgba(0,0,0,.12);border-radius:10px}.note-compose textarea{margin-top:0}.note-compose>div{display:flex;gap:12px;align-items:end;justify-content:space-between}.note-compose label{display:grid;min-width:0;gap:5px;color:var(--sg-text-muted);font-size:9px}.note-compose input{height:34px;padding:0 9px}.note-compose>.el-button{justify-self:end}.note-list{display:grid;gap:11px;margin-top:15px}.note-card{padding:13px;cursor:pointer;background:rgba(255,255,255,.025);border:1px solid var(--sg-border);border-radius:10px}.note-card.is-selected{border-color:var(--sg-accent);box-shadow:0 0 0 1px var(--sg-accent-soft)}.note-card[data-status=resolved]{opacity:.72}.note-card>header{display:flex;gap:8px;align-items:center;justify-content:space-between}.note-card>header>div{display:flex;gap:6px;align-items:center}.note-card strong{font-size:11px}.mandatory-chip,.time-chip,.note-status{padding:3px 6px;font-size:8px;border-radius:999px}.mandatory-chip{color:var(--sg-danger);background:rgba(244,92,92,.1)}.time-chip{color:var(--sg-accent);background:var(--sg-accent-soft)}.note-status{color:var(--sg-text-muted);background:rgba(255,255,255,.05)}.note-card>p{margin:10px 0 7px;color:var(--sg-text-secondary);font-size:11px;line-height:1.65;white-space:pre-wrap}.note-card>small{color:var(--sg-text-muted);font-size:9px}.reply-list{display:grid;gap:7px;padding:10px;margin-top:10px;background:rgba(0,0,0,.13);border-radius:8px}.reply-list>div{display:grid;grid-template-columns:auto 1fr;gap:7px;color:var(--sg-text-muted)}.reply-list p{display:grid;gap:3px;margin:0;color:var(--sg-text-secondary);font-size:10px}.reply-list small{color:var(--sg-text-muted);font-size:8px}.reply-compose{display:grid;grid-template-columns:1fr auto;gap:7px;margin-top:10px}.reply-compose input{height:32px;padding:0 9px;font-size:10px}.resolve-button{margin-top:6px}.empty-block,.permission-hint{padding:24px 8px;margin:12px 0 0;color:var(--sg-text-muted);font-size:11px;text-align:center}.permission-hint{color:var(--sg-danger)}@media(max-width:1050px){.review-detail-grid{grid-template-columns:1fr}.notes-panel{position:static}}@media(max-width:700px){.review-context{grid-template-columns:1fr 1fr}.sg-page-heading{align-items:flex-start}.heading-actions{align-items:flex-end;flex-direction:column}.note-compose>div{align-items:flex-start;flex-direction:column}}
+.review-detail-grid{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(380px,.8fr);gap:18px;align-items:start}.review-main{display:grid;gap:18px}.review-work-step{display:grid;gap:12px}.work-step-heading{display:flex;gap:10px;align-items:center;padding:0 3px}.work-step-heading div{display:grid;gap:2px}.work-step-heading strong{font-size:13px}.work-step-heading p{margin:0;color:var(--sg-text-muted);font-size:10px}.step-number{display:grid;flex:0 0 auto;width:24px;height:24px;color:var(--sg-accent);font-size:11px;font-weight:800;background:var(--sg-accent-soft);border:1px solid rgba(255,179,71,.35);border-radius:50%;place-items:center}
+.review-assistant{position:sticky;top:18px;display:grid;max-height:calc(100vh - 36px);overflow-y:auto;background:var(--sg-surface);border:1px solid var(--sg-border-strong);border-radius:var(--sg-radius-md);box-shadow:0 16px 36px rgba(0,0,0,.16);scrollbar-width:thin}.assistant-heading{display:flex;gap:12px;align-items:flex-start;justify-content:space-between;padding:17px 18px}.assistant-heading h3{margin:3px 0 0;font-size:17px}.assistant-heading>span{color:var(--sg-text-muted);font-size:9px}.assistant-section{display:grid;gap:12px;padding:15px 18px;border-top:1px solid var(--sg-border)}.assistant-section-heading{display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:start}.assistant-section-heading h3{margin:1px 0 0;font-size:14px}.assistant-section-heading p{margin:3px 0 0;color:var(--sg-text-muted);font-size:9px;line-height:1.45}.assistant-section-heading>strong{color:var(--sg-text-muted);font-size:10px}
+.issue-list{display:grid;gap:10px}.issue-card{display:grid;gap:9px;padding:12px;background:rgba(255,255,255,.025);border:1px solid var(--sg-border);border-radius:10px}.issue-card.is-selected{border-color:var(--sg-accent);box-shadow:0 0 0 1px var(--sg-accent-soft)}.issue-card>header{display:flex;gap:8px;align-items:center;justify-content:space-between}.issue-card>header span{color:var(--sg-accent);font-size:9px;font-weight:700}.issue-card>header button{padding:0;color:#68b5ff;font:inherit;font-size:9px;background:transparent;border:0;cursor:pointer}.issue-card>p{margin:0;color:var(--sg-text-secondary);font-size:10px;line-height:1.65;white-space:pre-wrap}.issue-card>small{color:var(--sg-text-muted);font-size:8px}.maker-response{display:grid;gap:5px;padding:9px;color:var(--sg-text-secondary);background:rgba(104,181,255,.07);border-radius:8px}.maker-response span{font-size:8px}.maker-response strong{font-size:10px;line-height:1.55;white-space:pre-wrap}.verification-options{width:100%}.verification-options :deep(.el-radio-button){width:50%}.verification-options :deep(.el-radio-button__inner){width:100%}.verification-comment{display:grid;gap:6px}.verification-comment>span{color:var(--sg-text-secondary);font-size:9px}.verification-comment em{color:var(--sg-danger);font-style:normal}.issue-compose{display:grid;gap:9px;padding:11px;background:rgba(0,0,0,.12);border-radius:10px}.issue-compose>.el-button{justify-self:end}.issue-compose-meta{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center}.issue-compose-meta span{color:var(--sg-text-muted);font-size:8px}.issue-compose-meta span.active{color:#68b5ff}.empty-block{padding:20px 8px;margin:0;color:var(--sg-text-muted);font-size:10px;text-align:center}.empty-block.compact{padding:12px 8px}
+.decision-panel{background:rgba(255,179,71,.035)}.decision-summary{display:grid;gap:5px;padding:10px;color:var(--sg-text-secondary);font-size:9px;background:rgba(255,255,255,.025);border-radius:8px}.decision-warning{display:flex;gap:6px;align-items:center;margin:0;color:var(--sg-danger);font-size:9px}.decision-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}.decision-actions .el-button{margin:0}.decision-actions .el-button:last-child{grid-column:1/-1}.action-history{padding:20px;background:var(--sg-surface);border:1px solid var(--sg-border);border-radius:var(--sg-radius-md)}.action-history>header{display:flex;justify-content:space-between}.action-history h3{margin:3px 0 0;font-size:16px}.action-history>header>span{color:var(--sg-text-muted);font-size:10px}.action-list{display:grid;gap:12px;margin-top:15px}.action-list article{display:grid;grid-template-columns:auto 1fr;gap:10px}.action-dot{width:9px;height:9px;margin-top:4px;background:var(--sg-text-muted);border-radius:50%}.action-dot[data-tone=success]{background:var(--sg-success)}.action-dot[data-tone=danger]{background:var(--sg-danger)}.action-dot[data-tone=warning]{background:var(--sg-accent)}.action-list strong,.action-list p,.action-list small{display:block;margin:0}.action-list p{margin:4px 0;color:var(--sg-text-secondary);font-size:11px}.action-list small{color:var(--sg-text-muted);font-size:9px}
+@media(max-width:1100px){.review-detail-grid{grid-template-columns:1fr}.review-assistant{position:static;max-height:none}}@media(max-width:700px){.review-context-strip{grid-template-columns:1fr 1fr}.sg-page-heading,.manual-strip>header{align-items:flex-start}.heading-actions,.manual-strip>header{flex-direction:column}.issue-compose-meta,.decision-actions{grid-template-columns:1fr}.decision-actions .el-button:last-child{grid-column:auto}}
 </style>

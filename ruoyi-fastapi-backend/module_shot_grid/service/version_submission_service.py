@@ -1,4 +1,5 @@
 import hashlib
+import json
 import re
 import time
 import unicodedata
@@ -25,7 +26,11 @@ from module_shot_grid.dao.media_derivation_dao import ShotGridMediaDerivationDao
 from module_shot_grid.dao.project_audit_dao import ShotGridProjectAuditDao
 from module_shot_grid.dao.review_dao import ShotGridReviewDao
 from module_shot_grid.dao.version_submission_dao import ShotGridVersionSubmissionDao
-from module_shot_grid.entity.do.review_do import ShotGridReviewList, ShotGridReviewListVersion
+from module_shot_grid.entity.do.review_do import (
+    ShotGridReviewList,
+    ShotGridReviewListVersion,
+    ShotGridVersionIssueResponse,
+)
 from module_shot_grid.entity.do.task_do import ShotGridTask
 from module_shot_grid.entity.do.version_do import (
     ShotGridVersion,
@@ -88,6 +93,12 @@ class ShotGridVersionSubmissionService:
         task_context = await cls._require_task_context(db, task_id)
         cls._require_submit_access(access, cls._task_access_view(task_context), actor_id)
         cls._require_context_ready(task_context)
+        open_issues = await ShotGridVersionSubmissionDao.get_open_issue_identities(db, task_id)
+        issue_snapshot_hash = cls._validate_issue_responses(
+            task_status=str(task_context['task_status']),
+            open_issues=open_issues,
+            issue_responses=command.issue_responses,
+        )
         if await ShotGridVersionSubmissionDao.has_unresolved_submission(db, task_id):
             raise shot_grid_error(
                 409,
@@ -110,6 +121,7 @@ class ShotGridVersionSubmissionService:
             taskKind=task_context['task_kind'],
             taskStatus=task_context['task_status'],
             fileExtension=extension,
+            openIssueSnapshotHash=issue_snapshot_hash,
             allowedActions=['version.add'],
         )
 
@@ -148,7 +160,7 @@ class ShotGridVersionSubmissionService:
                 idempotency_key=normalized_key,
             )
             if existing is not None:
-                cls._require_same_command(existing, command)
+                await cls._require_same_command(db, existing, command)
                 result = cls._accepted(existing, task.task_status, replayed=True)
                 await db.rollback()
                 return result
@@ -186,7 +198,7 @@ class ShotGridVersionSubmissionService:
                 idempotency_key=normalized_key,
             )
             if existing is not None:
-                cls._require_same_command(existing, command)
+                await cls._require_same_command(db, existing, command)
                 result = cls._accepted(existing, task.task_status, replayed=True)
                 await db.commit()
                 return result
@@ -199,6 +211,24 @@ class ShotGridVersionSubmissionService:
                     'SG_VERSION_SUBMISSION_ACTIVE',
                     '任务已有正在处理或待处理失败的版本提交',
                 )
+
+            open_issues = await ShotGridVersionSubmissionDao.get_open_issue_identities(
+                db,
+                task_id,
+                for_update=True,
+            )
+            issue_snapshot_hash = cls._issue_snapshot_hash(open_issues)
+            if issue_snapshot_hash != command.open_issue_snapshot_hash:
+                raise shot_grid_error(
+                    409,
+                    'SG_ISSUE_SNAPSHOT_CONFLICT',
+                    '预检后的未关闭问题集合已经变化，请刷新任务后重新提交',
+                )
+            cls._validate_issue_responses(
+                task_status=str(task.task_status),
+                open_issues=open_issues,
+                issue_responses=command.issue_responses,
+            )
 
             locked_file = await FileInfoDao.get_file_info_by_id_for_update(db, command.file_id, true())
             await cls._require_locked_source_matches(
@@ -239,6 +269,7 @@ class ShotGridVersionSubmissionService:
                     source_file_size=inspection.file_size,
                     changelog=command.changelog,
                     ai_params=command.ai_params,
+                    open_issue_snapshot_hash=issue_snapshot_hash,
                     submission_status='pending',
                     submitted_by=actor_id,
                     idempotency_key=normalized_key,
@@ -250,6 +281,21 @@ class ShotGridVersionSubmissionService:
                     create_time=now,
                     update_time=now,
                 ),
+            )
+            now = cls._now()
+            await ShotGridVersionSubmissionDao.add_issue_responses(
+                db,
+                [
+                    ShotGridVersionIssueResponse(
+                        project_id=project_id,
+                        submission_id=submission.submission_id,
+                        note_id=item.issue_id,
+                        response_text=item.response_text,
+                        responded_by=actor_id,
+                        create_time=now,
+                    )
+                    for item in command.issue_responses
+                ],
             )
             await FileReferenceService.replace_business_file_references_services(
                 db,
@@ -688,7 +734,7 @@ class ShotGridVersionSubmissionService:
         project_code = context['project_code']
         producer_code = context.get('producer_code')
         if not producer_code:
-            raise shot_grid_error(422, 'SG_PRODUCER_CODE_REQUIRED', '任务制作人尚未设置制作人缩写')
+            raise shot_grid_error(422, 'SG_PRODUCER_CODE_REQUIRED', '任务制作人尚未设置用户昵称')
         version_segment = f'V{version_no:03d}'
         if context['task_kind'] == 'shot_video':
             if extension not in {'mp4', 'mov'}:
@@ -766,10 +812,14 @@ class ShotGridVersionSubmissionService:
             raise shot_grid_error(409, 'SG_INVALID_STATE_TRANSITION', '任务当前状态不能提交版本')
         if context['storage_status'] != 'ready' or context['directory_operation_status'] != 'succeeded':
             raise shot_grid_error(409, 'SG_PROJECT_NOT_READY', '项目或任务目标 NAS 目录尚未就绪')
-        if context['member_status'] != 'active' or context['assignee_user_status'] != '0':
-            raise shot_grid_error(409, 'SG_TASK_ASSIGNEE_STATE_INVALID', '任务制作人当前不是有效活动成员')
+        if (
+            context['member_status'] != 'active'
+            or context.get('assignee_project_role') != 'creator'
+            or context['assignee_user_status'] != '0'
+        ):
+            raise shot_grid_error(409, 'SG_TASK_ASSIGNEE_STATE_INVALID', '任务制作人当前不是有效制作人员')
         if context.get('assignee_user_del_flag') != '0' or not context.get('producer_code'):
-            raise shot_grid_error(422, 'SG_PRODUCER_CODE_REQUIRED', '任务制作人尚未设置有效缩写')
+            raise shot_grid_error(422, 'SG_PRODUCER_CODE_REQUIRED', '任务制作人尚未设置用户昵称')
         if context['task_kind'] == 'shot_video':
             statuses = (
                 context.get('episode_lifecycle_status'),
@@ -931,16 +981,74 @@ class ShotGridVersionSubmissionService:
         return context
 
     @staticmethod
-    def _require_same_command(
+    async def _require_same_command(
+        db: AsyncSession,
         submission: ShotGridVersionSubmission,
         command: ShotGridVersionSubmissionCreateModel,
     ) -> None:
+        stored_responses = await ShotGridVersionSubmissionDao.get_submission_issue_responses(
+            db,
+            int(submission.submission_id),
+        )
+        requested_responses = sorted(
+            (
+                {'issue_id': item.issue_id, 'response_text': item.response_text}
+                for item in command.issue_responses
+            ),
+            key=lambda item: item['issue_id'],
+        )
         if (
             submission.source_file_id != command.file_id
             or submission.changelog != command.changelog
             or submission.ai_params != command.ai_params
+            or submission.open_issue_snapshot_hash != command.open_issue_snapshot_hash
+            or stored_responses != requested_responses
         ):
             raise shot_grid_error(409, 'SG_IDEMPOTENCY_CONFLICT', '同一幂等键已用于不同版本提交请求')
+
+    @staticmethod
+    def _issue_snapshot_hash(open_issues: list[dict[str, int]]) -> str:
+        canonical = json.dumps(
+            [
+                {
+                    'issueId': int(item['issue_id']),
+                    'originVersionId': int(item['origin_version_id']),
+                }
+                for item in open_issues
+            ],
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(',', ':'),
+        ).encode('utf-8')
+        return hashlib.sha256(canonical).hexdigest()
+
+    @classmethod
+    def _validate_issue_responses(
+        cls,
+        *,
+        task_status: str,
+        open_issues: list[dict[str, int]],
+        issue_responses: list[Any],
+    ) -> str:
+        expected_ids = {int(item['issue_id']) for item in open_issues}
+        provided_ids = {int(item.issue_id) for item in issue_responses}
+        if task_status == 'in_progress':
+            if expected_ids or provided_ids:
+                raise shot_grid_error(422, 'SG_ISSUE_RESPONSES_NOT_ALLOWED', '首次制作版本不能携带问题处理说明')
+        elif task_status == 'revision':
+            if not expected_ids:
+                raise shot_grid_error(409, 'SG_REVISION_ISSUES_REQUIRED', '修订任务没有待处理问题，请刷新任务状态')
+            if provided_ids != expected_ids:
+                raise shot_grid_error(
+                    422,
+                    'SG_ISSUE_RESPONSES_INCOMPLETE',
+                    '必须逐条填写当前全部未关闭问题的处理说明',
+                    details={
+                        'missingIssueIds': sorted(expected_ids - provided_ids),
+                        'unexpectedIssueIds': sorted(provided_ids - expected_ids),
+                    },
+                )
+        return cls._issue_snapshot_hash(open_issues)
 
     @staticmethod
     def _accepted(
@@ -1130,7 +1238,7 @@ class ShotGridVersionSubmissionService:
             )
             if existing is None:
                 raise shot_grid_error(409, 'SG_IDEMPOTENCY_CONFLICT', '版本提交并发写入发生冲突')
-            cls._require_same_command(existing, command)
+            await cls._require_same_command(db, existing, command)
             result = cls._accepted(existing, task.task_status, replayed=True)
             await db.commit()
             return result

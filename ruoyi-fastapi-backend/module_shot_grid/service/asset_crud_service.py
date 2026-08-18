@@ -17,6 +17,8 @@ from module_shot_grid.entity.do.task_do import ShotGridTask
 from module_shot_grid.entity.vo.access_vo import ShotGridProjectAccessModel
 from module_shot_grid.entity.vo.asset_crud_vo import (
     ShotGridAssetArchiveModel,
+    ShotGridAssetBatchDeleteModel,
+    ShotGridAssetBatchDeleteResultModel,
     ShotGridAssetCreateModel,
     ShotGridAssetDetailModel,
     ShotGridAssetItemCreateModel,
@@ -31,6 +33,10 @@ from module_shot_grid.entity.vo.asset_crud_vo import (
 )
 from module_shot_grid.exceptions import ShotGridDomainException, shot_grid_error
 from module_shot_grid.service.asset_excel_parser import AssetExcelParser
+from module_shot_grid.service.asset_task_rules import (
+    is_asset_production_item_ready,
+    require_asset_production_item,
+)
 from module_shot_grid.service.project_access_service import ShotGridProjectAccessService
 from module_shot_grid.service.project_path_service import ShotGridProjectPathService
 from module_shot_grid.service.project_service import ShotGridProjectService
@@ -58,7 +64,12 @@ class ShotGridAssetCrudService:
         asset_ids = [int(row['asset_id']) for row in rows]
         directory_operations = await ShotGridAssetCrudDao.get_latest_directory_operations(db, project_id, asset_ids)
         assignees = await ShotGridAssetCrudDao.get_assignee_ids(db, project_id, asset_ids)
-        active_task_assets = await ShotGridAssetCrudDao.get_assets_with_active_tasks(db, project_id, asset_ids)
+        delete_blockers = await ShotGridAssetCrudDao.get_assets_with_delete_blockers(db, project_id, asset_ids)
+        assignment_blockers = await ShotGridAssetCrudDao.get_assets_with_assignment_blockers(
+            db,
+            project_id,
+            asset_ids,
+        )
         task_refs = await ShotGridAssetCrudDao.get_active_asset_task_refs(db, project_id, asset_ids)
         version_rows = await ShotGridAssetCrudDao.get_versions_for_tasks(
             db,
@@ -78,8 +89,8 @@ class ShotGridAssetCrudService:
                 project_status=project_status,
                 storage_status=storage_status,
                 lifecycle_status=row['lifecycle_status'],
-                has_active_items=bool(row['item_count']),
-                has_active_tasks=asset_id in active_task_assets,
+                has_archive_blockers=bool(row['usage_shot_count']) or asset_id in delete_blockers,
+                can_assign_items=bool(row['item_count']) and asset_id not in assignment_blockers,
             )
             models.append(ShotGridAssetListItemModel.model_validate(row))
         return PageModel[ShotGridAssetListItemModel](
@@ -298,15 +309,14 @@ class ShotGridAssetCrudService:
             await cls._lock_writable_project(db, project_id, current_user, actor_user_id)
             asset = await cls._lock_active_asset(db, project_id, asset_id)
             cls._require_lock_version(asset.lock_version, command.lock_version)
-            if await ShotGridAssetCrudDao.has_active_tasks_for_asset(db, project_id, asset_id):
-                raise shot_grid_error(409, 'SG_INVALID_STATE_TRANSITION', '资产仍有活动制作任务，不能归档')
-            if await ShotGridAssetCrudDao.has_active_items(db, asset_id):
-                raise shot_grid_error(409, 'SG_INVALID_STATE_TRANSITION', '请先归档资产下的活动制作分项')
             now = datetime.now().replace(microsecond=0)
-            asset.lifecycle_status = 'archived'
-            asset.update_by = actor_name
-            asset.update_time = now
-            asset.lock_version += 1
+            await cls._archive_asset_tree(
+                db,
+                project_id=project_id,
+                asset=asset,
+                actor_name=actor_name,
+                now=now,
+            )
             await db.flush()
             await cls._audit(
                 db,
@@ -332,6 +342,62 @@ class ShotGridAssetCrudService:
             await db.rollback()
             raise
         return result
+
+    @classmethod
+    async def batch_delete_assets(
+        cls,
+        db: AsyncSession,
+        project_id: int,
+        command: ShotGridAssetBatchDeleteModel,
+        current_user: CurrentUserModel,
+        access: ShotGridProjectAccessModel,
+    ) -> ShotGridAssetBatchDeleteResultModel:
+        actor_user_id, actor_name, dept_name = ShotGridProjectService._actor(current_user)
+        cls._require_write_access(access, project_id, actor_user_id)
+        try:
+            await cls._lock_writable_project(db, project_id, current_user, actor_user_id)
+            now = datetime.now().replace(microsecond=0)
+            deleted_asset_ids: list[int] = []
+            for item in sorted(command.items, key=lambda value: value.asset_id):
+                asset = await cls._lock_active_asset(db, project_id, item.asset_id)
+                cls._require_lock_version(asset.lock_version, item.lock_version)
+                await cls._archive_asset_tree(
+                    db,
+                    project_id=project_id,
+                    asset=asset,
+                    actor_name=actor_name,
+                    now=now,
+                )
+                deleted_asset_ids.append(item.asset_id)
+
+            await db.flush()
+            await cls._audit(
+                db,
+                actor_name=actor_name,
+                dept_name=dept_name,
+                business_type=BusinessType.DELETE.value,
+                method='batch_delete_assets',
+                request_method='POST',
+                oper_url=f'/shot-grid/projects/{project_id}/assets/batch-delete',
+                payload={
+                    'projectId': project_id,
+                    'reason': command.reason,
+                    'items': [item.model_dump(by_alias=True) for item in command.items],
+                },
+                result={'projectId': project_id, 'deletedAssetIds': deleted_asset_ids},
+            )
+            result = ShotGridAssetBatchDeleteResultModel(
+                deletedAssetIds=deleted_asset_ids,
+                deletedCount=len(deleted_asset_ids),
+            )
+            await db.commit()
+            return result
+        except ShotGridDomainException:
+            await db.rollback()
+            raise
+        except Exception:
+            await db.rollback()
+            raise
 
     @classmethod
     async def create_asset_item(
@@ -434,6 +500,8 @@ class ShotGridAssetCrudService:
             )
 
             existing_task = await cls._validate_item_task_update(db, project_id, asset_item_id, command)
+            if existing_task is not None:
+                require_asset_production_item(production_item, action='保存已分配任务')
 
             now = datetime.now().replace(microsecond=0)
             production_item_changed = item.production_item != production_item
@@ -446,7 +514,7 @@ class ShotGridAssetCrudService:
             item.update_time = now
             item.lock_version += 1
             if existing_task is not None and production_item_changed:
-                task_suffix = production_item or '待补制作分项'
+                task_suffix = production_item
                 existing_task.task_name = f'{asset.asset_name} - {task_suffix}'[:MAX_TASK_NAME_LENGTH]
                 existing_task.update_by = actor_name
                 existing_task.update_time = now
@@ -605,8 +673,11 @@ class ShotGridAssetCrudService:
             }
         )
         active_statuses = [item.asset_status for item in items if item.lifecycle_status == 'active']
-        has_active_tasks = any(
-            item.task is not None and item.task.task_status in ACTIVE_TASK_STATUSES for item in items
+        has_archive_blockers = bool(usage_count) or any(
+            item.latest_version is not None
+            or (item.task is not None and item.task.task_status != 'not_started')
+            for item in items
+            if item.lifecycle_status == 'active'
         )
         return ShotGridAssetDetailModel(
             assetId=asset.asset_id,
@@ -628,8 +699,12 @@ class ShotGridAssetCrudService:
                 project_status=project_status,
                 storage_status=storage_status,
                 lifecycle_status=asset.lifecycle_status,
-                has_active_items=bool(active_statuses),
-                has_active_tasks=has_active_tasks,
+                has_archive_blockers=has_archive_blockers,
+                can_assign_items=bool(active_statuses) and all(
+                    'task.assign' in item.allowed_actions
+                    for item in items
+                    if item.lifecycle_status == 'active'
+                ),
             ),
             directoryStatus=cls._directory_status(operation.get(asset.asset_id)),
             storageDirName=asset.storage_dir_name,
@@ -711,6 +786,7 @@ class ShotGridAssetCrudService:
                         storage_status=storage_status,
                         asset_lifecycle_status=asset_lifecycle_status,
                         item_lifecycle_status=row['lifecycle_status'],
+                        production_item=row['production_item'],
                         has_versions=bool(versions),
                         task_status=row['task_status'],
                         has_uncommitted_submission=bool(row.get('has_uncommitted_submission')),
@@ -829,8 +905,8 @@ class ShotGridAssetCrudService:
         project_status: str,
         storage_status: str | None,
         lifecycle_status: str,
-        has_active_items: bool,
-        has_active_tasks: bool,
+        has_archive_blockers: bool,
+        can_assign_items: bool,
     ) -> list[str]:
         if (
             not cls._can_manage_assets(
@@ -848,13 +924,14 @@ class ShotGridAssetCrudService:
         if cls._has_permission(current_user, 'shotgrid:asset:edit'):
             actions.append('asset.edit')
         if (
-            not has_active_items
-            and not has_active_tasks
+            not has_archive_blockers
             and cls._has_permission(current_user, 'shotgrid:asset:archive')
         ):
             actions.append('asset.archive')
         if cls._has_permission(current_user, 'shotgrid:asset:add'):
             actions.append('assetItem.add')
+        if can_assign_items and cls._has_permission(current_user, 'shotgrid:task:assign'):
+            actions.append('task.assign')
         return actions
 
     @classmethod
@@ -868,6 +945,7 @@ class ShotGridAssetCrudService:
         storage_status: str | None,
         asset_lifecycle_status: str,
         item_lifecycle_status: str,
+        production_item: str | None,
         has_versions: bool,
         task_status: str | None,
         has_uncommitted_submission: bool,
@@ -895,6 +973,7 @@ class ShotGridAssetCrudService:
             actions.append('assetItem.archive')
         if (
             task_status != 'completed'
+            and is_asset_production_item_ready(production_item)
             and not has_uncommitted_submission
             and cls._has_permission(current_user, 'shotgrid:task:assign')
         ):
@@ -1115,8 +1194,9 @@ class ShotGridAssetCrudService:
         if member is None:
             raise shot_grid_error(422, 'SG_TASK_ASSIGNEE_INVALID', '制作人不是有效的项目成员')
         if not member['producer_code']:
-            raise shot_grid_error(422, 'SG_PRODUCER_CODE_REQUIRED', '制作人尚未设置项目内制作人缩写')
-        task_suffix = item.production_item or '待补制作分项'
+            raise shot_grid_error(422, 'SG_PRODUCER_CODE_REQUIRED', '制作人尚未设置用户昵称')
+        require_asset_production_item(item.production_item, action='创建并分配任务')
+        task_suffix = item.production_item
         await ShotGridAssetCrudDao.add_task(
             db,
             ShotGridTask(
@@ -1195,6 +1275,57 @@ class ShotGridAssetCrudService:
             if status in item_statuses:
                 return status
         return 'not_started'
+
+    @classmethod
+    async def _archive_asset_tree(
+        cls,
+        db: AsyncSession,
+        *,
+        project_id: int,
+        asset: ShotGridAsset,
+        actor_name: str,
+        now: datetime,
+    ) -> None:
+        """在资产锁保护下删除未开始任务，并归档资产及其活动制作分项。"""
+
+        if await ShotGridAssetCrudDao.get_usage_shot_count(db, project_id, asset.asset_id):
+            raise shot_grid_error(409, 'SG_ASSET_IN_USE', '资产仍被镜头使用，不能删除')
+
+        items = await ShotGridAssetCrudDao.get_active_items_for_update(db, project_id, asset.asset_id)
+        task_by_item: dict[int, ShotGridTask | None] = {}
+        for item in items:
+            task = await ShotGridAssetCrudDao.get_task_for_item(
+                db,
+                project_id,
+                item.asset_item_id,
+                for_update=True,
+            )
+            if task is not None and task.task_status != 'not_started':
+                raise shot_grid_error(409, 'SG_ASSET_TASK_ALREADY_STARTED', '制作任务已经开始，资产不能删除')
+            if await ShotGridAssetCrudDao.has_versions_for_item(db, project_id, item.asset_item_id):
+                raise shot_grid_error(409, 'SG_ASSET_HAS_VERSION', '资产制作分项已有版本，不能删除')
+            task_by_item[item.asset_item_id] = task
+
+        for item in items:
+            task = task_by_item[item.asset_item_id]
+            if task is not None and not await ShotGridAssetCrudDao.delete_not_started_task(
+                db,
+                task_id=task.task_id,
+                actor_name=actor_name,
+                now=now,
+            ):
+                raise shot_grid_error(409, 'SG_OPTIMISTIC_LOCK_CONFLICT', '资产任务状态已发生变化')
+            item.lifecycle_status = 'archived'
+            item.del_flag = '2'
+            item.update_by = actor_name
+            item.update_time = now
+            item.lock_version += 1
+
+        asset.lifecycle_status = 'archived'
+        asset.del_flag = '2'
+        asset.update_by = actor_name
+        asset.update_time = now
+        asset.lock_version += 1
 
     @staticmethod
     def _directory_status(operation_status: str | None) -> str:

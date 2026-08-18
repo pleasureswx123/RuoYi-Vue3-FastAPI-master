@@ -113,7 +113,7 @@ class ShotGridTaskDao:
                 ShotGridProject.project_name,
                 ShotGridProject.project_status,
                 assignee.nick_name.label('assignee_nick_name'),
-                assignee_member.producer_code.label('assignee_producer_code'),
+                func.upper(assignee.nick_name).label('assignee_producer_code'),
                 assignee_member.member_status.label('assignee_member_status'),
                 ShotGridShot.episode_id,
                 ShotGridEpisode.episode_no,
@@ -480,7 +480,7 @@ class ShotGridTaskDao:
                 await db.execute(
                     select(
                         ShotGridProjectMember.user_id,
-                        ShotGridProjectMember.producer_code,
+                        func.upper(SysUser.nick_name).label('producer_code'),
                         SysUser.nick_name,
                     )
                     .join(SysUser, SysUser.user_id == ShotGridProjectMember.user_id)
@@ -488,6 +488,7 @@ class ShotGridTaskDao:
                         ShotGridProjectMember.project_id == project_id,
                         ShotGridProjectMember.user_id == user_id,
                         ShotGridProjectMember.member_status == 'active',
+                        ShotGridProjectMember.project_role == 'creator',
                         SysUser.status == '0',
                         SysUser.del_flag == '0',
                     )

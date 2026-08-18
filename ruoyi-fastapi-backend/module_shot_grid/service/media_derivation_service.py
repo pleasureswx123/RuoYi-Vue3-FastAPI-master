@@ -51,7 +51,7 @@ class DerivedFile:
 class ShotGridMediaDerivationService:
     """生成真实缩略图/代理文件，并以平台私有文件事务化登记。"""
 
-    VERSION_REFERENCE_TYPE = 'shot_grid_version'
+    VERSION_REFERENCE_TYPE = 'shotgrid_version'
 
     @classmethod
     async def run_scheduled_batch(

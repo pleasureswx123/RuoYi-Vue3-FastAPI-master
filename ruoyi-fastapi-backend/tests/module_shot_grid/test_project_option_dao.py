@@ -60,7 +60,7 @@ async def test_member_candidates_can_be_limited_to_one_department() -> None:
 
 
 @pytest.mark.asyncio
-async def test_shot_assignee_options_apply_membership_account_and_producer_guards() -> None:
+async def test_shot_assignee_options_apply_membership_account_and_nickname_guards() -> None:
     page_result = MagicMock()
     page_result.mappings.return_value = []
     db = AsyncMock()
@@ -78,10 +78,12 @@ async def test_shot_assignee_options_apply_membership_account_and_producer_guard
     for sql in (count_sql, rows_sql):
         assert 'sg_project_member.project_id = 1001' in sql
         assert "sg_project_member.member_status = 'active'" in sql
-        assert 'sg_project_member.producer_code IS NOT NULL' in sql
+        assert "sg_project_member.project_role = 'creator'" in sql
         assert "sys_user.status = '0'" in sql
         assert "sys_user.del_flag = '0'" in sql
-        assert "sg_project_member.producer_code ILIKE '%%YJF%%'" in sql
+        assert "sys_user.nick_name ILIKE '%%YJF%%'" in sql
+        assert 'sg_project_member.producer_code IS NOT NULL' not in sql
+    assert 'upper(sys_user.nick_name) AS producer_code' in rows_sql
     assert 'ORDER BY sys_user.nick_name, sys_user.user_name, sys_user.user_id' in rows_sql
     assert 'LIMIT 10 OFFSET 10' in rows_sql
 
@@ -103,6 +105,8 @@ async def test_asset_assignee_options_reuse_the_same_safe_project_member_guards(
     rows_sql = _postgresql_sql(db.execute.await_args.args[0])
     assert 'sg_project_member.project_id = 1001' in rows_sql
     assert "sg_project_member.member_status = 'active'" in rows_sql
-    assert 'sg_project_member.producer_code IS NOT NULL' in rows_sql
+    assert "sg_project_member.project_role = 'creator'" in rows_sql
+    assert 'sg_project_member.producer_code IS NOT NULL' not in rows_sql
+    assert 'upper(sys_user.nick_name) AS producer_code' in rows_sql
     assert "sys_user.status = '0'" in rows_sql
     assert "sys_user.del_flag = '0'" in rows_sql

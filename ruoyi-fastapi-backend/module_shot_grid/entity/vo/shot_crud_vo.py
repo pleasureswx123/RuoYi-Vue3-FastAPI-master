@@ -1,7 +1,7 @@
 from datetime import date, datetime
 from typing import Any, Literal
 
-from pydantic import ConfigDict, Field, field_validator
+from pydantic import ConfigDict, Field, field_validator, model_validator
 
 from module_shot_grid.entity.vo.common_vo import ShotGridApiModel, ShotGridLockVersionModel, ShotGridPageQueryModel
 
@@ -127,6 +127,34 @@ class ShotGridShotArchiveModel(ShotGridLockVersionModel):
     model_config = ConfigDict(extra='forbid')
 
 
+class ShotGridShotDeleteItemModel(ShotGridLockVersionModel):
+    """批量删除中的镜头标识和乐观锁版本。"""
+
+    shot_id: int = Field(gt=0, le=SQL_BIGINT_MAX)
+
+
+class ShotGridShotBatchDeleteModel(ShotGridApiModel):
+    """批量删除镜头；整个请求在同一事务内完成。"""
+
+    model_config = ConfigDict(extra='forbid')
+
+    items: list[ShotGridShotDeleteItemModel] = Field(min_length=1, max_length=200)
+
+    @model_validator(mode='after')
+    def validate_unique_shots(self) -> 'ShotGridShotBatchDeleteModel':
+        shot_ids = [item.shot_id for item in self.items]
+        if len(shot_ids) != len(set(shot_ids)):
+            raise ValueError('批量删除不能包含重复镜头')
+        return self
+
+
+class ShotGridShotBatchDeleteResultModel(ShotGridApiModel):
+    """镜头批量删除结果。"""
+
+    deleted_shot_ids: list[int]
+    deleted_count: int = Field(ge=1)
+
+
 class ShotGridShotAssigneeModel(ShotGridApiModel):
     """镜头唯一任务的制作人摘要。"""
 
@@ -169,6 +197,14 @@ class ShotGridShotTaskSummaryModel(ShotGridApiModel):
 
 class ShotGridShotThumbnailModel(ShotGridApiModel):
     """镜头最新版本缩略图摘要。"""
+
+    file_id: str
+    name: str
+    url: str
+
+
+class ShotGridShotProxyMediaModel(ShotGridApiModel):
+    """镜头最新版本代理视频摘要。"""
 
     file_id: str
     name: str
@@ -223,8 +259,10 @@ class ShotGridShotListItemModel(ShotGridApiModel):
     remark: str | None = None
     sort_order: int
     status: ShotStatus
+    task_lock_version: int | None = Field(default=None, ge=0)
     assignee: ShotGridShotAssigneeModel | None = None
     thumbnail: ShotGridShotThumbnailModel | None = None
+    proxy_media: ShotGridShotProxyMediaModel | None = None
     latest_version: ShotGridShotLatestVersionModel | None = None
     latest_feedback: ShotGridShotLatestFeedbackModel | None = None
     asset_count: int = Field(ge=0)

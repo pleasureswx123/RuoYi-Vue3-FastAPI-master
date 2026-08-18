@@ -102,6 +102,74 @@ class ShotGridTaskAssignModel(ShotGridApiModel):
         return self
 
 
+class ShotGridShotTaskBatchAssignItemModel(ShotGridApiModel):
+    """批量分配中的镜头及其当前任务锁版本。"""
+
+    model_config = ConfigDict(extra='forbid')
+
+    shot_id: int = Field(gt=0, le=SQL_BIGINT_MAX)
+    task_lock_version: int | None = Field(default=None, ge=0)
+
+
+class ShotGridShotTaskBatchAssignModel(ShotGridApiModel):
+    """批量创建或改派镜头任务；整个请求在同一事务内完成。"""
+
+    model_config = ConfigDict(extra='forbid')
+
+    assignee_user_id: int = Field(gt=0, le=SQL_BIGINT_MAX)
+    items: list[ShotGridShotTaskBatchAssignItemModel] = Field(min_length=1, max_length=200)
+
+    @model_validator(mode='after')
+    def validate_unique_shots(self) -> 'ShotGridShotTaskBatchAssignModel':
+        shot_ids = [item.shot_id for item in self.items]
+        if len(shot_ids) != len(set(shot_ids)):
+            raise ValueError('批量分配不能包含重复镜头')
+        return self
+
+
+class ShotGridShotTaskBatchAssignResultModel(ShotGridApiModel):
+    """镜头任务批量分配结果。"""
+
+    assigned_shot_ids: list[int]
+    assigned_count: int = Field(ge=1)
+    created_task_count: int = Field(ge=0)
+    reassigned_task_count: int = Field(ge=0)
+
+
+class ShotGridAssetItemTaskBatchAssignItemModel(ShotGridApiModel):
+    """批量分配中的资产制作分项及其当前任务锁版本。"""
+
+    model_config = ConfigDict(extra='forbid')
+
+    asset_item_id: int = Field(gt=0, le=SQL_BIGINT_MAX)
+    task_lock_version: int | None = Field(default=None, ge=0)
+
+
+class ShotGridAssetItemTaskBatchAssignModel(ShotGridApiModel):
+    """批量创建或改派资产制作分项任务；整个请求在同一事务内完成。"""
+
+    model_config = ConfigDict(extra='forbid')
+
+    assignee_user_id: int = Field(gt=0, le=SQL_BIGINT_MAX)
+    items: list[ShotGridAssetItemTaskBatchAssignItemModel] = Field(min_length=1, max_length=200)
+
+    @model_validator(mode='after')
+    def validate_unique_items(self) -> 'ShotGridAssetItemTaskBatchAssignModel':
+        item_ids = [item.asset_item_id for item in self.items]
+        if len(item_ids) != len(set(item_ids)):
+            raise ValueError('批量分配不能包含重复资产制作分项')
+        return self
+
+
+class ShotGridAssetItemTaskBatchAssignResultModel(ShotGridApiModel):
+    """资产制作分项任务批量分配结果。"""
+
+    assigned_asset_item_ids: list[int]
+    assigned_count: int = Field(ge=1)
+    created_task_count: int = Field(ge=0)
+    reassigned_task_count: int = Field(ge=0)
+
+
 class ShotGridTaskStartModel(ShotGridLockVersionModel):
     """开始任务请求。"""
 

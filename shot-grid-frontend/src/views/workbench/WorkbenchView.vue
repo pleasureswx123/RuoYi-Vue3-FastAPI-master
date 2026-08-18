@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { Box, Collection, Film, FolderOpened, Refresh, Right, Search, Tickets } from '@element-plus/icons-vue'
+import { Refresh, Right, Search } from '@element-plus/icons-vue'
 
 import { getMineTaskPage } from '@/api/shot-grid/tasks'
 import { getMineReviewListPage, getRecentMineVersions } from '@/api/shot-grid/reviews'
@@ -26,6 +26,7 @@ const pendingReviews = ref([])
 const recentSubmissions = ref([])
 const activityLoading = ref(false)
 const validationMessage = ref('')
+const taskFilterForm = ref(null)
 const query = reactive({
   keyword: '',
   taskKind: '',
@@ -36,32 +37,12 @@ const query = reactive({
   pageNum: 1,
   pageSize: 20,
   orderByColumn: 'updateTime',
-  isAsc: 'descending'
+  isAsc: 'descending',
+  orderValue: 'updateTime:descending'
 })
-const orderValue = ref('updateTime:descending')
 let controller = null
 let loadGeneration = 0
 let disposed = false
-
-const moduleRegistry = Object.freeze({
-  projects: { title: '项目', path: '/projects', icon: Collection, description: '管理项目资料与项目成员' },
-  shots: { title: '镜头管理', path: '/shots', icon: Film, description: '进入镜头生产与分配视图' },
-  assets: { title: '资产库管理', path: '/assets', icon: Box, description: '查看角色、场景与道具资产' },
-  reviews: { title: '版本审核', path: '/reviews', icon: Tickets, description: '处理版本反馈与审核动作' },
-  files: { title: '文件与 NAS', path: '/files', icon: FolderOpened, description: '查看业务文件和存储状态' }
-})
-
-const availableModules = computed(() => {
-  const navigation = Array.isArray(sessionStore.navigation) ? sessionStore.navigation : []
-  return navigation
-    .map((item, index) => {
-      if (!Object.hasOwn(moduleRegistry, item?.routeKey)) return null
-      const module = moduleRegistry[item.routeKey]
-      return { ...module, routeKey: item.routeKey, orderNum: Number(item.orderNum ?? index) }
-    })
-    .filter(Boolean)
-    .sort((left, right) => left.orderNum - right.orderNum)
-})
 
 const displayName = computed(() => sessionStore.user?.nickName || sessionStore.user?.userName || '制作成员')
 const pageCount = computed(() => Math.max(1, Math.ceil(total.value / query.pageSize)))
@@ -144,26 +125,21 @@ function submitFilters() {
 }
 
 function applyOrder() {
-  const [column, direction] = orderValue.value.split(':')
+  const [column, direction] = query.orderValue.split(':')
   query.orderByColumn = column
   query.isAsc = direction
   submitFilters()
 }
 
 function resetFilters() {
+  taskFilterForm.value?.resetFields()
   Object.assign(query, {
-    keyword: '',
-    taskKind: '',
-    taskStatus: '',
-    priority: '',
-    dueDateFrom: '',
-    dueDateTo: '',
     pageNum: 1,
     pageSize: 20,
     orderByColumn: 'updateTime',
-    isAsc: 'descending'
+    isAsc: 'descending',
+    orderValue: 'updateTime:descending'
   })
-  orderValue.value = 'updateTime:descending'
   loadTasks()
 }
 
@@ -218,17 +194,30 @@ onBeforeUnmount(() => {
         <article :data-alert="pageSummary.overdue > 0"><span>已逾期</span><strong>{{ pageSummary.overdue }}</strong><small>当前页未完成</small></article>
       </div>
 
-      <form class="task-filters" aria-label="我的任务筛选" @submit.prevent="submitFilters">
-        <label class="task-filters__search"><span>搜索</span><div><el-icon><Search /></el-icon><input v-model="query.keyword" maxlength="200" placeholder="任务、项目、镜头或资产" /></div></label>
-        <label><span>任务类型</span><el-select v-model="query.taskKind" class="sg-select" placeholder="全部类型"><el-option label="全部类型" value="" /><el-option label="镜头视频" value="shot_video" /><el-option label="资产图片" value="asset_image" /></el-select></label>
-        <label><span>任务状态</span><el-select v-model="query.taskStatus" class="sg-select" placeholder="全部状态"><el-option label="全部状态" value="" /><el-option label="未开始" value="not_started" /><el-option label="制作中" value="in_progress" /><el-option label="待审核" value="pending_review" /><el-option label="待修订" value="revision" /><el-option label="已完成" value="completed" /></el-select></label>
-        <label><span>优先级</span><el-select v-model="query.priority" class="sg-select" placeholder="全部优先级"><el-option label="全部优先级" value="" /><el-option label="紧急" value="urgent" /><el-option label="高" value="high" /><el-option label="普通" value="normal" /><el-option label="低" value="low" /></el-select></label>
-        <label><span>截止日期起</span><input v-model="query.dueDateFrom" type="date" /></label>
-        <label><span>截止日期止</span><input v-model="query.dueDateTo" type="date" /></label>
-        <label><span>排序</span><el-select v-model="orderValue" class="sg-select" aria-label="任务排序" @change="applyOrder"><el-option label="最近更新" value="updateTime:descending" /><el-option label="截止日期由近到远" value="dueDate:ascending" /><el-option label="优先级由高到低" value="priority:ascending" /><el-option label="最近创建" value="createTime:descending" /></el-select></label>
-        <div class="task-filters__actions"><el-button native-type="submit" type="primary" :loading="loading">查询</el-button><el-button :disabled="loading" @click="resetFilters">重置</el-button></div>
-        <p v-if="validationMessage" class="task-filters__error" role="alert">{{ validationMessage }}</p>
-      </form>
+      <el-form ref="taskFilterForm" :model="query" class="task-filters" label-position="top" aria-label="我的任务筛选" @submit.prevent="submitFilters">
+        <el-form-item class="task-filter-item task-filter-item--search" label="搜索" prop="keyword">
+          <el-input v-model="query.keyword" class="sg-input" :prefix-icon="Search" maxlength="200" clearable placeholder="任务、项目、镜头或资产" aria-label="搜索任务" />
+        </el-form-item>
+        <el-form-item class="task-filter-item" label="任务类型" prop="taskKind">
+          <el-select v-model="query.taskKind" class="sg-select" placeholder="全部类型" aria-label="按任务类型筛选" @change="submitFilters"><el-option label="全部类型" value="" /><el-option label="镜头视频" value="shot_video" /><el-option label="资产图片" value="asset_image" /></el-select>
+        </el-form-item>
+        <el-form-item class="task-filter-item" label="任务状态" prop="taskStatus">
+          <el-select v-model="query.taskStatus" class="sg-select" placeholder="全部状态" aria-label="按任务状态筛选" @change="submitFilters"><el-option label="全部状态" value="" /><el-option label="未开始" value="not_started" /><el-option label="制作中" value="in_progress" /><el-option label="待审核" value="pending_review" /><el-option label="待修订" value="revision" /><el-option label="已完成" value="completed" /></el-select>
+        </el-form-item>
+        <el-form-item class="task-filter-item" label="优先级" prop="priority">
+          <el-select v-model="query.priority" class="sg-select" placeholder="全部优先级" aria-label="按优先级筛选" @change="submitFilters"><el-option label="全部优先级" value="" /><el-option label="紧急" value="urgent" /><el-option label="高" value="high" /><el-option label="普通" value="normal" /><el-option label="低" value="low" /></el-select>
+        </el-form-item>
+        <el-form-item class="task-filter-item" label="截止日期起" prop="dueDateFrom">
+          <el-date-picker v-model="query.dueDateFrom" class="sg-input" type="date" value-format="YYYY-MM-DD" format="YYYY/MM/DD" placeholder="选择开始日期" aria-label="截止日期起" @change="submitFilters" />
+        </el-form-item>
+        <el-form-item class="task-filter-item" label="截止日期止" prop="dueDateTo" :error="validationMessage">
+          <el-date-picker v-model="query.dueDateTo" class="sg-input" type="date" value-format="YYYY-MM-DD" format="YYYY/MM/DD" placeholder="选择结束日期" aria-label="截止日期止" @change="submitFilters" />
+        </el-form-item>
+        <el-form-item class="task-filter-item" label="排序" prop="orderValue">
+          <el-select v-model="query.orderValue" class="sg-select" aria-label="任务排序" @change="applyOrder"><el-option label="最近更新" value="updateTime:descending" /><el-option label="截止日期由近到远" value="dueDate:ascending" /><el-option label="优先级由高到低" value="priority:ascending" /><el-option label="最近创建" value="createTime:descending" /></el-select>
+        </el-form-item>
+        <el-form-item class="task-filter-actions"><el-button native-type="submit" type="primary" :loading="loading">查询</el-button><el-button :disabled="loading" @click="resetFilters">重置</el-button></el-form-item>
+      </el-form>
 
       <ProjectStatePanel
         v-if="errorState"
@@ -265,21 +254,22 @@ onBeforeUnmount(() => {
       </nav>
     </section>
 
-    <section v-if="availableModules.length" class="module-section">
-      <div class="workbench-section-heading"><div><h3>其他可访问模块</h3><p>权限来自 Shot Grid 业务导航，不加载系统管理菜单。</p></div></div>
-      <div class="module-grid">
-        <button v-for="item in availableModules" :key="item.routeKey" class="module-card" type="button" @click="router.push(item.path)">
-          <span class="module-card__icon"><el-icon><component :is="item.icon" /></el-icon></span>
-          <span class="module-card__copy"><strong>{{ item.title }}</strong><small>{{ item.description }}</small></span>
-          <el-icon class="module-card__arrow"><Right /></el-icon>
-        </button>
-      </div>
-    </section>
   </section>
 </template>
 
 <style scoped lang="scss">
 .activity-grid.is-loading{opacity:.55;pointer-events:none}
 .activity-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.activity-grid>article{display:grid;gap:8px;padding:18px;background:var(--sg-surface);border:1px solid var(--sg-border);border-radius:var(--sg-radius-md)}.activity-grid header{display:flex;align-items:center;justify-content:space-between}.activity-grid h3{margin:3px 0 0;font-size:16px}.activity-grid button{display:flex;gap:12px;align-items:center;justify-content:space-between;padding:11px;color:var(--sg-text);text-align:left;cursor:pointer;background:rgba(255,255,255,.025);border:1px solid var(--sg-border);border-radius:9px}.activity-grid button span{display:grid;min-width:0;gap:5px}.activity-grid button strong{overflow:hidden;font-size:11px;text-overflow:ellipsis;white-space:nowrap}.activity-grid button small,.activity-grid>article>p{margin:0;color:var(--sg-text-muted);font-size:9px}@media(max-width:800px){.activity-grid{grid-template-columns:1fr}}
-.workbench-page{display:grid;gap:28px}.workbench-hero{position:relative;display:flex;min-height:218px;align-items:flex-end;justify-content:space-between;padding:clamp(30px,5vw,54px);overflow:hidden;background:radial-gradient(circle at 86% 12%,rgba(255,182,87,.24),transparent 28%),linear-gradient(135deg,#1c222c,#101319 72%);border:1px solid var(--sg-border);border-radius:var(--sg-radius-lg);box-shadow:var(--sg-shadow)}.workbench-hero::after{position:absolute;top:-80px;right:-10px;width:310px;height:310px;content:'';border:1px solid rgba(255,255,255,.08);border-radius:50%}.workbench-hero>div{position:relative;z-index:1;max-width:760px}.workbench-hero h2{margin:0;font-size:clamp(30px,4vw,48px);font-weight:600;letter-spacing:-.045em}.workbench-hero p:not(.sg-eyebrow){max-width:680px;margin:16px 0 0;color:var(--sg-text-secondary);font-size:14px;line-height:1.8}.workbench-hero__label{position:relative;z-index:1;padding:7px 11px;color:var(--sg-text-secondary);font-size:11px;background:rgba(0,0,0,.22);border:1px solid var(--sg-border);border-radius:999px}.task-workbench,.module-section{display:grid;gap:16px}.workbench-section-heading{display:flex;gap:20px;align-items:flex-end;justify-content:space-between}.workbench-section-heading h3{margin:0;font-size:19px}.workbench-section-heading p:not(.sg-eyebrow){margin:7px 0 0;color:var(--sg-text-muted);font-size:12px}.task-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.task-stats article{display:grid;grid-template-columns:1fr auto;gap:4px 12px;padding:15px 17px;background:var(--sg-surface);border:1px solid var(--sg-border);border-radius:var(--sg-radius-md)}.task-stats article[data-alert=true]{border-color:rgba(255,107,107,.28)}.task-stats span,.task-stats small{color:var(--sg-text-muted);font-size:10px}.task-stats strong{grid-row:1/3;grid-column:2;font-size:25px}.task-filters{display:grid;grid-template-columns:2fr repeat(6,minmax(120px,1fr)) auto;gap:10px;align-items:end;padding:16px;background:var(--sg-surface);border:1px solid var(--sg-border);border-radius:var(--sg-radius-md)}.task-filters label{display:grid;gap:6px}.task-filters label>span{color:var(--sg-text-muted);font-size:10px}.task-filters input,.task-filters select{width:100%;height:38px;box-sizing:border-box;padding:0 10px;color:var(--sg-text);background:#11151a;border:1px solid var(--sg-border);border-radius:8px}.task-filters__search>div{position:relative}.task-filters__search .el-icon{position:absolute;top:11px;left:10px;color:var(--sg-text-muted)}.task-filters__search input{padding-left:31px}.task-filters__actions{display:flex;gap:7px}.task-filters__error{grid-column:1/-1;margin:0;color:var(--sg-danger);font-size:12px}.task-loading,.task-empty{display:grid;min-height:190px;padding:24px;color:var(--sg-text-muted);text-align:center;background:var(--sg-surface);border:1px dashed var(--sg-border-strong);border-radius:var(--sg-radius-md);place-content:center}.task-empty strong{color:var(--sg-text-secondary)}.task-empty p{max-width:620px;margin:8px 0 0;font-size:12px;line-height:1.7}.task-list{display:grid;overflow:hidden;background:var(--sg-border);border:1px solid var(--sg-border);border-radius:var(--sg-radius-md);gap:1px}.task-list.is-refreshing{pointer-events:none;opacity:.58}.task-row{display:grid;min-height:88px;grid-template-columns:48px minmax(240px,2fr) minmax(150px,1fr) 80px auto auto;gap:14px;align-items:center;padding:16px 18px;color:var(--sg-text);text-align:left;cursor:pointer;background:var(--sg-surface);border:0}.task-row:hover{background:var(--sg-surface-raised)}.task-row__kind{display:grid;width:42px;height:42px;color:#80bfff;font-size:11px;background:rgba(128,191,255,.08);border-radius:11px;place-items:center}.task-row__kind[data-tone=purple]{color:#c9a7ff;background:rgba(165,112,255,.1)}.task-row__main,.task-row__meta,.task-row__version{display:grid;min-width:0;gap:6px}.task-row__heading{display:flex;gap:8px;align-items:center}.task-row__heading strong{overflow:hidden;font-size:13px;text-overflow:ellipsis;white-space:nowrap}.task-row__main>small,.task-row__main>span:not(.task-row__heading),.task-row__meta,.task-row__version small{overflow:hidden;color:var(--sg-text-muted);font-size:10px;text-overflow:ellipsis;white-space:nowrap}.task-row__meta>span{color:var(--sg-text-secondary);font-size:11px}.task-row__meta small[data-tone=danger]{color:var(--sg-danger)}.task-row__version strong{color:var(--sg-accent)}.status-chip,.priority-chip{display:inline-flex;width:max-content;padding:4px 7px;font-size:9px;background:rgba(255,255,255,.05);border-radius:999px}.status-chip[data-tone=success]{color:var(--sg-success);background:rgba(98,212,155,.1)}.status-chip[data-tone=warning],.priority-chip[data-tone=warning]{color:var(--sg-accent);background:var(--sg-accent-soft)}.status-chip[data-tone=danger],.priority-chip[data-tone=danger]{color:var(--sg-danger);background:rgba(255,107,107,.09)}.status-chip[data-tone=info],.priority-chip[data-tone=info]{color:#80bfff;background:rgba(128,191,255,.08)}.task-row__arrow{color:var(--sg-text-muted)}.task-pagination{display:flex;gap:14px;align-items:center;justify-content:center}.task-pagination button{padding:7px 11px;color:var(--sg-text-secondary);cursor:pointer;background:var(--sg-surface);border:1px solid var(--sg-border);border-radius:8px}.task-pagination button:disabled{opacity:.35;cursor:not-allowed}.task-pagination span{color:var(--sg-text-muted);font-size:11px}.module-section{padding-top:6px;border-top:1px solid var(--sg-border)}.module-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.module-card{display:grid;min-height:105px;grid-template-columns:42px minmax(0,1fr) auto;gap:15px;align-items:center;padding:19px;color:var(--sg-text);text-align:left;cursor:pointer;background:var(--sg-surface);border:1px solid var(--sg-border);border-radius:var(--sg-radius-md);transition:160ms ease}.module-card:hover{background:var(--sg-surface-raised);border-color:rgba(255,182,87,.3);transform:translateY(-2px)}.module-card__icon{display:grid;width:42px;height:42px;color:var(--sg-accent);background:var(--sg-accent-soft);border-radius:12px;place-items:center}.module-card__copy strong,.module-card__copy small{display:block}.module-card__copy strong{font-size:13px}.module-card__copy small{margin-top:6px;color:var(--sg-text-muted);font-size:10px;line-height:1.5}.module-card__arrow{color:var(--sg-text-muted)}@media(max-width:1400px){.task-filters{grid-template-columns:repeat(4,minmax(0,1fr))}.task-filters__search{grid-column:span 2}.task-row{grid-template-columns:48px minmax(240px,2fr) minmax(140px,1fr) 70px auto}.task-row__arrow{display:none}}@media(max-width:1000px){.task-stats,.module-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.task-row{grid-template-columns:44px minmax(0,1fr) auto}.task-row__meta,.task-row__version{display:none}}@media(max-width:680px){.workbench-hero__label{display:none}.workbench-section-heading{align-items:flex-start;flex-direction:column}.task-stats,.task-filters,.module-grid{grid-template-columns:1fr}.task-filters__search{grid-column:auto}.task-filters__actions{width:100%}.task-row{grid-template-columns:38px minmax(0,1fr)}.task-row>.priority-chip{display:none}.task-row__kind{width:36px;height:36px}.task-row__heading{align-items:flex-start;flex-direction:column}}
+.workbench-page{display:grid;gap:28px}.workbench-hero{position:relative;display:flex;min-height:218px;align-items:flex-end;justify-content:space-between;padding:clamp(30px,5vw,54px);overflow:hidden;background:radial-gradient(circle at 86% 12%,rgba(255,182,87,.24),transparent 28%),linear-gradient(135deg,#1c222c,#101319 72%);border:1px solid var(--sg-border);border-radius:var(--sg-radius-lg);box-shadow:var(--sg-shadow)}.workbench-hero::after{position:absolute;top:-80px;right:-10px;width:310px;height:310px;content:'';border:1px solid rgba(255,255,255,.08);border-radius:50%}.workbench-hero>div{position:relative;z-index:1;max-width:760px}.workbench-hero h2{margin:0;font-size:clamp(30px,4vw,48px);font-weight:600;letter-spacing:-.045em}.workbench-hero p:not(.sg-eyebrow){max-width:680px;margin:16px 0 0;color:var(--sg-text-secondary);font-size:14px;line-height:1.8}.workbench-hero__label{position:relative;z-index:1;padding:7px 11px;color:var(--sg-text-secondary);font-size:11px;background:rgba(0,0,0,.22);border:1px solid var(--sg-border);border-radius:999px}.task-workbench{display:grid;gap:16px}.workbench-section-heading{display:flex;gap:20px;align-items:flex-end;justify-content:space-between}.workbench-section-heading h3{margin:0;font-size:19px}.workbench-section-heading p:not(.sg-eyebrow){margin:7px 0 0;color:var(--sg-text-muted);font-size:12px}.task-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.task-stats article{display:grid;grid-template-columns:1fr auto;gap:4px 12px;padding:15px 17px;background:var(--sg-surface);border:1px solid var(--sg-border);border-radius:var(--sg-radius-md)}.task-stats article[data-alert=true]{border-color:rgba(255,107,107,.28)}.task-stats span,.task-stats small{color:var(--sg-text-muted);font-size:10px}.task-stats strong{grid-row:1/3;grid-column:2;font-size:25px}.task-filters{display:grid;grid-template-columns:2fr repeat(6,minmax(120px,1fr)) auto;gap:10px;align-items:end;padding:16px;background:var(--sg-surface);border:1px solid var(--sg-border);border-radius:var(--sg-radius-md)}.task-filters label{display:grid;gap:6px}.task-filters label>span{color:var(--sg-text-muted);font-size:10px}.task-filters input,.task-filters select{width:100%;height:38px;box-sizing:border-box;padding:0 10px;color:var(--sg-text);background:#11151a;border:1px solid var(--sg-border);border-radius:8px}.task-filters__search>div{position:relative}.task-filters__search .el-icon{position:absolute;top:11px;left:10px;color:var(--sg-text-muted)}.task-filters__search input{padding-left:31px}.task-filters__actions{display:flex;gap:7px}.task-filters__error{grid-column:1/-1;margin:0;color:var(--sg-danger);font-size:12px}.task-loading,.task-empty{display:grid;min-height:190px;padding:24px;color:var(--sg-text-muted);text-align:center;background:var(--sg-surface);border:1px dashed var(--sg-border-strong);border-radius:var(--sg-radius-md);place-content:center}.task-empty strong{color:var(--sg-text-secondary)}.task-empty p{max-width:620px;margin:8px 0 0;font-size:12px;line-height:1.7}.task-list{display:grid;overflow:hidden;background:var(--sg-border);border:1px solid var(--sg-border);border-radius:var(--sg-radius-md);gap:1px}.task-list.is-refreshing{pointer-events:none;opacity:.58}.task-row{display:grid;min-height:88px;grid-template-columns:48px minmax(240px,2fr) minmax(150px,1fr) 80px auto auto;gap:14px;align-items:center;padding:16px 18px;color:var(--sg-text);text-align:left;cursor:pointer;background:var(--sg-surface);border:0}.task-row:hover{background:var(--sg-surface-raised)}.task-row__kind{display:grid;width:42px;height:42px;color:#80bfff;font-size:11px;background:rgba(128,191,255,.08);border-radius:11px;place-items:center}.task-row__kind[data-tone=purple]{color:#c9a7ff;background:rgba(165,112,255,.1)}.task-row__main,.task-row__meta,.task-row__version{display:grid;min-width:0;gap:6px}.task-row__heading{display:flex;gap:8px;align-items:center}.task-row__heading strong{overflow:hidden;font-size:13px;text-overflow:ellipsis;white-space:nowrap}.task-row__main>small,.task-row__main>span:not(.task-row__heading),.task-row__meta,.task-row__version small{overflow:hidden;color:var(--sg-text-muted);font-size:10px;text-overflow:ellipsis;white-space:nowrap}.task-row__meta>span{color:var(--sg-text-secondary);font-size:11px}.task-row__meta small[data-tone=danger]{color:var(--sg-danger)}.task-row__version strong{color:var(--sg-accent)}.status-chip,.priority-chip{display:inline-flex;width:max-content;padding:4px 7px;font-size:9px;background:rgba(255,255,255,.05);border-radius:999px}.status-chip[data-tone=success]{color:var(--sg-success);background:rgba(98,212,155,.1)}.status-chip[data-tone=warning],.priority-chip[data-tone=warning]{color:var(--sg-accent);background:var(--sg-accent-soft)}.status-chip[data-tone=danger],.priority-chip[data-tone=danger]{color:var(--sg-danger);background:rgba(255,107,107,.09)}.status-chip[data-tone=info],.priority-chip[data-tone=info]{color:#80bfff;background:rgba(128,191,255,.08)}.task-row__arrow{color:var(--sg-text-muted)}.task-pagination{display:flex;gap:14px;align-items:center;justify-content:center}.task-pagination button{padding:7px 11px;color:var(--sg-text-secondary);cursor:pointer;background:var(--sg-surface);border:1px solid var(--sg-border);border-radius:8px}.task-pagination button:disabled{opacity:.35;cursor:not-allowed}.task-pagination span{color:var(--sg-text-muted);font-size:11px}@media(max-width:1400px){.task-filters{grid-template-columns:repeat(4,minmax(0,1fr))}.task-filters__search{grid-column:span 2}.task-row{grid-template-columns:48px minmax(240px,2fr) minmax(140px,1fr) 70px auto}.task-row__arrow{display:none}}@media(max-width:1000px){.task-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.task-row{grid-template-columns:44px minmax(0,1fr) auto}.task-row__meta,.task-row__version{display:none}}@media(max-width:680px){.workbench-hero__label{display:none}.workbench-section-heading{align-items:flex-start;flex-direction:column}.task-stats,.task-filters{grid-template-columns:1fr}.task-filters__search{grid-column:auto}.task-filters__actions{width:100%}.task-row{grid-template-columns:38px minmax(0,1fr)}.task-row>.priority-chip{display:none}.task-row__kind{width:36px;height:36px}.task-row__heading{align-items:flex-start;flex-direction:column}}
+.task-filters:deep(.el-form-item){min-width:0;margin-bottom:0}
+.task-filters:deep(.el-form-item__label){display:flex;height:auto;padding-bottom:6px;color:var(--sg-text-muted);font-size:10px;line-height:1}
+.task-filter-item:deep(.el-form-item__content),
+.task-filter-item:deep(.el-input),
+.task-filter-item:deep(.el-select),
+.task-filter-item:deep(.el-date-editor){width:100%;min-width:0}
+.task-filter-item:deep(.el-input__inner){height:auto;padding:0;background:transparent;border:0;border-radius:0}
+.task-filter-actions:deep(.el-form-item__content){flex-wrap:nowrap;justify-content:flex-end}
+.task-filter-item:deep(.el-form-item__error){padding-top:4px;white-space:nowrap}
+@media(max-width:1400px){.task-filter-item--search{grid-column:span 2}.task-filter-actions:deep(.el-form-item__content){justify-content:flex-start}}
+@media(max-width:680px){.task-filter-item--search{grid-column:auto}.task-filter-actions{width:100%}}
 </style>

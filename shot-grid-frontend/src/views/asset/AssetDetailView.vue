@@ -15,6 +15,12 @@ import AssetItemFormDialog from '@/views/asset/components/AssetItemFormDialog.vu
 import ProtectedAssetThumbnail from '@/views/asset/components/ProtectedAssetThumbnail.vue'
 import { assetDirectoryStatusMeta, assetErrorState, assetStatusMeta, assetTypeMeta, formatAssetDateTime, memberLabel, resolveAssetThumbnail } from '@/views/asset/assetPresentation'
 
+const props = defineProps({
+  targetProjectId: { type: [Number, String], default: null },
+  targetAssetId: { type: [Number, String], default: null },
+  embedded: { type: Boolean, default: false }
+})
+const emit = defineEmits(['changed', 'deleted'])
 const route = useRoute()
 const router = useRouter()
 const sessionStore = useSessionStore()
@@ -33,14 +39,14 @@ let operationGeneration = 0
 
 const projectId = computed(() => {
   try {
-    return assertPositiveId(route.params.projectId, '项目')
+    return assertPositiveId(props.targetProjectId ?? route.params.projectId, '项目')
   } catch {
     return null
   }
 })
 const assetId = computed(() => {
   try {
-    return assertPositiveId(route.params.assetId, '资产')
+    return assertPositiveId(props.targetAssetId ?? route.params.assetId, '资产')
   } catch {
     return null
   }
@@ -126,6 +132,11 @@ function openItemForm(item = null) {
 }
 
 function openAssign(item) {
+  if (!String(item?.productionItem || '').trim()) {
+    ElMessage.warning('请先补齐制作分项，再分配或改派任务')
+    if (itemCanEdit(item)) openItemForm(item)
+    return
+  }
   assignContext.value = newContext(item)
 }
 
@@ -161,6 +172,7 @@ async function handleAssetSaved(_result, operationContext) {
   }
   ElMessage.success('资产已更新')
   await loadDetail()
+  emit('changed', { projectId: projectId.value, assetId: assetId.value })
 }
 
 async function handleItemSaved(_result, operationContext) {
@@ -176,6 +188,7 @@ async function handleItemSaved(_result, operationContext) {
   }
   ElMessage.success(operationContext.assetItemId ? '制作分项已更新' : '制作分项已新增')
   await loadDetail()
+  emit('changed', { projectId: projectId.value, assetId: assetId.value })
 }
 
 async function handleAssigned(_result, operationContext) {
@@ -191,6 +204,7 @@ async function handleAssigned(_result, operationContext) {
   }
   ElMessage.success(operationContext.wasReassign ? '资产任务已改派' : '资产任务已分配')
   await loadDetail()
+  emit('changed', { projectId: projectId.value, assetId: assetId.value })
 }
 
 async function handleArchived(_result, operationContext) {
@@ -207,9 +221,11 @@ async function handleArchived(_result, operationContext) {
   if (operationContext.assetItemId) {
     ElMessage.success('制作分项已归档')
     await loadDetail()
+    emit('changed', { projectId: projectId.value, assetId: assetId.value })
   } else {
     ElMessage.success('资产已归档')
-    await router.replace({ path: '/assets', query: { projectId: String(operationContext.projectId) } })
+    if (props.embedded) emit('deleted', { projectId: operationContext.projectId, assetId: operationContext.assetId })
+    else await router.replace({ path: '/assets', query: { projectId: String(operationContext.projectId) } })
   }
 }
 
@@ -225,7 +241,11 @@ function itemCanAssign(item) {
   return new Set(item.allowedActions || []).has('task.assign') && hasPermission('shotgrid:task:assign')
 }
 
-watch(() => [route.params.projectId, route.params.assetId], loadDetail, { immediate: true })
+watch(
+  () => [props.targetProjectId, props.targetAssetId, route.params.projectId, route.params.assetId],
+  loadDetail,
+  { immediate: true }
+)
 onBeforeUnmount(() => {
   disposed = true
   controller?.abort()
@@ -234,8 +254,8 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <section class="sg-page asset-detail-page">
-    <button class="back-link" type="button" @click="router.push({ path: '/assets', query: { projectId: String(projectId || '') } })"><el-icon><ArrowLeft /></el-icon>返回资产库</button>
+  <section class="sg-page asset-detail-page" :class="{ 'asset-detail-page--embedded': embedded }">
+    <button v-if="!embedded" class="back-link" type="button" @click="router.push({ path: '/assets', query: { projectId: String(projectId || '') } })"><el-icon><ArrowLeft /></el-icon>返回资产库</button>
 
     <div v-if="loading" class="detail-loading">正在加载资产详情…</div>
     <ProjectStatePanel v-else-if="errorState" :title="errorState.title" :message="errorState.message" :retryable="errorState.retryable" @retry="loadDetail" />
@@ -258,8 +278,8 @@ onBeforeUnmount(() => {
         <div v-else class="item-list">
           <article v-for="item in asset.items" :key="item.assetItemId" class="item-card" :data-archived="item.lifecycleStatus === 'archived'">
             <ProtectedAssetThumbnail class="item-card__thumbnail" :thumbnail="item.thumbnail" :alt="`${item.productionItem || '未命名制作分项'} 缩略图`" />
-            <div class="item-card__body"><header><div><span>分项 #{{ item.assetItemId }}</span><h4>{{ item.productionItem || '未命名制作分项' }}</h4></div><span class="status-chip" :data-tone="assetStatusMeta(item.assetStatus).tone">{{ assetStatusMeta(item.assetStatus).label }}</span></header><p>{{ item.description || '暂无分项说明' }}</p><dl><div><dt>负责人</dt><dd>{{ item.task ? memberLabel({ userId: item.task.assigneeUserId, nickName: item.task.assigneeName, producerCode: item.task.producerCode }) : '未分配' }}</dd></div><div><dt>任务</dt><dd>{{ item.task ? `${item.task.taskStatus} · ${item.task.priority}` : '尚未创建' }}</dd></div><div><dt>最新版本</dt><dd>{{ item.latestVersion ? `V${String(item.latestVersion.versionNo).padStart(3, '0')} · ${item.latestVersion.versionStatus}` : '—' }}</dd></div><div><dt>最终版本</dt><dd>{{ item.finalVersion ? `V${String(item.finalVersion.versionNo).padStart(3, '0')}` : '—' }}</dd></div></dl><small>{{ item.remark || '无备注' }} · 更新于 {{ formatAssetDateTime(item.updateTime) }}</small></div>
-            <div class="item-card__actions"><el-button v-if="itemCanAssign(item)" text type="primary" :icon="UserFilled" @click="openAssign(item)">{{ item.task ? '改派任务' : '分配任务' }}</el-button><el-button v-if="itemCanEdit(item)" text :icon="Edit" @click="openItemForm(item)">编辑分项</el-button><el-button v-if="itemCanArchive(item)" text type="danger" :icon="Lock" @click="openArchive(item)">归档分项</el-button></div>
+            <div class="item-card__body"><header><div><span>分项 #{{ item.assetItemId }}</span><h4>{{ item.productionItem || '未命名制作分项' }}</h4></div><span class="status-chip" :data-tone="assetStatusMeta(item.assetStatus).tone">{{ assetStatusMeta(item.assetStatus).label }}</span></header><p>{{ item.description || '暂无分项说明' }}</p><dl><div><dt>负责人</dt><dd>{{ item.task ? memberLabel({ userId: item.task.assigneeUserId, nickName: item.task.assigneeName }) : '未分配' }}</dd></div><div><dt>任务</dt><dd>{{ item.task ? `${item.task.taskStatus} · ${item.task.priority}` : '尚未创建' }}</dd></div><div><dt>最新版本</dt><dd>{{ item.latestVersion ? `V${String(item.latestVersion.versionNo).padStart(3, '0')} · ${item.latestVersion.versionStatus}` : '—' }}</dd></div><div><dt>最终版本</dt><dd>{{ item.finalVersion ? `V${String(item.finalVersion.versionNo).padStart(3, '0')}` : '—' }}</dd></div></dl><small>{{ item.remark || '无备注' }} · 更新于 {{ formatAssetDateTime(item.updateTime) }}</small></div>
+            <div class="item-card__actions"><el-button v-if="itemCanAssign(item)" text type="primary" :icon="UserFilled" @click="openAssign(item)">{{ item.task ? '改派任务' : '分配任务' }}</el-button><el-button v-if="itemCanEdit(item)" text :type="item.productionItem ? 'default' : 'warning'" :icon="Edit" @click="openItemForm(item)">{{ item.productionItem ? '编辑分项' : '补齐制作分项' }}</el-button><el-button v-if="itemCanArchive(item)" text type="danger" :icon="Lock" @click="openArchive(item)">归档分项</el-button></div>
           </article>
         </div>
       </section>

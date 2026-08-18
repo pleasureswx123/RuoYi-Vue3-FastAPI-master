@@ -1,4 +1,5 @@
 import json
+import unicodedata
 import uuid
 from datetime import datetime
 from typing import Any, Literal
@@ -15,6 +16,28 @@ VersionSubmissionTaskKind = Literal['shot_video', 'asset_image']
 VersionSubmissionFileExtension = Literal['mp4', 'mov', 'jpg', 'png']
 
 
+class ShotGridIssueResponseInputModel(ShotGridApiModel):
+    """制作人对一条未关闭问题的本版处理说明。"""
+
+    model_config = ConfigDict(extra='forbid')
+
+    issue_id: int = Field(gt=0)
+    response_text: str = Field(min_length=1, max_length=5000)
+
+    @field_validator('response_text', mode='before')
+    @classmethod
+    def normalize_response_text(cls, value: Any) -> str:
+        if not isinstance(value, str):
+            raise ValueError('问题处理说明必须是字符串')
+        normalized = value.replace('\r\n', '\n').replace('\r', '\n').strip()
+        has_forbidden_control = any(
+            unicodedata.category(character) == 'Cc' and character != '\n' for character in normalized
+        )
+        if not normalized or has_forbidden_control:
+            raise ValueError('问题处理说明不能为空且不能包含换行以外的控制字符')
+        return normalized
+
+
 class ShotGridVersionSubmissionMetadataModel(ShotGridApiModel):
     """预检与正式提交共用的版本说明。"""
 
@@ -27,6 +50,7 @@ class ShotGridVersionSubmissionMetadataModel(ShotGridApiModel):
 
     changelog: str = Field(min_length=1, max_length=5000, description='本轮修改说明')
     ai_params: dict[str, Any] | list[Any] | None = Field(default=None, description='可选AI生成参数快照')
+    issue_responses: list[ShotGridIssueResponseInputModel] = Field(default_factory=list, max_length=200)
 
     @field_validator('changelog', mode='before')
     @classmethod
@@ -40,6 +64,9 @@ class ShotGridVersionSubmissionMetadataModel(ShotGridApiModel):
 
     @model_validator(mode='after')
     def validate_ai_params_size(self) -> 'ShotGridVersionSubmissionMetadataModel':
+        issue_ids = [item.issue_id for item in self.issue_responses]
+        if len(issue_ids) != len(set(issue_ids)):
+            raise ValueError('issueResponses 不能包含重复问题')
         if self.ai_params is None:
             return self
         try:
@@ -72,6 +99,7 @@ class ShotGridVersionSubmissionCreateModel(ShotGridVersionSubmissionMetadataMode
     """创建版本暂存请求。"""
 
     file_id: str = Field(description='平台受保护源文件ID')
+    open_issue_snapshot_hash: str = Field(pattern=r'^[0-9a-f]{64}$', description='预检返回的未关闭问题集合摘要')
 
     @field_validator('file_id', mode='before')
     @classmethod
@@ -90,6 +118,7 @@ class ShotGridVersionSubmissionPreflightResultModel(ShotGridApiModel):
     task_kind: VersionSubmissionTaskKind
     task_status: Literal['in_progress', 'revision']
     file_extension: VersionSubmissionFileExtension
+    open_issue_snapshot_hash: str = Field(pattern=r'^[0-9a-f]{64}$')
     allowed_actions: list[Literal['version.add']] = Field(default_factory=lambda: ['version.add'])
 
 

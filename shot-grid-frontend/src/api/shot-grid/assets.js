@@ -98,6 +98,15 @@ export function archiveAsset(projectId, assetId, data) {
   })
 }
 
+export function batchDeleteAssets(projectId, items) {
+  return request({
+    url: projectUrl(projectId, '/assets/batch-delete'),
+    method: 'post',
+    data: { items, reason: '资产列表批量删除' },
+    silentError: true
+  })
+}
+
 export function getAssetItems(projectId, assetId, options = {}) {
   return request({
     url: assetUrl(projectId, assetId, '/items'),
@@ -139,6 +148,15 @@ export function assignAssetItemTask(projectId, assetItemId, data) {
     url: assetItemUrl(projectId, assetItemId, '/assign'),
     method: 'post',
     data,
+    silentError: true
+  })
+}
+
+export function batchAssignAssetItemTasks(projectId, assigneeUserId, items) {
+  return request({
+    url: projectUrl(projectId, '/asset-items/batch-assign'),
+    method: 'post',
+    data: { assigneeUserId, items },
     silentError: true
   })
 }

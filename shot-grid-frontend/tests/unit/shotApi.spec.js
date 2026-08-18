@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import request from '@/utils/request'
 import {
   archiveShot,
+  batchAssignShotTasks,
+  batchDeleteShots,
   assertProtectedVersionDownloadUrl,
   assignShotTask,
   commitShotImport,
@@ -61,6 +63,38 @@ describe('镜头 API 契约', () => {
       params: { pageNum: 1, pageSize: 100, keyword: '杨' },
       signal
     }))
+  })
+
+  it('批量删除提交镜头 ID 与乐观锁版本并拒绝重复镜头', () => {
+    batchDeleteShots(8, [{ shotId: 41, lockVersion: 0 }, { shotId: 42, lockVersion: 3 }])
+    expect(request).toHaveBeenCalledWith(expect.objectContaining({
+      url: '/shot-grid/projects/8/shots/batch-delete',
+      method: 'post',
+      data: { items: [{ shotId: 41, lockVersion: 0 }, { shotId: 42, lockVersion: 3 }] }
+    }))
+    expect(() => batchDeleteShots(8, [{ shotId: 41, lockVersion: 0 }, { shotId: 41, lockVersion: 1 }])).toThrow('重复镜头')
+  })
+
+  it('批量分配提交制作人、镜头 ID 与任务乐观锁版本', () => {
+    batchAssignShotTasks(8, 7, [
+      { shotId: 41, taskLockVersion: null },
+      { shotId: 42, taskLockVersion: 3 }
+    ])
+    expect(request).toHaveBeenCalledWith(expect.objectContaining({
+      url: '/shot-grid/projects/8/shots/batch-assign',
+      method: 'post',
+      data: {
+        assigneeUserId: 7,
+        items: [
+          { shotId: 41, taskLockVersion: null },
+          { shotId: 42, taskLockVersion: 3 }
+        ]
+      }
+    }))
+    expect(() => batchAssignShotTasks(8, 7, [
+      { shotId: 41, taskLockVersion: null },
+      { shotId: 41, taskLockVersion: 2 }
+    ])).toThrow('重复镜头')
   })
 
   it('模板通过鉴权请求层按 blob 下载，预检使用 multipart', () => {

@@ -28,7 +28,7 @@ class AssetImportNormalizedRowModel(ShotGridApiModel):
     remark: str | None = Field(default=None, description='制作分项备注')
     assignee_user_name: str | None = Field(default=None, description='Excel 原始制作人文本')
     assignee_user_id: int | None = Field(default=None, description='唯一匹配的项目成员用户ID')
-    producer_code: str | None = Field(default=None, description='项目内制作人缩写')
+    producer_code: str | None = Field(default=None, description='制作人用户昵称（内部兼容字段）')
     import_row_key: str | None = Field(default=None, description='来源文件、Sheet和行号幂等键')
 
 
@@ -86,11 +86,17 @@ class AssetImportPreviewResponseModel(ShotGridApiModel):
     workbook_warnings: list[ImportIssueModel] = Field(default_factory=list, description='工作簿级警告')
 
 
+class AssetImportSelectedRowModel(ImportSelectedRowModel):
+    """正式提交时允许为单个制作分项覆盖或清空制作人。"""
+
+    assignee_user_id: int | None = Field(default=None, gt=0, description='制作人用户ID；显式 null 表示未分配')
+
+
 class AssetImportCommitRequestModel(ShotGridApiModel):
     """资产 Excel 正式提交请求。"""
 
     import_token: str = Field(min_length=1, max_length=200, description='预览 Token')
-    selected_rows: list[ImportSelectedRowModel] = Field(min_length=1, description='选择提交的自包含明细行')
+    selected_rows: list[AssetImportSelectedRowModel] = Field(min_length=1, description='选择提交的自包含明细行')
 
     @model_validator(mode='after')
     def validate_unique_rows(self) -> 'AssetImportCommitRequestModel':

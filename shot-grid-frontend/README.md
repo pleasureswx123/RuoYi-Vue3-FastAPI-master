@@ -36,13 +36,40 @@
 
 ## 本地开发
 
+日常本地开发时，Docker Compose 只启动 PostgreSQL 和 Redis；后端在 Windows 宿主机启动，以保留 Uvicorn 热更新并直接访问 Windows UNC/SMB/NAS 路径。
+
+先在仓库根目录启动基础设施：
+
+```powershell
+docker compose -f docker-compose.dev.yml up -d postgres redis
+docker compose -f docker-compose.dev.yml ps
+```
+
+宿主机需要 Python `>=3.10`，建议团队统一使用 Python 3.11.x。首次启动后端时，在新的 PowerShell 窗口执行：
+
+```powershell
+cd ruoyi-fastapi-backend
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements-pg.txt
+python -m alembic upgrade head
+python -m uvicorn server:create_app --factory --host 127.0.0.1 --port 9099 --reload
+```
+
+启用缩略图或代理媒体 Worker 时，宿主机还需要 FFmpeg。执行 `ffmpeg -version` 确认可用；如果未加入 `PATH`，可在后端 `.env.dev` 中配置 `SHOT_GRID_MEDIA_WORKER_FFMPEG_PATH` 为可执行文件的绝对路径。
+
+后端健康后，再在本目录启动前端：
+
 ```powershell
 cd shot-grid-frontend
 npm.cmd ci
 npm.cmd run dev
 ```
 
-开发服务器默认监听 `5174`。浏览器请求使用 `/dev-api` 前缀，Vite 会剥离该前缀并转发到 `VITE_APP_PROXY_TARGET`；未配置时默认使用 `http://127.0.0.1:9099`。
+开发服务器默认监听 `5174`，访问地址为 `http://127.0.0.1:5174`。浏览器请求使用 `/dev-api` 前缀，Vite 会剥离该前缀并转发到 `VITE_APP_PROXY_TARGET`；未配置时默认使用 `http://127.0.0.1:9099`。
+
+完整后端容器拓扑仍可用于集成验证，但不是日常本地开发的默认方式。Linux 容器不能直接执行 Windows UNC/SMB 目录操作。详细步骤见根目录 [`README.md`](../README.md)；可选容器验证说明见 [`../ruoyi-fastapi-backend/docs/docker_dev_guide.md`](../ruoyi-fastapi-backend/docs/docker_dev_guide.md)。
 
 ## 检查与构建
 

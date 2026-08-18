@@ -26,8 +26,8 @@ const errorState = ref(null)
 const mutationError = ref(null)
 const selectedCandidate = ref(null)
 const editingMember = ref(null)
-const addForm = reactive({ projectRole: 'creator', producerCode: '' })
-const editForm = reactive({ projectRole: 'creator', producerCode: '' })
+const addForm = reactive({ projectRole: 'creator' })
+const editForm = reactive({ projectRole: 'creator' })
 let controller = null
 
 const wildcard = computed(() => props.permissions.includes('*:*:*'))
@@ -43,7 +43,7 @@ async function loadMembers() {
   loading.value = true
   errorState.value = null
   try {
-    const response = await getProjectMembers(props.projectId, { signal: requestController.signal })
+    const response = await getProjectMembers(props.projectId, {}, { signal: requestController.signal })
     members.value = Array.isArray(response.rows) ? response.rows : []
   } catch (error) {
     if (error?.code !== 'ERR_CANCELED') errorState.value = projectErrorState(error, '项目成员加载失败')
@@ -55,37 +55,22 @@ async function loadMembers() {
 function chooseCandidate(candidate) {
   selectedCandidate.value = candidate
   addForm.projectRole = 'creator'
-  addForm.producerCode = ''
   mutationError.value = null
 }
 
 function openEdit(member) {
   editingMember.value = member
   editForm.projectRole = member.projectRole
-  editForm.producerCode = member.producerCode || ''
   mutationError.value = null
-}
-
-function normalizeProducerCode(value) {
-  const normalized = String(value || '').trim().toUpperCase()
-  if (normalized && !/^[A-Z0-9]{2,12}$/.test(normalized)) {
-    throw new Error('制作人缩写必须为 2—12 位英文字母或数字')
-  }
-  return normalized || null
 }
 
 async function submitAdd() {
   mutationError.value = null
-  let producerCode
-  try { producerCode = normalizeProducerCode(addForm.producerCode) } catch (error) {
-    mutationError.value = { title: '请检查成员信息', message: error.message }; return
-  }
   mutationBusy.value = true
   try {
     await addProjectMember(props.projectId, {
       userId: selectedCandidate.value.userId,
-      projectRole: addForm.projectRole,
-      producerCode
+      projectRole: addForm.projectRole
     })
     selectedCandidate.value = null
     ElMessage.success('项目成员已添加')
@@ -97,15 +82,10 @@ async function submitAdd() {
 
 async function submitEdit() {
   mutationError.value = null
-  let producerCode
-  try { producerCode = normalizeProducerCode(editForm.producerCode) } catch (error) {
-    mutationError.value = { title: '请检查成员信息', message: error.message }; return
-  }
   mutationBusy.value = true
   try {
     await updateProjectMember(props.projectId, editingMember.value.userId, {
-      projectRole: editForm.projectRole,
-      producerCode
+      projectRole: editForm.projectRole
     })
     editingMember.value = null
     ElMessage.success('成员信息已更新')
@@ -156,12 +136,11 @@ onBeforeUnmount(() => controller?.abort())
       <p v-else-if="!members.length" class="panel-muted">项目当前没有可展示的活动成员。</p>
       <div v-else class="member-table-wrap">
         <table>
-          <thead><tr><th>成员</th><th>项目角色</th><th>制作人缩写</th><th>部门</th><th>加入时间</th><th v-if="canEdit || canRemove">操作</th></tr></thead>
+          <thead><tr><th>成员</th><th>项目角色</th><th>部门</th><th>加入时间</th><th v-if="canEdit || canRemove">操作</th></tr></thead>
           <tbody>
             <tr v-for="member in members" :key="member.userId">
               <td><strong>{{ member.nickName || member.userName }}</strong><small>{{ member.userName }}</small></td>
               <td>{{ member.projectRole === 'director' ? '项目管理人员' : '制作人员' }}</td>
-              <td><code>{{ member.producerCode || '—' }}</code></td>
               <td>{{ member.deptName || '—' }}</td>
               <td>{{ formatDateTime(member.joinedTime) }}</td>
               <td v-if="canEdit || canRemove" class="member-actions">
@@ -181,7 +160,6 @@ onBeforeUnmount(() => controller?.abort())
       <form class="member-form" @submit.prevent="submitAdd">
         <div class="member-identity"><strong>{{ selectedCandidate.nickName || selectedCandidate.userName }}</strong><span>{{ selectedCandidate.userName }} · {{ selectedCandidate.deptName || '未分配部门' }}</span></div>
         <label><span>项目角色</span><el-select v-model="addForm.projectRole" class="sg-select"><el-option label="制作人员" value="creator" /><el-option label="项目管理人员" value="director" /></el-select></label>
-        <label><span>制作人缩写</span><input v-model="addForm.producerCode" maxlength="12" placeholder="可空；承担任务前需补齐" @input="addForm.producerCode = addForm.producerCode.toUpperCase()" /></label>
         <div v-if="mutationError" class="inline-error" role="alert"><strong>{{ mutationError.title }}</strong><span>{{ mutationError.message }}</span></div>
         <footer><el-button :disabled="mutationBusy" @click="selectedCandidate = null">取消</el-button><el-button type="primary" native-type="submit" :loading="mutationBusy">添加</el-button></footer>
       </form>
@@ -191,7 +169,6 @@ onBeforeUnmount(() => controller?.abort())
       <form class="member-form" @submit.prevent="submitEdit">
         <div class="member-identity"><strong>{{ editingMember.nickName || editingMember.userName }}</strong><span>{{ editingMember.userName }}</span></div>
         <label><span>项目角色</span><el-select v-model="editForm.projectRole" class="sg-select"><el-option label="制作人员" value="creator" /><el-option label="项目管理人员" value="director" /></el-select></label>
-        <label><span>制作人缩写</span><input v-model="editForm.producerCode" maxlength="12" placeholder="显式留空将清除缩写" @input="editForm.producerCode = editForm.producerCode.toUpperCase()" /></label>
         <div v-if="mutationError" class="inline-error" role="alert"><strong>{{ mutationError.title }}</strong><span>{{ mutationError.message }}</span></div>
         <footer><el-button :disabled="mutationBusy" @click="editingMember = null">取消</el-button><el-button type="primary" native-type="submit" :loading="mutationBusy">保存</el-button></footer>
       </form>

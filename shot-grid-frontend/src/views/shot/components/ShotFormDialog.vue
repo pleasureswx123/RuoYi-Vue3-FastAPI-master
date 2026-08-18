@@ -44,7 +44,7 @@ const form = reactive({
 })
 
 const isEdit = computed(() => Boolean(props.shot?.shotId))
-const assignableMembers = computed(() => props.members.filter(member => member.producerCode))
+const assignableMembers = computed(() => props.members.filter(member => member.projectRole === 'creator'))
 const canSubmit = computed(() => !busy.value && form.sceneId && form.shotNo && form.description.trim())
 
 async function loadScenes(resetScene = false) {
@@ -149,7 +149,7 @@ onBeforeUnmount(() => sceneController?.abort())
         <label><span>机位</span><input v-model="form.cameraPosition" maxlength="100" /></label>
         <label><span>镜头运动</span><input v-model="form.cameraMovement" maxlength="100" /></label>
         <label><span>焦段</span><input v-model="form.focalLength" maxlength="50" placeholder="支持 35/25 等文本" /></label>
-        <label v-if="!isEdit"><span>首次分配制作人</span><el-select v-model="form.assigneeUserId" class="sg-select" placeholder="暂不分配"><el-option label="暂不分配" value="" /><el-option v-for="member in assignableMembers" :key="member.userId" :label="`${member.nickName}（${member.producerCode}）`" :value="String(member.userId)" /></el-select></label>
+        <label v-if="!isEdit"><span>首次分配制作人</span><el-select v-model="form.assigneeUserId" class="sg-select" placeholder="暂不分配"><el-option label="暂不分配" value="" /><el-option v-for="member in assignableMembers" :key="member.userId" :label="member.userName ? `${member.nickName}（${member.userName}）` : member.nickName" :value="String(member.userId)" /></el-select></label>
       </div>
       <label class="shot-form__full"><span>制作内容描述 *</span><textarea v-model="form.description" rows="4" /></label>
       <div class="shot-form__grid shot-form__grid--text">

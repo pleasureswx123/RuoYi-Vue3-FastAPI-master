@@ -112,6 +112,31 @@ input:focus-visible,
   box-shadow: 0 0 0 1px var(--sg-border) inset;
 }
 
+.sg-input {
+  width: 100%;
+  --el-input-border-color: var(--sg-border-strong);
+  --el-input-hover-border-color: rgba(255, 182, 87, 0.46);
+  --el-input-focus-border-color: var(--sg-accent);
+  --el-input-text-color: var(--sg-text);
+  --el-input-placeholder-color: var(--sg-text-muted);
+}
+
+.sg-input .el-input__wrapper {
+  min-height: 42px;
+  padding: 0 12px;
+  background: var(--sg-surface-soft);
+  border-radius: 10px;
+  box-shadow: 0 0 0 1px var(--sg-border-strong) inset;
+}
+
+.sg-input .el-input__wrapper:hover {
+  box-shadow: 0 0 0 1px rgba(255, 182, 87, 0.46) inset;
+}
+
+.sg-input .el-input__wrapper.is-focus {
+  box-shadow: 0 0 0 1px var(--sg-accent) inset;
+}
+
 .el-select__popper.el-popper {
   z-index: 4000 !important;
   background: var(--sg-surface-raised);
@@ -131,8 +156,39 @@ input:focus-visible,
   background: var(--sg-accent-soft);
 }
 
+.import-batch-assign-dialog {
+  overflow: hidden;
+  background: var(--sg-surface-raised);
+  border: 1px solid var(--sg-border-strong);
+  border-radius: 16px;
+  box-shadow: 0 24px 72px rgba(0, 0, 0, 0.55);
+}
+
+.import-batch-assign-dialog .el-dialog__header {
+  padding: 20px 22px 16px;
+  margin: 0;
+  border-bottom: 1px solid var(--sg-border);
+}
+
+.import-batch-assign-dialog .el-dialog__title {
+  color: var(--sg-text);
+  font-size: 17px;
+  font-weight: 650;
+}
+
+.import-batch-assign-dialog .el-dialog__body {
+  padding: 20px 22px;
+}
+
+.import-batch-assign-dialog .el-dialog__footer {
+  padding: 15px 22px 18px;
+  background: rgba(0, 0, 0, 0.12);
+  border-top: 1px solid var(--sg-border);
+}
+
 .sg-page {
-  width: min(100%, 1440px);
+  //width: min(100%, 1440px);
+  width: 100%;
   margin: 0 auto;
   padding: 32px clamp(20px, 3vw, 48px) 56px;
 }

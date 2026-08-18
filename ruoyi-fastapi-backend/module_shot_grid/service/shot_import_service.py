@@ -21,7 +21,6 @@ from module_shot_grid.entity.do.task_do import ShotGridTask
 from module_shot_grid.entity.vo.import_common_vo import (
     ImportIssueModel,
     ImportPreviewTokenPayloadModel,
-    ImportSelectedRowModel,
 )
 from module_shot_grid.entity.vo.shot_import_vo import (
     ShotImportCommitRequestModel,
@@ -29,6 +28,7 @@ from module_shot_grid.entity.vo.shot_import_vo import (
     ShotImportNormalizedRowModel,
     ShotImportPreviewResultModel,
     ShotImportPreviewRowModel,
+    ShotImportSelectedRowModel,
 )
 from module_shot_grid.exceptions import ShotGridDomainException, shot_grid_error
 from module_shot_grid.service.excel_security_service import ExcelSecurityService
@@ -186,7 +186,7 @@ class ShotGridShotImportService:
             cls._validate_payload(payload, project_id, user_id, has_all_scope)
 
             selected_rows = cls._select_rows(payload, request_model.selected_rows)
-            selection_hash = cls._selection_hash(selected_rows)
+            selection_hash = cls._selection_hash_from_request(payload.file_sha256, request_model.selected_rows)
         except Exception:
             await db.rollback()
             raise
@@ -215,7 +215,7 @@ class ShotGridShotImportService:
 
             project, storage = await ShotGridShotImportDao.get_project_storage(db, project_id, for_update=True)
             cls._require_ready_project(project, storage)
-            await cls._revalidate_selected_rows(db, project_id, selected_rows)
+            await cls._revalidate_selected_rows(db, project_id, selected_rows, request_model.selected_rows)
             result = await cls._write_selected_rows(
                 db,
                 project_id=project_id,
@@ -358,7 +358,12 @@ class ShotGridShotImportService:
                 409,
                 'SG_SHOT_NO_CONFLICT',
                 '提交前检测到集内镜头号已存在',
-                details={'shotCodes': [row.shot_code for row in conflicting_rows]},
+                details={
+                    'shots': [
+                        {'episodeCode': row.episode_code, 'shotCode': row.shot_code}
+                        for row in conflicting_rows
+                    ]
+                },
             )
 
         created_shots: list[tuple[ShotGridShot, ShotImportNormalizedRowModel]] = []
@@ -477,18 +482,28 @@ class ShotGridShotImportService:
         )
 
     @classmethod
-    async def _enrich_rows_from_database(  # noqa: PLR0912
+    async def _enrich_rows_from_database(  # noqa: PLR0912, PLR0915
         cls,
         db: AsyncSession,
         project_id: int,
         rows: list[ShotImportPreviewRowModel],
+        assignee_overrides: dict[tuple[str, int], int | None] | None = None,
     ) -> None:
+        assignee_overrides = assignee_overrides or {}
         names = {
             row.normalized.assignee_user_name
             for row in rows
-            if row.normalized is not None and row.normalized.assignee_user_name
+            if row.normalized is not None
+            and row.normalized.assignee_user_name
+            and (row.sheet_name, row.row_number) not in assignee_overrides
         }
         member_records = await ShotGridShotImportDao.list_assignable_members(db, project_id, names)
+        override_records = await ShotGridShotImportDao.list_assignable_members_by_ids(
+            db,
+            project_id,
+            {user_id for user_id in assignee_overrides.values() if user_id is not None},
+        )
+        override_members = {record[0]: record for record in override_records}
         by_login = {record[1]: record for record in member_records}
         by_nickname: dict[str, list[tuple[int, str, str, str | None]]] = defaultdict(list)
         for record in member_records:
@@ -510,43 +525,73 @@ class ShotGridShotImportService:
             if normalized is None:
                 row.can_import = False
                 continue
-            assignee_name = normalized.assignee_user_name
-            if assignee_name:
-                member = by_login.get(assignee_name)
+            row_identity = (row.sheet_name, row.row_number)
+            override_supplied = row_identity in assignee_overrides
+            override_user_id = assignee_overrides.get(row_identity)
+            if override_supplied and override_user_id is None:
+                normalized.assignee_user_id = None
+                normalized.assignee_user_name = None
+            elif override_user_id is not None:
+                member = override_members.get(override_user_id)
                 if member is None:
-                    nickname_matches = by_nickname.get(assignee_name, [])
-                    if len(nickname_matches) == 1:
-                        member = nickname_matches[0]
-                    elif len(nickname_matches) > 1:
-                        row.errors.append(
-                            cls._row_issue(
-                                'SG_TASK_ASSIGNEE_AMBIGUOUS',
-                                '制作人昵称匹配到多个项目成员，请改用登录账号',
-                                'assigneeUserName',
-                                row,
-                            )
+                    row.errors.append(
+                        cls._row_issue(
+                            'SG_TASK_ASSIGNEE_INVALID',
+                            '选择的制作人不存在、已停用或不是项目成员',
+                            'assigneeUserName',
+                            row,
                         )
-                    else:
-                        row.errors.append(
-                            cls._row_issue(
-                                'SG_TASK_ASSIGNEE_INVALID',
-                                '制作人不存在、已停用或不是项目成员',
-                                'assigneeUserName',
-                                row,
-                            )
+                    )
+                elif not member[3]:
+                    row.errors.append(
+                        cls._row_issue(
+                            'SG_PRODUCER_CODE_REQUIRED',
+                            '选择的制作人尚未设置用户昵称',
+                            'assigneeUserName',
+                            row,
                         )
-                if member is not None:
-                    if not member[3]:
-                        row.errors.append(
-                            cls._row_issue(
-                                'SG_PRODUCER_CODE_REQUIRED',
-                                '制作人尚未设置项目内文件名缩写',
-                                'assigneeUserName',
-                                row,
+                    )
+                else:
+                    normalized.assignee_user_id = member[0]
+                    normalized.assignee_user_name = member[1]
+            else:
+                assignee_name = normalized.assignee_user_name
+                if assignee_name:
+                    member = by_login.get(assignee_name)
+                    if member is None:
+                        nickname_matches = by_nickname.get(assignee_name, [])
+                        if len(nickname_matches) == 1:
+                            member = nickname_matches[0]
+                        elif len(nickname_matches) > 1:
+                            row.errors.append(
+                                cls._row_issue(
+                                    'SG_TASK_ASSIGNEE_AMBIGUOUS',
+                                    '制作人昵称匹配到多个项目成员，请改用登录账号',
+                                    'assigneeUserName',
+                                    row,
+                                )
                             )
-                        )
-                    else:
-                        normalized.assignee_user_id = member[0]
+                        else:
+                            row.errors.append(
+                                cls._row_issue(
+                                    'SG_TASK_ASSIGNEE_INVALID',
+                                    '制作人不存在、已停用或不是项目成员',
+                                    'assigneeUserName',
+                                    row,
+                                )
+                            )
+                    if member is not None:
+                        if not member[3]:
+                            row.errors.append(
+                                cls._row_issue(
+                                    'SG_PRODUCER_CODE_REQUIRED',
+                                    '制作人尚未设置用户昵称',
+                                    'assigneeUserName',
+                                    row,
+                                )
+                            )
+                        else:
+                            normalized.assignee_user_id = member[0]
 
             for requirement in normalized.asset_requirements:
                 candidates = assets_by_name.get(requirement.normalized_name, [])
@@ -569,14 +614,20 @@ class ShotGridShotImportService:
         db: AsyncSession,
         project_id: int,
         rows: list[ShotImportPreviewRowModel],
+        selections: list[ShotImportSelectedRowModel],
     ) -> None:
+        assignee_overrides = {
+            selection.key(): selection.assignee_user_id
+            for selection in selections
+            if 'assignee_user_id' in selection.model_fields_set
+        }
         for row in rows:
             row.errors = []
             if row.normalized is not None:
                 row.normalized.assignee_user_id = None
                 for requirement in row.normalized.asset_requirements:
                     requirement.matched_asset_id = None
-        await cls._enrich_rows_from_database(db, project_id, rows)
+        await cls._enrich_rows_from_database(db, project_id, rows, assignee_overrides)
         errors = [row for row in rows if not row.can_import]
         if errors:
             raise shot_grid_error(
@@ -616,9 +667,18 @@ class ShotGridShotImportService:
     def _selection_hash_from_request(
         cls,
         file_sha256: str,
-        selected_rows: list[ImportSelectedRowModel],
+        selected_rows: list[ShotImportSelectedRowModel],
     ) -> str:
-        keys = sorted(cls._row_key(file_sha256, row.sheet_name, row.row_number) for row in selected_rows)
+        keys = []
+        for row in selected_rows:
+            row_key = cls._row_key(file_sha256, row.sheet_name, row.row_number)
+            if 'assignee_user_id' not in row.model_fields_set:
+                keys.append(f'{row_key}\0unchanged')
+            elif row.assignee_user_id is None:
+                keys.append(f'{row_key}\0unassigned')
+            else:
+                keys.append(f'{row_key}\0user:{row.assignee_user_id}')
+        keys.sort()
         return hashlib.sha256('\n'.join(keys).encode('utf-8')).hexdigest()
 
     @staticmethod
@@ -629,7 +689,7 @@ class ShotGridShotImportService:
     @staticmethod
     def _select_rows(
         payload: ImportPreviewTokenPayloadModel,
-        selections: list[ImportSelectedRowModel],
+        selections: list[ShotImportSelectedRowModel],
     ) -> list[ShotImportPreviewRowModel]:
         rows = [ShotImportPreviewRowModel.model_validate(row) for row in payload.rows]
         rows_by_key = {(row.sheet_name, row.row_number): row for row in rows}
@@ -648,6 +708,18 @@ class ShotGridShotImportService:
                 '选中行不属于当前预检查结果',
                 details={'rows': missing},
             )
+        selection_by_key = {selection.key(): selection for selection in selections}
+        for row in selected:
+            selection = selection_by_key[(row.sheet_name, row.row_number)]
+            if 'assignee_user_id' not in selection.model_fields_set or row.normalized is None:
+                continue
+            non_assignee_errors = [issue for issue in row.errors if issue.field_name != 'assigneeUserName']
+            if not non_assignee_errors:
+                row.normalized.assignee_user_id = selection.assignee_user_id
+                if selection.assignee_user_id is None:
+                    row.normalized.assignee_user_name = None
+                row.errors = []
+                row.can_import = True
         invalid = [row for row in selected if not row.can_import]
         if invalid:
             raise shot_grid_error(

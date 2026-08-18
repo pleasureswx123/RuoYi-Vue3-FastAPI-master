@@ -8,6 +8,7 @@ import {
   getMemberCandidatePage,
   getProjectMemberCandidatePage,
   getProjectDetail,
+  getProjectMembers,
   getProjectPage,
   getStorageRootOptions,
   previewProjectPath,
@@ -57,7 +58,7 @@ describe('项目 API 契约', () => {
   it('项目编辑与成员写入使用后端真实路径和完整请求体', () => {
     const update = { projectName: '新名称', lockVersion: 4 }
     updateProject(9, update)
-    addProjectMember(9, { userId: 31, projectRole: 'creator', producerCode: 'YJF' })
+    addProjectMember(9, { userId: 31, projectRole: 'creator' })
 
     expect(request.mock.calls[0][0]).toMatchObject({ url: '/shot-grid/projects/9', method: 'put', data: update })
     expect(request.mock.calls[1][0]).toMatchObject({ url: '/shot-grid/projects/9/members', method: 'post' })
@@ -79,5 +80,18 @@ describe('项目 API 契约', () => {
       '/shot-grid/projects/9/member-candidates'
     ])
     expect(request.mock.calls[1][0].headers).toEqual({ repeatSubmit: false })
+  })
+
+  it('项目成员列表支持可选项目角色过滤', () => {
+    const signal = new AbortController().signal
+    getProjectMembers(9, { projectRole: 'creator' }, { signal })
+
+    expect(request).toHaveBeenCalledWith({
+      url: '/shot-grid/projects/9/members',
+      method: 'get',
+      params: { projectRole: 'creator' },
+      signal,
+      silentError: true
+    })
   })
 })

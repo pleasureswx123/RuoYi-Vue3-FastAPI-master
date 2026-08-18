@@ -33,7 +33,9 @@ const validationMessage = ref('')
 const requestError = ref(null)
 
 async function submit() {
-  validationMessage.value = form.assigneeUserId ? '' : '请选择唯一主制作人'
+  validationMessage.value = !String(props.item.productionItem || '').trim()
+    ? '请先编辑资产并填写制作分项，再分配或改派任务'
+    : form.assigneeUserId ? '' : '请选择唯一主制作人'
   requestError.value = null
   if (validationMessage.value) return
   saving.value = true
@@ -55,7 +57,7 @@ async function submit() {
 </script>
 
 <template>
-  <ProjectModal :title="isReassign ? '改派资产任务' : '分配资产任务'" :description="`${asset.assetName} · ${item.productionItem || '未命名制作分项'}；一个制作分项始终只维护一个资产图片任务。`" :busy="saving" @close="emit('close')">
+  <ProjectModal :title="isReassign ? '改派资产任务' : '分配资产任务'" :description="`${asset.assetName} · ${item.productionItem || '未命名制作分项'}；制作分项名称完整后才能进入任务分配。`" :busy="saving" @close="emit('close')">
     <form class="assign-form" @submit.prevent="submit">
       <div v-if="validationMessage || requestError" class="assign-form__error" role="alert"><el-icon><WarningFilled /></el-icon><div><strong>{{ requestError?.title || '请检查任务分配' }}</strong><p>{{ requestError?.message || validationMessage }}</p><code v-if="requestError?.errorKey">{{ requestError.errorKey }}</code><button v-if="requestError?.status === 409" type="button" @click="emit('refresh')">刷新后重试</button></div></div>
       <label><span>唯一主制作人</span><el-select v-model="form.assigneeUserId" class="sg-select" placeholder="请选择" :disabled="saving"><el-option label="请选择" value="" /><el-option v-for="member in members" :key="member.userId" :label="memberLabel(member)" :value="String(member.userId)" /></el-select></label>

@@ -462,19 +462,16 @@ class ShotExcelParser:
 
     @staticmethod
     def build_summary(rows: list[ShotImportPreviewRowModel]) -> ShotImportPreviewSummaryModel:
+        structural_rows = [row.normalized for row in rows if row.normalized is not None]
         valid_rows = [row for row in rows if row.can_import and row.normalized is not None]
         return ShotImportPreviewSummaryModel(
             totalRows=len(rows),
             validRows=len(valid_rows),
             warningRows=sum(bool(row.warnings) for row in rows),
             errorRows=sum(bool(row.errors) for row in rows),
-            distinctEpisodes=len({row.normalized.episode_no for row in valid_rows if row.normalized}),
-            distinctScenes=len(
-                {(row.normalized.episode_no, row.normalized.scene_no) for row in valid_rows if row.normalized}
-            ),
-            distinctShots=len(
-                {(row.normalized.episode_no, row.normalized.shot_no) for row in valid_rows if row.normalized}
-            ),
+            distinctEpisodes=len({row.episode_no for row in structural_rows}),
+            distinctScenes=len({(row.episode_no, row.scene_no) for row in structural_rows}),
+            distinctShots=len({(row.episode_no, row.shot_no) for row in structural_rows}),
         )
 
     @staticmethod

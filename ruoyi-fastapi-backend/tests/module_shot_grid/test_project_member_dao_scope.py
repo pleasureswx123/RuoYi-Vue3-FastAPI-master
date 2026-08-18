@@ -47,6 +47,21 @@ async def test_active_member_candidate_validation_applies_user_data_scope() -> N
 
 
 @pytest.mark.asyncio
+async def test_member_list_applies_optional_project_role_filter() -> None:
+    result = MagicMock()
+    result.mappings.return_value = []
+    db = AsyncMock()
+    db.execute.return_value = result
+
+    await ShotGridProjectMemberDao.list_members(db, 10, 'creator')
+
+    sql = _postgresql_sql(db.execute.await_args.args[0])
+    assert 'sg_project_member.project_id = 10' in sql
+    assert "sg_project_member.member_status = 'active'" in sql
+    assert "sg_project_member.project_role = 'creator'" in sql
+
+
+@pytest.mark.asyncio
 async def test_default_project_scope_joins_only_active_membership() -> None:
     count_result = MagicMock()
     count_result.scalar_one.return_value = 0

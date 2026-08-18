@@ -17,7 +17,7 @@ from module_shot_grid.entity.vo.asset_import_vo import (
     AssetImportNormalizedRowModel,
     AssetImportPreviewRowModel,
 )
-from module_shot_grid.entity.vo.import_common_vo import ImportPreviewTokenPayloadModel
+from module_shot_grid.entity.vo.import_common_vo import ImportIssueModel, ImportPreviewTokenPayloadModel
 from module_shot_grid.exceptions import ShotGridDomainException
 from module_shot_grid.service.asset_import_service import AssetImportService
 from module_shot_grid.service.import_preview_store import ImportPreviewStore
@@ -112,6 +112,16 @@ def test_selection_hash_is_order_independent_but_sheet_sensitive() -> None:
     assert AssetImportService._selection_hash(first) == AssetImportService._selection_hash(reversed_request)
     assert AssetImportService._selection_hash(first) != AssetImportService._selection_hash(changed_sheet)
 
+    unassigned = AssetImportCommitRequestModel(
+        importToken='token',
+        selectedRows=[{'sheetName': 'Sheet1', 'rowNumber': 2, 'assigneeUserId': None}],
+    )
+    unchanged = AssetImportCommitRequestModel(
+        importToken='token',
+        selectedRows=[{'sheetName': 'Sheet1', 'rowNumber': 2}],
+    )
+    assert AssetImportService._selection_hash(unassigned) != AssetImportService._selection_hash(unchanged)
+
 
 @pytest.mark.parametrize('value', [None, '', '   ', 'x' * 101, 'line\nbreak'])
 def test_invalid_idempotency_key_uses_stable_domain_error(value: str | None) -> None:
@@ -134,6 +144,28 @@ def test_partial_parent_selection_is_self_contained() -> None:
 
     assert [(row.sheet_name, row.row_number) for row in selected] == [('Sheet1', 3)]
     assert selected[0].normalized.asset_name == '控制室'
+
+
+def test_assignee_error_can_be_cleared_to_unassigned_during_commit() -> None:
+    row = _row(can_import=False)
+    row.normalized.assignee_user_name = '无法匹配'
+    row.errors = [
+        ImportIssueModel(
+            errorKey='SG_TASK_ASSIGNEE_INVALID',
+            fieldName='assigneeUserName',
+            message='制作人无法匹配',
+        )
+    ]
+    selected = AssetImportService._select_rows(
+        _payload([row]),
+        AssetImportCommitRequestModel(
+            importToken='token',
+            selectedRows=[{'sheetName': 'Sheet1', 'rowNumber': 2, 'assigneeUserId': None}],
+        ),
+    )
+
+    assert selected[0].can_import is True
+    assert selected[0].errors == []
 
 
 def test_replay_requires_same_token_and_selection_snapshot() -> None:

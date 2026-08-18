@@ -8,7 +8,9 @@ SHOT_GRID_STORAGE_WORKER_SCHEMA_REVISION = '20260810_05'
 SHOT_GRID_TASK_VERSION_REVIEW_SCHEMA_REVISION = '20260811_06'
 SHOT_GRID_MEDIA_DERIVATION_SCHEMA_REVISION = '20260812_07'
 SHOT_GRID_NAS_ADMIN_SCHEMA_REVISION = '20260812_08'
-SHOT_GRID_SCHEMA_REVISION = SHOT_GRID_NAS_ADMIN_SCHEMA_REVISION
+SHOT_GRID_SHOT_DELETE_SCHEMA_REVISION = '20260813_09'
+SHOT_GRID_CROSS_VERSION_REVIEW_SCHEMA_REVISION = '20260814_10'
+SHOT_GRID_SCHEMA_REVISION = SHOT_GRID_CROSS_VERSION_REVIEW_SCHEMA_REVISION
 
 SHOT_GRID_NAVIGATION_ROUTE_KEYS = ('workbench', 'projects', 'shots', 'assets', 'reviews', 'files')
 
@@ -27,7 +29,8 @@ SHOT_GRID_TABLE_NAMES = frozenset(
         'sg_version_file',
         'sg_media_derivation',
         'sg_note',
-        'sg_note_reply',
+        'sg_version_issue_response',
+        'sg_issue_verification',
         'sg_review_action',
         'sg_review_list',
         'sg_review_list_version',
@@ -101,8 +104,6 @@ SHOT_GRID_PERMISSION_CODES = frozenset(
         'shotgrid:version:review',
         'shotgrid:note:list',
         'shotgrid:note:add',
-        'shotgrid:note:reply',
-        'shotgrid:note:resolve',
         'shotgrid:reviewList:list',
         'shotgrid:reviewList:query',
         'shotgrid:reviewList:add',

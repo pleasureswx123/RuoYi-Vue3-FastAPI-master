@@ -26,6 +26,8 @@ const MAX_POLL_BACKOFF_MS = 30_000
 const props = defineProps({
   taskId: { type: Number, required: true },
   taskKind: { type: String, required: true },
+  taskStatus: { type: String, required: true },
+  openIssues: { type: Array, default: () => [] },
   allowedActions: { type: Array, default: () => [] },
   hasUncommittedSubmission: { type: Boolean, default: false },
   hasAddPermission: { type: Boolean, default: false },
@@ -34,11 +36,13 @@ const props = defineProps({
   operationGeneration: { type: Number, default: 0 },
   pollInterval: { type: Number, default: 2000 }
 })
-const emit = defineEmits(['committed', 'submission-change'])
+const emit = defineEmits(['committed', 'submission-change', 'focus-issue'])
 
 const selectedFile = ref(null)
 const changelog = ref('')
 const aiParamsText = ref('')
+const issueResponseTexts = ref({})
+const openIssueSnapshotHash = ref('')
 const uploadResult = ref(null)
 const uploadProgress = ref(0)
 const submission = ref(null)
@@ -66,6 +70,17 @@ const canSubmit = computed(() => (
   recoveryResolved.value &&
   props.allowedActions.includes('version.add') &&
   props.hasAddPermission
+))
+const issueResponses = computed(() => props.taskStatus === 'revision'
+  ? props.openIssues.map(issue => ({
+      issueId: Number(issue.issueId),
+      responseText: String(issueResponseTexts.value[issue.issueId] || '').trim()
+    }))
+  : [])
+const issueResponsesComplete = computed(() => (
+  props.taskStatus !== 'revision' || (
+    props.openIssues.length > 0 && issueResponses.value.every(item => item.responseText)
+  )
 ))
 const hasActiveSubmission = computed(() => Boolean(submission.value && submission.value.submissionStatus !== 'committed'))
 const isBusy = computed(() => recovering.value || ['preflighting', 'uploading', 'submitting', 'retrying'].includes(phase.value))
@@ -116,6 +131,8 @@ function resetComposer() {
   selectedFile.value = null
   changelog.value = ''
   aiParamsText.value = ''
+  issueResponseTexts.value = Object.fromEntries(props.openIssues.map(issue => [issue.issueId, '']))
+  openIssueSnapshotHash.value = ''
   uploadResult.value = null
   uploadProgress.value = 0
   phase.value = 'idle'
@@ -348,6 +365,12 @@ async function submitVersion() {
     validationMessage.value = '请填写本轮修改说明'
     return
   }
+  if (!issueResponsesComplete.value) {
+    validationMessage.value = props.openIssues.length
+      ? '请逐条填写审核人提出的全部问题处理说明'
+      : '退回修改任务缺少待处理问题，请刷新任务'
+    return
+  }
   if (Array.from(normalizedChangelog).some(character => character !== ' ' && /[\p{C}\p{Z}]/u.test(character))) {
     validationMessage.value = '修改说明不能包含换行、Tab 或其他控制字符'
     return
@@ -377,7 +400,8 @@ async function submitVersion() {
         fileName: targetFile.name,
         fileSize: targetFile.size,
         changelog: normalizedChangelog,
-        aiParams
+        aiParams,
+        issueResponses: issueResponses.value
       }
       const preflightResponse = await preflightVersionSubmission(
         targetTaskId,
@@ -405,6 +429,7 @@ async function submitVersion() {
       ) {
         throw new Error('版本提交预检响应与当前任务不一致，未上传文件')
       }
+      openIssueSnapshotHash.value = preflightResponse.data.openIssueSnapshotHash
 
       failureTitle = '受保护文件上传失败'
       phase.value = 'uploading'
@@ -438,7 +463,9 @@ async function submitVersion() {
     const payload = {
       fileId: uploadResult.value.fileId,
       changelog: normalizedChangelog,
-      aiParams
+      aiParams,
+      openIssueSnapshotHash: openIssueSnapshotHash.value,
+      issueResponses: issueResponses.value
     }
     phase.value = 'submitting'
     failureTitle = '版本提交创建失败'
@@ -512,6 +539,14 @@ watch(
   { immediate: true }
 )
 
+watch(
+  () => props.openIssues.map(issue => issue.issueId),
+  issueIds => {
+    const current = issueResponseTexts.value
+    issueResponseTexts.value = Object.fromEntries(issueIds.map(issueId => [issueId, current[issueId] || '']))
+  }
+)
+
 onBeforeUnmount(() => {
   disposed = true
   contextGeneration += 1
@@ -562,6 +597,40 @@ onBeforeUnmount(() => {
         <b>{{ selectedFile ? '更换' : '选择文件' }}</b>
       </label>
 
+      <section v-if="taskStatus === 'revision'" class="issue-response-panel">
+        <header>
+          <div>
+            <p class="sg-eyebrow">REVIEW ISSUES</p>
+            <h4>逐条说明本轮如何处理</h4>
+          </div>
+          <span>{{ openIssues.length }} 条待处理</span>
+        </header>
+        <p class="issue-response-help">每条说明会随新版本永久保存，审核人将在下一版逐条确认是否已修复。</p>
+        <div v-if="openIssues.length" class="issue-response-list">
+          <article v-for="(issue, index) in openIssues" :key="issue.issueId">
+            <div class="issue-response-title">
+              <strong>问题 {{ index + 1 }}</strong>
+              <span>待处理归属 {{ issue.pendingVersionNumber || issue.originVersionNumber }}<template v-if="issue.pendingVersionNumber && issue.pendingVersionNumber !== issue.originVersionNumber"> · 来源 {{ issue.originVersionNumber }}</template></span>
+            </div>
+            <p>{{ issue.content || `包含 ${issue.annotations?.items?.length || 0} 个画面标注` }}</p>
+            <button class="issue-source-link" type="button" @click="emit('focus-issue', issue)">
+              查看来源版本{{ issue.annotations?.items?.length ? `与 ${issue.annotations.items.length} 处画面标注` : '' }}
+            </button>
+            <label class="field-label">
+              <span>本轮处理说明 <em>*</em></span>
+              <textarea
+                v-model="issueResponseTexts[issue.issueId]"
+                maxlength="5000"
+                rows="3"
+                :disabled="composerLocked || !canSubmit"
+                placeholder="说明具体改了什么、如何改，以及需要审核人重点确认的位置。"
+              />
+            </label>
+          </article>
+        </div>
+        <div v-else class="issue-response-empty">当前没有可处理问题，请刷新任务后再提交。</div>
+      </section>
+
       <label class="field-label">
         <span>本轮修改说明 <em>*</em></span>
         <textarea v-model="changelog" maxlength="5000" rows="4" :disabled="composerLocked || !canSubmit" placeholder="说明本版本完成内容、修改点或需要审核人关注的部分。" />
@@ -588,7 +657,7 @@ onBeforeUnmount(() => {
           native-type="submit"
           type="primary"
           :loading="isBusy"
-          :disabled="!canSubmit || !selectedFile"
+          :disabled="!canSubmit || !selectedFile || !issueResponsesComplete"
         >
           {{ uploadResult ? '重试创建版本提交' : '上传并提交版本' }}
         </el-button>
@@ -612,6 +681,19 @@ onBeforeUnmount(() => {
 .submission-actions { display: flex; align-items: center; justify-content: space-between; padding-top: 16px; gap: 16px; }
 .submission-actions p { margin: 0; color: var(--sg-text-secondary); font-size: 11px; line-height: 1.6; }
 .submission-form { display: grid; margin-top: 20px; gap: 16px; }
+.issue-response-panel { display: grid; gap: 12px; padding: 17px; background: rgba(255, 182, 87, 0.045); border: 1px solid rgba(255, 182, 87, 0.2); border-radius: 12px; }
+.issue-response-panel > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.issue-response-panel h4 { margin: 3px 0 0; font-size: 16px; }
+.issue-response-panel > header > span { padding: 5px 8px; color: var(--sg-accent); font-size: 10px; background: var(--sg-accent-soft); border-radius: 999px; }
+.issue-response-help { margin: 0; color: var(--sg-text-muted); font-size: 11px; line-height: 1.6; }
+.issue-response-list { display: grid; gap: 10px; }
+.issue-response-list article { display: grid; gap: 9px; padding: 13px; background: rgba(0, 0, 0, 0.14); border: 1px solid var(--sg-border); border-radius: 10px; }
+.issue-response-title { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.issue-response-title strong { font-size: 12px; }
+.issue-response-title span { color: var(--sg-text-muted); font-size: 9px; }
+.issue-response-list article > p { margin: 0; color: var(--sg-text-secondary); font-size: 11px; line-height: 1.65; white-space: pre-wrap; }
+.issue-source-link { justify-self: start; padding: 0; color: #68b5ff; font: inherit; font-size: 10px; cursor: pointer; background: transparent; border: 0; }
+.issue-response-empty { padding: 18px; color: var(--sg-danger); font-size: 11px; text-align: center; border: 1px dashed rgba(244, 92, 92, 0.3); border-radius: 9px; }
 .file-picker { position: relative; display: grid; min-height: 84px; padding: 18px; cursor: pointer; background: rgba(255, 255, 255, 0.025); border: 1px dashed var(--sg-border-strong); border-radius: var(--sg-radius-md); grid-template-columns: auto minmax(0, 1fr) auto; gap: 14px; align-items: center; }
 .file-picker:hover,
 .file-picker.has-file { border-color: rgba(255, 182, 87, 0.5); }

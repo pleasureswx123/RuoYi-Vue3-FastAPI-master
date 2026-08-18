@@ -10,17 +10,21 @@ from module_shot_grid.service.media_derivation_service import (
 )
 
 THUMBNAIL_EDGE = 128
-PROXY_EDGE = 256
+PROXY_EDGE = 480
 
 
 def media_config() -> ShotGridMediaWorkerConfig:
     return ShotGridMediaWorkerConfig(
         enabled=True,
-        maxAttempts=2,
-        retryDelaysSeconds=(1,),
-        thumbnailMaxEdge=THUMBNAIL_EDGE,
-        imageProxyMaxEdge=PROXY_EDGE,
+        max_attempts=2,
+        retry_delays_seconds=(1,),
+        thumbnail_max_edge=THUMBNAIL_EDGE,
+        image_proxy_max_edge=PROXY_EDGE,
     )
+
+
+def test_media_derivation_uses_official_version_reference_type() -> None:
+    assert ShotGridMediaDerivationService.VERSION_REFERENCE_TYPE == 'shotgrid_version'
 
 
 def test_image_derivation_generates_distinct_thumbnail_and_proxy(tmp_path: Path) -> None:

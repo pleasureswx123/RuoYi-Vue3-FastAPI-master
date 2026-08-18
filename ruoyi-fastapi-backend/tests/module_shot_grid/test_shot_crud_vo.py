@@ -4,6 +4,7 @@ from pydantic import ValidationError
 from module_shot_grid.entity.vo.shot_crud_vo import (
     ShotGridShotArchiveModel,
     ShotGridShotAssigneeModel,
+    ShotGridShotBatchDeleteModel,
     ShotGridShotCreateModel,
     ShotGridShotListQueryModel,
     ShotGridShotUpdateModel,
@@ -86,6 +87,18 @@ def test_historical_task_assignee_allows_missing_producer_code() -> None:
     assignee = ShotGridShotAssigneeModel(userId=2, nickName='杨景锋', producerCode=None)
 
     assert assignee.producer_code is None
+
+
+def test_batch_delete_requires_unique_shots_and_lock_versions() -> None:
+    command = ShotGridShotBatchDeleteModel(
+        items=[{'shotId': 41, 'lockVersion': 0}, {'shotId': 42, 'lockVersion': 3}]
+    )
+    assert [item.shot_id for item in command.items] == [41, 42]
+
+    with pytest.raises(ValidationError):
+        ShotGridShotBatchDeleteModel(
+            items=[{'shotId': 41, 'lockVersion': 0}, {'shotId': 41, 'lockVersion': 1}]
+        )
 
 
 @pytest.mark.parametrize(

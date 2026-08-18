@@ -124,15 +124,14 @@ class ShotGridProjectOptionDao:
                 SysUser.dept_id,
                 SysDept.dept_name,
                 ShotGridProjectMember.project_role,
-                ShotGridProjectMember.producer_code,
+                func.upper(SysUser.nick_name).label('producer_code'),
             )
             .join(ShotGridProjectMember, ShotGridProjectMember.user_id == SysUser.user_id)
             .outerjoin(SysDept, SysDept.dept_id == SysUser.dept_id)
             .where(
                 ShotGridProjectMember.project_id == project_id,
                 ShotGridProjectMember.member_status == 'active',
-                ShotGridProjectMember.producer_code.is_not(None),
-                func.length(func.trim(ShotGridProjectMember.producer_code)) > 0,
+                ShotGridProjectMember.project_role == 'creator',
                 SysUser.status == '0',
                 SysUser.del_flag == '0',
             )
@@ -143,7 +142,6 @@ class ShotGridProjectOptionDao:
                 or_(
                     SysUser.user_name.ilike(f'%{keyword}%'),
                     SysUser.nick_name.ilike(f'%{keyword}%'),
-                    ShotGridProjectMember.producer_code.ilike(f'%{keyword}%'),
                 )
             )
         total = int(await db.scalar(select(func.count()).select_from(statement.order_by(None).subquery())) or 0)
@@ -167,6 +165,6 @@ class ShotGridProjectOptionDao:
         project_id: int,
         query: ShotGridAssetAssigneeOptionQueryModel,
     ) -> tuple[list[dict[str, Any]], int]:
-        """资产任务与镜头任务共用同一项目成员和制作人缩写资格。"""
+        """资产任务与镜头任务共用同一项目制作人员和用户昵称标识。"""
 
         return await cls.get_shot_assignee_option_page(db, project_id, query)

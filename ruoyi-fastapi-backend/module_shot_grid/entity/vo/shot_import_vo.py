@@ -83,9 +83,15 @@ class ShotImportPreviewResultModel(ShotGridApiModel):
     workbook_warnings: list[ImportIssueModel] = Field(default_factory=list)
 
 
+class ShotImportSelectedRowModel(ImportSelectedRowModel):
+    """正式提交时允许为单行覆盖预检匹配到的制作人。"""
+
+    assignee_user_id: int | None = Field(default=None, gt=0, le=SQL_BIGINT_MAX)
+
+
 class ShotImportCommitRequestModel(ShotGridApiModel):
     import_token: str = Field(min_length=1, max_length=200)
-    selected_rows: list[ImportSelectedRowModel] = Field(min_length=1)
+    selected_rows: list[ShotImportSelectedRowModel] = Field(min_length=1)
 
     @model_validator(mode='after')
     def validate_unique_rows(self) -> 'ShotImportCommitRequestModel':

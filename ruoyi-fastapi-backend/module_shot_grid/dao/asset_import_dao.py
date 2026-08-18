@@ -59,7 +59,7 @@ class AssetImportDao:
                 SysUser.user_id,
                 SysUser.user_name,
                 SysUser.nick_name,
-                ShotGridProjectMember.producer_code,
+                func.upper(SysUser.nick_name).label('producer_code'),
             )
             .join(
                 ShotGridProjectMember,
@@ -69,7 +69,41 @@ class AssetImportDao:
                 SysUser.status == '0',
                 SysUser.del_flag == '0',
                 ShotGridProjectMember.member_status == 'active',
+                ShotGridProjectMember.project_role == 'creator',
                 or_(SysUser.user_name.in_(unique_names), SysUser.nick_name.in_(unique_names)),
+            )
+        )
+        return [dict(row) for row in result.mappings().all()]
+
+    @classmethod
+    async def get_member_candidates_by_ids(
+        cls,
+        db: AsyncSession,
+        project_id: int,
+        user_ids: Iterable[int],
+    ) -> list[dict[str, Any]]:
+        """按用户 ID 重新核验预检页面显式选择的制作人。"""
+
+        unique_ids = sorted(set(user_ids))
+        if not unique_ids:
+            return []
+        result = await db.execute(
+            select(
+                SysUser.user_id,
+                SysUser.user_name,
+                SysUser.nick_name,
+                func.upper(SysUser.nick_name).label('producer_code'),
+            )
+            .join(
+                ShotGridProjectMember,
+                (ShotGridProjectMember.user_id == SysUser.user_id) & (ShotGridProjectMember.project_id == project_id),
+            )
+            .where(
+                SysUser.user_id.in_(unique_ids),
+                SysUser.status == '0',
+                SysUser.del_flag == '0',
+                ShotGridProjectMember.member_status == 'active',
+                ShotGridProjectMember.project_role == 'creator',
             )
         )
         return [dict(row) for row in result.mappings().all()]

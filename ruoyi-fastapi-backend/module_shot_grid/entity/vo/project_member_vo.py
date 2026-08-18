@@ -42,6 +42,12 @@ class ShotGridProjectMemberAddModel(ShotGridInitialMemberModel):
     """新增项目成员请求。"""
 
 
+class ShotGridProjectMemberQueryModel(ShotGridApiModel):
+    """项目成员列表查询。"""
+
+    project_role: ProjectRole | None = Field(default=None, description='项目角色；不传返回全部成员')
+
+
 class ShotGridProjectMemberUpdateModel(ShotGridApiModel):
     """修改项目成员角色或制作人缩写请求。"""
 

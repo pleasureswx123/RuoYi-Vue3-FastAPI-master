@@ -1,7 +1,7 @@
 from collections import defaultdict
 from typing import Any
 
-from fastapi.routing import APIRoute, iter_route_contexts
+from fastapi.routing import APIRoute
 
 from cli.bootstrap import APP_BOOTSTRAP, AppBootstrapService
 from cli.core import (
@@ -11,6 +11,7 @@ from cli.core import (
 )
 from cli.exit_codes import DEPENDENCY_ERROR, SUCCESS
 from cli.runtime.app import APP_RUNTIME, AppRuntimeService
+from cli.runtime.app.route_compat import iter_app_route_contexts
 from cli.runtime.crypto import CRYPTO_RUNTIME, CryptoRuntimeService
 from cli.runtime.db import DATABASE_RUNTIME, DatabaseRuntimeService
 from cli.runtime.ops import OPERATIONS_RUNTIME, OperationsRuntimeService
@@ -197,7 +198,7 @@ class AppCommandController:
         """
         normalized_method = method.upper().strip()
         routes = []
-        for route_context in iter_route_contexts(app_instance.routes):
+        for route_context in iter_app_route_contexts(app_instance.routes):
             if not isinstance(route_context.original_route, APIRoute):
                 continue
             if not include_hidden and not route_context.include_in_schema:

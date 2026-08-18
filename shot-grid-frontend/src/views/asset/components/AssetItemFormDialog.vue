@@ -40,7 +40,9 @@ function optionalText(value) {
 
 async function submit() {
   requestError.value = null
-  validationMessage.value = Number.isInteger(Number(form.sortOrder)) && Number(form.sortOrder) >= 0 ? '' : '排序必须是非负整数'
+  validationMessage.value = form.assigneeUserId && !String(form.productionItem || '').trim()
+    ? '首次分配制作人前必须填写制作分项'
+    : Number.isInteger(Number(form.sortOrder)) && Number(form.sortOrder) >= 0 ? '' : '排序必须是非负整数'
   if (validationMessage.value) return
   const common = {
     productionItem: optionalText(form.productionItem),
@@ -77,12 +79,12 @@ async function submit() {
   <ProjectModal :title="isEdit ? '编辑制作分项' : `新增制作分项 · ${asset.assetName}`" description="制作分项是独立分配、提交图片版本和审核的最小生产单元。已有版本后主数据将失败关闭。" :busy="saving" @close="emit('close')">
     <form class="item-form" @submit.prevent="submit">
       <div v-if="validationMessage || requestError" class="item-form__error" role="alert"><el-icon><WarningFilled /></el-icon><div><strong>{{ requestError?.title || '请检查表单' }}</strong><p>{{ requestError?.message || validationMessage }}</p><code v-if="requestError?.errorKey">{{ requestError.errorKey }}</code><button v-if="requestError?.status === 409" type="button" @click="emit('refresh')">刷新后重试</button></div></div>
-      <label><span>制作分项</span><input v-model="form.productionItem" maxlength="240" :disabled="saving" placeholder="允许留空，提交版本前必须补齐" /></label>
+      <label><span>制作分项</span><input v-model="form.productionItem" maxlength="240" :disabled="saving" placeholder="未分配时可留空；分配任务前必须填写" /></label>
       <label><span>分项说明</span><textarea v-model="form.description" rows="3" :disabled="saving" /></label>
       <label><span>排序</span><input v-model.number="form.sortOrder" type="number" min="0" step="1" :disabled="saving" /></label>
       <label><span>备注</span><textarea v-model="form.remark" rows="2" maxlength="500" :disabled="saving" /></label>
       <template v-if="!item?.task">
-        <label><span>首次分配制作人</span><el-select v-model="form.assigneeUserId" class="sg-select" placeholder="暂不分配" :disabled="saving"><el-option label="暂不分配" value="" /><el-option v-for="member in members" :key="member.userId" :label="memberLabel(member)" :value="String(member.userId)" /></el-select></label>
+        <label><span>首次分配制作人</span><el-select v-model="form.assigneeUserId" class="sg-select" :placeholder="form.productionItem.trim() ? '暂不分配' : '请先填写制作分项'" :disabled="saving || !form.productionItem.trim()"><el-option label="暂不分配" value="" /><el-option v-for="member in members" :key="member.userId" :label="memberLabel(member)" :value="String(member.userId)" /></el-select></label>
         <label v-if="form.assigneeUserId"><span>首次任务要求</span><textarea v-model="form.taskDescription" rows="2" :disabled="saving" /></label>
       </template>
       <p v-else class="item-form__task-note">该分项已有任务；负责人变更必须使用“改派任务”，不会通过主数据编辑静默改派。</p>

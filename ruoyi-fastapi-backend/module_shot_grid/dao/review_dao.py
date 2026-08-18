@@ -2,22 +2,27 @@ from typing import Any
 
 from sqlalchemy import asc, delete, desc, exists, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from module_admin.entity.do.file_do import SysFileInfo
 from module_admin.entity.do.user_do import SysUser
 from module_shot_grid.entity.do.project_do import ShotGridProject, ShotGridProjectMember, ShotGridShot
 from module_shot_grid.entity.do.review_do import (
+    ShotGridIssueVerification,
     ShotGridNote,
-    ShotGridNoteReply,
     ShotGridReviewAction,
     ShotGridReviewList,
     ShotGridReviewListVersion,
+    ShotGridVersionIssueResponse,
 )
 from module_shot_grid.entity.do.task_do import ShotGridTask
-from module_shot_grid.entity.do.version_do import ShotGridMediaDerivation, ShotGridVersion, ShotGridVersionFile
+from module_shot_grid.entity.do.version_do import (
+    ShotGridMediaDerivation,
+    ShotGridVersion,
+    ShotGridVersionFile,
+    ShotGridVersionSubmission,
+)
 from module_shot_grid.entity.vo.review_vo import (
-    ShotGridNoteListQueryModel,
-    ShotGridNoteReplyListQueryModel,
     ShotGridReviewActionQueryModel,
     ShotGridReviewListQueryModel,
     ShotGridVersionListQueryModel,
@@ -184,6 +189,7 @@ class ShotGridReviewDao:
                         ShotGridVersion.version_id,
                         ShotGridVersion.project_id,
                         ShotGridVersion.task_id,
+                        ShotGridVersion.submission_id,
                         ShotGridVersion.version_no,
                         ShotGridVersion.version_status,
                         ShotGridVersion.lock_version,
@@ -696,125 +702,123 @@ class ShotGridReviewDao:
         return dict(row) if row is not None else None
 
     @classmethod
-    async def get_notes(
+    async def get_task_issues(
         cls,
         db: AsyncSession,
         project_id: int,
-        version_id: int,
-        query: ShotGridNoteListQueryModel,
-    ) -> tuple[list[dict[str, Any]], int]:
-        reply_counts = (
-            select(ShotGridNoteReply.note_id, func.count(ShotGridNoteReply.reply_id).label('reply_count'))
-            .group_by(ShotGridNoteReply.note_id)
-            .subquery()
-        )
+        task_id: int,
+        *,
+        status: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """读取任务问题主记录；问题永久绑定来源版本。"""
+
+        origin_version = aliased(ShotGridVersion)
+        resolved_version = aliased(ShotGridVersion)
         statement = (
             select(
-                ShotGridNote.note_id,
+                ShotGridNote.note_id.label('issue_id'),
                 ShotGridNote.project_id,
-                ShotGridNote.version_id,
+                ShotGridNote.version_id.label('origin_version_id'),
+                origin_version.version_no.label('origin_version_no'),
                 ShotGridNote.reviewer_user_id,
                 SysUser.nick_name.label('reviewer_name'),
                 ShotGridNote.content,
                 ShotGridNote.media_time_ms,
                 ShotGridNote.annotations,
-                ShotGridNote.is_mandatory,
-                ShotGridNote.note_status,
-                func.coalesce(reply_counts.c.reply_count, 0).label('reply_count'),
+                ShotGridNote.note_status.label('status'),
+                ShotGridNote.resolved_in_version_id,
+                resolved_version.version_no.label('resolved_in_version_no'),
                 ShotGridNote.create_time,
                 ShotGridNote.update_time,
             )
+            .join(origin_version, origin_version.version_id == ShotGridNote.version_id)
+            .outerjoin(resolved_version, resolved_version.version_id == ShotGridNote.resolved_in_version_id)
             .outerjoin(SysUser, SysUser.user_id == ShotGridNote.reviewer_user_id)
-            .outerjoin(reply_counts, reply_counts.c.note_id == ShotGridNote.note_id)
-            .where(ShotGridNote.project_id == project_id, ShotGridNote.version_id == version_id)
-        )
-        if query.note_status:
-            statement = statement.where(ShotGridNote.note_status == query.note_status)
-        if query.is_mandatory is not None:
-            statement = statement.where(ShotGridNote.is_mandatory == ('1' if query.is_mandatory else '0'))
-        if query.keyword:
-            statement = statement.where(ShotGridNote.content.ilike(f'%{query.keyword.strip()}%'))
-        statement = statement.order_by(
-            ShotGridNote.create_time.asc() if query.is_asc == 'ascending' else ShotGridNote.create_time.desc(),
-            ShotGridNote.note_id.asc() if query.is_asc == 'ascending' else ShotGridNote.note_id.desc(),
-        )
-        total = int(
-            (await db.execute(select(func.count()).select_from(statement.order_by(None).subquery()))).scalar_one()
-        )
-        rows = (
-            await db.execute(statement.offset((query.page_num - 1) * query.page_size).limit(query.page_size))
-        ).mappings()
-        return [dict(row) for row in rows], total
-
-    @classmethod
-    async def get_note_row(cls, db: AsyncSession, project_id: int, note_id: int) -> dict[str, Any] | None:
-        reply_count = (
-            select(func.count(ShotGridNoteReply.reply_id))
-            .where(ShotGridNoteReply.note_id == ShotGridNote.note_id)
-            .correlate(ShotGridNote)
-            .scalar_subquery()
-        )
-        row = (
-            (
-                await db.execute(
-                    select(
-                        ShotGridNote.note_id,
-                        ShotGridNote.project_id,
-                        ShotGridNote.version_id,
-                        ShotGridNote.reviewer_user_id,
-                        SysUser.nick_name.label('reviewer_name'),
-                        ShotGridNote.content,
-                        ShotGridNote.media_time_ms,
-                        ShotGridNote.annotations,
-                        ShotGridNote.is_mandatory,
-                        ShotGridNote.note_status,
-                        reply_count.label('reply_count'),
-                        ShotGridNote.create_time,
-                        ShotGridNote.update_time,
-                    )
-                    .outerjoin(SysUser, SysUser.user_id == ShotGridNote.reviewer_user_id)
-                    .where(ShotGridNote.project_id == project_id, ShotGridNote.note_id == note_id)
-                )
+            .where(
+                ShotGridNote.project_id == project_id,
+                origin_version.task_id == task_id,
             )
-            .mappings()
-            .one_or_none()
         )
-        return dict(row) if row is not None else None
+        if status is not None:
+            statement = statement.where(ShotGridNote.note_status == status)
+        rows = (
+            await db.execute(
+                statement.order_by(origin_version.version_no, ShotGridNote.create_time, ShotGridNote.note_id)
+            )
+        ).mappings()
+        return [dict(row) for row in rows]
 
     @classmethod
-    async def get_note_replies(
+    async def get_issue_responses(
         cls,
         db: AsyncSession,
-        project_id: int,
-        note_id: int,
-        query: ShotGridNoteReplyListQueryModel,
-    ) -> tuple[list[dict[str, Any]], int]:
-        statement = (
-            select(
-                ShotGridNoteReply.reply_id,
-                ShotGridNoteReply.project_id,
-                ShotGridNoteReply.note_id,
-                ShotGridNoteReply.reply_user_id,
-                SysUser.nick_name.label('reply_user_name'),
-                ShotGridNoteReply.content,
-                ShotGridNoteReply.create_time,
-            )
-            .outerjoin(SysUser, SysUser.user_id == ShotGridNoteReply.reply_user_id)
-            .where(ShotGridNoteReply.project_id == project_id, ShotGridNoteReply.note_id == note_id)
-            .order_by(
-                ShotGridNoteReply.create_time.asc()
-                if query.is_asc == 'ascending'
-                else ShotGridNoteReply.create_time.desc(),
-                ShotGridNoteReply.reply_id.asc() if query.is_asc == 'ascending' else ShotGridNoteReply.reply_id.desc(),
-            )
-        )
-        total = int(
-            (await db.execute(select(func.count()).select_from(statement.order_by(None).subquery()))).scalar_one()
-        )
+        issue_ids: list[int],
+    ) -> list[dict[str, Any]]:
+        if not issue_ids:
+            return []
+        responder = aliased(SysUser)
         rows = (
-            await db.execute(statement.offset((query.page_num - 1) * query.page_size).limit(query.page_size))
+            await db.execute(
+                select(
+                    ShotGridVersionIssueResponse.note_id.label('issue_id'),
+                    ShotGridVersionIssueResponse.response_id,
+                    ShotGridVersionIssueResponse.submission_id,
+                    ShotGridVersion.version_id,
+                    ShotGridVersion.version_no,
+                    ShotGridVersionIssueResponse.response_text,
+                    ShotGridVersionIssueResponse.responded_by,
+                    responder.nick_name.label('responder_name'),
+                    ShotGridVersionIssueResponse.create_time,
+                )
+                .join(
+                    ShotGridVersionSubmission,
+                    ShotGridVersionSubmission.submission_id == ShotGridVersionIssueResponse.submission_id,
+                )
+                .outerjoin(ShotGridVersion, ShotGridVersion.submission_id == ShotGridVersionIssueResponse.submission_id)
+                .outerjoin(responder, responder.user_id == ShotGridVersionIssueResponse.responded_by)
+                .where(ShotGridVersionIssueResponse.note_id.in_(issue_ids))
+                .order_by(
+                    ShotGridVersionIssueResponse.note_id,
+                    ShotGridVersionIssueResponse.create_time,
+                    ShotGridVersionIssueResponse.response_id,
+                )
+            )
         ).mappings()
-        return [dict(row) for row in rows], total
+        return [dict(row) for row in rows]
+
+    @classmethod
+    async def get_issue_verifications(
+        cls,
+        db: AsyncSession,
+        issue_ids: list[int],
+    ) -> list[dict[str, Any]]:
+        if not issue_ids:
+            return []
+        reviewer = aliased(SysUser)
+        rows = (
+            await db.execute(
+                select(
+                    ShotGridIssueVerification.note_id.label('issue_id'),
+                    ShotGridIssueVerification.verification_id,
+                    ShotGridIssueVerification.checked_version_id,
+                    ShotGridVersion.version_no.label('checked_version_no'),
+                    ShotGridIssueVerification.result,
+                    ShotGridIssueVerification.comment,
+                    ShotGridIssueVerification.reviewer_user_id,
+                    reviewer.nick_name.label('reviewer_name'),
+                    ShotGridIssueVerification.create_time,
+                )
+                .join(ShotGridVersion, ShotGridVersion.version_id == ShotGridIssueVerification.checked_version_id)
+                .outerjoin(reviewer, reviewer.user_id == ShotGridIssueVerification.reviewer_user_id)
+                .where(ShotGridIssueVerification.note_id.in_(issue_ids))
+                .order_by(
+                    ShotGridIssueVerification.note_id,
+                    ShotGridIssueVerification.create_time,
+                    ShotGridIssueVerification.verification_id,
+                )
+            )
+        ).mappings()
+        return [dict(row) for row in rows]
 
     @classmethod
     async def get_review_actions(
@@ -941,6 +945,60 @@ class ShotGridReviewDao:
         ).scalar_one_or_none()
 
     @classmethod
+    async def get_carried_issues_for_update(
+        cls,
+        db: AsyncSession,
+        *,
+        project_id: int,
+        task_id: int,
+        version_id: int,
+        submission_id: int,
+    ) -> list[ShotGridNote]:
+        origin_version = aliased(ShotGridVersion)
+        issues = (
+            await db.execute(
+                select(ShotGridNote)
+                .join(origin_version, origin_version.version_id == ShotGridNote.version_id)
+                .join(
+                    ShotGridVersionIssueResponse,
+                    (ShotGridVersionIssueResponse.note_id == ShotGridNote.note_id)
+                    & (ShotGridVersionIssueResponse.submission_id == submission_id),
+                )
+                .where(
+                    ShotGridNote.project_id == project_id,
+                    origin_version.task_id == task_id,
+                    ShotGridNote.version_id != version_id,
+                    ShotGridNote.note_status == 'open',
+                )
+                .order_by(origin_version.version_no, ShotGridNote.create_time, ShotGridNote.note_id)
+                .with_for_update(of=ShotGridNote)
+            )
+        ).scalars()
+        return list(issues)
+
+    @classmethod
+    async def get_current_version_open_issues_for_update(
+        cls,
+        db: AsyncSession,
+        *,
+        project_id: int,
+        version_id: int,
+    ) -> list[ShotGridNote]:
+        issues = (
+            await db.execute(
+                select(ShotGridNote)
+                .where(
+                    ShotGridNote.project_id == project_id,
+                    ShotGridNote.version_id == version_id,
+                    ShotGridNote.note_status == 'open',
+                )
+                .order_by(ShotGridNote.create_time, ShotGridNote.note_id)
+                .with_for_update()
+            )
+        ).scalars()
+        return list(issues)
+
+    @classmethod
     async def get_latest_version_no(cls, db: AsyncSession, task_id: int) -> int | None:
         value = (
             await db.execute(select(func.max(ShotGridVersion.version_no)).where(ShotGridVersion.task_id == task_id))
@@ -948,15 +1006,15 @@ class ShotGridReviewDao:
         return int(value) if value is not None else None
 
     @classmethod
-    async def has_open_mandatory_note(cls, db: AsyncSession, version_id: int) -> bool:
+    async def has_open_task_issue(cls, db: AsyncSession, task_id: int) -> bool:
         return bool(
             (
                 await db.execute(
                     select(
                         exists().where(
-                            ShotGridNote.version_id == version_id,
+                            ShotGridNote.version_id == ShotGridVersion.version_id,
+                            ShotGridVersion.task_id == task_id,
                             ShotGridNote.note_status == 'open',
-                            ShotGridNote.is_mandatory == '1',
                         )
                     )
                 )
@@ -1019,10 +1077,15 @@ class ShotGridReviewDao:
         return note
 
     @classmethod
-    async def add_reply(cls, db: AsyncSession, reply: ShotGridNoteReply) -> ShotGridNoteReply:
-        db.add(reply)
+    async def add_issue_verifications(
+        cls,
+        db: AsyncSession,
+        verifications: list[ShotGridIssueVerification],
+    ) -> None:
+        if not verifications:
+            return
+        db.add_all(verifications)
         await db.flush()
-        return reply
 
     @classmethod
     async def add_review_action(cls, db: AsyncSession, action: ShotGridReviewAction) -> ShotGridReviewAction:

@@ -1,11 +1,12 @@
 from collections import defaultdict
 from typing import Any
 
-from fastapi.routing import APIRoute, iter_route_contexts
+from fastapi.routing import APIRoute
 
 from cli.runtime.base import RUNTIME_ENVIRONMENT, RuntimeEnvironmentService
 
 from .gateway import AppInfrastructureGateway
+from .route_compat import iter_app_route_contexts
 from .support import AppSnapshotSupport
 
 
@@ -89,7 +90,7 @@ class AppRuntimeService:
         """
         normalized_method = method.upper().strip()
         routes: list[dict[str, Any]] = []
-        for route_context in iter_route_contexts(self.build_app_instance().routes):
+        for route_context in iter_app_route_contexts(self.build_app_instance().routes):
             if not isinstance(route_context.original_route, APIRoute):
                 continue
             if not include_hidden and not route_context.include_in_schema:

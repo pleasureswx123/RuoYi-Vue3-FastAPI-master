@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Collection, Plus, Refresh, Search } from '@element-plus/icons-vue'
+import { Plus, Refresh, Search } from '@element-plus/icons-vue'
 
 import { getProjectPage } from '@/api/shot-grid/projects'
 import { useSessionStore } from '@/store/modules/session'
@@ -19,7 +19,6 @@ const router = useRouter()
 const sessionStore = useSessionStore()
 const projects = ref([])
 const total = ref(0)
-const hasNext = ref(false)
 const loading = ref(false)
 const errorState = ref(null)
 const showCreate = ref(false)
@@ -60,7 +59,6 @@ async function loadProjects() {
     )
     projects.value = Array.isArray(response.rows) ? response.rows : []
     total.value = Number(response.total || 0)
-    hasNext.value = Boolean(response.hasNext)
   } catch (error) {
     if (error?.code !== 'ERR_CANCELED') {
       projects.value = []
@@ -81,6 +79,10 @@ function changePage(nextPage) {
   if (nextPage < 1 || nextPage > pageCount.value || nextPage === query.pageNum) return
   query.pageNum = nextPage
   loadProjects()
+}
+
+function tagType(tone) {
+  return ['success', 'warning', 'danger'].includes(tone) ? tone : 'info'
 }
 
 async function openProject(projectId) {
@@ -108,34 +110,43 @@ onBeforeUnmount(() => activeController?.abort())
       <el-button v-if="canCreate" type="primary" :icon="Plus" @click="showCreate = true">创建项目</el-button>
     </header>
 
-    <form class="project-filters" aria-label="项目筛选" @submit.prevent="submitFilters">
-      <label class="project-search">
-        <el-icon><Search /></el-icon>
-        <input v-model="query.keyword" maxlength="200" placeholder="搜索项目名称或代号" />
-      </label>
-      <el-select v-model="query.projectStatus" class="sg-select" placeholder="全部状态" aria-label="项目状态">
-        <el-option label="全部状态" value="" />
-        <el-option label="准备中" value="preparing" />
-        <el-option label="进行中" value="active" />
-        <el-option label="已完成" value="completed" />
-        <el-option label="已归档" value="archived" />
-      </el-select>
-      <el-select v-if="canViewAll" v-model="query.scope" class="sg-select" placeholder="我的项目" aria-label="项目范围">
-        <el-option label="我的项目" value="" />
-        <el-option label="全部项目" value="all" />
-      </el-select>
-      <el-select v-model="query.orderByColumn" class="sg-select" aria-label="排序字段">
-        <el-option label="创建时间" value="createTime" />
-        <el-option label="项目代号" value="projectCode" />
-        <el-option label="项目名称" value="projectName" />
-      </el-select>
-      <el-select v-model="query.isAsc" class="sg-select" aria-label="排序方向">
-        <el-option label="降序" value="descending" />
-        <el-option label="升序" value="ascending" />
-      </el-select>
-      <el-button native-type="submit" :loading="loading">查询</el-button>
-      <el-button :icon="Refresh" circle aria-label="刷新项目列表" :disabled="loading" @click="loadProjects" />
-    </form>
+    <el-form :model="query" class="project-filters" aria-label="项目筛选" @submit.prevent="submitFilters">
+      <el-form-item class="project-filter-item project-filter-item--keyword" prop="keyword">
+        <el-input v-model="query.keyword" :prefix-icon="Search" maxlength="200" clearable placeholder="搜索项目名称或代号" aria-label="搜索项目名称或代号" />
+      </el-form-item>
+      <el-form-item class="project-filter-item" prop="projectStatus">
+        <el-select v-model="query.projectStatus" class="sg-select" placeholder="全部状态" aria-label="项目状态">
+          <el-option label="全部状态" value="" />
+          <el-option label="准备中" value="preparing" />
+          <el-option label="进行中" value="active" />
+          <el-option label="已完成" value="completed" />
+          <el-option label="已归档" value="archived" />
+        </el-select>
+      </el-form-item>
+      <el-form-item v-if="canViewAll" class="project-filter-item" prop="scope">
+        <el-select v-model="query.scope" class="sg-select" placeholder="我的项目" aria-label="项目范围">
+          <el-option label="我的项目" value="" />
+          <el-option label="全部项目" value="all" />
+        </el-select>
+      </el-form-item>
+      <el-form-item class="project-filter-item" prop="orderByColumn">
+        <el-select v-model="query.orderByColumn" class="sg-select" aria-label="排序字段">
+          <el-option label="创建时间" value="createTime" />
+          <el-option label="项目代号" value="projectCode" />
+          <el-option label="项目名称" value="projectName" />
+        </el-select>
+      </el-form-item>
+      <el-form-item class="project-filter-item" prop="isAsc">
+        <el-select v-model="query.isAsc" class="sg-select" aria-label="排序方向">
+          <el-option label="降序" value="descending" />
+          <el-option label="升序" value="ascending" />
+        </el-select>
+      </el-form-item>
+      <el-form-item class="project-filter-actions">
+        <el-button type="primary" native-type="submit" :loading="loading">查询</el-button>
+        <el-button :icon="Refresh" circle aria-label="刷新项目列表" :disabled="loading" @click="loadProjects" />
+      </el-form-item>
+    </el-form>
 
     <ProjectStatePanel
       v-if="errorState"
@@ -146,15 +157,15 @@ onBeforeUnmount(() => activeController?.abort())
     />
 
     <div v-else-if="loading && projects.length === 0" class="project-grid" aria-label="项目加载中">
-      <div v-for="index in 6" :key="index" class="project-card project-card--skeleton"></div>
+      <el-card v-for="index in 6" :key="index" class="project-card project-card--skeleton" shadow="never">
+        <el-skeleton :rows="5" animated />
+      </el-card>
     </div>
 
-    <section v-else-if="projects.length === 0" class="project-empty">
-      <span class="project-empty__icon"><el-icon><Collection /></el-icon></span>
-      <h3>当前范围暂无项目</h3>
+    <el-empty v-else-if="projects.length === 0" class="project-empty" description="当前范围暂无项目">
       <p>可以调整筛选条件，或由具备权限的项目总监创建第一个项目。</p>
-      <el-button v-if="canCreate" type="primary" @click="showCreate = true">创建项目</el-button>
-    </section>
+      <el-button v-if="canCreate" type="primary" :icon="Plus" @click="showCreate = true">创建项目</el-button>
+    </el-empty>
 
     <template v-else>
       <div class="project-summary">
@@ -162,26 +173,29 @@ onBeforeUnmount(() => activeController?.abort())
         <span v-if="loading">正在刷新…</span>
       </div>
       <div class="project-grid" :class="{ 'is-refreshing': loading }">
-        <article
+        <el-card
           v-for="project in projects"
           :key="project.projectId"
           class="project-card"
+          shadow="hover"
           tabindex="0"
+          role="link"
+          :aria-label="`打开项目 ${project.projectName}`"
           @click="openProject(project.projectId)"
           @keydown.enter="openProject(project.projectId)"
         >
-          <header>
+          <header class="project-card__header">
             <span class="project-card__code">{{ project.projectCode }}</span>
-            <span class="status-chip" :data-tone="statusMeta(project.projectStatus).tone">
+            <el-tag size="small" effect="plain" :type="tagType(statusMeta(project.projectStatus).tone)">
               {{ statusMeta(project.projectStatus).label }}
-            </span>
+            </el-tag>
           </header>
           <div class="project-card__title-row">
             <div>
               <h3>{{ project.projectName }}</h3>
               <p>{{ project.projectTypeName }} · {{ project.aspectRatio }}</p>
             </div>
-            <span class="project-card__role">{{ project.myProjectRole === 'director' ? '项目总监' : project.myProjectRole === 'creator' ? '制作人员' : '跨项目管理员' }}</span>
+            <el-tag class="project-card__role" size="small" effect="plain" type="info">{{ project.myProjectRole === 'director' ? '项目总监' : project.myProjectRole === 'creator' ? '制作人员' : '跨项目管理员' }}</el-tag>
           </div>
           <div class="project-card__storage">
             <span class="status-dot" :data-tone="storageMeta(project.storageStatus).tone"></span>
@@ -193,16 +207,23 @@ onBeforeUnmount(() => activeController?.abort())
             <div><dt>资产</dt><dd>{{ project.completedAssets }}/{{ project.totalAssets }}</dd></div>
           </dl>
           <div class="project-card__progress">
-            <span><i :style="{ width: `${project.overallProgress || 0}%` }"></i></span>
+            <el-progress :percentage="Number(project.overallProgress || 0)" :stroke-width="5" :show-text="false" />
             <strong>{{ Number(project.overallProgress || 0).toFixed(0) }}%</strong>
           </div>
-        </article>
+        </el-card>
       </div>
-      <nav class="project-pagination" aria-label="项目分页">
-        <el-button :disabled="query.pageNum <= 1 || loading" @click="changePage(query.pageNum - 1)">上一页</el-button>
-        <span>第 {{ query.pageNum }} / {{ pageCount }} 页</span>
-        <el-button :disabled="!hasNext || loading" @click="changePage(query.pageNum + 1)">下一页</el-button>
-      </nav>
+      <el-pagination
+        v-if="total > query.pageSize"
+        class="project-pagination"
+        background
+        layout="prev, pager, next"
+        :current-page="query.pageNum"
+        :page-size="query.pageSize"
+        :total="total"
+        :disabled="loading"
+        aria-label="项目分页"
+        @current-change="changePage"
+      />
     </template>
 
     <ProjectCreateDialog
@@ -221,7 +242,7 @@ onBeforeUnmount(() => activeController?.abort())
 
 .project-filters {
   display: grid;
-  grid-template-columns: minmax(220px, 1.6fr) repeat(4, minmax(120px, 0.7fr)) auto auto;
+  grid-template-columns: minmax(220px, 1.6fr) repeat(4, minmax(120px, 0.7fr)) auto;
   gap: 10px;
   margin-bottom: 24px;
   padding: 14px;
@@ -230,29 +251,11 @@ onBeforeUnmount(() => activeController?.abort())
   border-radius: var(--sg-radius-md);
 }
 
-.project-search {
-  display: flex;
-  height: 40px;
-  gap: 9px;
-  align-items: center;
-  padding: 0 12px;
-  background: rgba(255, 255, 255, 0.035);
-  border: 1px solid var(--sg-border);
-  border-radius: 9px;
-}
-
-.project-search .el-icon {
-  color: var(--sg-text-muted);
-}
-
-.project-search input {
-  min-width: 0;
-  flex: 1;
-  color: var(--sg-text);
-  background: transparent;
-  border: 0;
-  outline: 0;
-}
+.project-filters :deep(.el-form-item) { min-width: 0; margin-bottom: 0; }
+.project-filter-item :deep(.el-form-item__content),
+.project-filter-item :deep(.el-input),
+.project-filter-item :deep(.el-select) { width: 100%; min-width: 0; }
+.project-filter-actions :deep(.el-form-item__content) { flex-wrap: nowrap; justify-content: flex-end; }
 
 .project-summary {
   display: flex;
@@ -275,14 +278,16 @@ onBeforeUnmount(() => activeController?.abort())
 
 .project-card {
   min-height: 300px;
-  padding: 20px;
   cursor: pointer;
+  --el-card-bg-color: var(--sg-surface);
+  --el-card-border-color: var(--sg-border);
   background: linear-gradient(145deg, rgba(255, 255, 255, 0.035), transparent 55%), var(--sg-surface);
-  border: 1px solid var(--sg-border);
   border-radius: var(--sg-radius-md);
   box-shadow: 0 12px 36px rgba(0, 0, 0, 0.14);
   transition: transform 160ms ease, border-color 160ms ease;
 }
+
+.project-card :deep(.el-card__body) { padding: 20px; }
 
 .project-card:hover,
 .project-card:focus-visible {
@@ -291,7 +296,7 @@ onBeforeUnmount(() => activeController?.abort())
   transform: translateY(-3px);
 }
 
-.project-card > header,
+.project-card__header,
 .project-card__title-row,
 .project-card__progress {
   display: flex;
@@ -306,18 +311,6 @@ onBeforeUnmount(() => activeController?.abort())
   font-weight: 800;
   letter-spacing: 0.1em;
 }
-
-.status-chip {
-  padding: 5px 9px;
-  color: var(--sg-text-secondary);
-  font-size: 11px;
-  background: rgba(255, 255, 255, 0.04);
-  border-radius: 999px;
-}
-
-.status-chip[data-tone='success'] { color: var(--sg-success); background: rgba(98, 212, 155, 0.1); }
-.status-chip[data-tone='warning'] { color: var(--sg-accent); background: var(--sg-accent-soft); }
-.status-chip[data-tone='danger'] { color: var(--sg-danger); background: rgba(255, 107, 107, 0.09); }
 
 .project-card__title-row {
   align-items: flex-start;
@@ -340,7 +333,6 @@ onBeforeUnmount(() => activeController?.abort())
 }
 
 .project-card__role {
-  color: var(--sg-text-secondary);
   font-size: 11px;
   white-space: nowrap;
 }
@@ -394,20 +386,12 @@ onBeforeUnmount(() => activeController?.abort())
   margin-top: 22px;
 }
 
-.project-card__progress > span {
-  height: 5px;
+.project-card__progress :deep(.el-progress) {
   flex: 1;
-  overflow: hidden;
-  background: rgba(255, 255, 255, 0.06);
-  border-radius: 999px;
 }
 
-.project-card__progress i {
-  display: block;
-  height: 100%;
-  background: var(--sg-accent);
-  border-radius: inherit;
-}
+.project-card__progress :deep(.el-progress-bar__outer) { background: rgba(255, 255, 255, 0.06); }
+.project-card__progress :deep(.el-progress-bar__inner) { background: var(--sg-accent); }
 
 .project-card__progress strong {
   color: var(--sg-text-secondary);
@@ -416,60 +400,36 @@ onBeforeUnmount(() => activeController?.abort())
 
 .project-card--skeleton {
   cursor: default;
-  background: linear-gradient(100deg, var(--sg-surface) 30%, var(--sg-surface-soft) 48%, var(--sg-surface) 66%);
-  background-size: 300% 100%;
-  animation: shimmer 1.5s infinite;
 }
 
 .project-empty {
-  display: grid;
   min-height: 330px;
-  place-items: center;
-  align-content: center;
   padding: 36px;
-  text-align: center;
   background: var(--sg-surface);
   border: 1px dashed var(--sg-border-strong);
   border-radius: var(--sg-radius-lg);
 }
-
-.project-empty__icon {
-  display: grid;
-  width: 58px;
-  height: 58px;
-  color: var(--sg-accent);
-  font-size: 25px;
-  background: var(--sg-accent-soft);
-  border-radius: 16px;
-  place-items: center;
-}
-
-.project-empty h3 { margin: 18px 0 0; }
-.project-empty p { margin: 8px 0 20px; color: var(--sg-text-muted); font-size: 13px; }
+.project-empty :deep(.el-empty__description p) { color: var(--sg-text-secondary); }
+.project-empty > p { margin: 0 0 16px; color: var(--sg-text-muted); font-size: 13px; }
 
 .project-pagination {
-  display: flex;
-  gap: 16px;
-  align-items: center;
   justify-content: center;
   margin-top: 24px;
-  color: var(--sg-text-muted);
-  font-size: 12px;
 }
-
-@keyframes shimmer {
-  to { background-position-x: -300%; }
-}
+.project-pagination :deep(.el-pager li),
+.project-pagination :deep(button) { background: var(--sg-surface) !important; }
+.project-pagination :deep(.is-active) { color: #17130d !important; background: var(--sg-accent) !important; }
 
 @media (max-width: 1180px) {
   .project-filters { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .project-search { grid-column: span 2; }
+  .project-filter-item--keyword { grid-column: span 2; }
+  .project-filter-actions :deep(.el-form-item__content) { justify-content: flex-start; }
   .project-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @media (max-width: 700px) {
   .project-filters,
   .project-grid { grid-template-columns: 1fr; }
-  .project-search { grid-column: auto; }
+  .project-filter-item--keyword { grid-column: auto; }
 }
 </style>

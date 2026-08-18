@@ -44,6 +44,7 @@ class ShotGridVersionSubmission(Base):
     source_file_size = Column(BigInteger, nullable=False, comment='源文件大小')
     changelog = Column(Text, nullable=False, comment='本轮修改说明')
     ai_params = Column(SHOT_GRID_JSON, nullable=True, comment='AI生成参数快照')
+    open_issue_snapshot_hash = Column(CHAR(64), nullable=False, comment='提交时未关闭问题集合SHA-256')
     submission_status = Column(String(20), nullable=False, server_default='pending', comment='提交编排状态')
     submitted_by = Column(
         BigInteger,
@@ -89,6 +90,10 @@ class ShotGridVersionSubmission(Base):
         CheckConstraint('temporary_relative_path <> target_relative_path', name='ck_sg_submission_distinct_paths'),
         CheckConstraint('source_file_size >= 0', name='ck_sg_submission_file_size'),
         CheckConstraint("btrim(changelog) <> ''", name='ck_sg_submission_changelog'),
+        CheckConstraint(
+            "open_issue_snapshot_hash ~ '^[0-9a-f]{64}$'",
+            name='ck_sg_submission_issue_snapshot_hash',
+        ),
         CheckConstraint(
             "submission_status in ('pending', 'publishing', 'published', 'committing', 'committed', 'failed')",
             name='ck_sg_submission_status',
