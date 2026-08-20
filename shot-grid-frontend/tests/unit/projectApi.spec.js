@@ -7,9 +7,11 @@ import {
   createProject,
   getMemberCandidatePage,
   getProjectMemberCandidatePage,
+  getProjectMemberRoleOptions,
   getProjectDetail,
   getProjectMembers,
   getProjectPage,
+  getProjectRoleOptions,
   getStorageRootOptions,
   previewProjectPath,
   retryProjectStorage,
@@ -66,20 +68,24 @@ describe('项目 API 契约', () => {
 
   it('项目选项使用 Shot Grid 专用只读接口', () => {
     getStorageRootOptions()
+    getProjectRoleOptions()
     previewProjectPath(5, {
       projectType: 'ai_short_film',
       projectName: '罗刹夫人'
     })
     getMemberCandidatePage({ pageNum: 1, pageSize: 20, keyword: '杨' })
     getProjectMemberCandidatePage(9, { pageNum: 1, pageSize: 20, keyword: '杨' })
+    getProjectMemberRoleOptions(9)
 
     expect(request.mock.calls.map(([config]) => config.url)).toEqual([
       '/shot-grid/storage-roots/options',
+      '/shot-grid/project-role-options',
       '/shot-grid/storage-roots/5/project-path-preview',
       '/shot-grid/member-candidates',
-      '/shot-grid/projects/9/member-candidates'
+      '/shot-grid/projects/9/member-candidates',
+      '/shot-grid/projects/9/role-options'
     ])
-    expect(request.mock.calls[1][0].headers).toEqual({ repeatSubmit: false })
+    expect(request.mock.calls[2][0].headers).toEqual({ repeatSubmit: false })
   })
 
   it('项目成员列表支持可选项目角色过滤', () => {

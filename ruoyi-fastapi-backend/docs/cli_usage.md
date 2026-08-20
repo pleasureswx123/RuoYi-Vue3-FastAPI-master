@@ -218,6 +218,13 @@ ruoyi db revision --env=dev --message="add user index" --yes
 ruoyi db upgrade --env=dev --revision=head --yes
 ```
 
+包含 Shot Grid 平台角色联动版本 `20260818_12` 的 PostgreSQL 发布必须遵循以下顺序：
+
+1. 先执行 `ruoyi db upgrade --env=prod --revision=20260818_12 --allow-prod --yes`，并用 `ruoyi db current --env=prod` 确认版本。
+2. 再启动或滚动发布包含平台角色 guard 的新后端代码。
+
+不得先启动新代码再补迁移；用户和角色管理写链会读取 `sg_managed_user_role`，反向顺序会使迁移窗口内的管理端写操作失败。
+
 ### 4.4 缓存与调度排查
 
 ```bash

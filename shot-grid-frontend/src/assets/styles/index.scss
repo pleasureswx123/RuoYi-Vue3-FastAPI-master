@@ -135,6 +135,30 @@ body {
   transition: color 180ms ease, background-color 180ms ease;
 }
 
+html.sg-theme-transitioning::view-transition-new(root),
+html.sg-theme-transitioning::view-transition-old(root) {
+  position: fixed;
+  inset: 0;
+  animation: none !important;
+  backface-visibility: hidden;
+  mix-blend-mode: normal;
+  pointer-events: none;
+}
+
+html.sg-theme-transitioning::view-transition-old(root) {
+  z-index: 1;
+}
+
+html.sg-theme-transitioning::view-transition-new(root) {
+  z-index: 2;
+}
+
+html.sg-theme-transitioning *,
+html.sg-theme-transitioning *::before,
+html.sg-theme-transitioning *::after {
+  transition: none !important;
+}
+
 .el-table {
   --el-table-bg-color: var(--sg-surface);
   --el-table-tr-bg-color: var(--sg-surface);
@@ -200,6 +224,12 @@ html:not(.dark) .el-pagination.is-background .el-pager li.is-active,
 html:not(.dark) :is(.asset-pagination, .file-pagination, .project-pagination, .shot-pagination) .is-active {
   color: #fff !important;
   background: var(--el-color-primary) !important;
+}
+
+html.dark .el-pagination.is-background .el-pager li.is-active,
+html.dark .el-pagination.is-background :is(.btn-prev.is-active, .btn-next.is-active) {
+  color: var(--sg-on-accent) !important;
+  background-color: var(--el-color-primary) !important;
 }
 
 html:not(.dark) :is(

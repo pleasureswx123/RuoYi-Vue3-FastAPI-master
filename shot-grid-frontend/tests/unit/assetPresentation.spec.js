@@ -8,6 +8,7 @@ import {
   assetTypeMeta,
   groupAssetPreviewRows,
   memberLabel,
+  memberUserName,
   resolveAssetThumbnail,
   selectableAssetPreviewRows
 } from '@/views/asset/assetPresentation'
@@ -52,14 +53,15 @@ describe('资产展示模型', () => {
     expect(resolveAssetThumbnail({ thumbnail, items: [] })).toBe(thumbnail)
     expect(resolveAssetThumbnail({ items: [{ thumbnail }] })).toBeNull()
     expect(resolveAssetThumbnail({ items: [{ latestVersion: { versionId: 1 } }] })).toBeNull()
-    expect(memberLabel({ userId: 7, nickName: 'YJF', producerCode: 'OLD' })).toBe('YJF')
+    expect(memberLabel({ userId: 7, userName: '杨景锋', nickName: 'YJF', producerCode: 'OLD' })).toBe('杨景锋（YJF）')
+    expect(memberUserName({ userId: 7, userName: '杨景锋', nickName: 'YJF' })).toBe('杨景锋')
     expect(memberLabel({ userId: 8, userName: 'producer' })).toBe('producer')
   })
 
   it('只用安全制作人选项映射列表 ID，未命中身份不猜姓名', () => {
-    const members = [{ userId: 7, nickName: '杨景锋', producerCode: 'YJF' }]
-    expect(assetAssigneeSummary([7], members)).toBe('杨景锋（YJF）')
-    expect(assetAssigneeSummary([7, 99], members)).toBe('杨景锋（YJF）、另 1 人不可分配')
+    const members = [{ userId: 7, userName: '杨景锋', nickName: 'YJF', producerCode: 'YJF' }]
+    expect(assetAssigneeSummary([7], members)).toBe('杨景锋')
+    expect(assetAssigneeSummary([7, 99], members)).toBe('杨景锋、另 1 人不可分配')
     expect(assetAssigneeSummary([99], members)).toBe('另 1 人不可分配')
     expect(assetAssigneeSummary([], members)).toBe('未分配')
   })

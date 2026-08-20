@@ -28,6 +28,7 @@ from module_shot_grid.entity.vo.project_vo import (
     ShotGridProjectUpdateModel,
 )
 from module_shot_grid.exceptions import ShotGridDomainException, shot_grid_error
+from module_shot_grid.service.platform_role_service import ShotGridPlatformRoleService
 from module_shot_grid.service.project_overview_service import ShotGridProjectOverviewService
 from module_shot_grid.service.project_path_service import ShotGridProjectPathService
 
@@ -150,6 +151,7 @@ class ShotGridProjectService:
                 raise shot_grid_error(503, 'SG_STORAGE_ROOT_UNAVAILABLE', 'NAS 根目录当前不可达或不可写')
 
             user_ids = set(command.director_user_ids) | {member.user_id for member in command.members}
+            await ShotGridPlatformRoleService.lock_target_users(db, user_ids)
             active_user_ids = await ShotGridProjectMemberDao.get_active_users(db, user_ids, user_data_scope_sql)
             invalid_user_ids = sorted(user_ids - active_user_ids)
             if invalid_user_ids:
@@ -220,6 +222,12 @@ class ShotGridProjectService:
                     ),
                 )
 
+            platform_role_changes = await ShotGridPlatformRoleService.synchronize_user_roles(
+                db,
+                user_ids,
+                actor_name,
+            )
+
             await ShotGridProjectStorageDao.add_storage(
                 db,
                 ShotGridProjectStorage(
@@ -269,8 +277,13 @@ class ShotGridProjectService:
                     'storageRootId': storage_root.storage_root_id,
                     'directorUserIds': command.director_user_ids,
                     'memberUserIds': [member.user_id for member in command.members],
+                    'platformRoleChanges': platform_role_changes,
                 },
-                result={'projectId': project.project_id, 'storageStatus': 'initializing'},
+                result={
+                    'projectId': project.project_id,
+                    'storageStatus': 'initializing',
+                    'platformRoleChanges': platform_role_changes,
+                },
             )
             accepted = cls._accepted(project.project_id, project.project_status, 'initializing')
             await db.commit()

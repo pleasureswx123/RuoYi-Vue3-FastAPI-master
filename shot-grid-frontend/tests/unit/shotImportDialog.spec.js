@@ -40,7 +40,7 @@ describe('镜头 Excel 导入对话框', () => {
     const file = new File(['xlsx'], '镜头样表.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
     Object.defineProperty(input.element, 'files', { configurable: true, value: [file] })
     await input.trigger('change')
-    await wrapper.findAll('button').find(button => button.text().includes('开始预检')).trigger('click')
+    await wrapper.findAll('button').find(button => button.text().includes('检查文件')).trigger('click')
     await flushPromises()
 
     expect(wrapper.text()).toContain('EP001')
@@ -80,7 +80,7 @@ describe('镜头 Excel 导入对话框', () => {
       },
       expect.stringContaining('shot-import-8:')
     )
-    expect(wrapper.text()).toContain('镜头已按单事务完成导入')
+    expect(wrapper.text()).toContain('镜头导入完成')
     wrapper.unmount()
   })
 
@@ -93,7 +93,7 @@ describe('镜头 Excel 导入对话框', () => {
     const file = new File(['xlsx'], '镜头样表.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
     Object.defineProperty(input.element, 'files', { configurable: true, value: [file] })
     await input.trigger('change')
-    await wrapper.findAll('button').find(button => button.text().includes('开始预检')).trigger('click')
+    await wrapper.findAll('button').find(button => button.text().includes('检查文件')).trigger('click')
     await flushPromises()
 
     expect(wrapper.text()).not.toContain('选择全部可处理行')

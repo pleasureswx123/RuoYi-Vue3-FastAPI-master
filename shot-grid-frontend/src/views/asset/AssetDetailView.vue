@@ -14,7 +14,7 @@ import AssetAssignDialog from '@/views/asset/components/AssetAssignDialog.vue'
 import AssetFormDialog from '@/views/asset/components/AssetFormDialog.vue'
 import AssetItemFormDialog from '@/views/asset/components/AssetItemFormDialog.vue'
 import ProtectedAssetThumbnail from '@/views/asset/components/ProtectedAssetThumbnail.vue'
-import { assetDirectoryStatusMeta, assetErrorState, assetStatusMeta, assetTypeMeta, formatAssetDateTime, memberLabel, resolveAssetThumbnail } from '@/views/asset/assetPresentation'
+import { assetDirectoryStatusMeta, assetErrorState, assetStatusMeta, assetTypeMeta, formatAssetDateTime, memberUserName, resolveAssetThumbnail } from '@/views/asset/assetPresentation'
 import { taskPriorityMeta, taskStatusMeta, taskVersionStatusMeta } from '@/views/task/taskPresentation'
 
 const props = defineProps({
@@ -35,6 +35,12 @@ const editAssetContext = ref(null)
 const itemFormContext = ref(null)
 const assignContext = ref(null)
 const archiveContext = ref(null)
+
+function taskAssigneeName(task) {
+  if (!task) return '未分配'
+  const member = members.value.find(item => Number(item.userId) === Number(task.assigneeUserId))
+  return memberUserName(member || { userId: task.assigneeUserId, nickName: task.assigneeName })
+}
 let controller = null
 let disposed = false
 let operationGeneration = 0
@@ -158,7 +164,7 @@ function stillOnTarget(operationContext) {
 }
 
 function notifyDetachedOperation() {
-  ElMessage.success('操作已完成；当前资产详情未自动刷新。')
+  ElMessage.success('操作已完成；请返回对应资产查看最新结果。')
 }
 
 async function handleAssetSaved(_result, operationContext) {
@@ -270,7 +276,7 @@ onBeforeUnmount(() => {
       </el-card>
 
       <section class="detail-grid">
-        <el-card class="detail-card" shadow="never"><template #header><h3>稳定身份与目录</h3></template><el-descriptions :column="2" border><el-descriptions-item label="资产类型"><el-tag size="small" effect="plain" round :type="tagTypeFromTone(assetTypeMeta(asset.assetType).tone)">{{ assetTypeMeta(asset.assetType).label }}</el-tag></el-descriptions-item><el-descriptions-item label="存储目录名">{{ asset.storageDirName }}</el-descriptions-item><el-descriptions-item label="目录状态"><el-tag size="small" effect="plain" round :type="tagTypeFromTone(assetDirectoryStatusMeta(asset.directoryStatus).tone)">{{ assetDirectoryStatusMeta(asset.directoryStatus).label }}</el-tag></el-descriptions-item><el-descriptions-item label="生命周期"><el-tag size="small" effect="plain" round :type="asset.lifecycleStatus === 'active' ? 'success' : 'info'">{{ asset.lifecycleStatus === 'active' ? '活动' : '已归档' }}</el-tag></el-descriptions-item></el-descriptions></el-card>
+        <el-card class="detail-card" shadow="never"><template #header><h3>资产信息与目录</h3></template><el-descriptions :column="2" border><el-descriptions-item label="资产类型"><el-tag size="small" effect="plain" round :type="tagTypeFromTone(assetTypeMeta(asset.assetType).tone)">{{ assetTypeMeta(asset.assetType).label }}</el-tag></el-descriptions-item><el-descriptions-item label="存储目录名">{{ asset.storageDirName }}</el-descriptions-item><el-descriptions-item label="目录状态"><el-tag size="small" effect="plain" round :type="tagTypeFromTone(assetDirectoryStatusMeta(asset.directoryStatus).tone)">{{ assetDirectoryStatusMeta(asset.directoryStatus).label }}</el-tag></el-descriptions-item><el-descriptions-item label="使用状态"><el-tag size="small" effect="plain" round :type="asset.lifecycleStatus === 'active' ? 'success' : 'info'">{{ asset.lifecycleStatus === 'active' ? '活动' : '已归档' }}</el-tag></el-descriptions-item></el-descriptions></el-card>
         <el-card class="detail-card" shadow="never"><template #header><h3>审计与说明</h3></template><el-descriptions :column="2" border><el-descriptions-item label="创建人">{{ asset.createBy }}</el-descriptions-item><el-descriptions-item label="创建时间">{{ formatAssetDateTime(asset.createTime) }}</el-descriptions-item><el-descriptions-item label="更新人">{{ asset.updateBy }}</el-descriptions-item><el-descriptions-item label="更新时间">{{ formatAssetDateTime(asset.updateTime) }}</el-descriptions-item><el-descriptions-item label="备注" :span="2">{{ asset.remark || '暂无备注' }}</el-descriptions-item></el-descriptions></el-card>
       </section>
 
@@ -280,7 +286,7 @@ onBeforeUnmount(() => {
         <div v-else class="item-list">
           <el-card v-for="item in asset.items" :key="item.assetItemId" class="item-card" :class="{ 'is-archived': item.lifecycleStatus === 'archived' }" shadow="never">
             <ProtectedAssetThumbnail class="item-card__thumbnail" :thumbnail="item.thumbnail" :alt="`${item.productionItem || '未命名制作分项'} 缩略图`" />
-            <div class="item-card__body"><header><div><span class="item-card__id">分项 #{{ item.assetItemId }}</span><h4>{{ item.productionItem || '未命名制作分项' }}</h4></div><el-tag size="small" effect="plain" round :type="tagTypeFromTone(assetStatusMeta(item.assetStatus).tone)">{{ assetStatusMeta(item.assetStatus).label }}</el-tag></header><p>{{ item.description || '暂无分项说明' }}</p><el-descriptions class="item-card__details" :column="4" border><el-descriptions-item label="负责人">{{ item.task ? memberLabel({ userId: item.task.assigneeUserId, nickName: item.task.assigneeName }) : '未分配' }}</el-descriptions-item><el-descriptions-item label="任务"><span v-if="item.task" class="detail-tag-group"><el-tag size="small" effect="plain" round :type="tagTypeFromTone(taskStatusMeta(item.task.taskStatus).tone)">{{ taskStatusMeta(item.task.taskStatus).label }}</el-tag><el-tag size="small" effect="plain" round :type="tagTypeFromTone(taskPriorityMeta(item.task.priority).tone)">{{ taskPriorityMeta(item.task.priority).label }}优先级</el-tag></span><span v-else>尚未创建</span></el-descriptions-item><el-descriptions-item label="最新版本"><span v-if="item.latestVersion" class="detail-tag-group"><span>V{{ String(item.latestVersion.versionNo).padStart(3, '0') }}</span><el-tag size="small" effect="plain" round :type="tagTypeFromTone(taskVersionStatusMeta(item.latestVersion.versionStatus).tone)">{{ taskVersionStatusMeta(item.latestVersion.versionStatus).label }}</el-tag></span><span v-else>—</span></el-descriptions-item><el-descriptions-item label="最终版本"><span v-if="item.finalVersion" class="detail-tag-group"><span>V{{ String(item.finalVersion.versionNo).padStart(3, '0') }}</span><el-tag size="small" effect="plain" round :type="tagTypeFromTone(taskVersionStatusMeta(item.finalVersion.versionStatus).tone)">{{ taskVersionStatusMeta(item.finalVersion.versionStatus).label }}</el-tag></span><span v-else>—</span></el-descriptions-item></el-descriptions><small>{{ item.remark || '无备注' }} · 更新于 {{ formatAssetDateTime(item.updateTime) }}</small></div>
+            <div class="item-card__body"><header><div><span class="item-card__id">分项 #{{ item.assetItemId }}</span><h4>{{ item.productionItem || '未命名制作分项' }}</h4></div><el-tag size="small" effect="plain" round :type="tagTypeFromTone(assetStatusMeta(item.assetStatus).tone)">{{ assetStatusMeta(item.assetStatus).label }}</el-tag></header><p>{{ item.description || '暂无分项说明' }}</p><el-descriptions class="item-card__details" :column="4" border><el-descriptions-item label="负责人">{{ taskAssigneeName(item.task) }}</el-descriptions-item><el-descriptions-item label="任务"><span v-if="item.task" class="detail-tag-group"><el-tag size="small" effect="plain" round :type="tagTypeFromTone(taskStatusMeta(item.task.taskStatus).tone)">{{ taskStatusMeta(item.task.taskStatus).label }}</el-tag><el-tag size="small" effect="plain" round :type="tagTypeFromTone(taskPriorityMeta(item.task.priority).tone)">{{ taskPriorityMeta(item.task.priority).label }}优先级</el-tag></span><span v-else>尚未创建</span></el-descriptions-item><el-descriptions-item label="最新版本"><span v-if="item.latestVersion" class="detail-tag-group"><span>V{{ String(item.latestVersion.versionNo).padStart(3, '0') }}</span><el-tag size="small" effect="plain" round :type="tagTypeFromTone(taskVersionStatusMeta(item.latestVersion.versionStatus).tone)">{{ taskVersionStatusMeta(item.latestVersion.versionStatus).label }}</el-tag></span><span v-else>—</span></el-descriptions-item><el-descriptions-item label="最终版本"><span v-if="item.finalVersion" class="detail-tag-group"><span>V{{ String(item.finalVersion.versionNo).padStart(3, '0') }}</span><el-tag size="small" effect="plain" round :type="tagTypeFromTone(taskVersionStatusMeta(item.finalVersion.versionStatus).tone)">{{ taskVersionStatusMeta(item.finalVersion.versionStatus).label }}</el-tag></span><span v-else>—</span></el-descriptions-item></el-descriptions><small>{{ item.remark || '无备注' }} · 更新于 {{ formatAssetDateTime(item.updateTime) }}</small></div>
             <div class="item-card__actions"><el-button v-if="itemCanAssign(item)" text type="primary" :icon="UserFilled" @click="openAssign(item)">{{ item.task ? '改派任务' : '分配任务' }}</el-button><el-button v-if="itemCanEdit(item)" text :type="item.productionItem ? 'default' : 'warning'" :icon="Edit" @click="openItemForm(item)">{{ item.productionItem ? '编辑分项' : '补齐制作分项' }}</el-button><el-button v-if="itemCanArchive(item)" text type="danger" :icon="Lock" @click="openArchive(item)">归档分项</el-button></div>
           </el-card>
         </div>

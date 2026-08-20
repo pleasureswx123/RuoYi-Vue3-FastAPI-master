@@ -369,7 +369,7 @@ defineExpose({ focusIssue })
 <template>
   <el-card class="version-history-panel" shadow="never">
     <header class="history-heading">
-      <div><p class="sg-eyebrow">IMMUTABLE HISTORY</p><h3>版本历史</h3><p>版本号由后端分配；修订只新增版本，不覆盖历史文件。</p></div>
+      <div><p class="sg-eyebrow">IMMUTABLE HISTORY</p><h3>版本历史</h3><p>版本按提交顺序自动编号；每次修订都会新增版本，历史文件始终保留。</p></div>
       <el-form :model="historyFilters" class="history-tools" size="large" inline aria-label="版本历史筛选">
         <el-form-item prop="versionStatus">
           <el-select v-model="statusFilter" class="sg-select" placeholder="全部状态" aria-label="筛选版本状态" @change="applyStatusFilter">
@@ -383,8 +383,8 @@ defineExpose({ focusIssue })
       </el-form>
     </header>
 
-    <el-alert v-if="!canList" class="history-error" title="当前账号没有版本列表权限" description="未发起版本历史请求。" type="warning" :closable="false" show-icon />
-    <el-alert v-else-if="listError" class="history-error" :title="listError.title" :description="[listError.message, listError.errorKey].filter(Boolean).join(' · ')" type="error" :closable="false" show-icon />
+    <el-alert v-if="!canList" class="history-error" title="当前账号没有版本列表权限" description="请联系项目管理人或管理员开通访问权限。" type="warning" :closable="false" show-icon />
+    <el-alert v-else-if="listError" class="history-error" :title="listError.title" :description="listError.message" type="error" :closable="false" show-icon />
 
     <div class="history-layout">
       <aside class="version-rail" :aria-busy="loading">
@@ -410,7 +410,7 @@ defineExpose({ focusIssue })
 
       <main class="history-detail">
         <el-skeleton v-if="detailLoading" class="detail-placeholder" :rows="8" animated />
-        <el-alert v-else-if="detailError" class="detail-placeholder is-error" :title="detailError.title" :description="[detailError.message, detailError.errorKey].filter(Boolean).join(' · ')" type="error" :closable="false" show-icon />
+        <el-alert v-else-if="detailError" class="detail-placeholder is-error" :title="detailError.title" :description="detailError.message" type="error" :closable="false" show-icon />
         <template v-else-if="versionDetail">
           <VersionDetailCard :version="versionDetail" :can-download="canDownload" :show-preview="!feedbackNotes.length" />
           <el-card v-if="feedbackLoading || feedbackError || hasFeedback" ref="feedbackPanel" class="version-feedback-panel" shadow="never">

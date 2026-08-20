@@ -3,11 +3,18 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 
 import {
   createProject,
+  getProjectRoleOptions,
   getStorageRootOptions,
   previewProjectPath
 } from '@/api/shot-grid/projects'
 import { createIdempotencyState } from '@/utils/idempotency'
-import { projectErrorState, projectRoleMeta } from '@/views/project/projectPresentation'
+import {
+  normalizeProjectRoleOptions,
+  projectErrorState,
+  projectRoleMeta,
+  projectRoleOptionLabel,
+  REQUIRED_PROJECT_ROLES
+} from '@/views/project/projectPresentation'
 import MemberCandidateSelect from './MemberCandidateSelect.vue'
 import ProjectModal from './ProjectModal.vue'
 
@@ -20,6 +27,10 @@ const requestError = ref(null)
 const storageRoots = ref([])
 const storageLoading = ref(false)
 const storageError = ref(null)
+const roleOptions = ref([])
+const roleOptionsLoading = ref(false)
+const roleOptionsLoaded = ref(false)
+const roleOptionsError = ref(null)
 const pathPreview = ref(null)
 const previewLoading = ref(false)
 const previewError = ref(null)
@@ -36,7 +47,7 @@ const form = reactive({
     userName: props.currentUser.userName,
     nickName: props.currentUser.nickName,
     deptName: props.currentUser.dept?.deptName || null,
-    projectRole: 'director',
+    projectRole: '',
     isCurrentUser: true
   }]
 })
@@ -70,7 +81,11 @@ const createRules = {
   }],
   members: [{
     validator: (_rule, value, callback) => {
-      if (!Array.isArray(value) || !value.some(member => member.projectRole === 'director')) {
+      if (!roleOptionsReady.value) {
+        callback(new Error('项目角色配置未就绪'))
+      } else if (!Array.isArray(value) || value.some(member => !isConfiguredProjectRole(member.projectRole))) {
+        callback(new Error('项目成员包含未配置的项目角色'))
+      } else if (!value.some(member => member.projectRole === 'director')) {
         callback(new Error('项目必须至少有一名项目管理人'))
       } else {
         callback()
@@ -81,36 +96,100 @@ const createRules = {
   remark: [{ max: 500, message: '备注不能超过 500 个字符', trigger: 'change' }]
 }
 let storageController = null
+let roleOptionsController = null
 let previewController = null
 let previewTimer = null
+let storageGeneration = 0
+let roleOptionsGeneration = 0
 let previewGeneration = 0
 
 const selectedUserIds = computed(() => form.members.map(item => item.userId))
 const selectedStorageRoot = computed(() =>
   storageRoots.value.find(root => String(root.storageRootId) === String(form.storageRootId)) || null
 )
-const canSubmit = computed(() =>
-  !busy.value && form.projectCode.trim() && form.projectName.trim() && form.storageRootId
+const missingProjectRoles = computed(() => {
+  const configured = new Set(roleOptions.value.map(option => option.projectRole))
+  return REQUIRED_PROJECT_ROLES.filter(role => !configured.has(role))
+})
+const roleOptionsReady = computed(() =>
+  roleOptionsLoaded.value &&
+  !roleOptionsLoading.value &&
+  !roleOptionsError.value &&
+  missingProjectRoles.value.length === 0
 )
+const roleConfigurationMessage = computed(() => {
+  if (!roleOptionsLoaded.value || roleOptionsLoading.value || roleOptionsError.value || roleOptionsReady.value) return ''
+  const labels = missingProjectRoles.value.map(role => projectRoleMeta(role).label).join('、')
+  return `项目角色配置不完整：缺少“${labels}”角色，请联系管理员完成配置。`
+})
+const defaultCreatorRole = computed(() =>
+  roleOptions.value.find(option => option.projectRole === 'creator')?.projectRole || ''
+)
+const canSubmit = computed(() =>
+  !busy.value && roleOptionsReady.value && form.projectCode.trim() && form.projectName.trim() && form.storageRootId
+)
+
+function isConfiguredProjectRole(role) {
+  return roleOptions.value.some(option => option.projectRole === role)
+}
 
 async function loadStorageRoots() {
   storageController?.abort()
-  storageController = new AbortController()
+  const generation = ++storageGeneration
+  const requestController = new AbortController()
+  storageController = requestController
   storageLoading.value = true
   storageError.value = null
   try {
-    const response = await getStorageRootOptions({ signal: storageController.signal })
+    const response = await getStorageRootOptions({ signal: requestController.signal })
+    if (generation !== storageGeneration) return
     storageRoots.value = Array.isArray(response.data) ? response.data : []
     if (storageRoots.value.length === 1 && !form.storageRootId) {
       form.storageRootId = String(storageRoots.value[0].storageRootId)
     }
   } catch (error) {
-    if (error?.code !== 'ERR_CANCELED') {
+    if (generation === storageGeneration && error?.code !== 'ERR_CANCELED') {
       storageRoots.value = []
       storageError.value = projectErrorState(error, 'NAS 根目录选项加载失败')
     }
   } finally {
-    storageLoading.value = false
+    if (generation === storageGeneration) storageLoading.value = false
+  }
+}
+
+function applyRoleDefaults() {
+  const configured = new Set(roleOptions.value.map(option => option.projectRole))
+  const directorRole = roleOptions.value.find(option => option.projectRole === 'director')?.projectRole || ''
+  const creatorRole = defaultCreatorRole.value
+  form.members.forEach(member => {
+    if (configured.has(member.projectRole)) return
+    member.projectRole = member.isCurrentUser ? directorRole : creatorRole
+  })
+  createFormRef.value?.clearValidate('members')
+}
+
+async function loadRoleOptions() {
+  roleOptionsController?.abort()
+  const generation = ++roleOptionsGeneration
+  const requestController = new AbortController()
+  roleOptionsController = requestController
+  roleOptionsLoading.value = true
+  roleOptionsLoaded.value = false
+  roleOptionsError.value = null
+  roleOptions.value = []
+  try {
+    const response = await getProjectRoleOptions({ signal: requestController.signal })
+    if (generation !== roleOptionsGeneration) return
+    roleOptions.value = normalizeProjectRoleOptions(response.data)
+    roleOptionsLoaded.value = true
+    applyRoleDefaults()
+  } catch (error) {
+    if (generation === roleOptionsGeneration && error?.code !== 'ERR_CANCELED') {
+      roleOptionsLoaded.value = true
+      roleOptionsError.value = projectErrorState(error, '项目角色配置加载失败')
+    }
+  } finally {
+    if (generation === roleOptionsGeneration) roleOptionsLoading.value = false
   }
 }
 
@@ -165,7 +244,8 @@ function schedulePathPreview() {
 }
 
 function addMember(candidate) {
-  form.members.push({ ...candidate, projectRole: 'creator' })
+  if (!roleOptionsReady.value) return
+  form.members.push({ ...candidate, projectRole: defaultCreatorRole.value })
   createFormRef.value?.validateField('members').catch(() => false)
 }
 
@@ -196,7 +276,7 @@ function buildPayload() {
 }
 
 async function submit() {
-  if (busy.value) return
+  if (busy.value || !roleOptionsReady.value) return
   requestError.value = null
   busy.value = true
   try {
@@ -216,21 +296,38 @@ async function submit() {
   } finally { busy.value = false }
 }
 
+function closeDialog() {
+  storageGeneration += 1
+  roleOptionsGeneration += 1
+  storageController?.abort()
+  roleOptionsController?.abort()
+  invalidatePathPreview()
+  createFormRef.value?.resetFields()
+  requestError.value = null
+  emit('close')
+}
+
 watch(
   () => [form.storageRootId, form.projectName],
   schedulePathPreview
 )
 
-onMounted(loadStorageRoots)
+onMounted(() => {
+  loadStorageRoots()
+  loadRoleOptions()
+})
 onBeforeUnmount(() => {
   if (previewTimer) clearTimeout(previewTimer)
+  storageGeneration += 1
+  roleOptionsGeneration += 1
   storageController?.abort()
+  roleOptionsController?.abort()
   previewController?.abort()
 })
 </script>
 
 <template>
-  <ProjectModal title="创建项目" description="项目名称同时作为 NAS 项目目录名称，系统自动计算并校验保存路径。" :busy="busy" wide @close="emit('close')">
+  <ProjectModal title="创建项目" description="项目名称同时作为 NAS 项目目录名称，系统自动计算并校验保存路径。" :busy="busy" wide @close="closeDialog">
     <el-form ref="createFormRef" :model="form" :rules="createRules" class="project-form" size="large" label-position="top">
       <div class="project-form__grid">
         <el-form-item label="项目名称" prop="projectName" required>
@@ -246,11 +343,11 @@ onBeforeUnmount(() => {
           <el-input model-value="AI 影视短片" disabled />
         </el-form-item>
         <el-form-item label="NAS 根目录" prop="storageRootId" required>
-          <el-select v-model="form.storageRootId" class="sg-select" :placeholder="storageLoading ? '正在加载健康根目录…' : '请选择健康根目录'" :loading="storageLoading" :disabled="storageLoading || !!storageError">
-            <el-option :label="storageLoading ? '正在加载健康根目录…' : '请选择健康根目录'" value="" />
+          <el-select v-model="form.storageRootId" class="sg-select" :placeholder="storageLoading ? '正在加载可用根目录…' : '请选择可用根目录'" :loading="storageLoading" :disabled="storageLoading || !!storageError">
+            <el-option :label="storageLoading ? '正在加载可用根目录…' : '请选择可用根目录'" value="" />
             <el-option v-for="root in storageRoots" :key="root.storageRootId" :label="`${root.rootName}（${root.rootCode}）`" :value="String(root.storageRootId)" />
           </el-select>
-          <small v-if="!storageError && !storageLoading && storageRoots.length === 0">当前没有已启用且探测健康的 NAS 根目录，请联系管理员。</small>
+          <small v-if="!storageError && !storageLoading && storageRoots.length === 0">当前没有可用的 NAS 根目录，请联系管理员。</small>
           <el-alert v-if="storageError" class="field-alert" :title="storageError.message" type="error" show-icon :closable="false"><el-button v-if="storageError.retryable" link type="danger" @click="loadStorageRoots">重试</el-button></el-alert>
         </el-form-item>
       </div>
@@ -268,10 +365,17 @@ onBeforeUnmount(() => {
       <el-form-item prop="members" class="project-form__members">
         <el-card class="people-section" shadow="never">
           <template #header><div class="people-section__heading"><div><strong>项目成员</strong><p>当前账号默认加入项目；所有成员均可设置为项目管理人或制作人员，且至少需要一名项目管理人。</p></div></div></template>
-          <MemberCandidateSelect :department-id="currentUser.dept?.deptId" :exclude-ids="selectedUserIds" @select="addMember" />
+          <el-alert v-if="roleOptionsLoading" title="正在加载项目角色配置…" type="info" show-icon :closable="false" />
+          <el-alert v-else-if="roleOptionsError" :title="roleOptionsError.title" :description="roleOptionsError.message" type="error" show-icon :closable="false">
+            <el-button v-if="roleOptionsError.retryable" link type="danger" @click="loadRoleOptions">重试</el-button>
+          </el-alert>
+          <el-alert v-else-if="roleConfigurationMessage" title="项目角色配置缺失" :description="roleConfigurationMessage" type="error" show-icon :closable="false">
+            <el-button link type="danger" @click="loadRoleOptions">重新检查</el-button>
+          </el-alert>
+          <MemberCandidateSelect :department-id="currentUser.dept?.deptId" :exclude-ids="selectedUserIds" :disabled="!roleOptionsReady" @select="addMember" />
           <el-table class="member-rows" :data="form.members" row-key="userId" empty-text="尚未添加项目成员">
             <el-table-column label="成员" min-width="210"><template #default="{ row }"><strong>{{ row.nickName || row.userName }}</strong><small>{{ row.userName }} · {{ row.deptName || '未分配部门' }}<template v-if="row.isCurrentUser"> · 当前登录账号</template></small></template></el-table-column>
-            <el-table-column label="项目角色" width="170"><template #default="{ row }"><el-select v-model="row.projectRole" class="sg-select" size="default" aria-label="项目角色"><el-option :label="projectRoleMeta('creator').label" value="creator" /><el-option :label="projectRoleMeta('director').label" value="director" /></el-select></template></el-table-column>
+            <el-table-column label="项目角色" min-width="250"><template #default="{ row }"><el-select v-model="row.projectRole" class="sg-select" size="default" aria-label="项目角色" :loading="roleOptionsLoading" :disabled="!roleOptionsReady"><el-option v-for="option in roleOptions" :key="`${option.projectRole}:${option.systemRoleId}`" :label="projectRoleOptionLabel(option)" :value="option.projectRole" /></el-select></template></el-table-column>
             <el-table-column label="操作" width="90"><template #default="{ row, $index }"><el-button v-if="!row.isCurrentUser" link type="danger" @click="removeMember($index)">移除</el-button><el-tag v-else size="small" type="info" effect="plain">本人</el-tag></template></el-table-column>
           </el-table>
         </el-card>
@@ -285,7 +389,7 @@ onBeforeUnmount(() => {
       </el-form-item>
 
       <el-alert v-if="requestError" :title="requestError.title" :description="requestError.message" type="error" show-icon :closable="false" />
-      <footer><el-button :disabled="busy" @click="emit('close')">取消</el-button><el-button type="primary" :loading="busy" :disabled="!canSubmit" @click="submit">创建并初始化 NAS</el-button></footer>
+      <footer><el-button :disabled="busy" @click="closeDialog">取消</el-button><el-button type="primary" :loading="busy" :disabled="!canSubmit" @click="submit">创建并初始化 NAS</el-button></footer>
     </el-form>
   </ProjectModal>
 </template>

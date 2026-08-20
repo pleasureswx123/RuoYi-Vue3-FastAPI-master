@@ -34,11 +34,11 @@ from module_shot_grid.entity.vo.review_vo import (
     ShotGridManualReviewListUpdateModel,
     ShotGridManualReviewListVersionsModel,
     ShotGridNoteCreateModel,
-    ShotGridReviewContextModel,
     ShotGridReviewActionCreateModel,
     ShotGridReviewActionModel,
     ShotGridReviewActionQueryModel,
     ShotGridReviewActionResultModel,
+    ShotGridReviewContextModel,
     ShotGridReviewListDetailModel,
     ShotGridReviewListItemModel,
     ShotGridReviewListQueryModel,
@@ -82,7 +82,14 @@ class ShotGridReviewService:
     ) -> PageModel[ShotGridReviewListItemModel]:
         user_id, _, _, _ = cls._actor(current_user)
         user = current_user.user
-        has_all_scope = bool(user and (user.admin or '*:*:*' in current_user.permissions))
+        has_all_scope = bool(
+            user
+            and (
+                user.admin
+                or '*:*:*' in current_user.permissions
+                or 'shotgrid:project:all' in current_user.permissions
+            )
+        )
         rows, total = await ShotGridReviewDao.get_mine_review_lists(db, user_id, query, has_all_scope)
         return PageModel[ShotGridReviewListItemModel](
             rows=[cls._review_list_item(row) for row in rows],
@@ -846,9 +853,7 @@ class ShotGridReviewService:
                 },
             )
         missing_comment_issue_ids = [
-            item.issue_id
-            for item in command.issue_verifications
-            if item.result == 'still_present' and not item.comment
+            item.issue_id for item in command.issue_verifications if item.result == 'still_present' and not item.comment
         ]
         if missing_comment_issue_ids:
             raise shot_grid_error(
@@ -1027,7 +1032,7 @@ class ShotGridReviewService:
     def _require_director(access: ShotGridProjectAccessModel) -> None:
         if access.has_all_scope or access.project_role == 'director':
             return
-        raise shot_grid_error(403, 'SG_PROJECT_ACCESS_DENIED', '只有项目总监或管理员可以执行审核动作')
+        raise shot_grid_error(403, 'SG_PROJECT_ACCESS_DENIED', '只有项目管理人或管理员可以执行审核动作')
 
     @staticmethod
     def _actor(current_user: CurrentUserModel) -> tuple[int, str, str, str | None]:

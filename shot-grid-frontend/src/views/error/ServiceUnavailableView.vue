@@ -14,7 +14,7 @@ async function returnToLogin() {
 
 <template>
   <main class="error-page">
-    <el-result class="error-card" icon="error" title="服务暂时不可用" sub-title="平台暂时无法完成身份或业务导航加载。为避免把服务异常伪装成空数据，本次访问已停止。">
+    <el-result class="error-card" icon="error" title="服务暂时不可用" sub-title="平台暂时无法加载账号信息或页面内容，请稍后重新加载。">
       <template #extra><div class="error-card__actions">
         <el-button type="primary" @click="$router.go(0)">重新加载</el-button>
         <el-button @click="returnToLogin">退出并重新登录</el-button>

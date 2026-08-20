@@ -30,14 +30,14 @@ const reviewsLoading = ref(false)
 const projectsError = ref(null)
 const reviewsError = ref(null)
 const manualDialogVisible = ref(false)
-const query = reactive({ reviewStatus: 'active', pageNum: 1, pageSize: 20 })
+const query = reactive({ reviewStatus: '', pageNum: 1, pageSize: 20 })
 let projectsController = null
 let reviewsController = null
 
 const canViewAll = computed(() => sessionStore.permissions.includes('*:*:*') || sessionStore.permissions.includes('shotgrid:project:all'))
 const canListReviews = computed(() => sessionStore.permissions.includes('*:*:*') || sessionStore.permissions.includes('shotgrid:reviewList:list'))
 const canCreateManual = computed(() => sessionStore.permissions.includes('*:*:*') || sessionStore.permissions.includes('shotgrid:reviewList:add'))
-const manualCandidates = computed(() => reviews.value.filter(item => item.reviewMode === 'auto_single' && item.versionStatus === 'pending_review'))
+const manualCandidates = computed(() => reviews.value.filter(item => item.reviewStatus === 'active' && item.reviewMode === 'auto_single' && item.versionStatus === 'pending_review'))
 const reviewFilterModel = computed(() => ({ projectId: selectedProjectId.value, reviewStatus: query.reviewStatus }))
 
 async function loadProjects() {

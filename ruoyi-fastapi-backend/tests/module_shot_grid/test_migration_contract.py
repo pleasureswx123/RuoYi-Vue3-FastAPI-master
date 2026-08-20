@@ -7,6 +7,7 @@ from config.database import Base
 from module_shot_grid.schema import (
     SHOT_GRID_IMPORT_SCHEMA_REVISION,
     SHOT_GRID_INITIAL_SCHEMA_REVISION,
+    SHOT_GRID_MANAGED_USER_ROLE_SCHEMA_REVISION,
     SHOT_GRID_MEMBER_SCHEMA_REVISION,
     SHOT_GRID_PERMISSION_CODES,
     SHOT_GRID_REPAIR_SCHEMA_REVISION,
@@ -25,6 +26,30 @@ EXPECTED_DICT_TYPES = {
     'sg_project_phase',
     'sg_task_priority',
 }
+EXPECTED_INITIAL_TABLES = (
+    'sg_project',
+    'sg_storage_root',
+    'sg_asset',
+    'sg_episode',
+    'sg_import_batch',
+    'sg_project_member',
+    'sg_project_storage',
+    'sg_storage_operation',
+    'sg_asset_item',
+    'sg_scene',
+    'sg_shot',
+    'sg_shot_asset',
+    'sg_shot_asset_requirement',
+    'sg_task',
+    'sg_version_submission',
+    'sg_version',
+    'sg_note',
+    'sg_review_action',
+    'sg_review_list',
+    'sg_version_file',
+    'sg_note_reply',
+    'sg_review_list_version',
+)
 STORAGE_DOWNGRADE_STATEMENT_COUNT = 4
 
 
@@ -39,7 +64,7 @@ def test_migration_covers_the_exact_frozen_table_set() -> None:
 
     assert migration['revision'] == SHOT_GRID_INITIAL_SCHEMA_REVISION
     assert migration['down_revision'] is None
-    assert set(migration['SHOT_GRID_TABLES']) == SHOT_GRID_TABLE_NAMES
+    assert migration['SHOT_GRID_TABLES'] == EXPECTED_INITIAL_TABLES
 
 
 def test_import_snapshot_migration_extends_the_initial_revision() -> None:
@@ -63,23 +88,32 @@ def test_member_lifecycle_migration_extends_the_import_revision() -> None:
 
 def test_schema_repair_migration_extends_member_lifecycle_and_covers_metadata() -> None:
     migration = _migration_namespace(SHOT_GRID_REPAIR_SCHEMA_REVISION)
+    initial_migration = _migration_namespace(SHOT_GRID_INITIAL_SCHEMA_REVISION)
+    surviving_initial_tables = set(initial_migration['SHOT_GRID_TABLES']).intersection(SHOT_GRID_TABLE_NAMES)
     timestamp_columns = {
         (table_name, column.name)
-        for table_name in SHOT_GRID_TABLE_NAMES
+        for table_name in surviving_initial_tables
         for column in Base.metadata.tables[table_name].columns
         if isinstance(column.type, DateTime)
     }
     audit_actor_columns = {
         (table_name, column.name)
-        for table_name in SHOT_GRID_TABLE_NAMES
+        for table_name in surviving_initial_tables
         for column in Base.metadata.tables[table_name].columns
         if column.name in {'create_by', 'update_by'} and column.server_default is not None
     }
+    repaired_timestamp_columns = set(migration['REPAIRED_TIMESTAMP_COLUMNS'])
+    repaired_audit_actor_columns = set(migration['REPAIRED_AUDIT_ACTOR_COLUMNS'])
 
     assert migration['revision'] == SHOT_GRID_REPAIR_SCHEMA_REVISION
     assert migration['down_revision'] == SHOT_GRID_MEMBER_SCHEMA_REVISION
-    assert set(migration['REPAIRED_TIMESTAMP_COLUMNS']) == timestamp_columns - {('sg_project_member', 'removed_time')}
-    assert set(migration['REPAIRED_AUDIT_ACTOR_COLUMNS']) == audit_actor_columns
+    assert {item for item in repaired_timestamp_columns if item[0] in surviving_initial_tables} == timestamp_columns - {
+        ('sg_project_member', 'removed_time')
+    }
+    assert repaired_timestamp_columns - {
+        item for item in repaired_timestamp_columns if item[0] in surviving_initial_tables
+    } == {('sg_note_reply', 'create_time')}
+    assert {item for item in repaired_audit_actor_columns if item[0] in surviving_initial_tables} == audit_actor_columns
     assert migration['_EMPTY_STRING_DEFAULT_SQL'] == "''"
 
 
@@ -248,6 +282,9 @@ def test_postgresql_baseline_is_stamped_at_the_current_head() -> None:
     assert 'uk_sg_version_submission_source_file' in baseline
     assert 'idx_sg_task_assignee_status_due' in baseline
     assert 'uk_sg_review_action_idempotency' in baseline
+    assert 'CREATE TABLE sg_managed_user_role' in baseline
+    assert 'fk_sg_managed_user_role_user_role' in baseline
+    assert 'REFERENCES sys_user_role (user_id, role_id) ON DELETE CASCADE' in baseline
     assert (
         'CREATE INDEX idx_sg_storage_operation_project_aggregate_latest '
         'ON sg_storage_operation (project_id, aggregate_type, aggregate_id, operation_id DESC)' in baseline
@@ -265,6 +302,19 @@ def test_postgresql_baseline_is_stamped_at_the_current_head() -> None:
     )
 
 
+def test_managed_user_role_migration_only_adds_provenance_table() -> None:
+    migration = _migration_namespace(SHOT_GRID_MANAGED_USER_ROLE_SCHEMA_REVISION)
+    source = Path(migration['__file__']).read_text(encoding='utf-8')
+
+    assert migration['revision'] == SHOT_GRID_MANAGED_USER_ROLE_SCHEMA_REVISION
+    assert migration['down_revision'] == '20260817_11'
+    assert 'CREATE TABLE sg_managed_user_role' in source
+    assert 'REFERENCES sys_user_role (user_id, role_id)' in source
+    assert 'ON DELETE CASCADE' in source
+    assert 'INSERT INTO sys_role' not in source
+    assert source.index('DELETE FROM sys_user_role') < source.index("op.execute('DROP TABLE sg_managed_user_role')")
+
+
 def test_deleted_shot_number_release_migration_is_safely_scoped() -> None:
     migration = _migration_namespace(SHOT_GRID_SHOT_DELETE_SCHEMA_REVISION)
     source = Path(migration['__file__']).read_text(encoding='utf-8')
@@ -272,7 +322,7 @@ def test_deleted_shot_number_release_migration_is_safely_scoped() -> None:
     assert migration['down_revision'] == '20260812_08'
     assert "SET del_flag = '2'" in source
     assert "shot.lifecycle_status = 'archived'" in source
-    assert 'active_task.del_flag = \'0\'' in source
+    assert "active_task.del_flag = '0'" in source
     assert 'JOIN sg_task AS historical_task' in source
 
 

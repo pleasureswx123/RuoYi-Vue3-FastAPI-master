@@ -2,7 +2,7 @@
 import { reactive, ref } from 'vue'
 
 import { updateProject } from '@/api/shot-grid/projects'
-import { projectErrorState } from '@/views/project/projectPresentation'
+import { PROJECT_PHASE_OPTIONS, projectErrorState } from '@/views/project/projectPresentation'
 import ProjectModal from './ProjectModal.vue'
 
 const props = defineProps({
@@ -30,7 +30,7 @@ const editRules = {
     },
     trigger: 'change'
   }],
-  currentPhase: [{ required: true, type: 'enum', enum: ['planning', 'asset_production', 'shot_production', 'review', 'delivery', 'completed'], message: '请选择有效的当前阶段', trigger: 'change' }],
+  currentPhase: [{ required: true, type: 'enum', enum: PROJECT_PHASE_OPTIONS.map(phase => phase.value), message: '请选择有效的当前阶段', trigger: 'change' }],
   aspectRatio: [{ required: true, type: 'enum', enum: ['16:9', '21:9', '2.39:1', '9:16', '1:1'], message: '请选择有效的画幅', trigger: 'change' }],
   remark: [{ max: 500, message: '备注不能超过 500 个字符', trigger: 'change' }]
 }
@@ -42,6 +42,8 @@ function buildPayload() {
     projectDescription: form.projectDescription.trim() || null,
     projectType: form.projectType,
     aspectRatio: form.aspectRatio,
+    plannedDurationMs: props.project.plannedDurationMs ?? null,
+    deliveryDate: props.project.deliveryDate || null,
     currentPhase: form.currentPhase,
     remark: form.remark.trim() || null,
     lockVersion: props.project.lockVersion
@@ -70,7 +72,7 @@ async function submit() {
 </script>
 
 <template>
-  <ProjectModal title="编辑项目" description="项目代号和 NAS 绑定不可在普通编辑中修改。" :busy="busy" @close="emit('close')">
+  <ProjectModal title="编辑项目" description="项目代号和 NAS 目录绑定创建后不可在此修改。" :busy="busy" @close="emit('close')">
     <el-form ref="editFormRef" :model="form" :rules="editRules" class="edit-form" size="large" label-position="top">
       <el-form-item label="项目名称" prop="projectName" required>
         <el-input v-model="form.projectName" maxlength="200" />
@@ -78,12 +80,7 @@ async function submit() {
       <div class="edit-form__grid">
         <el-form-item label="当前阶段" prop="currentPhase" required>
           <el-select v-model="form.currentPhase" class="sg-select">
-            <el-option label="策划" value="planning" />
-            <el-option label="资产制作" value="asset_production" />
-            <el-option label="镜头制作" value="shot_production" />
-            <el-option label="审核" value="review" />
-            <el-option label="交付" value="delivery" />
-            <el-option label="已完成" value="completed" />
+            <el-option v-for="phase in PROJECT_PHASE_OPTIONS" :key="phase.value" :label="phase.label" :value="phase.value" />
           </el-select>
         </el-form-item>
         <el-form-item label="画幅" prop="aspectRatio" required>

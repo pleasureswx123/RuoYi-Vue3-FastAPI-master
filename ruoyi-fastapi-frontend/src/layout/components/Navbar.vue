@@ -12,30 +12,21 @@
       <template v-if="appStore.device !== 'mobile'">
         <header-search id="header-search" class="right-menu-item" />
 
-        <el-tooltip content="源码地址" effect="dark" placement="bottom">
-          <ruo-yi-git id="ruoyi-git" class="right-menu-item hover-effect" />
-        </el-tooltip>
-
-        <el-tooltip content="文档地址" effect="dark" placement="bottom">
-          <ruo-yi-doc id="ruoyi-doc" class="right-menu-item hover-effect" />
-        </el-tooltip>
-
         <screenfull id="screenfull" class="right-menu-item hover-effect" />
 
-        <el-tooltip content="主题模式" effect="dark" placement="bottom">
-          <div class="right-menu-item hover-effect theme-switch-wrapper" @click="toggleTheme">
+        <el-tooltip :content="settingsStore.isDark ? '切换为明亮模式' : '切换为暗黑模式'" effect="dark" placement="bottom">
+          <el-button
+            class="right-menu-item theme-switch-wrapper"
+            :aria-label="settingsStore.isDark ? '切换为明亮模式' : '切换为暗黑模式'"
+            text
+            circle
+            @click="toggleTheme"
+          >
             <svg-icon v-if="settingsStore.isDark" icon-class="sunny" />
             <svg-icon v-if="!settingsStore.isDark" icon-class="moon" />
-          </div>
+          </el-button>
         </el-tooltip>
 
-        <el-tooltip content="布局大小" effect="dark" placement="bottom">
-          <size-select id="size-select" class="right-menu-item hover-effect" />
-        </el-tooltip>
-
-        <el-tooltip content="消息通知" effect="dark" placement="bottom">
-          <header-notice id="header-notice" class="right-menu-item hover-effect" />
-        </el-tooltip>
       </template>
 
       <el-dropdown @command="handleCommand" class="avatar-container right-menu-item hover-effect" trigger="hover">
@@ -48,9 +39,6 @@
             <router-link to="/user/profile">
               <el-dropdown-item>个人中心</el-dropdown-item>
             </router-link>
-            <el-dropdown-item command="setLayout" v-if="settingsStore.showSettings">
-                <span>布局设置</span>
-            </el-dropdown-item>
             <el-dropdown-item command="lockScreen">
                 <span>锁定屏幕</span>
             </el-dropdown-item>
@@ -72,15 +60,11 @@ import TopBar from './TopBar'
 import Logo from './Sidebar/Logo'
 import Hamburger from '@/components/Hamburger'
 import Screenfull from '@/components/Screenfull'
-import SizeSelect from '@/components/SizeSelect'
 import HeaderSearch from '@/components/HeaderSearch'
-import RuoYiGit from '@/components/RuoYi/Git'
-import RuoYiDoc from '@/components/RuoYi/Doc'
 import useAppStore from '@/store/modules/app'
 import useUserStore from '@/store/modules/user'
 import useLockStore from '@/store/modules/lock'
 import useSettingsStore from '@/store/modules/settings'
-import HeaderNotice from './HeaderNotice'
 
 const route = useRoute()
 const router = useRouter()
@@ -95,9 +79,6 @@ function toggleSideBar() {
 
 function handleCommand(command) {
   switch (command) {
-    case "setLayout":
-      setLayout()
-      break
     case "lockScreen":
       lockScreen()
       break
@@ -119,11 +100,6 @@ function logout() {
       location.href = '/index'
     })
   }).catch(() => { })
-}
-
-const emits = defineEmits(['setLayout'])
-function setLayout() {
-  emits('setLayout')
 }
 
 function lockScreen() {
@@ -203,7 +179,7 @@ async function toggleTheme(event) {
     margin-right: 8px;
 
     &:hover {
-      background: rgba(0, 0, 0, 0.025);
+      background: var(--navbar-hover);
     }
   }
 
@@ -241,7 +217,7 @@ async function toggleTheme(event) {
       padding: 0 8px;
       height: 100%;
       font-size: 18px;
-      color: #5a5e66;
+      color: var(--navbar-text);
       vertical-align: text-bottom;
 
       &.hover-effect {
@@ -249,13 +225,30 @@ async function toggleTheme(event) {
         transition: background 0.3s;
 
         &:hover {
-          background: rgba(0, 0, 0, 0.025);
+          background: var(--navbar-hover);
         }
       }
 
       &.theme-switch-wrapper {
-        display: flex;
+        display: inline-flex;
+        width: 36px;
+        height: 36px;
+        padding: 0;
+        margin: 0 2px;
         align-items: center;
+        justify-content: center;
+        color: var(--navbar-text);
+        background: transparent;
+        border: 0;
+        --el-button-hover-bg-color: var(--navbar-hover);
+        --el-button-hover-text-color: var(--navbar-text);
+        --el-button-active-bg-color: var(--navbar-hover);
+        --el-button-active-text-color: var(--navbar-text);
+
+        &:focus-visible {
+          outline: 2px solid var(--el-color-primary);
+          outline-offset: -2px;
+        }
 
         svg {
           transition: transform 0.3s;

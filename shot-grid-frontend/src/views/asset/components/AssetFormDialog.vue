@@ -168,15 +168,15 @@ function closeDialog() {
 </script>
 
 <template>
-  <ProjectModal :title="isEdit ? `编辑资产 · ${asset.assetName}` : '新建资产'" :description="isEdit ? '资产类型、名称和目录身份不可普通修改；此处保存非身份主数据完整快照。' : '创建资产时至少创建一个制作分项；制作人可稍后通过任务分配补充。'" :busy="saving" wide @close="closeDialog">
-    <el-form ref="assetForm" :model="form" :rules="assetFormRules" class="asset-form" size="large" label-position="top" aria-label="资产主数据表单">
-      <el-alert v-if="requestError" :title="requestError.title" type="error" show-icon :closable="false"><span>{{ requestError.message }}</span><code v-if="requestError.errorKey">{{ requestError.errorKey }}</code><el-button v-if="requestError.status === 409" link type="danger" @click="emit('refresh')">刷新后重试</el-button></el-alert>
+  <ProjectModal :title="isEdit ? `编辑资产 · ${asset.assetName}` : '新建资产'" :description="isEdit ? '资产类型和名称创建后不可直接修改；可在此更新排序、说明和备注。' : '创建资产时至少创建一个制作分项；制作人可稍后通过任务分配补充。'" :busy="saving" wide @close="closeDialog">
+    <el-form ref="assetForm" :model="form" :rules="assetFormRules" class="asset-form" size="large" label-position="top" aria-label="资产信息表单">
+      <el-alert v-if="requestError" :title="requestError.title" type="error" show-icon :closable="false"><span>{{ requestError.message }}</span><el-button v-if="requestError.status === 409" link type="danger" @click="emit('refresh')">刷新后重试</el-button></el-alert>
 
       <section class="asset-form__grid">
         <el-form-item label="资产类型" prop="assetType"><el-select v-model="form.assetType" class="sg-select" :disabled="isEdit || saving"><el-option label="角色" value="Character" /><el-option label="场景" value="Environment" /><el-option label="道具" value="Prop" /></el-select></el-form-item>
         <el-form-item label="资产名称" prop="assetName"><el-input v-model="form.assetName" maxlength="200" show-word-limit :disabled="isEdit || saving" placeholder="例如：动力舱室内" /></el-form-item>
         <el-form-item label="项目内排序" prop="sortOrder"><el-input-number v-model="form.sortOrder" :min="0" :step="1" step-strictly controls-position="right" :disabled="saving" /></el-form-item>
-        <el-form-item class="asset-form__wide" label="资产说明" prop="description"><el-input v-model="form.description" type="textarea" :rows="3" :disabled="saving" placeholder="资产的稳定业务说明" /></el-form-item>
+        <el-form-item class="asset-form__wide" label="资产说明" prop="description"><el-input v-model="form.description" type="textarea" :rows="3" :disabled="saving" placeholder="填写资产用途、视觉要求等说明" /></el-form-item>
         <el-form-item class="asset-form__wide" label="备注" prop="remark"><el-input v-model="form.remark" type="textarea" :rows="2" maxlength="500" show-word-limit :disabled="saving" placeholder="内部备注，可留空" /></el-form-item>
       </section>
 

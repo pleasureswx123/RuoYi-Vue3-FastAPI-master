@@ -8,6 +8,7 @@ from module_shot_grid.entity.vo.project_option_vo import (
     ShotGridAssetAssigneeOptionQueryModel,
     ShotGridMemberCandidateModel,
     ShotGridMemberCandidateQueryModel,
+    ShotGridPlatformRoleOptionModel,
     ShotGridProjectPathPreviewModel,
     ShotGridProjectPathPreviewRequestModel,
     ShotGridShotAssigneeOptionModel,
@@ -15,11 +16,16 @@ from module_shot_grid.entity.vo.project_option_vo import (
     ShotGridStorageRootOptionModel,
 )
 from module_shot_grid.exceptions import shot_grid_error
+from module_shot_grid.service.platform_role_service import ShotGridPlatformRoleService
 from module_shot_grid.service.project_path_service import ShotGridProjectPathService
 
 
 class ShotGridProjectOptionService:
     """项目创建和成员选择的真实只读数据源。"""
+
+    @classmethod
+    async def get_platform_role_options(cls, db: AsyncSession) -> list[ShotGridPlatformRoleOptionModel]:
+        return await ShotGridPlatformRoleService.get_role_options(db)
 
     @classmethod
     async def get_storage_root_options(cls, db: AsyncSession) -> list[ShotGridStorageRootOptionModel]:
@@ -66,8 +72,15 @@ class ShotGridProjectOptionService:
         db: AsyncSession,
         query: ShotGridMemberCandidateQueryModel,
         data_scope_sql: ColumnElement,
+        *,
+        project_id: int | None = None,
     ) -> PageModel[ShotGridMemberCandidateModel]:
-        rows, total = await ShotGridProjectOptionDao.get_member_candidate_page(db, query, data_scope_sql)
+        rows, total = await ShotGridProjectOptionDao.get_member_candidate_page(
+            db,
+            query,
+            data_scope_sql,
+            project_id=project_id,
+        )
         return PageModel[ShotGridMemberCandidateModel](
             rows=[ShotGridMemberCandidateModel.model_validate(row) for row in rows],
             pageNum=query.page_num,

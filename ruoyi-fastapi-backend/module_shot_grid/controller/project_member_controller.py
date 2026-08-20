@@ -4,10 +4,12 @@ from fastapi import Path, Query, Request, Response
 from sqlalchemy import ColumnElement
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from common.annotation.cache_annotation import ApiCacheEvict
 from common.aspect.data_scope import DataScopeDependency
 from common.aspect.db_seesion import DBSessionDependency
 from common.aspect.interface_auth import UserInterfaceAuthDependency
 from common.aspect.pre_auth import CurrentUserDependency, PreAuthDependency
+from common.constant import ApiGroup
 from common.router import APIRouterPro
 from common.vo import DataResponseModel, ResponseBaseModel
 from module_admin.entity.do.user_do import SysUser
@@ -59,6 +61,7 @@ async def get_shot_grid_project_members(
     response_model=DataResponseModel[ShotGridProjectMemberModel],
     dependencies=[UserInterfaceAuthDependency('shotgrid:member:add')],
 )
+@ApiCacheEvict(namespaces=ApiGroup.USER_PERMISSION_MUTATION)
 async def add_shot_grid_project_member(
     request: Request,
     project_id: Annotated[int, Path(alias='projectId', gt=0)],
@@ -84,6 +87,7 @@ async def add_shot_grid_project_member(
     response_model=DataResponseModel[ShotGridProjectMemberModel],
     dependencies=[UserInterfaceAuthDependency('shotgrid:member:edit')],
 )
+@ApiCacheEvict(namespaces=ApiGroup.USER_PERMISSION_MUTATION)
 async def update_shot_grid_project_member(
     request: Request,
     project_id: Annotated[int, Path(alias='projectId', gt=0)],
@@ -91,6 +95,7 @@ async def update_shot_grid_project_member(
     command: ShotGridProjectMemberUpdateModel,
     query_db: Annotated[AsyncSession, DBSessionDependency()],
     current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
+    user_data_scope_sql: Annotated[ColumnElement, DataScopeDependency(SysUser)],
     access: Annotated[ShotGridProjectAccessModel, ProjectRoleDependency('director')],
 ) -> Response:
     result = await ShotGridProjectMemberService.update_member(
@@ -99,6 +104,7 @@ async def update_shot_grid_project_member(
         user_id,
         command,
         current_user,
+        user_data_scope_sql,
     )
     return ResponseUtil.success(data=result)
 
@@ -109,6 +115,7 @@ async def update_shot_grid_project_member(
     response_model=ResponseBaseModel,
     dependencies=[UserInterfaceAuthDependency('shotgrid:member:remove')],
 )
+@ApiCacheEvict(namespaces=ApiGroup.USER_PERMISSION_MUTATION)
 async def remove_shot_grid_project_member(
     request: Request,
     project_id: Annotated[int, Path(alias='projectId', gt=0)],

@@ -11,7 +11,7 @@ import ProjectStatePanel from '@/views/project/components/ProjectStatePanel.vue'
 import ProtectedThumbnail from '@/views/shot/components/ProtectedThumbnail.vue'
 import ShotAssignDialog from '@/views/shot/components/ShotAssignDialog.vue'
 import ShotFormDialog from '@/views/shot/components/ShotFormDialog.vue'
-import { directoryStatusMeta, formatShotDateTime, formatShotDuration, shotErrorState, shotStatusMeta } from '@/views/shot/shotPresentation'
+import { directoryStatusMeta, formatShotDateTime, formatShotDuration, shotAssigneeName, shotErrorState, shotStatusMeta } from '@/views/shot/shotPresentation'
 import { taskPriorityMeta, taskStatusMeta, taskVersionStatusMeta } from '@/views/task/taskPresentation'
 
 const props = defineProps({
@@ -71,7 +71,7 @@ async function loadDetail() {
   errorState.value = null
   if (!targetProjectId || !targetShotId) {
     loading.value = false
-    errorState.value = { title: '镜头地址无效', message: '项目 ID 和镜头 ID 必须为正整数。', retryable: false }
+    errorState.value = { title: '镜头地址无效', message: '请返回镜头列表并重新打开该镜头。', retryable: false }
     return
   }
   const requestController = new AbortController()
@@ -141,7 +141,7 @@ function isActiveOperation(activeContext, operationContext) {
 }
 
 function notifyDetachedOperation() {
-  ElMessage.success('操作已完成；当前镜头未自动刷新。')
+  ElMessage.success('操作已完成，请返回原镜头查看最新结果。')
 }
 
 async function confirmArchive() {
@@ -217,7 +217,7 @@ onBeforeUnmount(() => { disposed = true; loadGeneration += 1; controller?.abort(
       <section class="detail-grid">
         <el-card class="detail-card detail-card--wide" shadow="never"><header><div><p class="sg-eyebrow">PRODUCTION</p><h3>制作信息</h3></div><el-tag :type="tagTypeFromTone(directoryStatusMeta(shot.directoryStatus).tone)" size="small" effect="plain" round>{{ directoryStatusMeta(shot.directoryStatus).label }}</el-tag></header><el-descriptions class="detail-fields" :column="4" border><el-descriptions-item label="景别">{{ shot.shotSize || '—' }}</el-descriptions-item><el-descriptions-item label="机位">{{ shot.cameraPosition || '—' }}</el-descriptions-item><el-descriptions-item label="镜头运动">{{ shot.cameraMovement || '—' }}</el-descriptions-item><el-descriptions-item label="焦段">{{ shot.focalLength || '—' }}</el-descriptions-item><el-descriptions-item label="台词 / 对白">{{ shot.dialogue || '—' }}</el-descriptions-item><el-descriptions-item label="音效">{{ shot.soundEffect || '—' }}</el-descriptions-item><el-descriptions-item label="色调参考">{{ shot.colorReference || '—' }}</el-descriptions-item><el-descriptions-item label="备注">{{ shot.remark || '—' }}</el-descriptions-item></el-descriptions></el-card>
 
-        <el-card class="detail-card" shadow="never"><p class="sg-eyebrow">TASK</p><h3>唯一镜头视频任务</h3><template v-if="shot.task"><div class="task-person"><strong>{{ shot.task.assignee.nickName }}</strong></div><el-descriptions class="compact-fields" :column="2" border><el-descriptions-item label="任务状态"><el-tag :type="tagTypeFromTone(taskStatusMeta(shot.task.taskStatus).tone)" size="small" effect="light" round>{{ taskStatusMeta(shot.task.taskStatus).label }}</el-tag></el-descriptions-item><el-descriptions-item label="优先级"><el-tag :type="tagTypeFromTone(taskPriorityMeta(shot.task.priority).tone)" size="small" effect="plain" round>{{ taskPriorityMeta(shot.task.priority).label }}</el-tag></el-descriptions-item><el-descriptions-item label="截止日期">{{ shot.task.dueDate || '未设置' }}</el-descriptions-item><el-descriptions-item label="任务锁版本">{{ shot.task.lockVersion }}</el-descriptions-item></el-descriptions></template><el-empty v-else class="detail-empty" :image-size="48" description="尚未分配主制作人，因此没有生成任务" /></el-card>
+        <el-card class="detail-card" shadow="never"><p class="sg-eyebrow">TASK</p><h3>镜头视频任务</h3><template v-if="shot.task"><div class="task-person"><strong>{{ shotAssigneeName(shot.task.assignee, members) }}</strong></div><el-descriptions class="compact-fields" :column="2" border><el-descriptions-item label="任务状态"><el-tag :type="tagTypeFromTone(taskStatusMeta(shot.task.taskStatus).tone)" size="small" effect="light" round>{{ taskStatusMeta(shot.task.taskStatus).label }}</el-tag></el-descriptions-item><el-descriptions-item label="优先级"><el-tag :type="tagTypeFromTone(taskPriorityMeta(shot.task.priority).tone)" size="small" effect="plain" round>{{ taskPriorityMeta(shot.task.priority).label }}</el-tag></el-descriptions-item><el-descriptions-item label="截止日期">{{ shot.task.dueDate || '未设置' }}</el-descriptions-item></el-descriptions></template><el-empty v-else class="detail-empty" :image-size="48" description="尚未分配主制作人" /></el-card>
 
         <el-card class="detail-card" shadow="never"><p class="sg-eyebrow">VERSION</p><h3>最新版本与反馈</h3><template v-if="shot.latestVersion"><strong class="version-number">{{ shot.latestVersion.versionNumber }}</strong><p>{{ shot.latestVersion.businessFileName }}</p><el-tag :type="tagTypeFromTone(taskVersionStatusMeta(shot.latestVersion.status).tone)" size="small" effect="light" round>{{ taskVersionStatusMeta(shot.latestVersion.status).label }}</el-tag></template><el-empty v-else class="detail-empty" :image-size="48" description="尚未提交正式版本" /><blockquote v-if="shot.latestFeedback">{{ shot.latestFeedback.content }}<small>{{ formatShotDateTime(shot.latestFeedback.createTime) }}</small></blockquote></el-card>
 

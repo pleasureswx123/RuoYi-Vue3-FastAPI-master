@@ -81,7 +81,7 @@ function stateMeta(status) {
     conflict: { label: '冲突', type: 'danger' },
     matched: { label: '已匹配', type: 'success' },
     ignored: { label: '已忽略', type: 'info' }
-  }[status] || { label: status || '未知', type: 'info' }
+  }[status] || { label: '未知匹配状态', type: 'info' }
 }
 
 function shotLabel(row) {
@@ -241,7 +241,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <ProjectModal title="资产待匹配需求" description="镜头导入不会隐式创建正式资产；在这里选择同类型正式资产、明确忽略，或重新执行项目级唯一匹配。" :busy="submitting" wide @close="emit('close')">
+  <ProjectModal title="资产待匹配需求" description="镜头导入中未匹配的资产需求会保留在此；可选择同类型正式资产、忽略需求或重新匹配。" :busy="submitting" wide @close="emit('close')">
     <div class="requirement-dialog">
       <el-form ref="requirementFilterForm" :model="query" :rules="requirementFilterRules" class="requirement-filters" aria-label="资产需求筛选">
         <el-form-item prop="keyword"><el-input v-model="query.keyword" maxlength="200" clearable placeholder="搜索需求名称或匹配资产" :prefix-icon="Search" /></el-form-item>

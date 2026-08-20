@@ -127,7 +127,7 @@ function handlePlaybackError() {
   preview.state = 'error'
   preview.error = {
     title: '浏览器无法播放该视频',
-    message: '可以下载原文件，或在媒体派生完成后使用网页代理预览。',
+    message: '可下载原文件查看；在线预览可用后即可直接播放。',
     errorKey: null
   }
 }
@@ -153,8 +153,8 @@ onBeforeUnmount(() => {
     <el-skeleton v-if="preview.state === 'loading'" class="preview-state" :rows="5" animated />
     <el-empty v-else-if="preview.state === 'empty'" class="preview-state" :image-size="64" description="当前版本没有可预览的主文件" />
     <el-result v-else-if="preview.state === 'forbidden'" class="preview-state" icon="warning" title="没有预览权限" sub-title="当前账号没有版本文件预览权限。" />
-    <el-result v-else-if="preview.state === 'unsupported'" class="preview-state" icon="info" title="暂不支持网页预览" sub-title="可以使用下方下载操作取得受保护文件。" />
-    <el-result v-else-if="preview.state === 'error'" class="preview-state is-error" icon="error" :title="preview.error?.title" :sub-title="[preview.error?.message, preview.error?.errorKey].filter(Boolean).join(' · ')" />
+    <el-result v-else-if="preview.state === 'unsupported'" class="preview-state" icon="info" title="暂不支持网页预览" sub-title="可使用下方下载按钮保存文件。" />
+    <el-result v-else-if="preview.state === 'error'" class="preview-state is-error" icon="error" :title="preview.error?.title" :sub-title="preview.error?.message" />
     <div v-else-if="preview.state === 'ready'" class="preview-stage" :class="{ 'preview-stage--image': kind === 'image' }">
       <template v-if="kind === 'image'">
         <el-image

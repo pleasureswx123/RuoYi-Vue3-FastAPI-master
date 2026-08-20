@@ -18,6 +18,7 @@ from module_shot_grid.entity.vo.project_option_vo import (
     ShotGridAssetAssigneeOptionQueryModel,
     ShotGridMemberCandidateModel,
     ShotGridMemberCandidateQueryModel,
+    ShotGridPlatformRoleOptionModel,
     ShotGridProjectPathPreviewModel,
     ShotGridProjectPathPreviewRequestModel,
     ShotGridShotAssigneeOptionModel,
@@ -35,6 +36,36 @@ project_option_controller = APIRouterPro(
     tags=['Shot Grid-项目选项'],
     dependencies=[PreAuthDependency()],
 )
+
+
+@project_option_controller.get(
+    '/project-role-options',
+    summary='获取创建项目可用的 Shot Grid 项目角色映射',
+    response_model=DataResponseModel[list[ShotGridPlatformRoleOptionModel]],
+    dependencies=[UserInterfaceAuthDependency('shotgrid:project:add')],
+)
+async def get_shot_grid_project_role_options(
+    request: Request,
+    query_db: Annotated[AsyncSession, DBSessionDependency()],
+) -> Response:
+    result = await ShotGridProjectOptionService.get_platform_role_options(query_db)
+    return ResponseUtil.success(data=result)
+
+
+@project_option_controller.get(
+    '/projects/{projectId}/role-options',
+    summary='获取项目成员维护可用的 Shot Grid 项目角色映射',
+    response_model=DataResponseModel[list[ShotGridPlatformRoleOptionModel]],
+    dependencies=[UserInterfaceAuthDependency(['shotgrid:member:add', 'shotgrid:member:edit'])],
+)
+async def get_shot_grid_project_member_role_options(
+    request: Request,
+    project_id: Annotated[int, Path(alias='projectId', gt=0, le=SQL_BIGINT_MAX)],
+    query_db: Annotated[AsyncSession, DBSessionDependency()],
+    access: Annotated[ShotGridProjectAccessModel, ProjectRoleDependency('director')],
+) -> Response:
+    result = await ShotGridProjectOptionService.get_platform_role_options(query_db)
+    return ResponseUtil.success(data=result)
 
 
 @project_option_controller.get(
@@ -105,6 +136,7 @@ async def get_shot_grid_project_member_candidates(
         query_db,
         candidate_query,
         data_scope_sql,
+        project_id=access.project_id,
     )
     return ResponseUtil.success(msg='查询成功', model_content=result)
 

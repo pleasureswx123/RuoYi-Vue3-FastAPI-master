@@ -17,7 +17,11 @@ from sqlalchemy import (
 )
 
 from config.database import Base
-from module_shot_grid.entity.do.base_do import SHOT_GRID_DATETIME, ShotGridMutableAuditMixin
+from module_shot_grid.entity.do.base_do import (
+    SHOT_GRID_DATETIME,
+    ShotGridCreateAuditMixin,
+    ShotGridMutableAuditMixin,
+)
 
 
 class ShotGridProject(ShotGridMutableAuditMixin, Base):
@@ -130,6 +134,25 @@ class ShotGridProjectMember(Base):
         ),
         Index('idx_sg_project_member_user_project', 'user_id', 'project_id'),
         {'comment': 'Shot Grid项目成员表'},
+    )
+
+
+class ShotGridManagedUserRole(ShotGridCreateAuditMixin, Base):
+    """由 Shot Grid 创建并负责生命周期回收的平台用户角色关系。"""
+
+    __tablename__ = 'sg_managed_user_role'
+
+    user_id = Column(BigInteger, primary_key=True, nullable=False, comment='平台用户ID')
+    role_id = Column(BigInteger, primary_key=True, nullable=False, comment='平台角色ID')
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ['user_id', 'role_id'],
+            ['sys_user_role.user_id', 'sys_user_role.role_id'],
+            name='fk_sg_managed_user_role_user_role',
+            ondelete='CASCADE',
+        ),
+        {'comment': 'Shot Grid受管平台用户角色来源标记'},
     )
 
 

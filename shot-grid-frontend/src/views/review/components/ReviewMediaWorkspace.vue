@@ -92,9 +92,9 @@ const hasMedia = computed(() => Boolean(primaryFile(props.version)))
 const usingProxy = computed(() => currentMedia.file?.role === 'proxy_media')
 const derivationLabel = computed(() => ({
   pending: '优化预览正在排队，暂用原始媒体',
-  processing: '正在生成缩略图和网页代理，暂用原始媒体',
-  completed: '已使用优化后的网页审核媒体',
-  failed: '优化预览生成失败，已安全降级为原始媒体'
+  processing: '正在优化预览，暂时显示原始媒体',
+  completed: '正在使用优化后的审核预览',
+  failed: '优化预览生成失败，当前显示原始媒体'
 }[props.version?.mediaDerivationStatus] || ''))
 const selectedNoteSummary = computed(() => {
   if (!props.selectedNote) return ''
@@ -442,7 +442,7 @@ defineExpose({ clearDraft, seekToNote })
     <div class="media-columns" :class="{ 'has-comparison': comparisonVersionId }">
       <article class="media-column">
         <el-alert v-if="derivationLabel" class="media-derivation" :title="derivationLabel" :type="version.mediaDerivationStatus === 'failed' ? 'warning' : version.mediaDerivationStatus === 'completed' ? 'success' : 'info'" :closable="false" show-icon />
-        <div class="media-label"><strong>{{ feedbackMode ? '反馈版本' : 'A' }} · {{ version.versionNumber }} <el-tag v-if="usingProxy" type="success" effect="plain" size="small" round>网页代理</el-tag></strong><span v-if="currentKind === 'video'">{{ formatMediaTime(currentTimeMs) }}</span></div>
+        <div class="media-label"><strong>{{ feedbackMode ? '反馈版本' : 'A' }} · {{ version.versionNumber }} <el-tag v-if="usingProxy" type="success" effect="plain" size="small" round>优化预览</el-tag></strong><span v-if="currentKind === 'video'">{{ formatMediaTime(currentTimeMs) }}</span></div>
         <div v-if="currentMedia.state === 'ready' && currentKind !== 'unsupported'" class="media-stage" :class="{ 'is-note-focus': noteFocusPulse }" :style="stageStyle">
           <img v-if="currentKind === 'image'" :src="currentMedia.url" alt="当前审核图片" @load="onMediaReady($event, currentMedia)" />
           <video v-else ref="video" :src="currentMedia.url" :poster="currentMedia.posterUrl || undefined" controls preload="metadata" @loadedmetadata="onMediaReady($event, currentMedia)" @timeupdate="updateVideoTime" />

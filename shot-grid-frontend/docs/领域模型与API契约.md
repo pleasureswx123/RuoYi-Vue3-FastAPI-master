@@ -4,10 +4,10 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 版本 | v2.1 |
-| 状态 | 2026-08-14 已实现“来源版本修改问题 → 制作人随新版本逐条处理说明 → 审核人逐条确认 → 未关闭问题继续跨版本”的功能代码、PostgreSQL 迁移、API 和前端闭环；旧 `isMandatory + reply + resolve` 模型及旧数据直接移除。尚未执行用户手动业务旅程，不能描述为完整验收通过；目录/版本/媒体 Worker、真实 FFmpeg 视频派生、Range 真分段及真实 UNC/完整 E2E 仍属独立验收范围 |
+| 版本 | v2.2 |
+| 状态 | 2026-08-18 已实现“项目角色保持独立 + 固定平台角色包 + `sg_managed_user_role` 来源标记 + 专用服务增量绑定”、两条 role-options API、领域审计和成功响应后的平台权限缓存失效；目标用户已打开的 SPA 仍需人工刷新。此前跨版本修改问题闭环及目录/版本/媒体 Worker、真实 FFmpeg、Range 真分段和真实 UNC/完整 E2E 的独立验收边界保持不变 |
 | 建立日期 | 2026-08-07 |
-| 最近修订 | 2026-08-14 |
+| 最近修订 | 2026-08-18 |
 | 数据库 | PostgreSQL |
 | 业务前端 | 独立 `shot-grid-frontend`，工程配置参考 `ruoyi-fastapi-frontend` |
 | 管理后台 | `ruoyi-fastapi-frontend` |
@@ -202,7 +202,7 @@ sg_project / sg_shot / sg_asset / sg_version / sg_note
 
 只新增 DO、只修改初始化 SQL 或只写设计文档，都不算数据库交付完成。JSONB、部分唯一索引等 PostgreSQL 专用实现必须明确限制在 PostgreSQL 路径，不得无意影响仓库保留的 MySQL 兼容模块。
 
-当前 Shot Grid Alembic head 为 `20260813_09`。06 增加任务/版本/审核完整性约束；07 增加 `sg_media_derivation`、领取租约/重试状态，以及每版本唯一 `thumbnail`/`proxy_media` 部分索引；08 增加平台 NAS 根目录管理菜单；09 将可安全释放编号的历史误删镜头统一为归档加逻辑删除。媒体 Worker 默认关闭：图片使用 Pillow 生成 JPEG 缩略图和网页代理，视频使用显式配置的 FFmpeg 生成 JPEG 缩略图和 H.264/AAC faststart MP4；工具缺失或解码失败必须持久化安全错误并让前端降级原媒体，不得将原文件登记为代理。生成物继续进入 `sys_file_info`、`sys_file_reference` 和 `sg_version_file`，成功提交前清理半成品。该增量链仍不是完整 RuoYi 空库 Alembic baseline。
+当前 Shot Grid Alembic head 为 `20260818_12`。06 增加任务/版本/审核完整性约束；07 增加 `sg_media_derivation`、领取租约/重试状态，以及每版本唯一 `thumbnail`/`proxy_media` 部分索引；08 增加平台 NAS 根目录管理菜单；09 将可安全释放编号的历史误删镜头统一为归档加逻辑删除；10 切换到跨版本修改问题闭环；11 修复媒体派生文件的版本引用类型；12 以 PostgreSQL-only 迁移增加 `sg_managed_user_role` 来源标记，固定平台角色包仍由平台管理端显式配置，迁移不会自动创建或猜测角色。媒体 Worker 默认关闭：图片使用 Pillow 生成 JPEG 缩略图和网页代理，视频使用显式配置的 FFmpeg 生成 JPEG 缩略图和 H.264/AAC faststart MP4；工具缺失或解码失败必须持久化安全错误并让前端降级原媒体，不得将原文件登记为代理。生成物继续进入 `sys_file_info`、`sys_file_reference` 和 `sg_version_file`，成功提交前清理半成品。该增量链仍不是完整 RuoYi 空库 Alembic baseline。
 
 媒体派生配置使用 `SHOT_GRID_MEDIA_WORKER_` 前缀；至少需要显式设置 `ENABLED=true` 才注册 Application Leader 内部任务，视频环境还需通过 `FFMPEG_PATH` 提供可执行文件。默认缩略图最长边 480、图片代理最长边 1920、视频代理最大宽度 1280；转换期间按 `HEARTBEAT_SECONDS` 续租，数据库回写继续使用 version + owner + attempt fencing。审核列表返回 `thumbnail` 和 `mediaDerivationStatus`，版本详情返回完整派生文件角色及同名状态；前端只能优先使用真实 `proxy_media`，代理加载失败时回退主 `review_media`。
 
@@ -244,7 +244,7 @@ sg_project / sg_shot / sg_asset / sg_version / sg_note
 - `aspect_ratio` 只允许 `16:9`、`21:9`、`2.39:1`、`9:16`、`1:1`。
 - `project_status` 只允许 `preparing`、`active`、`completed`、`archived`；`current_phase` 只允许第 7.6 节代码。
 - `planned_duration_ms >= 0`。
-- 创建项目时必须在同一数据库事务中创建项目、至少一名项目总监成员、唯一项目存储绑定和项目目录初始化操作。
+- 创建项目时必须在同一数据库事务中创建项目、至少一名项目管理人成员、唯一项目存储绑定和项目目录初始化操作。
 - 只有 `sg_project_storage.storage_status = 'ready'` 的项目可以创建正式业务数据或提交版本；初始化中和失败状态只允许查询、重试初始化或受控撤销。
 - 项目统计字段不直接存储，镜头总数、完成数、待审核数等由查询聚合。
 
@@ -275,22 +275,42 @@ MVP 项目角色：
 
 | 代码 | 中文 | 说明 |
 | --- | --- | --- |
-| `director` | 项目总监 | 项目管理、任务分配、审核、锁版 |
+| `director` | 项目管理人 | 项目管理、任务分配、审核、锁版 |
 | `creator` | 制作人员 | 执行任务、查看 open 问题、逐条说明处理方式并提交版本 |
 
 规则：
 
 - 用户必须处于 `sys_user.status = '0'` 且 `del_flag = '0'`。
 - 可被分配制作任务的成员必须设置 2—12 位大写 ASCII 字母或数字 `producer_code`；同一项目内不允许重复。
-- 系统可以根据成员姓名提供首字母建议，但必须由项目总监或管理员确认并保存；成员改名不能改变历史版本文件名。
+- 系统可以根据成员姓名提供首字母建议，但必须由项目管理人或管理员确认并保存；成员改名不能改变历史版本文件名。
 - 平台管理员不是项目角色；是否绕过成员限制由平台权限决定。
 - 一个项目始终至少保留一名 `director`。
-- 不允许移除最后一名活动项目总监。
+- 不允许移除最后一名活动项目管理人。
 - 普通成员接口只做软移除：将 `member_status` 改为 `removed` 并记录 `removed_by`、`removed_time`；不得物理删除成员关系或破坏历史任务外键。
 - 项目范围、成员列表、总监计数以及 Excel 制作人匹配只认 `member_status = 'active'` 的成员。
 - 重新添加已移除用户时复用原 `(project_id, user_id)` 关系，清空移除字段并恢复为 `active`；活动成员重复添加仍返回冲突。
 - 旧版数据库结构无法表达软移除状态；存在 `removed` 成员时，成员生命周期迁移必须拒绝降级，禁止静默恢复访问。
 - MVP 不创建 `client` 项目角色。
+
+### 6.2.1 `sg_managed_user_role`
+
+Shot Grid 对平台 `sys_user_role` 增量的来源标记。该表不是第三层业务角色，也不保存项目权限；它只证明某一条平台角色关系由 Shot Grid 首次创建并允许在满足条件时由 Shot Grid 撤回。
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `user_id` | bigint | 是 | 复合主键；对应 `sys_user_role.user_id` |
+| `role_id` | bigint | 是 | 复合主键；对应 `sys_user_role.role_id` |
+| `create_by` | varchar(64) | 是 | 创建来源标记的操作账号，默认空字符串 |
+| `create_time` | timestamp(0) | 是 | 创建来源标记时间 |
+
+约束与所有权规则：
+
+- 主键为 `(user_id, role_id)`；同一字段组以复合外键引用 `sys_user_role(user_id, role_id)` 并使用 `ON DELETE CASCADE`，先删除受管平台角色关系时来源标记随之删除，不存在孤立来源行。
+- 只有 Shot Grid 在同一事务中新建对应 `sys_user_role` 时才创建来源标记。若平台角色关系已存在而来源标记不存在，专用服务只复用该外部关系，不补写标记、不取得撤回权。
+- 依赖数量不保存为可漂移计数器；每次同步都直接查询目标用户全部 `member_status='active'` 的 `sg_project_member.project_role`。查询不按项目状态过滤，因此归档项目仍计入历史只读依赖。
+- 只有来源标记存在、对应 `sys_user_role` 仍一致且活动项目依赖为零时，才能在同一事务中删除该一条平台角色关系和来源标记。无标记关系、其他角色和其他业务来源的关系一律保留。
+- 表不保存项目 ID、依赖计数、代理主键、角色键快照或来源类型；所有权只由复合来源行表达，依赖事实只由活动项目成员关系表达。
+- PostgreSQL 迁移 `20260818_12`、初始化 SQL、SQLAlchemy DO 和 schema 注册保持上述结构一致；迁移只建来源表，不自动创建或猜测两个平台角色包。
 
 ### 6.3 `sg_episode`
 
@@ -1433,7 +1453,7 @@ initializing
   └─初始化失败──────────→ failed
 
 failed
-  └─项目总监或管理员重试，新建项目级 reconcile_directory──→ initializing
+  └─项目管理人或管理员重试，新建项目级 reconcile_directory──→ initializing
 
 ready
   └─受控迁移（后续能力）──→ migrating ──→ ready | failed
@@ -1459,7 +1479,7 @@ active ─────────────────────归档─�
 - `archived` 为只读终态，MVP 不提供恢复接口。
 - 当前代码对 `completed`、`archived` 项目下的集、场次、镜头、资产和资产制作分项创建/修改/归档在锁内拒绝；镜头与资产 Excel preview 普通读取项目状态并拒绝，commit 再以 `FOR UPDATE` 锁定项目重检，稳定返回 HTTP 409 / `SG_INVALID_STATE_TRANSITION`。项目 `completed` 时 `allowedActions` 只可包含已授权的 `project.archive`，`archived` 时为空；镜头、资产和制作分项在两种状态下均不返回写动作。
 - 上述终态镜像门禁确认了项目自身、集、场次、镜头、资产、资产制作分项及两类 Excel 导入。成员、任务、版本、审核、文件和目录操作等其余全域写接口尚未统一完成同一轮治理，文档和前端不得将本批门禁外推为全系统不可变保证。
-- `current_phase` 只允许 `planning`、`asset_production`、`shot_production`、`review`、`delivery`、`completed`，由项目总监或管理员显式调整；它不替代任务状态机。
+- `current_phase` 只允许 `planning`、`asset_production`、`shot_production`、`review`、`delivery`、`completed`，对应展示文案固定为“制作规划、资产制作、镜头制作、版本审核、交付确认、项目完成”；由项目管理人或管理员显式调整，它不替代任务状态机。
 
 ### 7.7 审核单状态机
 
@@ -1489,7 +1509,7 @@ previewed ──确认提交──→ committing ──事务成功──→ com
 ```text
 pending ──唯一资产自动匹配──→ matched
    ├─候选不唯一或历史数据冲突──→ conflict ──人工选择──→ matched
-   └─项目总监明确忽略─────────→ ignored
+   └─项目管理人明确忽略─────────→ ignored
 conflict ──明确忽略──────────→ ignored
 ```
 
@@ -1512,6 +1532,18 @@ AND 当前项目角色允许该业务动作
 ```
 
 独立业务前端还必须执行“当前账号平台权限 ∩ 详情响应 `allowedActions`”双门禁。`version.add`、`version.query`、`version.retry`、`version.list` 和 `file.download` 是独立能力，不能因用户能打开任务详情就推导其可上传、查询提交、重试、查看历史或下载文件；后端仍按实时项目角色、任务负责人、任务/项目状态和文件关系重新授权。
+
+项目角色与平台角色保持两层事实，但成员生命周期通过专用服务维护以下固定映射：
+
+```text
+sg_project_member.project_role = director
+  -> sys_role.role_key = shotgrid_admin
+
+sg_project_member.project_role = creator
+  -> sys_role.role_key = shotgrid_creator
+```
+
+该映射只确保用户具备候选平台接口权限，不扩大项目数据范围。平台角色存在不代表项目成员存在，项目成员存在也不代表平台接口权限存在；最终授权仍是两层交集及资源/状态门禁。
 
 ### 8.1 平台权限码
 
@@ -1601,7 +1633,7 @@ shotgrid:<resource>:<domain-action>
 
 ### 8.2 项目角色矩阵
 
-| 动作 | 平台管理员 | 项目总监 | 制作人员 |
+| 动作 | 平台管理员 | 项目管理人 | 制作人员 |
 | --- | --- | --- | --- |
 | 查看所属项目 | 允许 | 允许 | 允许 |
 | 查看所有项目 | 需 `shotgrid:project:all` | 禁止 | 禁止 |
@@ -1647,26 +1679,34 @@ Shot Grid 后端必须分层完成授权：
 
 - 项目成员可以只读查看所属项目的镜头、资产、任务、版本、修改问题、处理说明、确认记录和文件，满足局域网项目协作；写动作仍按角色和任务负责人限制。
 - 成员移除后立即失去项目读取和文件访问权；任务改派后旧负责人仍可作为项目成员只读查看，但立即失去开始、提交和重试该任务的动作权，历史提交人身份和审计记录保留。
-- 开始任务、提交版本和重试提交必须执行 `TaskAssigneeDependency` 或等价 Service 校验；项目总监和管理员代操作必须记录实际操作人。
+- 开始任务、提交版本和重试提交必须执行 `TaskAssigneeDependency` 或等价 Service 校验；项目管理人和管理员代操作必须记录实际操作人。
 - Shot Grid 文件下载接口在项目/任务授权通过后复用平台流式下载和 Range 能力；显式 deny ACL 仍优先，不能由项目权限绕过。
 
 现有 `DataScopeDependency` 面向部门、用户和平台角色数据范围，不能代替项目成员关系。项目列表必须在查询中联结 `sg_project_member`；只有拥有 `shotgrid:project:all` 且显式请求全量范围时才能绕过成员过滤。
 
 项目成员身份也不能自动授予平台文件下载权限。文件访问按第 17 节执行独立授权校验。
 
-### 8.4 推荐平台权限包
+### 8.4 固定受管平台角色包
 
-项目角色不会自动修改 RuoYi 平台角色。部署时建议配置三个可审计的平台权限包，最终授权仍取“平台权限 ∩ 项目角色”的交集：
+部署必须提供两个角色键唯一、启用且未删除的最小权限包；项目/成员专用服务只按角色键解析，不接受前端传入 `roleId` 或自定义角色键：
 
-| 权限包 | 建议包含 | 适用对象 |
-| --- | --- | --- |
-| Shot Grid 制作人员 | 项目/成员/集/场次/镜头/资产/任务/版本/修改问题/处理与确认历史/审核单只读，`task:start`、`version:add`、`version:retry`、`file:download`、`storage:path` | 普通制作账号 |
-| Shot Grid 项目总监 | 制作人员权限，加项目编辑、成员管理、业务对象 CRUD、任务分配、问题创建与逐条确认、版本审核、审核单管理、项目启动/完成/归档和存储重试 | 可担任项目总监的账号 |
-| Shot Grid 存储管理员 | NAS 根目录查询、新增、修改、探测及跨项目存储诊断 | 少量平台管理员 |
+| `sys_role.role_key` | 项目角色映射 | 必需能力 | 角色包边界 |
+| --- | --- | --- | --- |
+| `shotgrid_admin` | `director` | 至少启用的 `shotgrid:navigation:list` 和一个启用的 Shot Grid 业务导航权限；按第 8.2 节为项目管理人配置所需 Shot Grid 项目/成员/业务对象/任务/审核权限 | 只是 Shot Grid 项目管理人接口包，不是平台超级管理员，也不授予跨项目范围 |
+| `shotgrid_creator` | `creator` | 至少 `shotgrid:navigation:list`；按第 8.2 节配置项目只读、本人任务、版本提交/重试、文件下载等权限 | 只能结合活动项目成员和本人任务门禁使用 |
 
-- `shotgrid:project:all` 只分配给确需跨项目数据范围的平台管理员，不包含在普通项目总监权限包。
-- 某用户即使拥有“项目总监权限包”，在项目内角色为 `creator` 时仍不能执行总监写动作。
-- 某用户项目内角色为 `director`，但缺少对应平台接口权限时也必须拒绝动作。
+两个受管角色包都禁止包含：
+
+- `*:*:*`；
+- `shotgrid:project:all`；
+- 任意 `system:*`；当前实现进一步拒绝所有不以 `shotgrid:` 开头的权限码；
+- `shotgrid:storageRoot:add`、`shotgrid:storageRoot:edit`、`shotgrid:storageRoot:probe` 及后续等价的存储根管理写权限。
+
+`shotgrid:storageRoot:list`、`shotgrid:storageRoot:query` 是受管角色包允许包含的只读例外；新增、修改、停用和探测仍由独立的 Shot Grid 存储管理员平台角色承担。跨项目平台管理员也必须使用独立、非受管角色；专用成员服务不得创建、修改或撤回这些角色。
+
+后端必须在 `GET /shot-grid/project-role-options` 和每次项目创建、成员新增/恢复、项目角色变更及成员移除事务内重新校验：固定角色唯一、启用、未删除，至少包含启用的 `shotgrid:navigation:list` 和一个启用的 Shot Grid 业务导航权限，且不含上述禁用权限。配置不安全时失败关闭；不能因用户另有超级管理员角色就跳过固定角色包校验。项目归档不触发本轮角色同步，归档项目中的活动成员仍保留历史只读依赖。
+
+某用户即使拥有 `shotgrid_admin`，在目标项目内不是活动 `director` 时仍不能执行总监写动作；某用户是 `director` 但平台包缺少对应接口权限时也必须拒绝。最终授权始终取“平台权限 ∩ 项目成员/项目角色 ∩ 资源归属/状态/`allowedActions`”。
 
 ### 8.5 菜单与独立业务端边界
 
@@ -1692,6 +1732,7 @@ Permission: shotgrid:navigation:list
 - 响应返回稳定路由键，不向独立业务端注入任意 Vue 组件路径；
 - 业务端使用白名单将路由键映射为本地异步组件；未知路由键拒绝注册并记录净化告警；
 - 菜单管理负责标题、图标、顺序、显示、停用和角色授权；用户、角色、字典等系统管理菜单仍只由 `ruoyi-fastapi-frontend` 解析；
+- 独立业务前端的项目创建和成员管理只调用 `/shot-grid/...` 专用接口；禁止调用 `/system/user/authRole`、`/system/role/*` 或任何其他 `/system/*` 读取/写入平台角色。平台用户、角色和菜单的通用管理仍留在 `ruoyi-fastapi-frontend`；
 - MVP 不修改公共 `sys_menu` 增加应用字段；未来出现多个独立业务应用后再评审通用应用范围模型。
 
 当前业务端已按上述六个 `routeKey` 建立固定本地注册表，并同时校验返回路径。未知键、重复键或路径不匹配项会被丢弃；后端返回值不能注入 Vue 组件。当前六个目标页面只展示“业务数据功能待接入、未使用 Mock 数据”的实施边界，不代表对应业务 CRUD 已完成。
@@ -1848,6 +1889,8 @@ ShotGridDomainException
 - 自有登录页只提交账号、密码和按 `/captchaImage` 返回决定是否启用的验证码，不提供记住密码，不在 LocalStorage、SessionStorage 或 Pinia 中保存密码。
 - Token 沿用平台 Cookie 名 `Admin-Token`，`path=/`，请求头使用 `Authorization: Bearer <token>`。同域不同路径部署可共享该 Cookie，但真实共享效果仍需在生产域、HTTPS 和浏览器策略下验收。
 - 登录成功后必须依次完成 `/getInfo` 和 `/shot-grid/navigation` 初始化；刷新受保护路由时复用同一初始化流程，初始化并发请求只允许一个在途 Promise。
+- 项目创建和成员新增/恢复、改角、移除的成功响应保持原有项目/成员模型，不增加权限刷新或跨会话推送字段。控制器在数据库事务成功提交后通过 `ApiCacheEvict(ApiGroup.USER_PERMISSION_MUTATION)` 清理平台身份、路由、用户、角色、菜单和数据范围相关接口缓存；项目创建只在业务响应码 202 时触发，成员写在业务成功码 200 时触发。
+- `/shot-grid/navigation` 当前不使用接口缓存，但已打开的 SPA 会继续持有旧身份和导航 Pinia 快照，直到目标用户手动刷新页面、重新执行 `/getInfo` 与 `/shot-grid/navigation` 初始化或重新登录。数据库提交后的新请求必须按服务端最新授权结果执行；旧前端按钮显隐既不能继续授权已撤回动作，也不能证明新增权限尚未生效。
 - `/getInfo` 后端只输出不含 `password` 的专用安全用户 VO；前端会话只保存 `userId`、`userName`、`nickName`、`avatar`、部门摘要、角色和权限列表。
 - 范围导航只接受 `workbench`、`projects`、`shots`、`assets`、`reviews`、`files`，并映射到固定本地路径；无任何有效导航时进入 403，不得默认授予六项菜单。
 - 退出无论后端调用是否成功都清理本地会话；后端错误仍向调用方报告，不能因本地清理而伪装退出接口成功。
@@ -2036,12 +2079,13 @@ Header: X-Idempotency-Key
 1. 校验创建人平台权限。
 2. 规范化并校验项目代号、类型、画幅，并使用项目名称生成目录名。
 3. 锁定并重新校验 NAS 根目录已启用、路径未冲突。
-4. 校验项目总监和成员账号有效。
-5. 创建 `sg_project`、项目成员、`sg_project_storage(initializing)`。
-6. 创建唯一 `initialize_project` 存储操作 Outbox。
-7. 写操作日志并提交。
+4. 校验项目管理人和成员账号有效。
+5. 创建 `sg_project` 和项目成员。
+6. 锁定目标平台用户，按全部活动项目成员关系同步 `director -> shotgrid_admin`、`creator -> shotgrid_creator`；只为新建 `sys_user_role` 写 `sg_managed_user_role` 来源标记。
+7. 创建 `sg_project_storage(initializing)` 和唯一 `initialize_project` 存储操作 Outbox。
+8. 将 `platformRoleChanges` 写入操作日志并提交。
 
-任何数据库步骤失败均回滚，不能产生没有项目总监或没有存储绑定的项目。接口返回 HTTP 202：
+任何数据库步骤失败均回滚，不能产生没有项目管理人或没有存储绑定的项目。接口返回 HTTP 202：
 
 ```json
 {
@@ -2058,6 +2102,8 @@ Header: X-Idempotency-Key
 ```
 
 前端轮询或订阅存储状态；只有状态变为 `ready` 才显示“项目创建成功”并进入业务页面。初始化失败显示可重试错误，不得伪装成功。
+
+控制器只在业务响应码 202 时清理 `ApiGroup.USER_PERMISSION_MUTATION`。响应不返回平台角色变化或权限刷新字段；目标成员已经打开的 SPA 仍需手动刷新或重新登录。
 
 ### 10.3 项目详情
 
@@ -2141,6 +2187,8 @@ Permission: shotgrid:project:archive
 
 归档成功时设置 `project_status = 'archived'`，保留 `del_flag = '0'`，并按 `lockVersion` 执行乐观锁更新。MVP 不提供恢复归档接口。
 
+项目归档不在本轮平台角色同步触发链。归档项目中的 `member_status='active'` 成员仍保留历史只读访问，其项目角色继续计入受管平台角色依赖；归档接口不得据此撤回 `sys_user_role`。
+
 ### 10.6 项目概览
 
 ```http
@@ -2172,7 +2220,7 @@ Permissions:
   shotgrid:storage:retry
 ```
 
-- 状态接口对项目成员或 `shotgrid:project:all` 返回 `storageStatus`、最近净化错误、`lockVersion` 和更新时间；不返回凭据、根路径键、租约或内部临时路径。项目总监/管理员可在任一存储状态查看完整项目路径快照；制作人员只有在 `ready` 时获得该路径，初始化中或失败时返回 `projectPathSnapshot=null`。
+- 状态接口对项目成员或 `shotgrid:project:all` 返回 `storageStatus`、最近净化错误、`lockVersion` 和更新时间；不返回凭据、根路径键、租约或内部临时路径。项目管理人/管理员可在任一存储状态查看完整项目路径快照；制作人员只有在 `ready` 时获得该路径，初始化中或失败时返回 `projectPathSnapshot=null`。
 - 制作人员不能执行目录重试。项目详情的 `allowedActions` 只有在存储状态确为 `failed`、项目未归档且当前用户同时满足项目角色与平台 `shotgrid:storage:retry` 权限时才包含 `storage.retry`。
 - 项目重试只允许 `failed` 状态，请求必须携带 `X-Idempotency-Key`，正文固定为：
 
@@ -2186,7 +2234,7 @@ Permissions:
 - 项目重试在同一短事务锁定项目及存储绑定，校验项目未归档、乐观锁、没有活动项目目录操作后，新建项目级 `reconcile_directory(pending)`，把存储改回 `initializing`、清除旧错误并写操作日志。旧 `initialize_project`/失败操作不覆盖、不删除。
 - 动态目录重试正文只包含非空 `reason`，同时要求 `X-Idempotency-Key`。它只接受最终 `failed` 且 `aggregateType` 为 `episode|shot|asset` 的来源操作；后端重新校验项目未归档、项目根存储仍 `ready`、业务对象仍存在、当前目录快照等于来源目标且不存在活动同聚合操作，再新建同聚合的 `reconcile_directory(pending)`。
 - 两个重试接口均返回真实 HTTP 202，`data` 包含 `operationId`、`projectId`、`operationStatus`、`replayed` 和可查询详情的 `statusUrl`。同一用户、作用域、`X-Idempotency-Key` 和规范化命令重放首次受理结果；同键不同正文返回 `SG_IDEMPOTENCY_CONFLICT`。
-- 操作分页和详情只对项目总监或具有全项目范围且拥有接口权限的管理员开放。分页支持 `operationType`、`operationStatus`、`keyword`、`pageNum`、`pageSize`、`orderByColumn` 和 `isAsc`；`keyword` 只匹配相对路径快照、稳定错误键和净化错误摘要。排序字段白名单为 `operationId|createTime|updateTime|nextRetryTime`，默认 `orderByColumn=createTime`、`isAsc=descending`，相同创建时间再按 `operationId` 倒序。响应只返回操作类型、聚合目标、相对路径快照、状态、尝试次数、重试/开始/完成时间及净化错误，不返回 `leaseOwner`、`leaseUntil`、内部幂等键、凭据引用或服务器绝对路径。
+- 操作分页和详情只对项目管理人或具有全项目范围且拥有接口权限的管理员开放。分页支持 `operationType`、`operationStatus`、`keyword`、`pageNum`、`pageSize`、`orderByColumn` 和 `isAsc`；`keyword` 只匹配相对路径快照、稳定错误键和净化错误摘要。排序字段白名单为 `operationId|createTime|updateTime|nextRetryTime`，默认 `orderByColumn=createTime`、`isAsc=descending`，相同创建时间再按 `operationId` 倒序。响应只返回操作类型、聚合目标、相对路径快照、状态、尝试次数、重试/开始/完成时间及净化错误，不返回 `leaseOwner`、`leaseUntil`、内部幂等键、凭据引用或服务器绝对路径。
 
 ### 10.8 启动与完成项目
 
@@ -2202,7 +2250,56 @@ Permissions:
 
 ## 11. 第一批项目成员 API
 
-### 11.0 成员候选分页
+### 11.0 项目角色选项
+
+```http
+GET /shot-grid/project-role-options
+Permission: shotgrid:project:add
+
+GET /shot-grid/projects/{projectId}/role-options
+Permission: shotgrid:member:add OR shotgrid:member:edit
+Project role: director
+```
+
+第一条供创建项目使用；第二条供已有项目的成员新增/恢复和角色修改使用，并校验当前用户对目标项目仍是 `director`。两个接口都实时解析并安全校验固定平台角色包，成功时按 `director`、`creator` 稳定顺序返回：
+
+```json
+{
+  "code": 200,
+  "msg": "操作成功",
+  "success": true,
+  "time": "2026-08-18T16:00:00+08:00",
+  "data": [
+    {
+      "projectRole": "director",
+      "projectRoleLabel": "项目管理人",
+      "systemRoleId": 10,
+      "systemRoleKey": "shotgrid_admin",
+      "systemRoleName": "Shot Grid 项目管理人"
+    },
+    {
+      "projectRole": "creator",
+      "projectRoleLabel": "制作人员",
+      "systemRoleId": 11,
+      "systemRoleKey": "shotgrid_creator",
+      "systemRoleName": "Shot Grid 制作人员"
+    }
+  ]
+}
+```
+
+`systemRoleId/systemRoleKey/systemRoleName` 是安全投影，只供显示、诊断和固定映射完整性校验；项目创建和成员写请求仍只提交 `projectRole`。任一固定角色缺失、重复、停用/删除或权限包不安全时，接口以第 19 节稳定 503 错误失败关闭，不返回部分选项，前端禁用相关写表单且不得回退硬编码角色或调用 `/system/*`。
+
+### 11.0.1 存量平台角色对账
+
+```http
+POST /shot-grid/platform-role-bindings/reconcile
+Permissions: shotgrid:project:all AND system:user:edit
+```
+
+该接口只供平台管理员在 `20260818_12` 迁移完成并配置好两个固定角色后，对存量活动成员和历史来源标记执行一次全事务对账。服务按用户 ID 稳定加锁，复用成员写链的增量授权、外部关系保留和来源标记撤权规则；任一固定角色配置异常或任一用户同步失败时整体回滚。响应只返回处理用户数、变更用户数以及新增、撤回、依赖保留、外部保留的绑定计数，不返回用户清单或完整角色实体。成功提交后清理 `ApiGroup.USER_PERMISSION_MUTATION`，已打开的 SPA 仍需刷新或重新登录。
+
+### 11.0.2 成员候选分页
 
 ```http
 GET /shot-grid/member-candidates?pageNum=1&pageSize=20&keyword=杨景锋
@@ -2213,7 +2310,7 @@ Permission: shotgrid:member:add
 Project role: director
 ```
 
-第一条用于创建项目选择项目管理者和初始成员；第二条用于已创建项目的成员维护，并额外执行项目总监角色校验。二者都不等于某个项目的活动成员列表，均通过 `DataScopeDependency(SysUser)` 约束候选范围，并支持可选的精确 `deptId` 过滤。创建项目页面必须提交当前登录账号的部门 ID，只展示同部门候选；计划总时长和交付日期不属于创建主流程输入。接口只返回未删除、未停用且当前操作者有权选择的 `sys_user` 安全投影。分页响应 `rows` 中单项为：
+第一条用于创建项目选择项目管理人和初始成员；第二条用于已创建项目的成员维护，并额外执行项目管理人角色校验。二者都不等于某个项目的活动成员列表，均通过 `DataScopeDependency(SysUser)` 约束候选范围，并支持可选的精确 `deptId` 过滤。创建项目页面必须提交当前登录账号的部门 ID，只展示同部门候选；计划总时长和交付日期不属于创建主流程输入。接口只返回未删除、未停用且当前操作者有权选择的 `sys_user` 安全投影。分页响应 `rows` 中单项为：
 
 ```json
 {
@@ -2249,7 +2346,7 @@ GET /shot-grid/projects/{projectId}/members?projectRole=creator
     {
       "userId": 1,
       "userName": "director",
-      "nickName": "项目总监",
+      "nickName": "项目管理人",
       "avatar": "",
       "deptId": 100,
       "deptName": "导演组",
@@ -2280,6 +2377,8 @@ Permission: shotgrid:member:add
 
 重复添加同一用户返回冲突，不静默覆盖其项目角色。
 
+新增或恢复成员时，服务在同一事务内按全部活动项目成员关系增量同步目标用户的平台角色。若当前需要的映射关系原已存在则记录为 `requiredPreservedRoleKeys`；无来源标记的外部关系仍不补标记、不取得撤回权。只有关系已不再被活动成员需要且没有来源标记时才记录为 `externalPreservedRoleKeys`。成功后控制器清理 `ApiGroup.USER_PERMISSION_MUTATION`。成员响应仍是 `ShotGridProjectMemberModel`，不暴露平台角色变更明细。
+
 ### 11.3 修改成员角色
 
 ```http
@@ -2297,6 +2396,8 @@ Permission: shotgrid:member:edit
 
 `projectRole` 显式 `null` 非法。当前 Shot Grid 前端不提交独立 `producerCode`；同名响应字段不得作为分配、匹配或文件命名依据。
 
+角色确有变化时，服务先在未提交事务中更新成员角色，再按更新后的全部活动成员关系同步；同步同一用户时先建立仍需但缺失的新映射，再判断旧映射是否可撤回。仍被其他活动成员关系依赖时记录 `requiredPreservedRoleKeys`，无依赖但关系没有来源标记时记录 `externalPreservedRoleKeys`。`grantedRoleKeys/revokedRoleKeys/requiredPreservedRoleKeys/externalPreservedRoleKeys` 只进入领域审计 `platformRoleChanges`，不进入成员成功响应。
+
 ### 11.4 移除成员
 
 ```http
@@ -2306,10 +2407,12 @@ Permission: shotgrid:member:remove
 
 规则：
 
-- 不能移除最后一名项目总监。
+- 不能移除最后一名项目管理人。
 - 用户仍负责活动任务时返回冲突，先完成任务转交。
 - 成功后仅将成员关系软移除并保留历史任务引用；重新加入同一用户会复用并恢复原成员关系。
 - 成员移除后立即失去项目查询和业务动作权限。
+- 软移除后在同一事务内按目标用户全部活动项目成员关系重算固定角色依赖；只有关系带 `sg_managed_user_role` 来源标记且已无任何活动成员依赖时才撤回，外部平台角色和仍被其他项目依赖的角色保留。
+- 领域审计记录 `platformRoleChanges`，数据库提交后控制器清理 `ApiGroup.USER_PERMISSION_MUTATION`；目标用户已打开的 SPA 仍需手动刷新身份和导航。
 - 文件访问授权同步策略在 17.1 决策关闭后执行。
 
 ## 12. 第一批集与场次 API
@@ -2432,7 +2535,7 @@ Project access: required
 }
 ```
 
-服务端只返回 `projectRole=creator`、`memberStatus=active` 的项目成员以及状态正常且未删除的平台账号；`keyword` 只匹配登录账号和昵称。兼容字段 `producerCode` 由 `sys_user.nick_name` 派生。该接口是分页安全选项，不返回联系方式、认证字段或完整用户实体，也不替代创建、编辑、导入或任务改派事务内对账号、成员、项目角色和用户昵称的重新校验。镜头 Excel 预检、用户手动覆盖制作人和正式提交时都按相同规则重新校验，项目管理人员不能作为镜头制作人。
+服务端只返回 `projectRole=creator`、`memberStatus=active` 的项目成员以及状态正常且未删除的平台账号；`keyword` 只匹配登录账号和昵称。兼容字段 `producerCode` 由 `sys_user.nick_name` 派生。该接口是分页安全选项，不返回联系方式、认证字段或完整用户实体，也不替代创建、编辑、导入或任务改派事务内对账号、成员、项目角色和用户昵称的重新校验。镜头 Excel 预检、用户手动覆盖制作人和正式提交时都按相同规则重新校验，项目管理人不能作为镜头制作人。
 
 ### 13.1 镜头列表
 
@@ -2946,7 +3049,7 @@ POST /shot-grid/tasks/{taskId}/start
 Permission: shotgrid:task:start
 ```
 
-请求体为 `{ "lockVersion": 0 }`。制作人员只能开始分配给自己的任务；项目总监或管理员可以代操作，但必须记录实际操作人。仅允许 `not_started → in_progress`，乐观锁冲突返回 409。
+请求体为 `{ "lockVersion": 0 }`。制作人员只能开始分配给自己的任务；项目管理人或管理员可以代操作，但必须记录实际操作人。仅允许 `not_started → in_progress`，乐观锁冲突返回 409。
 
 ### 15.3 上传并自动提交版本
 
@@ -3009,7 +3112,7 @@ Header: X-Idempotency-Key
 
 提交前必须验证：
 
-- 当前用户是任务负责人，或拥有项目总监/平台管理员代提交权限；
+- 当前用户是任务负责人，或拥有项目管理人/平台管理员代提交权限；
 - 已存在任务的负责人仍是活动项目制作人员、平台账号有效且用户昵称可用；若该持久状态在任务创建后失效，返回 `SG_TASK_ASSIGNEE_STATE_INVALID`/409，而不是把它当作新分配请求参数错误；
 - 任务状态是 `in_progress` 或 `revision`；
 - `in_progress` 首版不得携带问题处理说明；`revision` 必须存在 open 问题，且 `issueResponses` 与锁内重查的 open 问题集合完全一致；
@@ -3074,7 +3177,7 @@ Permissions:
 ```
 
 - `current` 使用 `shotgrid:version:query`，用于详情刷新后恢复当前未解决提交；没有未解决提交时返回 `data=null`。
-- 制作人员只能查询和重试本人任务下由本人创建的提交；项目总监和管理员可以查询所属项目全部提交。
+- 制作人员只能查询和重试本人任务下由本人创建的提交；项目管理人和管理员可以查询所属项目全部提交。
 - `retry` 仅允许 `failed`，重新验证任务负责人、源文件、NAS 路径和项目状态，并复用原版本号、时间戳和业务文件名。
 - `committed` 响应返回 `versionId`、`reviewListId`、`versionStatus=pending_review` 和 `taskStatus=pending_review`。
 - 第一阶段文件上传已由基座独立提交，当前平台单文件上限为 100 MiB，`mov` 已加入上传白名单。暂存或发布失败不得谎报版本成功；已建立临时引用的源文件继续受删除保护，最终无引用文件才进入平台保留、对账和回收机制。
@@ -3278,7 +3381,7 @@ Permissions:
 
 项目任务列表支持 `taskKind`、`taskStatus`、`assigneeUserId`、`dueDateFrom`、`dueDateTo`、`priority`、`scope=project|mine` 和分页。所属项目成员可以只读查看项目任务；工作台使用独立 `GET /shot-grid/tasks/mine` 跨项目查询，负责人范围由后端根据当前用户强制注入，不能相信前端筛选来判定写权限。
 
-`PUT` 只允许项目总监或管理员修改 `requirements`、`priority`、`dueDate` 和 `lockVersion`，不能直接修改状态或负责人。负责人变更必须使用 `assign` 动作；状态只通过开始、版本提交和审核动作改变。
+`PUT` 只允许项目管理人或管理员修改 `requirements`、`priority`、`dueDate` 和 `lockVersion`，不能直接修改状态或负责人。负责人变更必须使用 `assign` 动作；状态只通过开始、版本提交和审核动作改变。
 
 独立业务前端工作台真实调用 `/tasks/mine`，支持任务类型、状态、优先级、截止区间、关键字、排序和服务端分页；行项进入 `/tasks/:taskId`。任务详情展示项目、归属对象、要求、负责人、锁版本及版本摘要，并仅在平台权限与 `allowedActions` 同时满足时开放开始、编辑或版本提交。
 
@@ -3304,7 +3407,7 @@ Permissions:
 
 ### 15.9 人工批量审核单 API
 
-本节接口已转化为代码。`manual_batch` 使用现有主表与有序多版本关系，不新增重复事实表；写接口由平台权限、项目总监角色、项目归属、状态机、乐观锁和同事务审计共同约束。
+本节接口已转化为代码。`manual_batch` 使用现有主表与有序多版本关系，不新增重复事实表；写接口由平台权限、项目管理人角色、项目归属、状态机、乐观锁和同事务审计共同约束。
 
 ```http
 GET  /shot-grid/projects/{projectId}/review-lists
@@ -3451,7 +3554,10 @@ failed
 
 | 动作 | 同事务内容 |
 | --- | --- |
-| 创建项目 | 项目、总监成员、初始成员、项目存储绑定、初始化目录 Outbox、操作日志 |
+| 创建项目 | 项目、总监成员、初始成员、按固定映射增量维护的 `sys_user_role`、仅对 Shot Grid 新建关系写入的 `sg_managed_user_role`、项目存储绑定、初始化目录 Outbox、含 `platformRoleChanges` 的操作日志 |
+| 新增/恢复成员 | 锁定目标用户与项目，新增或恢复项目成员，按全部活动成员关系增量维护平台角色与来源标记，写含 `platformRoleChanges` 的操作日志 |
+| 修改成员角色 | 锁定目标用户与项目，在未提交事务中更新项目角色，再按最新全部活动成员关系先补所需映射、后释放或保留旧映射，写含 `platformRoleChanges` 的操作日志 |
+| 移除成员 | 锁定目标用户与项目，软移除成员，按全部活动成员关系仅撤回 Shot Grid 有来源且无依赖的映射，写含 `platformRoleChanges` 的操作日志 |
 | 创建集或资产 | 业务实体；资产还包含制作分项、稳定目录快照和目录 Outbox，制作分项提供主制作人时为该分项创建唯一任务 |
 | 创建镜头 | 镜头、按镜头号生成的稳定目录快照、镜头资产关系、目录 Outbox；提供制作人时同时创建唯一任务 |
 | 导入镜头 | 导入批次、集、场次、镜头、稳定目录快照、目录 Outbox、已匹配资产关系、待匹配资产需求、可选唯一任务、操作审计 |
@@ -3466,6 +3572,8 @@ failed
 | 修改业务附件 | 领域文件关系、平台业务引用 |
 
 NAS I/O 不得在数据库事务内执行。`sg_storage_operation` 和 `sg_version_submission` 负责跨资源编排：目录 Worker 已按“领取短事务 → 事务外路径校验/幂等建目录/写探针 → 结果短事务”实现；版本 Worker 已按“领取短事务 → 事务外唯一临时写入/真实摘要校验/无覆盖原子发布 → 正式版本或失败回写短事务”实现。数据库事务失败时保留可校验的 NAS 文件并重试提交，不能重新分配版本号或盲目覆盖文件。两个 Worker 都默认关闭，真实 UNC E2E 是生产启用门禁。
+
+平台权限缓存不属于数据库事务。项目创建在业务响应码 202、成员新增/恢复/改角/移除在业务成功码 200 后，由控制器统一清理 `ApiGroup.USER_PERMISSION_MUTATION`；失败响应和回滚事务不得清缓存。缓存失效不等于浏览器状态推送，目标用户已打开的 SPA 仍需刷新或重新登录。项目归档不调用平台角色同步，也不清理由角色变化触发的权限缓存。
 
 目录 Worker 的软超时不会终止正在运行的 `asyncio.to_thread` 文件系统调用，只记录诊断并继续续租直至 I/O 退出；不得把该阈值描述为 SMB 硬超时。租约接管期间也不能宣称物理 I/O 绝不重叠，数据库 fencing 保证的是旧结果不能覆盖新终态。当前调度批内串行消费，不能描述为已经启用批内并发。
 
@@ -3486,10 +3594,17 @@ NAS I/O 不得在数据库事务内执行。`sg_storage_operation` 和 `sg_versi
 | `SG_PROJECT_NOT_READY` | 409 | 项目 NAS 存储尚未就绪，禁止业务写入 |
 | `SG_PROJECT_NOT_COMPLETABLE` | 409 | 仍有未完成镜头或资产制作分项，不能完成项目 |
 | `SG_PROJECT_ACCESS_DENIED` | 403 | 非项目成员 |
-| `SG_LAST_DIRECTOR_REQUIRED` | 409 | 尝试移除最后一名总监 |
+| `SG_LAST_DIRECTOR_REQUIRED` | 409 | 尝试移除或降级最后一名项目管理人 |
 | `SG_MEMBER_ALREADY_EXISTS` | 409 | 成员重复添加 |
 | `SG_MEMBER_NOT_FOUND` | 404 | 项目成员不存在 |
 | `SG_MEMBER_USER_INVALID` | 422 | 待添加用户不存在、已停用或不满足成员条件 |
+| `SG_PLATFORM_ROLE_MISSING` | 503 | `shotgrid_admin` 或 `shotgrid_creator` 尚未配置 |
+| `SG_PLATFORM_ROLE_DUPLICATE` | 503 | 固定角色键查询到多条平台角色，配置不唯一 |
+| `SG_PLATFORM_ROLE_DISABLED` | 503 | 固定平台角色已停用或逻辑删除 |
+| `SG_PLATFORM_ROLE_UNSAFE` | 503 | 固定角色复用超级管理员、缺少有效 `shotgrid:navigation:list`、含全局/非 Shot Grid/存储根写权限等不安全配置 |
+| `SG_PLATFORM_ROLE_CONTRACT_PROTECTED` | 409 | 管理端尝试改名或删除固定平台角色键 |
+| `SG_PROJECT_ROLE_BINDING_PROTECTED` | 409 | 管理端尝试移除活动成员所需或带来源标记的平台角色关系 |
+| `SG_ACTIVE_PROJECT_MEMBER_USER_PROTECTED` | 409 | 管理端尝试删除仍有活动项目成员关系或来源标记的用户 |
 | `SG_MEMBER_HAS_ACTIVE_TASKS` | 409 | 成员仍有活动任务 |
 | `SG_PRODUCER_CODE_REQUIRED` | 422 | 被分配制作任务的成员缺少平台用户昵称（错误键为兼容保留） |
 | `SG_PRODUCER_CODE_CONFLICT` | 409 | 历史兼容的项目制作人缩写重复 |
@@ -3523,7 +3638,7 @@ NAS I/O 不得在数据库事务内执行。`sg_storage_operation` 和 `sg_versi
 | `SG_TASK_ASSIGNEE_AMBIGUOUS` | 422 | 制作人字段包含多名候选，无法确定唯一主制作人 |
 | `SG_TASK_ASSIGNEE_STATE_INVALID` | 409 | 已存在任务的当前负责人已被移除、停用或删除，版本提交前必须治理任务状态或改派 |
 | `SG_TASK_NOT_FOUND` | 404 | 任务不存在、不属于可访问项目或不可见 |
-| `SG_TASK_ACTION_DENIED` | 403 | 当前用户不是任务负责人且没有项目总监/管理员代操作权限 |
+| `SG_TASK_ACTION_DENIED` | 403 | 当前用户不是任务负责人且没有项目管理人/管理员代操作权限 |
 | `SG_TASK_REASSIGN_SUBMISSION_CONFLICT` | 409 | 任务存在非 committed 版本提交（包括 failed），禁止改派 |
 | `SG_CROSS_PROJECT_REFERENCE` | 409 | 跨项目关联 |
 | `SG_RESOURCE_WRITE_CONFLICT` | 409 | 集、场次、镜头或资产写入遇到未归类的并发数据库约束冲突 |
@@ -3730,9 +3845,9 @@ commit 结果中的复用集/场均为 0、资产关系为 0。数据库终态�
 → 制作人员开始任务并在线下完成视频
 → 上传 MP4，创建版本提交暂存，发布到 NAS
 → 发布成功后自动生成 V001、规范业务文件名和单版本审核单
-→ 项目总监退回并提交审核意见
+→ 项目管理人退回并提交审核意见
 → 制作人员上传修改视频，自动生成 V002 和新审核单
-→ 项目总监确认通过，V002 成为最终版本且任务完成
+→ 项目管理人确认通过，V002 成为最终版本且任务完成
 → 刷新后数据、文件、版本、审核意见和权限保持正确
 ```
 
@@ -3742,8 +3857,14 @@ commit 结果中的复用集/场均为 0、资产关系为 0。数据库终态�
 - 没有平台权限时返回无接口权限。
 - 有平台权限但不是项目成员时不能读取项目资源。
 - 制作人员不能管理项目成员。
-- 不能创建没有项目总监的项目。
-- 不能移除最后一名项目总监。
+- 不能创建没有项目管理人的项目。
+- 不能移除最后一名项目管理人。
+- 项目创建和成员新增/恢复、改角、移除的前端网络记录中不能出现任何 `/system/*` 请求，写请求只提交 `projectRole` 而不提交平台角色 ID、角色键或菜单 ID。
+- 两条 role-options API 只在固定角色唯一、启用、未删除、至少含有效 `shotgrid:navigation:list` 且不含超级权限、跨项目范围、非 Shot Grid 权限或存储根写权限时返回完整两项；任一异常以对应稳定 503 失败关闭。
+- 平台已有但无 `sg_managed_user_role` 来源标记的角色关系不得被 Shot Grid 撤回；同一角色仍被其他活动项目成员关系依赖时也不得撤回。
+- 成员从 `creator` 改为 `director` 时，在同一事务内更新成员后先补齐 `shotgrid_admin`，再仅在满足来源和零依赖条件时撤回 `shotgrid_creator`；任一步失败，项目成员、平台角色、来源标记和审计全部回滚。
+- 项目归档不触发受管平台角色同步；归档项目中的活动成员继续计入历史只读依赖。
+- 成功写入后平台权限缓存命名空间被清理，但目标用户已打开的 SPA 不会自动更新；刷新或重新登录后才能以新 `/getInfo` 和 `/shot-grid/navigation` 结果验收导航与按钮。
 - 项目编码大小写变体不能重复。
 - 禁用、不可达或不可写的 NAS 根目录不能创建可用项目。
 - 项目目录初始化失败时项目不能进入正常业务页面，重试不得重复创建项目或目录。

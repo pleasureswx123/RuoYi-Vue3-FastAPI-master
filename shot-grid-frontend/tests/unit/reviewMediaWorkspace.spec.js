@@ -119,8 +119,8 @@ describe('审核媒体工作区', () => {
     expect(createVersionPlaybackTicket).toHaveBeenCalledWith(33, proxy.fileId, {
       signal: expect.any(AbortSignal)
     })
-    expect(wrapper.text()).toContain('网页代理')
-    const proxyTag = wrapper.findAllComponents(ElTag).find(tag => tag.text() === '网页代理')
+    expect(wrapper.text()).toContain('优化预览')
+    const proxyTag = wrapper.findAllComponents(ElTag).find(tag => tag.text() === '优化预览')
     expect(proxyTag.props()).toMatchObject({ type: 'success', effect: 'plain', size: 'small', round: true })
     wrapper.unmount()
   })

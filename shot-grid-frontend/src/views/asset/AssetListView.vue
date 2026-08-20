@@ -14,7 +14,7 @@ import AssetImportDialog from '@/views/asset/components/AssetImportDialog.vue'
 import AssetRequirementDialog from '@/views/asset/components/AssetRequirementDialog.vue'
 import AssetDetailView from '@/views/asset/AssetDetailView.vue'
 import ProtectedAssetThumbnail from '@/views/asset/components/ProtectedAssetThumbnail.vue'
-import { assetAssigneeSummary, assetDirectoryStatusMeta, assetErrorState, assetStatusMeta, assetTypeMeta, memberLabel, resolveAssetThumbnail } from '@/views/asset/assetPresentation'
+import { assetAssigneeSummary, assetDirectoryStatusMeta, assetErrorState, assetStatusMeta, assetTypeMeta, memberLabel, memberUserName, resolveAssetThumbnail } from '@/views/asset/assetPresentation'
 import { projectRoleMeta, storageMeta } from '@/views/project/projectPresentation'
 
 const route = useRoute()
@@ -207,7 +207,7 @@ async function loadProjectContext() {
     members.value = memberRows
     await loadAssets(controller)
   } catch (error) {
-    if (error?.code !== 'ERR_CANCELED') assetsError.value = assetErrorState(error, '资产项目上下文加载失败')
+    if (error?.code !== 'ERR_CANCELED') assetsError.value = assetErrorState(error, '当前项目资产信息加载失败')
   } finally {
     if (assetController === controller) assetsLoading.value = false
   }
@@ -372,7 +372,7 @@ async function confirmBatchAssign() {
       taskLockVersion: item.task?.lockVersion ?? null
     }))
     await batchAssignAssetItemTasks(targetProjectId, assigneeUserId, items)
-    ElMessage.success(`已将 ${targetAssets.length} 个资产的 ${items.length} 个制作分项分配给 ${member.nickName || member.userName}`)
+    ElMessage.success(`已将 ${targetAssets.length} 个资产的 ${items.length} 个制作分项分配给 ${memberUserName(member)}`)
     if (currentProjectId.value === targetProjectId) {
       showBatchAssign.value = false
       batchAssignForm.assigneeUserId = ''
@@ -516,7 +516,7 @@ function contextMatches(active, operationContext) {
 }
 
 function notifyDetachedOperation() {
-  ElMessage.success('操作已完成；当前项目未自动刷新。')
+  ElMessage.success('操作已完成；请切回对应项目查看最新结果。')
 }
 
 async function handleSaved(_result, operationContext) {
@@ -604,13 +604,13 @@ onBeforeUnmount(() => {
 <template>
   <section class="sg-page asset-page">
     <header class="sg-page-heading asset-heading">
-      <div><p class="sg-eyebrow">ASSETS</p><h2 class="sg-page-title">资产库管理</h2><p class="sg-page-description">在项目范围内管理角色、场景、道具及其制作分项；状态、制作人和缩略图均来自后端聚合。</p></div>
+      <div><p class="sg-eyebrow">ASSETS</p><h2 class="sg-page-title">资产库管理</h2><p class="sg-page-description">在项目范围内统一管理角色、场景、道具及其制作分项，查看制作状态、负责人和缩略图。</p></div>
       <div class="asset-heading__actions"><el-button v-if="canListRequirements" :icon="Link" @click="openRequirementDialog">待匹配需求</el-button><el-button v-if="canImport" :icon="Upload" @click="openImportDialog">导入 Excel</el-button><el-button v-if="canCreate" type="primary" :icon="Plus" @click="openCreateDialog">新建资产</el-button></div>
     </header>
 
     <ProjectStatePanel v-if="projectsError" :title="projectsError.title" :message="projectsError.message" :retryable="projectsError.retryable" @retry="loadProjects" />
     <template v-else>
-      <el-form ref="projectContextForm" :model="projectContext" :rules="projectContextRules" class="project-context" size="large" inline label-position="top" aria-label="项目上下文">
+      <el-form ref="projectContextForm" :model="projectContext" :rules="projectContextRules" class="project-context" size="large" inline label-position="top" aria-label="当前项目筛选">
         <el-form-item label="当前项目" prop="selectedProjectId"><el-select v-model="projectContext.selectedProjectId" class="sg-select" :placeholder="projectsLoading ? '正在加载项目…' : '请选择项目'" :disabled="projectsLoading"><el-option :label="projectsLoading ? '正在加载项目…' : '请选择项目'" value="" /><el-option v-for="item in projects" :key="item.projectId" :label="`${item.projectCode} · ${item.projectName}`" :value="String(item.projectId)" /></el-select></el-form-item>
         <el-form-item v-if="canViewAll" label="项目范围" prop="scope"><el-select v-model="projectContext.scope" class="sg-select" placeholder="我的项目"><el-option label="我的项目" value="" /><el-option label="全部项目" value="all" /></el-select></el-form-item>
         <div v-if="project" class="project-context__meta"><el-tag size="small" effect="plain" type="primary">{{ project.projectTypeName }}</el-tag><el-tag size="small" effect="plain" type="info">{{ project.aspectRatio }}</el-tag><el-tag size="small" effect="plain" round :type="projectRoleMeta(project.myProjectRole).type">我的角色：{{ projectRoleMeta(project.myProjectRole).label }}</el-tag><el-tag size="small" effect="plain" round :type="tagTypeFromTone(storageMeta(project.storageStatus).tone)">存储：{{ storageMeta(project.storageStatus).label }}</el-tag></div>

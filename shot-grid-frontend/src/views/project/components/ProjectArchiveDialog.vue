@@ -47,9 +47,9 @@ async function submit() {
 </script>
 
 <template>
-  <ProjectModal title="归档项目" description="归档后项目只允许读取，当前没有普通恢复入口。" :busy="busy" @close="emit('close')">
+  <ProjectModal title="归档项目" description="归档后项目将转为只读，暂不支持恢复。" :busy="busy" @close="emit('close')">
     <el-form ref="archiveFormRef" :model="archiveForm" :rules="archiveRules" class="archive-form" label-position="top">
-      <el-alert :title="`${project.projectCode} · ${project.projectName}`" description="归档会保留全部业务记录和文件引用，但成员不能继续修改项目。" type="warning" show-icon :closable="false" />
+      <el-alert :title="`${project.projectCode} · ${project.projectName}`" description="归档会保留全部业务记录和文件，但成员不能继续修改项目。" type="warning" show-icon :closable="false" />
       <el-form-item label="归档原因" prop="reason" required>
         <el-input v-model="archiveForm.reason" type="textarea" :rows="4" maxlength="500" show-word-limit placeholder="请说明归档依据" />
       </el-form-item>

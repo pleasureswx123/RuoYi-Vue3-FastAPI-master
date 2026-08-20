@@ -24,11 +24,11 @@ const ACTION_META = Object.freeze({
 })
 
 export function reviewStatusMeta(status) {
-  return REVIEW_STATUS[status] || { label: status || '未知', tone: 'neutral' }
+  return REVIEW_STATUS[status] || { label: '未知审核状态', tone: 'neutral' }
 }
 
 export function reviewModeMeta(mode) {
-  return REVIEW_MODE[mode] || { label: mode || '未知模式', tone: 'neutral' }
+  return REVIEW_MODE[mode] || { label: '未知审核模式', tone: 'neutral' }
 }
 
 export function mediaDerivationStatusMeta(status) {
@@ -36,7 +36,7 @@ export function mediaDerivationStatusMeta(status) {
 }
 
 export function reviewActionMeta(action) {
-  return ACTION_META[action] || { label: action || '未知动作', tone: 'neutral' }
+  return ACTION_META[action] || { label: '未知审核操作', tone: 'neutral' }
 }
 
 export function formatReviewDateTime(value) {
@@ -66,7 +66,7 @@ export function reviewErrorState(error, fallbackTitle = '审核操作失败') {
       : status === 409
         ? '审核状态已发生变化'
         : status >= 500
-          ? '审核服务暂不可用'
+          ? '审核暂时无法使用'
           : fallbackTitle
   return {
     title,

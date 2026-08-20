@@ -27,6 +27,28 @@ def _current_user() -> CurrentUserModel:
 
 def _patch_project_lock(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
+        'module_shot_grid.service.project_member_service.ShotGridPlatformRoleService.lock_target_users',
+        AsyncMock(),
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.project_member_service.ShotGridPlatformRoleService.synchronize_user_roles',
+        AsyncMock(
+            return_value=[
+                {
+                    'userId': 2,
+                    'grantedRoleKeys': [],
+                    'revokedRoleKeys': [],
+                    'requiredPreservedRoleKeys': ['shotgrid_creator'],
+                    'externalPreservedRoleKeys': [],
+                }
+            ]
+        ),
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.project_member_service.ShotGridProjectMemberDao.get_active_users',
+        AsyncMock(return_value={1, 2}),
+    )
+    monkeypatch.setattr(
         'module_shot_grid.service.project_member_service.ShotGridProjectDao.get_project_by_id',
         AsyncMock(return_value=SimpleNamespace(project_id=10, project_status='active')),
     )
@@ -63,6 +85,7 @@ async def test_cannot_demote_last_director(monkeypatch: pytest.MonkeyPatch) -> N
             1,
             ShotGridProjectMemberUpdateModel(projectRole='creator'),
             _current_user(),
+            true(),
         )
 
     assert exc_info.value.error_key == 'SG_LAST_DIRECTOR_REQUIRED'
@@ -89,6 +112,7 @@ async def test_active_task_prevents_clearing_producer_code(monkeypatch: pytest.M
             2,
             ShotGridProjectMemberUpdateModel(producerCode=None),
             _current_user(),
+            true(),
         )
 
     assert exc_info.value.error_key == 'SG_PRODUCER_CODE_REQUIRED'
@@ -268,8 +292,36 @@ async def test_member_write_revalidates_role_after_project_lock(monkeypatch: pyt
             2,
             ShotGridProjectMemberUpdateModel(producerCode='NEW'),
             _current_user(),
+            true(),
         )
 
     assert exc_info.value.error_key == 'SG_PROJECT_ACCESS_DENIED'
     get_member.assert_not_awaited()
+    db.rollback.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_creator_with_active_tasks_cannot_become_director(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_project_lock(monkeypatch)
+    monkeypatch.setattr(
+        'module_shot_grid.service.project_member_service.ShotGridProjectMemberDao.get_member_for_update',
+        AsyncMock(return_value=SimpleNamespace(project_role='creator', producer_code='YJF')),
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.project_member_service.ShotGridProjectMemberDao.has_active_tasks',
+        AsyncMock(return_value=True),
+    )
+    db = AsyncMock()
+
+    with pytest.raises(ShotGridDomainException) as exc_info:
+        await ShotGridProjectMemberService.update_member(
+            db,
+            10,
+            2,
+            ShotGridProjectMemberUpdateModel(projectRole='director'),
+            _current_user(),
+            true(),
+        )
+
+    assert exc_info.value.error_key == 'SG_MEMBER_ROLE_TASK_CONFLICT'
     db.rollback.assert_awaited_once()

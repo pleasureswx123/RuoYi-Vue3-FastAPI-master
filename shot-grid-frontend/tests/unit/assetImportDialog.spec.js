@@ -63,7 +63,7 @@ describe('资产 Excel 导入对话框', () => {
     const file = new File(['xlsx'], '资产样表.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
     Object.defineProperty(input.element, 'files', { configurable: true, value: [file] })
     await input.trigger('change')
-    await wrapper.findAll('button').find(button => button.text().includes('开始预检')).trigger('click')
+    await wrapper.findAll('button').find(button => button.text().includes('检查文件')).trigger('click')
     await flushPromises()
 
     expect(wrapper.text()).toContain('角色 1 资产 / 2 分项')
@@ -93,7 +93,7 @@ describe('资产 Excel 导入对话框', () => {
       },
       expect.stringContaining('asset-import-8:')
     )
-    expect(wrapper.text()).toContain('资产已按单事务完成导入')
+    expect(wrapper.text()).toContain('资产导入完成')
     const resultTags = wrapper.findAllComponents(ElTag)
     expect(resultTags.find(tag => tag.text() === '角色 1')?.props('type')).toBe('warning')
     expect(resultTags.find(tag => tag.text() === '场景 1')?.props('type')).toBe('primary')
@@ -119,7 +119,7 @@ describe('资产 Excel 导入对话框', () => {
     const file = new File(['xlsx'], '资产样表.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
     Object.defineProperty(input.element, 'files', { configurable: true, value: [file] })
     await input.trigger('change')
-    await wrapper.findAll('button').find(button => button.text().includes('开始预检')).trigger('click')
+    await wrapper.findAll('button').find(button => button.text().includes('检查文件')).trigger('click')
     await flushPromises()
 
     expect(wrapper.text()).not.toContain('选择全部可处理行')
@@ -157,14 +157,14 @@ describe('资产 Excel 导入对话框', () => {
     const oldFile = new File(['old'], '旧资产.xlsx')
     Object.defineProperty(input.element, 'files', { configurable: true, value: [oldFile] })
     await input.trigger('change')
-    await wrapper.findAll('button').find(button => button.text().includes('开始预检')).trigger('click')
+    await wrapper.findAll('button').find(button => button.text().includes('检查文件')).trigger('click')
     const oldSignal = previewAssetImport.mock.calls[0][2].signal
 
     const newFile = new File(['new'], '新资产.xlsx')
     Object.defineProperty(input.element, 'files', { configurable: true, value: [newFile] })
     await input.trigger('change')
     expect(oldSignal.aborted).toBe(true)
-    await wrapper.findAll('button').find(button => button.text().includes('开始预检')).trigger('click')
+    await wrapper.findAll('button').find(button => button.text().includes('检查文件')).trigger('click')
     await flushPromises()
     expect(wrapper.text()).toContain('新资产')
 
@@ -184,12 +184,12 @@ describe('资产 Excel 导入对话框', () => {
     const file = new File(['xlsx'], '资产样表.xlsx')
     Object.defineProperty(input.element, 'files', { configurable: true, value: [file] })
     await input.trigger('change')
-    await wrapper.findAll('button').find(button => button.text().includes('开始预检')).trigger('click')
+    await wrapper.findAll('button').find(button => button.text().includes('检查文件')).trigger('click')
     await flushPromises()
     expect(wrapper.text()).toContain('正式导入 2 行')
 
     previewAssetImport.mockRejectedValueOnce({ httpStatus: 503, message: '预检缓存不可用' })
-    await wrapper.findAll('button').find(button => button.text().includes('重新预检')).trigger('click')
+    await wrapper.findAll('button').find(button => button.text().includes('重新检查')).trigger('click')
     expect(wrapper.text()).not.toContain('正式导入 2 行')
     await flushPromises()
     expect(wrapper.text()).toContain('预检缓存不可用')

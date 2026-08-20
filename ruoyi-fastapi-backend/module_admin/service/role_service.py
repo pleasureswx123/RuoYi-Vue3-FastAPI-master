@@ -18,6 +18,7 @@ from module_admin.entity.vo.role_vo import (
     RolePageQueryModel,
 )
 from module_admin.entity.vo.user_vo import UserInfoModel, UserRolePageQueryModel
+from module_admin.service.shot_grid_role_guard import validate_role_mutation
 from utils.common_util import CamelCaseUtil
 from utils.excel_util import ExcelUtil
 
@@ -160,6 +161,8 @@ class RoleService:
             if page_object.menu_ids:
                 for menu in page_object.menu_ids:
                     await RoleDao.add_role_menu_dao(query_db, RoleMenuModel(roleId=role_id, menuId=menu))
+            await query_db.flush()
+            await validate_role_mutation(query_db, int(role_id))
             await query_db.commit()
             return CrudResponseModel(is_success=True, message='新增成功')
         except Exception as e:
@@ -196,6 +199,12 @@ class RoleService:
                             await RoleDao.add_role_menu_dao(
                                 query_db, RoleMenuModel(roleId=page_object.role_id, menuId=menu)
                             )
+                await query_db.flush()
+                await validate_role_mutation(
+                    query_db,
+                    int(page_object.role_id),
+                    previous_role_key=role_info.role_key,
+                )
                 await query_db.commit()
                 return CrudResponseModel(is_success=True, message='更新成功')
             except Exception as e:
@@ -246,6 +255,12 @@ class RoleService:
             try:
                 for role_id in role_id_list:
                     role = await cls.role_detail_services(query_db, int(role_id))
+                    await validate_role_mutation(
+                        query_db,
+                        int(role_id),
+                        previous_role_key=role.role_key,
+                        deleting=True,
+                    )
                     if (await RoleDao.count_user_role_dao(query_db, int(role_id))) > 0:
                         raise ServiceException(message=f'角色{role.role_name}已分配,不能删除')
                     role_id_dict = {

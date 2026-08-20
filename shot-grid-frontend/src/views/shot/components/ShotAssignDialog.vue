@@ -63,12 +63,6 @@ const assignFormRules = {
   }]
 }
 
-function detailsText(details) {
-  if (!details) return ''
-  if (typeof details === 'string') return details
-  try { return JSON.stringify(details) } catch { return '后端返回了额外诊断信息' }
-}
-
 async function submit() {
   if (busy.value) return
   requestError.value = null
@@ -106,7 +100,7 @@ function closeDialog() {
 </script>
 
 <template>
-  <ProjectModal :title="isReassign ? `改派 ${shot.shotCode}` : `分配 ${shot.shotCode}`" description="首次分配会创建唯一镜头视频任务；改派更新同一任务，不创建第二条任务。" :busy="busy" @close="closeDialog">
+  <ProjectModal :title="isReassign ? `改派 ${shot.shotCode}` : `分配 ${shot.shotCode}`" description="首次分配会创建镜头视频任务；后续改派只调整主制作人，原任务内容保持不变。" :busy="busy" @close="closeDialog">
     <el-form ref="assignFormRef" :model="form" :rules="assignFormRules" class="assign-form" size="large" label-position="top" aria-label="镜头任务分配表单">
       <el-form-item label="主制作人" prop="assigneeUserId" required>
         <el-select v-model="form.assigneeUserId" class="sg-select" placeholder="请选择项目成员" :disabled="busy || !candidates.length"><el-option label="请选择项目成员" value="" /><el-option v-for="member in candidates" :key="member.userId" :label="member.userName ? `${member.nickName}（${member.userName}）` : member.nickName" :value="String(member.userId)" /></el-select>
@@ -117,8 +111,8 @@ function closeDialog() {
         <el-form-item label="截止日期" prop="dueDate"><el-date-picker v-model="form.dueDate" type="date" value-format="YYYY-MM-DD" format="YYYY-MM-DD" placeholder="请选择截止日期" :disabled="busy" /></el-form-item>
         <el-form-item label="制作要求" prop="taskDescription"><el-input v-model="form.taskDescription" type="textarea" :rows="5" :disabled="busy" /></el-form-item>
       </template>
-      <p v-if="isReassign" class="assign-form__warning">本动作只改派主制作人，原任务要求、优先级和截止日期保持不变；存在未完成版本提交或状态冲突时后端会拒绝改派。</p>
-      <el-alert v-if="requestError" class="assign-form__alert" type="error" :closable="false" show-icon :title="requestError.title"><div class="form-alert-content"><p>{{ requestError.message }}</p><code v-if="requestError.errorKey">{{ requestError.errorKey }}</code><small v-if="requestError.details">{{ detailsText(requestError.details) }}</small><el-button v-if="requestError.status === 409" link type="primary" @click="emit('refresh')">刷新任务后重试</el-button></div></el-alert>
+      <p v-if="isReassign" class="assign-form__warning">本次只调整主制作人，原任务要求、优先级和截止日期保持不变。若任务正在提交版本或状态已经变化，将无法改派。</p>
+      <el-alert v-if="requestError" class="assign-form__alert" type="error" :closable="false" show-icon :title="requestError.title"><div class="form-alert-content"><p>{{ requestError.message }}</p><el-button v-if="requestError.status === 409" link type="primary" @click="emit('refresh')">刷新任务后重试</el-button></div></el-alert>
       <footer><el-button :disabled="busy" @click="closeDialog">取消</el-button><el-button type="primary" :loading="busy" :disabled="busy || !candidates.length" @click="submit">{{ isReassign ? '确认改派' : '创建并分配任务' }}</el-button></footer>
     </el-form>
   </ProjectModal>

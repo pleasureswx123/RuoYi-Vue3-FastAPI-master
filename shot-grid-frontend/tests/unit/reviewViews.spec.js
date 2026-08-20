@@ -149,7 +149,7 @@ describe('版本审核页面', () => {
   it('按项目加载自动审核单并进入真实详情路由', async () => {
     const { wrapper, router } = await mountList()
 
-    expect(getReviewListPage).toHaveBeenCalledWith('8', expect.objectContaining({ reviewStatus: 'active' }), expect.objectContaining({ signal: expect.any(AbortSignal) }))
+    expect(getReviewListPage).toHaveBeenCalledWith('8', expect.objectContaining({ reviewStatus: undefined }), expect.objectContaining({ signal: expect.any(AbortSignal) }))
     expect(wrapper.text()).toContain('动力舱合成 V003 审核')
     expect(wrapper.text()).toContain('预览已优化')
     const tags = wrapper.find('.review-card').findAllComponents(ElTag)

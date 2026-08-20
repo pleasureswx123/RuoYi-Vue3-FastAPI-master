@@ -83,7 +83,7 @@ const shotRow = {
   characterAssets: [],
   sortOrder: 1,
   status: 'in_progress',
-  assignee: { userId: 7, nickName: '杨景锋', producerCode: 'YJF' },
+  assignee: { userId: 7, nickName: 'YJF', producerCode: 'YJF' },
   thumbnail: null,
   latestVersion: null,
   latestFeedback: null,
@@ -162,10 +162,10 @@ describe('镜头管理真实列表页', () => {
   beforeEach(() => {
     getProjectPage.mockResolvedValue({ rows: [projectRow], total: 1, hasNext: false })
     getProjectDetail.mockResolvedValue({ data: { ...projectRow, projectTypeName: 'AI 影视短片', aspectRatio: '16:9', projectStatus: 'active', storageStatus: 'ready', myProjectRole: 'director' } })
-    getProjectMembers.mockResolvedValue({ rows: [{ userId: 7, nickName: '杨景锋', projectRole: 'creator', producerCode: 'YJF' }] })
+    getProjectMembers.mockResolvedValue({ rows: [{ userId: 7, userName: '杨景锋', nickName: 'YJF', projectRole: 'creator', producerCode: 'YJF' }] })
     getEpisodePage.mockResolvedValue({ rows: [{ episodeId: 21, episodeCode: 'EP001', episodeName: '第一集' }], total: 1, hasNext: false })
     getScenePage.mockResolvedValue({ rows: [{ sceneId: 31, sceneCode: '001', sceneName: '动力舱' }], total: 1, hasNext: false })
-    listShotAssignees.mockResolvedValue({ rows: [{ userId: 7, nickName: '杨景锋', projectRole: 'creator', producerCode: 'YJF' }], total: 1, hasNext: false })
+    listShotAssignees.mockResolvedValue({ rows: [{ userId: 7, userName: '杨景锋', nickName: 'YJF', projectRole: 'creator', producerCode: 'YJF' }], total: 1, hasNext: false })
     getShotPage.mockResolvedValue({ rows: [shotRow], total: 1, hasNext: false })
     getShotDetail.mockResolvedValue({ data: shotDetail(8, 41, 'S001', '镜头缓慢推进动力舱') })
     batchAssignShotTasks.mockResolvedValue({ data: { assignedShotIds: [41], assignedCount: 1 } })
@@ -202,6 +202,7 @@ describe('镜头管理真实列表页', () => {
     expect(wrapper.text()).toContain('设备低频轰鸣声')
     expect(wrapper.text()).toContain('冷蓝色调')
     expect(wrapper.text()).toContain('保持画面压迫感')
+    expect(wrapper.find('.shot-table-wrap').text()).toContain('杨景锋')
     expect(wrapper.text()).toContain('导入 Excel')
     expect(wrapper.text()).toContain('新建镜头')
     expect(findTag(wrapper, '场景 · 动力舱').props()).toMatchObject({ type: 'primary', size: 'small', effect: 'plain', round: true })
@@ -497,7 +498,7 @@ describe('镜头管理真实列表页', () => {
     fileInput.dispatchEvent(new Event('change', { bubbles: true }))
     await flushPromises()
     Array.from(document.body.querySelectorAll('.import-flow button'))
-      .find(button => button.textContent.includes('开始预检'))
+      .find(button => button.textContent.includes('检查文件'))
       .click()
     await flushPromises()
     expect(previewShotImport).toHaveBeenCalledWith(9, file, expect.anything())
@@ -696,7 +697,7 @@ describe('镜头详情跨项目请求隔离', () => {
   beforeEach(() => {
     getEpisodePage.mockResolvedValue({ rows: [{ episodeId: 21, episodeCode: 'EP001' }], total: 1, hasNext: false })
     getScenePage.mockResolvedValue({ rows: [{ sceneId: 31, sceneCode: '001' }], total: 1, hasNext: false })
-    listShotAssignees.mockResolvedValue({ rows: [{ userId: 7, nickName: '杨景锋', projectRole: 'creator', producerCode: 'YJF' }], total: 1, hasNext: false })
+    listShotAssignees.mockResolvedValue({ rows: [{ userId: 7, userName: '杨景锋', nickName: 'YJF', projectRole: 'creator', producerCode: 'YJF' }], total: 1, hasNext: false })
   })
 
   it('镜头详情的状态、目录、优先级、版本和关联资产使用 ElTag 动态类型', async () => {
@@ -705,7 +706,7 @@ describe('镜头详情跨项目请求隔离', () => {
       status: 'revision',
       directoryStatus: 'failed',
       task: {
-        assignee: { userId: 7, nickName: '杨景锋' },
+        assignee: { userId: 7, nickName: 'YJF' },
         taskStatus: 'pending_review',
         priority: 'urgent',
         dueDate: '2026-09-01',
@@ -728,6 +729,7 @@ describe('镜头详情跨项目请求隔离', () => {
     expect(findTag(wrapper, '场景 · 动力舱').props()).toMatchObject({ type: 'primary', effect: 'plain', round: true })
     expect(findTag(wrapper, '角色 · 女主').props()).toMatchObject({ type: 'warning', effect: 'plain', round: true })
     expect(findTag(wrapper, '道具 · 手电筒').props()).toMatchObject({ type: 'success', effect: 'plain', round: true })
+    expect(wrapper.find('.task-person').text()).toContain('杨景锋')
     expect(wrapper.find('.status-chip').exists()).toBe(false)
     wrapper.unmount()
   })

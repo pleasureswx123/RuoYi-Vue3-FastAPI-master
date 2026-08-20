@@ -6,7 +6,7 @@ from module_admin.entity.do.file_do import SysFileInfo  # noqa: F401
 from module_admin.entity.do.user_do import SysUser  # noqa: F401
 from module_shot_grid.schema import SHOT_GRID_TABLE_NAMES
 
-EXPECTED_TABLE_COUNT = 22
+EXPECTED_TABLE_COUNT = 25
 
 
 def _primary_key_columns(table_name: str) -> tuple[str, ...]:
@@ -24,12 +24,13 @@ def test_shot_grid_metadata_contains_exactly_the_frozen_tables() -> None:
 
 def test_association_tables_use_the_frozen_composite_primary_keys() -> None:
     assert _primary_key_columns('sg_project_member') == ('project_id', 'user_id')
+    assert _primary_key_columns('sg_managed_user_role') == ('user_id', 'role_id')
     assert _primary_key_columns('sg_shot_asset') == ('shot_id', 'asset_id')
     assert _primary_key_columns('sg_version_file') == ('version_id', 'file_id', 'file_role')
     assert _primary_key_columns('sg_review_list_version') == ('review_list_id', 'version_id')
 
 
-def test_all_shot_grid_foreign_keys_restrict_deletion() -> None:
+def test_shot_grid_foreign_keys_preserve_domain_data_and_cascade_only_managed_role_marker() -> None:
     foreign_keys = [
         constraint
         for table_name in SHOT_GRID_TABLE_NAMES
@@ -37,8 +38,18 @@ def test_all_shot_grid_foreign_keys_restrict_deletion() -> None:
         if isinstance(constraint, ForeignKeyConstraint)
     ]
 
-    assert foreign_keys
-    assert all(constraint.ondelete == 'RESTRICT' for constraint in foreign_keys)
+    managed_role_foreign_keys = [
+        constraint
+        for constraint in Base.metadata.tables['sg_managed_user_role'].constraints
+        if isinstance(constraint, ForeignKeyConstraint)
+    ]
+    domain_foreign_keys = [constraint for constraint in foreign_keys if constraint.table.name != 'sg_managed_user_role']
+
+    assert domain_foreign_keys
+    assert all(constraint.ondelete == 'RESTRICT' for constraint in domain_foreign_keys)
+    assert len(managed_role_foreign_keys) == 1
+    assert managed_role_foreign_keys[0].ondelete == 'CASCADE'
+    assert tuple(column.name for column in managed_role_foreign_keys[0].columns) == ('user_id', 'role_id')
 
 
 def test_database_guards_the_main_concurrency_invariants() -> None:

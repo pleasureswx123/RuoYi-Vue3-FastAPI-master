@@ -16,6 +16,7 @@ from module_shot_grid.entity.vo.project_member_vo import (
     ShotGridProjectMemberUpdateModel,
 )
 from module_shot_grid.exceptions import ShotGridDomainException, shot_grid_error
+from module_shot_grid.service.platform_role_service import ShotGridPlatformRoleService
 from module_shot_grid.service.project_access_service import ShotGridProjectAccessService
 from module_shot_grid.service.project_service import ShotGridProjectService
 
@@ -44,6 +45,7 @@ class ShotGridProjectMemberService:
     ) -> ShotGridProjectMemberModel:
         _, actor_name, dept_name = ShotGridProjectService._actor(current_user)
         try:
+            await ShotGridPlatformRoleService.lock_target_users(db, {command.user_id})
             await cls._lock_mutable_project(db, project_id)
             await cls._refresh_write_access(db, project_id, current_user)
             existing = await ShotGridProjectMemberDao.get_member_including_removed_for_update(
@@ -97,6 +99,11 @@ class ShotGridProjectMemberService:
                         'removed_time': None,
                     },
                 )
+            platform_role_changes = await ShotGridPlatformRoleService.synchronize_user_roles(
+                db,
+                {command.user_id},
+                actor_name,
+            )
             await cls._audit(
                 db,
                 actor_name=actor_name,
@@ -110,6 +117,7 @@ class ShotGridProjectMemberService:
                     'projectRole': command.project_role,
                     'producerCode': command.producer_code,
                 },
+                platform_role_changes=platform_role_changes,
             )
             detail = await ShotGridProjectMemberDao.get_member_detail(db, project_id, command.user_id)
             if detail is None:
@@ -139,23 +147,49 @@ class ShotGridProjectMemberService:
         user_id: int,
         command: ShotGridProjectMemberUpdateModel,
         current_user: CurrentUserModel,
+        user_data_scope_sql: ColumnElement,
     ) -> ShotGridProjectMemberModel:
         _, actor_name, dept_name = ShotGridProjectService._actor(current_user)
         try:
+            await ShotGridPlatformRoleService.lock_target_users(db, {user_id})
             await cls._lock_mutable_project(db, project_id)
             await cls._refresh_write_access(db, project_id, current_user)
             member = await ShotGridProjectMemberDao.get_member_for_update(db, project_id, user_id)
             if member is None:
                 raise shot_grid_error(404, 'SG_MEMBER_NOT_FOUND', '项目成员不存在')
+            active_users = await ShotGridProjectMemberDao.get_active_users(
+                db,
+                {user_id},
+                user_data_scope_sql,
+            )
+            if user_id not in active_users:
+                raise shot_grid_error(
+                    422,
+                    'SG_MEMBER_USER_INVALID',
+                    '项目成员账号不存在、已停用、已删除或超出当前数据范围',
+                    details={'userIds': [user_id]},
+                )
 
             values: dict[str, str | None] = {}
             if 'project_role' in command.model_fields_set:
+                role_changed = command.project_role != member.project_role
                 if (
                     member.project_role == 'director'
                     and command.project_role != 'director'
                     and await ShotGridProjectMemberDao.count_directors(db, project_id) <= 1
                 ):
-                    raise shot_grid_error(409, 'SG_LAST_DIRECTOR_REQUIRED', '项目必须至少保留一名项目总监')
+                    raise shot_grid_error(409, 'SG_LAST_DIRECTOR_REQUIRED', '项目必须至少保留一名项目管理人')
+                if (
+                    role_changed
+                    and member.project_role == 'creator'
+                    and command.project_role == 'director'
+                    and await ShotGridProjectMemberDao.has_active_tasks(db, project_id, user_id)
+                ):
+                    raise shot_grid_error(
+                        409,
+                        'SG_MEMBER_ROLE_TASK_CONFLICT',
+                        '仍负责活动任务的制作人员不能改为项目管理人，请先完成改派',
+                    )
                 values['project_role'] = command.project_role
 
             if 'producer_code' in command.model_fields_set:
@@ -177,6 +211,11 @@ class ShotGridProjectMemberService:
                 values['producer_code'] = command.producer_code
 
             await ShotGridProjectMemberDao.update_member(db, project_id, user_id, values)
+            platform_role_changes = await ShotGridPlatformRoleService.synchronize_user_roles(
+                db,
+                {user_id},
+                actor_name,
+            )
             await cls._audit(
                 db,
                 actor_name=actor_name,
@@ -194,6 +233,7 @@ class ShotGridProjectMemberService:
                     if 'producer_code' in command.model_fields_set
                     else member.producer_code,
                 },
+                platform_role_changes=platform_role_changes,
             )
             detail = await ShotGridProjectMemberDao.get_member_detail(db, project_id, user_id)
             if detail is None:
@@ -222,6 +262,7 @@ class ShotGridProjectMemberService:
     ) -> None:
         actor_user_id, actor_name, dept_name = ShotGridProjectService._actor(current_user)
         try:
+            await ShotGridPlatformRoleService.lock_target_users(db, {user_id})
             await cls._lock_mutable_project(db, project_id)
             await cls._refresh_write_access(db, project_id, current_user)
             member = await ShotGridProjectMemberDao.get_member_for_update(db, project_id, user_id)
@@ -231,7 +272,7 @@ class ShotGridProjectMemberService:
                 member.project_role == 'director'
                 and await ShotGridProjectMemberDao.count_directors(db, project_id) <= 1
             ):
-                raise shot_grid_error(409, 'SG_LAST_DIRECTOR_REQUIRED', '项目必须至少保留一名项目总监')
+                raise shot_grid_error(409, 'SG_LAST_DIRECTOR_REQUIRED', '项目必须至少保留一名项目管理人')
             if await ShotGridProjectMemberDao.has_active_tasks(db, project_id, user_id):
                 raise shot_grid_error(409, 'SG_MEMBER_HAS_ACTIVE_TASKS', '成员仍负责活动任务，请先完成改派')
 
@@ -242,6 +283,11 @@ class ShotGridProjectMemberService:
                 user_id,
                 removed_by=actor_user_id,
                 removed_time=removed_time,
+            )
+            platform_role_changes = await ShotGridPlatformRoleService.synchronize_user_roles(
+                db,
+                {user_id},
+                actor_name,
             )
             await cls._audit(
                 db,
@@ -256,6 +302,7 @@ class ShotGridProjectMemberService:
                     'projectRole': member.project_role,
                     'producerCode': member.producer_code,
                 },
+                platform_role_changes=platform_role_changes,
             )
             await db.commit()
         except ShotGridDomainException:
@@ -299,6 +346,7 @@ class ShotGridProjectMemberService:
         project_id: int,
         user_id: int,
         payload: dict,
+        platform_role_changes: list[dict[str, object]],
     ) -> None:
         oper_url = f'/shot-grid/projects/{project_id}/members'
         if request_method != 'POST':
@@ -312,6 +360,15 @@ class ShotGridProjectMemberService:
             oper_name=actor_name,
             dept_name=dept_name,
             oper_url=oper_url,
-            oper_param={'projectId': project_id, 'userId': user_id, **payload},
-            result={'projectId': project_id, 'userId': user_id},
+            oper_param={
+                'projectId': project_id,
+                'userId': user_id,
+                **payload,
+                'platformRoleChanges': platform_role_changes,
+            },
+            result={
+                'projectId': project_id,
+                'userId': user_id,
+                'platformRoleChanges': platform_role_changes,
+            },
         )

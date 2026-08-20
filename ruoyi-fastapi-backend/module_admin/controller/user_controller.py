@@ -174,7 +174,7 @@ async def edit_system_user(
     response_model=ResponseBaseModel,
     dependencies=[UserInterfaceAuthDependency('system:user:remove')],
 )
-@ApiCacheEvict(namespaces=ApiGroup.USER_ENTITY_MUTATION)
+@ApiCacheEvict(namespaces=(*ApiGroup.USER_ENTITY_MUTATION, *ApiGroup.USER_PERMISSION_MUTATION))
 @Log(title='用户管理', business_type=BusinessType.DELETE)
 async def delete_system_user(
     request: Request,

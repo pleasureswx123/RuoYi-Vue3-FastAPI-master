@@ -72,6 +72,8 @@ class ShotGridProjectOptionDao:
         db: AsyncSession,
         query: ShotGridMemberCandidateQueryModel,
         data_scope_sql: ColumnElement,
+        *,
+        project_id: int | None = None,
     ) -> tuple[list[dict[str, Any]], int]:
         statement = (
             select(
@@ -85,6 +87,17 @@ class ShotGridProjectOptionDao:
             .outerjoin(SysDept, SysDept.dept_id == SysUser.dept_id)
             .where(SysUser.status == '0', SysUser.del_flag == '0', data_scope_sql)
         )
+        if project_id is not None:
+            existing_active_member = (
+                select(ShotGridProjectMember.user_id)
+                .where(
+                    ShotGridProjectMember.project_id == project_id,
+                    ShotGridProjectMember.user_id == SysUser.user_id,
+                    ShotGridProjectMember.member_status == 'active',
+                )
+                .exists()
+            )
+            statement = statement.where(~existing_active_member)
         keyword = query.keyword.strip() if query.keyword else None
         if query.dept_id is not None:
             statement = statement.where(SysUser.dept_id == query.dept_id)

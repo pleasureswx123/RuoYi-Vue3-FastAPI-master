@@ -42,7 +42,7 @@ class ShotGridProjectCreateModel(ShotGridApiModel):
     )
     delivery_date: date | None = Field(default=None, description='交付日期')
     storage_root_id: int = Field(gt=0, le=SQL_BIGINT_MAX, description='NAS 根目录ID')
-    director_user_ids: list[int] = Field(min_length=1, description='初始项目总监用户ID')
+    director_user_ids: list[int] = Field(min_length=1, description='初始项目管理人用户ID')
     members: list[ShotGridInitialMemberModel] = Field(default_factory=list, description='初始项目成员')
     remark: str | None = Field(default=None, max_length=500, description='备注')
 
@@ -77,9 +77,9 @@ class ShotGridProjectCreateModel(ShotGridApiModel):
     @classmethod
     def validate_director_ids(cls, value: list[int]) -> list[int]:
         if any(user_id <= 0 for user_id in value):
-            raise ValueError('项目总监用户ID必须为正整数')
+            raise ValueError('项目管理人用户ID必须为正整数')
         if len(value) != len(set(value)):
-            raise ValueError('项目总监用户ID不能重复')
+            raise ValueError('项目管理人用户ID不能重复')
         return value
 
     @model_validator(mode='after')
@@ -89,7 +89,7 @@ class ShotGridProjectCreateModel(ShotGridApiModel):
             raise ValueError('初始项目成员不能重复')
         overlap = sorted(set(self.director_user_ids).intersection(member_ids))
         if overlap:
-            raise ValueError(f'项目总监与初始成员重复：{overlap}')
+            raise ValueError(f'项目管理人与初始成员重复：{overlap}')
         producer_codes = [member.producer_code for member in self.members if member.producer_code is not None]
         if len(producer_codes) != len(set(producer_codes)):
             raise ValueError('同一项目内制作人缩写不能重复')

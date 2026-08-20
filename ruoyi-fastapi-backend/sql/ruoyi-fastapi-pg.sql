@@ -25,6 +25,7 @@ drop table if exists sg_episode;
 drop table if exists sg_asset;
 drop table if exists sg_storage_root;
 drop table if exists sg_project;
+drop table if exists sg_managed_user_role;
 
 -- ----------------------------
 -- 1、部门表
@@ -1549,6 +1550,22 @@ comment on column sys_plugin_operation_log.remark is '备注';
 -- ----------------------------
 -- 34、Shot Grid 首批业务表
 -- ----------------------------
+-- sg_managed_user_role
+CREATE TABLE sg_managed_user_role (
+	user_id BIGINT NOT NULL,
+	role_id BIGINT NOT NULL,
+	create_by VARCHAR(64) DEFAULT '' NOT NULL,
+	create_time TIMESTAMP(0) WITHOUT TIME ZONE NOT NULL,
+	PRIMARY KEY (user_id, role_id),
+	CONSTRAINT fk_sg_managed_user_role_user_role FOREIGN KEY(user_id, role_id)
+		REFERENCES sys_user_role (user_id, role_id) ON DELETE CASCADE
+);
+COMMENT ON TABLE sg_managed_user_role IS 'Shot Grid受管平台用户角色来源标记';
+COMMENT ON COLUMN sg_managed_user_role.user_id IS '平台用户ID';
+COMMENT ON COLUMN sg_managed_user_role.role_id IS '平台角色ID';
+COMMENT ON COLUMN sg_managed_user_role.create_by IS '创建者';
+COMMENT ON COLUMN sg_managed_user_role.create_time IS '创建时间';
+
 -- sg_project
 CREATE TABLE sg_project (
 	project_id BIGSERIAL NOT NULL,
@@ -2895,7 +2912,7 @@ create table if not exists alembic_version (
     constraint alembic_version_pkc primary key (version_num)
 );
 delete from alembic_version;
-insert into alembic_version(version_num) values ('20260814_10');
+insert into alembic_version(version_num) values ('20260818_12');
 
 
 CREATE OR REPLACE FUNCTION "find_in_set"(int8, varchar)

@@ -90,7 +90,7 @@ export const useSessionStore = defineStore('session', {
         uuid: this.captcha.enabled ? this.captcha.uuid : undefined
       })
       if (!response.token) {
-        throw new Error('登录响应缺少访问令牌')
+        throw new Error('登录未完成，请稍后重试')
       }
       setToken(response.token)
       this.token = response.token

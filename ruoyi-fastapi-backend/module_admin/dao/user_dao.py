@@ -512,6 +512,20 @@ class UserDao:
         await db.execute(delete(SysUserRole).where(SysUserRole.user_id.in_([user_role.user_id])))
 
     @classmethod
+    async def delete_user_roles_except_dao(
+        cls,
+        db: AsyncSession,
+        user_id: int,
+        retained_role_ids: set[int],
+    ) -> None:
+        """全量替换用户角色时保留调用方明确指定的关系。"""
+
+        statement = delete(SysUserRole).where(SysUserRole.user_id == user_id)
+        if retained_role_ids:
+            statement = statement.where(SysUserRole.role_id.not_in(retained_role_ids))
+        await db.execute(statement)
+
+    @classmethod
     async def delete_user_role_by_user_and_role_dao(cls, db: AsyncSession, user_role: UserRoleModel) -> None:
         """
         根据用户id及角色id删除用户角色关联信息数据库操作

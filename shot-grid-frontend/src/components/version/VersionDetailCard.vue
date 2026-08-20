@@ -106,7 +106,6 @@ onBeforeUnmount(() => {
     <el-descriptions class="version-facts" :column="2" border size="small">
       <el-descriptions-item label="提交人">{{ version.submitterName || `用户 #${version.submittedBy}` }}</el-descriptions-item>
       <el-descriptions-item label="提交时间">{{ formatVersionDateTime(version.submittedTime) }}</el-descriptions-item>
-      <el-descriptions-item label="版本锁">{{ version.lockVersion }}</el-descriptions-item>
       <el-descriptions-item label="审核单">{{ version.autoReviewList?.reviewListName || '—' }}</el-descriptions-item>
     </el-descriptions>
 
@@ -135,7 +134,7 @@ onBeforeUnmount(() => {
       <el-empty v-else class="empty-files" :image-size="54" description="当前版本没有可访问文件" />
     </section>
 
-    <el-alert v-if="downloadError" class="download-error" :title="downloadError.title" :description="[downloadError.message, downloadError.errorKey].filter(Boolean).join(' · ')" type="error" :closable="false" show-icon />
+    <el-alert v-if="downloadError" class="download-error" :title="downloadError.title" :description="downloadError.message" type="error" :closable="false" show-icon />
 
     <el-collapse v-if="version.aiParams" v-model="activeAiSections" class="ai-snapshot">
       <el-collapse-item title="AI 参数快照" name="ai-params"><pre>{{ JSON.stringify(version.aiParams, null, 2) }}</pre></el-collapse-item>

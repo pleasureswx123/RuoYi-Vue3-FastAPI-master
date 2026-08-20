@@ -131,7 +131,7 @@ onBeforeUnmount(() => {
       <div>
         <p class="sg-eyebrow">PROJECTS</p>
         <h2 class="sg-page-title">项目</h2>
-        <p class="sg-page-description">仅展示当前账号项目成员范围内的数据；具备跨项目权限时可显式切换全部范围。</p>
+        <p class="sg-page-description">默认展示您参与的项目；如有跨项目权限，也可查看全部项目。</p>
       </div>
       <el-button v-if="canCreate" type="primary" :icon="Plus" @click="showCreate = true">创建项目</el-button>
     </header>

@@ -103,9 +103,9 @@ function closeDialog() {
 </script>
 
 <template>
-  <ProjectModal :title="isEdit ? '编辑制作分项' : `新增制作分项 · ${asset.assetName}`" description="制作分项是独立分配、提交图片版本和审核的最小生产单元。已有版本后主数据将失败关闭。" :busy="saving" @close="closeDialog">
+  <ProjectModal :title="isEdit ? '编辑制作分项' : `新增制作分项 · ${asset.assetName}`" description="制作分项是独立分配、提交图片版本和审核的最小生产单元；已有版本后，关键制作信息不可再修改。" :busy="saving" @close="closeDialog">
     <el-form ref="itemForm" :model="form" :rules="itemRules" class="item-form" size="large" label-position="top" aria-label="资产制作分项表单">
-      <el-alert v-if="requestError" :title="requestError.title" type="error" show-icon :closable="false"><span>{{ requestError.message }}</span><code v-if="requestError.errorKey">{{ requestError.errorKey }}</code><el-button v-if="requestError.status === 409" link type="danger" @click="emit('refresh')">刷新后重试</el-button></el-alert>
+      <el-alert v-if="requestError" :title="requestError.title" type="error" show-icon :closable="false"><span>{{ requestError.message }}</span><el-button v-if="requestError.status === 409" link type="danger" @click="emit('refresh')">刷新后重试</el-button></el-alert>
       <el-form-item label="制作分项" prop="productionItem"><el-input v-model="form.productionItem" maxlength="240" :disabled="saving" placeholder="未分配时可留空；分配任务前必须填写" /></el-form-item>
       <el-form-item label="分项说明" prop="description"><el-input v-model="form.description" type="textarea" :rows="3" :disabled="saving" /></el-form-item>
       <el-form-item label="排序" prop="sortOrder"><el-input-number v-model="form.sortOrder" :min="0" :step="1" step-strictly controls-position="right" :disabled="saving" /></el-form-item>
@@ -114,7 +114,7 @@ function closeDialog() {
         <el-form-item label="首次分配制作人" prop="assigneeUserId"><el-select v-model="form.assigneeUserId" class="sg-select" :placeholder="form.productionItem.trim() ? '暂不分配' : '请先填写制作分项'" :disabled="saving || !form.productionItem.trim()"><el-option label="暂不分配" value="" /><el-option v-for="member in members" :key="member.userId" :label="memberLabel(member)" :value="String(member.userId)" /></el-select></el-form-item>
         <el-form-item v-if="form.assigneeUserId" label="首次任务要求" prop="taskDescription"><el-input v-model="form.taskDescription" type="textarea" :rows="2" :disabled="saving" /></el-form-item>
       </template>
-      <el-alert v-else title="该分项已有任务" description="负责人变更必须使用“改派任务”，不会通过主数据编辑静默改派。" type="info" show-icon :closable="false" />
+      <el-alert v-else title="该分项已有任务" description="如需更换负责人，请使用“改派任务”；编辑分项信息不会变更负责人。" type="info" show-icon :closable="false" />
       <footer><el-button :disabled="saving" @click="closeDialog">取消</el-button><el-button type="primary" :loading="saving" @click="submit">{{ isEdit ? '保存分项' : '新增分项' }}</el-button></footer>
     </el-form>
   </ProjectModal>

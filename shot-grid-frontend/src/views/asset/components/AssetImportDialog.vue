@@ -296,7 +296,7 @@ async function runPreview() {
     await syncPreviewTableSelections()
   } catch (error) {
     if (error?.code !== 'ERR_CANCELED' && !controller.signal.aborted && fileGeneration === targetGeneration) {
-      requestError.value = assetErrorState(error, '资产 Excel 预检查失败')
+      requestError.value = assetErrorState(error, '资产 Excel 检查失败')
     }
   } finally {
     if (previewController === controller) previewing.value = false
@@ -334,7 +334,7 @@ async function commitImport() {
   validationMessage.value = ''
   requestError.value = null
   if (!preview.value?.importToken) {
-    validationMessage.value = '预检 Token 不存在，请重新预检'
+    validationMessage.value = '导入检查信息已失效，请重新检查文件'
     return
   }
   if (!selectedRows.value.length) {
@@ -358,16 +358,6 @@ function issueText(issue) {
   return [issue.fieldName, issue.message].filter(Boolean).join('：')
 }
 
-function detailsText(details) {
-  if (!details) return ''
-  if (typeof details === 'string') return details
-  try {
-    return JSON.stringify(details)
-  } catch {
-    return '后端返回了额外诊断信息'
-  }
-}
-
 onBeforeUnmount(() => {
   previewController?.abort()
   downloadController?.abort()
@@ -375,7 +365,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <ProjectModal title="导入资产 Excel" :description="`预检 ${projectName || '当前项目'} 的工作簿，确认跨 Sheet 的资产与制作分项后，再以单事务创建资产、可选任务并自动匹配。`" :busy="isBusy" wide @close="emit('close')">
+  <ProjectModal title="导入资产 Excel" :description="`检查 ${projectName || '当前项目'} 工作簿中的资产与制作分项，确认各工作表内容后再统一导入并自动匹配。`" :busy="isBusy" wide @close="emit('close')">
     <div class="asset-import">
       <el-card class="file-picker" :class="{ 'has-file': file }" shadow="never">
         <el-icon><UploadFilled /></el-icon>
@@ -385,13 +375,13 @@ onBeforeUnmount(() => {
           <el-button :disabled="isBusy">{{ file ? '更换文件' : '选择文件' }}</el-button>
         </el-upload>
         <el-button v-if="file" text type="danger" :disabled="isBusy" @click="clearSelectedFile">清除</el-button>
-        <el-button type="primary" :loading="previewing" :disabled="!file || committing" @click="runPreview">{{ preview ? '重新预检' : '开始预检' }}</el-button>
+        <el-button type="primary" :loading="previewing" :disabled="!file || committing" @click="runPreview">{{ preview ? '重新检查' : '检查文件' }}</el-button>
       </el-card>
-      <el-alert class="template-boundary" title="模板边界" description="官方模板沿用 docs/ 资产样表的 A:G 结构与合并分项方式，示例内容已经匿名化；下载后请先替换所有“示例”数据再预检。" type="info" show-icon :closable="false" />
+      <el-alert class="template-boundary" title="模板填写说明" description="官方模板采用 A:G 标准列及合并分项结构；导入前请替换示例内容并检查必填项。" type="info" show-icon :closable="false" />
 
-      <el-alert v-if="validationMessage || requestError" class="import-error" :title="requestError?.title || '请检查导入条件'" type="error" show-icon :closable="false"><span>{{ requestError?.message || validationMessage }}</span><code v-if="requestError?.errorKey">{{ requestError.errorKey }}</code><span v-if="requestError?.details">{{ detailsText(requestError.details) }}</span></el-alert>
+      <el-alert v-if="validationMessage || requestError" class="import-error" :title="requestError?.title || '请检查导入条件'" type="error" show-icon :closable="false"><span>{{ requestError?.message || validationMessage }}</span></el-alert>
 
-      <el-result v-if="commitResult" class="import-success" icon="success" title="资产已按单事务完成导入" sub-title="资产、制作分项、可选任务和需求匹配结果已经由后端持久化。">
+      <el-result v-if="commitResult" class="import-success" icon="success" title="资产导入完成" sub-title="已创建资产、制作分项和可选任务，并更新需求匹配结果。">
         <template #extra>
           <el-descriptions class="import-success__metrics" :column="3" border>
             <el-descriptions-item label="提交行">{{ commitResult.committedRows }}</el-descriptions-item><el-descriptions-item label="新增分项">{{ commitResult.createdAssetItems }}</el-descriptions-item><el-descriptions-item label="新增任务">{{ commitResult.createdTasks }}</el-descriptions-item><el-descriptions-item label="缺名称警告">{{ commitResult.missingProductionItemWarnings }}</el-descriptions-item><el-descriptions-item label="自动匹配">{{ commitResult.autoMatchedRequirements }}</el-descriptions-item><el-descriptions-item label="待处理 / 冲突">{{ commitResult.pendingRequirements }} / {{ commitResult.conflictRequirements }}</el-descriptions-item>
@@ -408,11 +398,11 @@ onBeforeUnmount(() => {
           <el-descriptions-item label="错误行"><el-tag size="small" effect="plain" round type="danger">{{ preview.summary.errorRows }}<template v-if="overriddenRowCount"> · 已处理 {{ overriddenRowCount }}</template></el-tag></el-descriptions-item>
           <el-descriptions-item label="资产 / 制作分项"><strong>{{ preview.summary.distinctAssets }} / {{ preview.summary.distinctAssetItems }}</strong></el-descriptions-item>
           <el-descriptions-item label="预计自动匹配"><strong>{{ preview.summary.estimatedAutoMatches }}</strong></el-descriptions-item>
-          <el-descriptions-item label="Token 到期"><strong>{{ new Date(preview.expiresAt).toLocaleTimeString('zh-CN') }}</strong></el-descriptions-item>
+          <el-descriptions-item label="检查结果有效至"><strong>{{ new Date(preview.expiresAt).toLocaleTimeString('zh-CN') }}</strong></el-descriptions-item>
         </el-descriptions>
 
         <section v-if="typeSummary.length" class="type-summary"><el-tag v-for="([type,summary]) in typeSummary" :key="type" effect="plain" round :type="tagTypeFromTone(assetTypeMeta(type).tone)"><strong>{{ assetTypeMeta(type).label }}</strong> {{ summary.assets }} 资产 / {{ summary.items }} 分项 / {{ summary.validRows }} 有效</el-tag></section>
-        <el-alert v-if="preview.workbookWarnings?.length" class="workbook-warnings" title="工作簿级警告" type="warning" show-icon :closable="false"><ul><li v-for="issue in preview.workbookWarnings" :key="`${issue.errorKey}-${issue.message}`">{{ issue.message }} <code>{{ issue.errorKey }}</code></li></ul></el-alert>
+        <el-alert v-if="preview.workbookWarnings?.length" class="workbook-warnings" title="工作簿级警告" type="warning" show-icon :closable="false"><ul><li v-for="issue in preview.workbookWarnings" :key="`${issue.errorKey}-${issue.message}`">{{ issue.message }}</li></ul></el-alert>
 
         <div class="selection-toolbar"><span>已选 {{ selectedPreviewRows.length }} 行 · {{ selectedRows.length }} 条可导入</span><el-button v-if="selectedPreviewRows.length" type="primary" plain @click="openBatchAssignDialog">批量分配</el-button></div>
 
@@ -426,12 +416,12 @@ onBeforeUnmount(() => {
               <el-table-column label="制作分项" min-width="190"><template #default="{ row }">{{ row.normalized?.productionItem || '待补充' }}</template></el-table-column>
               <el-table-column label="制作人" width="210"><template #default="{ row }"><el-select class="assignee-select" :model-value="assigneeSelectValue(row)" :aria-label="`选择 ${sheetName} 第 ${row.rowNumber} 行制作人`" :title="rowHasProductionItem(row) ? '选择制作人' : '制作分项为空时只能保持未分配'" :disabled="!row.normalized" @change="value => changeAssignee(row, value)"><el-option v-if="!hasAssigneeChoice(row) && row.normalized?.assigneeUserName" :label="`未匹配：${row.normalized.assigneeUserName}`" value="__unresolved__" disabled /><el-option label="未分配" value="" /><el-option v-for="member in assignableMembers" :key="member.userId" :label="assigneeLabel(member.userId)" :value="String(member.userId)" :disabled="!rowHasProductionItem(row)" /></el-select></template></el-table-column>
               <el-table-column label="描述 / 备注" min-width="280"><template #default="{ row }"><div class="description-cell">{{ row.normalized?.itemDescription || row.normalized?.assetDescription || '—' }}<small>{{ row.normalized?.remark || '' }}</small></div></template></el-table-column>
-              <el-table-column label="预检结果" min-width="260"><template #default="{ row }"><div class="issue-list"><el-tag v-if="selectedAssigneeId(row)" size="small" type="success" effect="plain" round>已选择：{{ assigneeLabel(selectedAssigneeId(row)) }}</el-tag><el-tag v-else-if="hasAssigneeChoice(row)" size="small" type="success" effect="plain" round>将以未分配状态导入</el-tag><el-tag v-else-if="row.canImport && !row.warnings.length" size="small" type="success" effect="plain" round>可导入</el-tag><el-tag v-for="issue in visibleWarnings(row)" :key="`w-${issue.errorKey}-${issue.fieldName}`" size="small" type="warning" effect="plain" round>{{ issueText(issue) }}</el-tag><el-tag v-for="issue in visibleErrors(row)" :key="`e-${issue.errorKey}-${issue.fieldName}`" size="small" type="danger" effect="plain" round>{{ issueText(issue) }}</el-tag></div></template></el-table-column>
+              <el-table-column label="检查结果" min-width="260"><template #default="{ row }"><div class="issue-list"><el-tag v-if="selectedAssigneeId(row)" size="small" type="success" effect="plain" round>已选择：{{ assigneeLabel(selectedAssigneeId(row)) }}</el-tag><el-tag v-else-if="hasAssigneeChoice(row)" size="small" type="success" effect="plain" round>将以未分配状态导入</el-tag><el-tag v-else-if="row.canImport && !row.warnings.length" size="small" type="success" effect="plain" round>可导入</el-tag><el-tag v-for="issue in visibleWarnings(row)" :key="`w-${issue.errorKey}-${issue.fieldName}`" size="small" type="warning" effect="plain" round>{{ issueText(issue) }}</el-tag><el-tag v-for="issue in visibleErrors(row)" :key="`e-${issue.errorKey}-${issue.fieldName}`" size="small" type="danger" effect="plain" round>{{ issueText(issue) }}</el-tag></div></template></el-table-column>
             </el-table>
           </div>
         </el-card>
 
-        <footer><div><strong>正式提交将全量回滚任一失败行</strong><p>系统内部以 Sheet 和源数据行共同定位；Token 与幂等键只保存在当前对话框内存。</p></div><el-button :disabled="isBusy" @click="emit('close')">取消</el-button><el-button type="primary" :loading="committing" :disabled="!selectedRows.length" @click="commitImport">正式导入 {{ selectedRows.length }} 行</el-button></footer>
+        <footer><div><strong>任一选中行失败，本次导入均不会保存</strong><p>请确认各工作表中的资产、制作分项和制作人信息后再提交。</p></div><el-button :disabled="isBusy" @click="emit('close')">取消</el-button><el-button type="primary" :loading="committing" :disabled="!selectedRows.length" @click="commitImport">正式导入 {{ selectedRows.length }} 行</el-button></footer>
       </template>
     </div>
 

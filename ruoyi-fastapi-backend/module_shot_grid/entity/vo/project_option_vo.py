@@ -67,6 +67,27 @@ class ShotGridMemberCandidateModel(ShotGridApiModel):
     dept_name: str | None = None
 
 
+class ShotGridPlatformRoleOptionModel(ShotGridApiModel):
+    """Shot Grid 项目角色对应的安全平台角色投影。"""
+
+    project_role: Literal['director', 'creator']
+    project_role_label: str
+    system_role_id: int = Field(gt=0, le=SQL_BIGINT_MAX)
+    system_role_key: Literal['shotgrid_admin', 'shotgrid_creator']
+    system_role_name: str
+
+
+class ShotGridPlatformRoleReconcileResultModel(ShotGridApiModel):
+    """管理员执行平台角色绑定对账后的汇总。"""
+
+    processed_user_count: int = Field(ge=0)
+    changed_user_count: int = Field(ge=0)
+    granted_binding_count: int = Field(ge=0)
+    revoked_binding_count: int = Field(ge=0)
+    required_preserved_binding_count: int = Field(ge=0)
+    external_preserved_binding_count: int = Field(ge=0)
+
+
 class ShotGridShotAssigneeOptionQueryModel(ShotGridApiModel):
     """镜头首位制作人选项分页查询。"""
 

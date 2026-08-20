@@ -53,15 +53,15 @@ const stepsActive = computed(() => isCommitted.value ? submissionStatusOrder.len
     <el-descriptions class="status-facts" :column="4" border size="small">
       <el-descriptions-item label="业务文件名">{{ submission.businessFileName || '—' }}</el-descriptions-item>
       <el-descriptions-item label="提交编号">#{{ submission.submissionId }}</el-descriptions-item>
-      <el-descriptions-item label="尝试次数">{{ submission.attemptCount ?? 0 }}</el-descriptions-item>
+      <el-descriptions-item label="处理次数">{{ submission.attemptCount ?? 0 }}</el-descriptions-item>
       <el-descriptions-item label="正式版本">{{ submission.versionId ? `#${submission.versionId}` : '尚未形成' }}</el-descriptions-item>
     </el-descriptions>
 
     <el-alert
       v-if="submission.submissionStatus === 'pending'"
       class="worker-boundary"
-      title="仍在等待后台发布"
-      description="若长时间停留在此阶段，可能是版本 Worker 尚未启用或当前进程未取得 Leader；文件此时只在平台私有区，不能视为版本成功。"
+      title="仍在等待处理"
+      description="若长时间没有进展，请刷新状态或联系管理员；正式版本生成前请勿重复提交。"
       type="warning"
       :closable="false"
       show-icon
@@ -70,13 +70,13 @@ const stepsActive = computed(() => isCommitted.value ? submissionStatusOrder.len
       v-if="submission.replayed"
       class="worker-boundary"
       title="已恢复原提交"
-      description="后端已按同一幂等键恢复原提交，没有创建重复版本号或重复文件。"
+      description="系统已恢复原提交，没有创建重复的版本或文件。"
       type="success"
       :closable="false"
       show-icon
     />
-    <el-alert v-if="isFailed" class="failure-detail" title="版本发布失败" :description="[submission.lastErrorMessage || '尚未形成正式版本，请查看诊断后重试。', submission.lastErrorKey].filter(Boolean).join(' · ')" type="error" :closable="false" show-icon />
-    <el-alert v-if="pollError" class="poll-error" :title="pollError.title" :description="[pollError.message, pollError.errorKey].filter(Boolean).join(' · ')" type="error" :closable="false" show-icon />
+    <el-alert v-if="isFailed" class="failure-detail" title="版本发布失败" :description="submission.lastErrorMessage || '尚未生成正式版本，请重试或联系项目管理人。'" type="error" :closable="false" show-icon />
+    <el-alert v-if="pollError" class="poll-error" :title="pollError.title" :description="pollError.message" type="error" :closable="false" show-icon />
   </el-card>
 </template>
 

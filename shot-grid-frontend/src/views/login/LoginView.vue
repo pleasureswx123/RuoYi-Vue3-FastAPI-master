@@ -13,6 +13,7 @@ const formRef = ref()
 const submitting = ref(false)
 const errorMessage = ref('')
 const form = reactive({ username: '', password: '', code: '' })
+const companyLogoUrl = `${import.meta.env.BASE_URL}company_logo.svg`
 
 const captcha = computed(() => sessionStore.captcha || {})
 const captchaEnabled = computed(() => captcha.value.enabled !== false)
@@ -82,6 +83,13 @@ onMounted(() => refreshCaptcha().catch(() => undefined))
   <main class="login-page">
     <section class="login-scene" aria-label="Shot Grid 产品介绍">
       <div class="login-scene__frame-lines" aria-hidden="true"></div>
+      <img
+        class="login-scene__company-logo"
+        :src="companyLogoUrl"
+        alt="LAPUTTA"
+        width="1231"
+        height="267"
+      />
       <div class="login-scene__content">
         <p class="login-scene__eyebrow">AI FILM PRODUCTION</p>
         <h1>让每一个镜头，<br />沿着清晰的制作链路完成。</h1>
@@ -157,7 +165,7 @@ onMounted(() => refreshCaptcha().catch(() => undefined))
           </el-button>
         </el-form>
 
-        <el-alert class="login-security" title="登录信息通过平台统一认证，本应用不会持久化保存密码。" type="info" :closable="false" show-icon />
+        <el-alert class="login-security" title="账号由平台统一管理，请妥善保管登录信息。" type="info" :closable="false" show-icon />
       </div>
     </section>
   </main>
@@ -234,6 +242,18 @@ onMounted(() => refreshCaptcha().catch(() => undefined))
   right: -1px;
   bottom: -1px;
   border-width: 0 2px 2px 0;
+}
+
+.login-scene__company-logo {
+  position: absolute;
+  top: clamp(52px, 7vw, 104px);
+  left: clamp(52px, 7vw, 104px);
+  z-index: 1;
+  display: block;
+  width: clamp(300px, 26vw, 380px);
+  height: auto;
+  opacity: 0.9;
+  pointer-events: none;
 }
 
 .login-scene__content {

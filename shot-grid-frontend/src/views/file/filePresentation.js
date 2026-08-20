@@ -16,11 +16,11 @@ const VERSION_STATUS = Object.freeze({
 })
 
 export function fileRoleLabel(role) {
-  return ROLE_LABELS[role] || role || '未分类'
+  return ROLE_LABELS[role] || '其他用途'
 }
 
 export function fileVersionStatusMeta(status) {
-  return VERSION_STATUS[status] || { label: status || '未知', tone: 'neutral' }
+  return VERSION_STATUS[status] || { label: '未知状态', tone: 'neutral' }
 }
 
 export function formatFileSize(bytes) {
@@ -43,7 +43,7 @@ export function fileErrorState(error, fallback = '文件数据加载失败') {
   return {
     status: status || null,
     title: status === 403 ? '没有文件访问权限' : status === 404 ? '文件资源不存在' : fallback,
-    message: error?.message || '请求未完成，请稍后重试。',
+    message: error?.message || '操作未完成，请稍后重试。',
     retryable: status !== 403 && status !== 404,
     errorKey: error?.errorKey || null
   }

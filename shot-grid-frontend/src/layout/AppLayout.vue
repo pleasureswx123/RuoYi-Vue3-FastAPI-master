@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessageBox } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   ArrowLeftBold,
   ArrowRightBold,
@@ -9,7 +9,9 @@ import {
   Collection,
   Film,
   FolderOpened,
+  FullScreen,
   Grid,
+  ScaleToOriginal,
   Search,
   SwitchButton,
   Tickets
@@ -24,6 +26,13 @@ const router = useRouter()
 const sessionStore = useSessionStore()
 const collapsed = ref(false)
 const searchVisible = ref(false)
+const fullscreenSupported = ref(false)
+const isFullscreen = ref(false)
+const fullscreenPending = ref(false)
+const companyLogoUrl = `${import.meta.env.BASE_URL}company_logo.svg`
+const companyLogoMaskStyle = Object.freeze({
+  '--app-company-logo-mask': `url("${companyLogoUrl}")`
+})
 
 const localNavigation = Object.freeze({
   workbench: { title: '工作台', path: '/workbench', icon: Grid },
@@ -77,6 +86,7 @@ const passwordNotice = computed(() => {
   if (sessionStore.passwordNotice === 'expired') return '当前密码已过期，请尽快在管理平台修改密码。'
   return ''
 })
+const fullscreenLabel = computed(() => (isFullscreen.value ? '退出全屏' : '进入全屏'))
 
 async function handleSignOut() {
   try {
@@ -99,8 +109,51 @@ function handleSearchShortcut(event) {
   }
 }
 
-onMounted(() => window.addEventListener('keydown', handleSearchShortcut))
-onBeforeUnmount(() => window.removeEventListener('keydown', handleSearchShortcut))
+function syncFullscreenState() {
+  isFullscreen.value = Boolean(document.fullscreenElement)
+}
+
+async function toggleFullscreen() {
+  if (!fullscreenSupported.value || fullscreenPending.value) return
+
+  const leavingFullscreen = Boolean(document.fullscreenElement)
+  fullscreenPending.value = true
+  try {
+    if (leavingFullscreen) {
+      await document.exitFullscreen()
+    } else {
+      await document.documentElement.requestFullscreen()
+    }
+  } catch {
+    ElMessage.warning(
+      leavingFullscreen
+        ? '无法退出全屏，请按 Esc 重试。'
+        : '浏览器未允许进入全屏，请检查窗口权限后重试。'
+    )
+  } finally {
+    syncFullscreenState()
+    fullscreenPending.value = false
+  }
+}
+
+onMounted(() => {
+  window.addEventListener('keydown', handleSearchShortcut)
+  fullscreenSupported.value = document.fullscreenEnabled !== false
+    && typeof document.documentElement?.requestFullscreen === 'function'
+    && typeof document.exitFullscreen === 'function'
+  syncFullscreenState()
+  if (fullscreenSupported.value) {
+    document.addEventListener('fullscreenchange', syncFullscreenState)
+  }
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', handleSearchShortcut)
+  document.removeEventListener('fullscreenchange', syncFullscreenState)
+  if (document.fullscreenElement === document.documentElement && typeof document.exitFullscreen === 'function') {
+    void document.exitFullscreen().catch(() => undefined)
+  }
+})
 </script>
 
 <template>
@@ -141,6 +194,16 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleSearchShortcut
         <el-empty v-else-if="!collapsed" class="app-navigation__empty" :image-size="42" description="当前账号没有可访问的业务模块" />
       </nav>
 
+      <div
+        v-show="!collapsed"
+        class="app-company-brand"
+        :style="companyLogoMaskStyle"
+        role="img"
+        aria-label="LAPUTTA"
+      >
+        <span class="app-company-brand__logo" aria-hidden="true"></span>
+      </div>
+
       <el-button
         class="app-sidebar__toggle"
         text
@@ -171,6 +234,18 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleSearchShortcut
           >
             搜索 <kbd>Ctrl K</kbd>
           </el-button>
+          <el-tooltip v-if="fullscreenSupported" :content="fullscreenLabel" placement="bottom" :show-after="350">
+            <el-button
+              class="app-fullscreen-toggle"
+              text
+              circle
+              :icon="isFullscreen ? ScaleToOriginal : FullScreen"
+              :disabled="fullscreenPending"
+              :aria-label="fullscreenLabel"
+              :aria-pressed="isFullscreen"
+              @click="toggleFullscreen"
+            />
+          </el-tooltip>
           <ThemeModeSwitch />
           <el-avatar class="app-account__avatar" :size="32" aria-hidden="true">{{ userDisplayName.slice(0, 1) }}</el-avatar>
           <span class="app-account__name">{{ userDisplayName }}</span>
@@ -209,6 +284,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleSearchShortcut
   height: 100vh;
   min-width: 0;
   flex-direction: column;
+  overflow: hidden;
   background: var(--sg-sidebar-bg);
   border-right: 1px solid var(--sg-border);
   backdrop-filter: blur(18px);
@@ -270,9 +346,16 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleSearchShortcut
 }
 
 .app-navigation {
+  flex: 1 1 auto;
+  min-width: 0;
   min-height: 0;
   padding: 20px 12px;
+  overflow-x: hidden;
   overflow-y: auto;
+}
+
+.app-shell.is-collapsed .app-navigation {
+  padding-inline: 6px;
 }
 
 .app-navigation__label {
@@ -291,6 +374,10 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleSearchShortcut
   border-right: 0;
 }
 
+.app-shell.is-collapsed .app-navigation__menu {
+  width: 100%;
+}
+
 .app-navigation__menu:deep(.el-menu-item) {
   height: 44px;
   margin: 4px 0;
@@ -299,6 +386,11 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleSearchShortcut
   border: 1px solid transparent;
   border-radius: 10px;
   transition: 150ms ease;
+}
+
+.app-shell.is-collapsed .app-navigation__menu:deep(.el-menu-item) {
+  justify-content: center;
+  padding-inline: 0;
 }
 
 .app-navigation__menu:deep(.el-menu-item.is-active) {
@@ -319,12 +411,44 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleSearchShortcut
   padding: 14px 4px;
 }
 
+.app-company-brand {
+  display: flex;
+  height: 56px;
+  min-width: 0;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 20px 12px;
+  border-top: 1px solid var(--sg-border);
+}
+
+.app-shell.is-collapsed .app-company-brand {
+  display: none;
+}
+
+.app-company-brand__logo {
+  display: block;
+  width: 112px;
+  height: 25px;
+  opacity: 0.72;
+  background-color: var(--sg-text-muted);
+  pointer-events: none;
+  mask-image: var(--app-company-logo-mask);
+  mask-position: center;
+  mask-repeat: no-repeat;
+  mask-size: contain;
+  -webkit-mask-image: var(--app-company-logo-mask);
+  -webkit-mask-position: center;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-size: contain;
+}
+
 .app-sidebar__toggle {
   width: 100%;
   height: 58px;
   gap: 10px;
   justify-content: flex-start;
-  margin: auto 0 0;
+  margin: 0;
   padding: 0 24px;
   color: var(--sg-text-muted);
   border-top: 1px solid var(--sg-border);
@@ -371,6 +495,17 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleSearchShortcut
   display: flex;
   gap: 10px;
   align-items: center;
+}
+
+.app-fullscreen-toggle {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  padding: 0;
+  --el-button-text-color: var(--sg-text-secondary);
+  --el-button-hover-text-color: var(--sg-text);
+  --el-button-hover-bg-color: var(--sg-fill-soft);
+  --el-button-hover-border-color: transparent;
 }
 
 .app-search-trigger kbd {
@@ -425,6 +560,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleSearchShortcut
   .app-brand__copy,
   .app-navigation__label,
   .app-navigation__empty,
+  .app-company-brand,
   .app-sidebar__toggle span,
   .app-account__name {
     display: none;

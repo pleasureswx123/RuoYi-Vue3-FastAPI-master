@@ -222,7 +222,7 @@ onBeforeUnmount(() => {
 <template>
   <section class="sg-page file-center-page">
     <header class="sg-page-heading">
-      <div><p class="sg-eyebrow">FILES & NAS</p><h2 class="sg-page-title">文件与 NAS</h2><p class="sg-page-description">追溯正式版本文件、鉴权下载，并查看项目存储绑定与目录操作状态。</p></div>
+      <div><p class="sg-eyebrow">FILES & NAS</p><h2 class="sg-page-title">文件与 NAS</h2><p class="sg-page-description">集中查看正式版本文件，安全下载，并了解项目存储位置与文件处理进度。</p></div>
       <el-button :icon="Refresh" :loading="projectsLoading || filesLoading" @click="refreshAll">刷新</el-button>
     </header>
 

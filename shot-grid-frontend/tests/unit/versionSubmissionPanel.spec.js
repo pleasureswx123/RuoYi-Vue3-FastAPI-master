@@ -151,7 +151,7 @@ describe('版本上传与发布面板', () => {
     expect(createVersionSubmission).toHaveBeenCalledTimes(2)
     expect(createVersionSubmission.mock.calls[1][1].fileId).toBe(fileId)
     expect(createVersionSubmission.mock.calls[1][2]).toBe(createVersionSubmission.mock.calls[0][2])
-    expect(wrapper.text()).toContain('后端已按同一幂等键恢复原提交')
+    expect(wrapper.text()).toContain('已恢复原提交')
     wrapper.unmount()
   })
 

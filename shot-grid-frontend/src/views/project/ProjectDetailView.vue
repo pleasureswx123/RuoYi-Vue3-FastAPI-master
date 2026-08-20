@@ -57,7 +57,7 @@ const metrics = computed(() => [
 
 async function loadProject() {
   if (!projectId.value) {
-    errorState.value = { title: '项目地址无效', message: '项目 ID 必须为正整数。', retryable: false, status: 404 }
+    errorState.value = { title: '项目地址无效', message: '请从项目列表重新进入。', retryable: false, status: 404 }
     return
   }
   controller?.abort()

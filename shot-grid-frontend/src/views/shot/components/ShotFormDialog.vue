@@ -135,12 +135,6 @@ function optionalText(value) {
   return normalized || null
 }
 
-function detailsText(details) {
-  if (!details) return ''
-  if (typeof details === 'string') return details
-  try { return JSON.stringify(details) } catch { return '后端返回了额外诊断信息' }
-}
-
 function buildPayload() {
   const sceneId = Number(form.sceneId)
   const shotNo = Number(form.shotNo)
@@ -236,8 +230,8 @@ onBeforeUnmount(() => sceneController?.abort())
         <el-form-item label="色调参考" prop="colorReference"><el-input v-model="form.colorReference" type="textarea" :rows="3" :disabled="busy" /></el-form-item>
         <el-form-item label="备注" prop="remark"><el-input v-model="form.remark" type="textarea" :rows="3" maxlength="500" show-word-limit :disabled="busy" /></el-form-item>
       </div>
-      <p v-if="isEdit && shot.assets?.length" class="shot-form__hint">当前 {{ shot.assets.length }} 项资产关系会原样保留；本批不在镜头表单中创建或猜测正式资产。</p>
-      <el-alert v-if="validationMessage || requestError" class="shot-form__alert" :type="requestError ? 'error' : 'warning'" :closable="false" show-icon :title="requestError?.title || '请检查表单'"><div class="form-alert-content"><p>{{ requestError?.message || validationMessage }}</p><code v-if="requestError?.errorKey">{{ requestError.errorKey }}</code><small v-if="requestError?.details">{{ detailsText(requestError.details) }}</small><el-button v-if="requestError?.status === 409" link type="primary" @click="emit('refresh')">刷新镜头后重试</el-button></div></el-alert>
+      <p v-if="isEdit && shot.assets?.length" class="shot-form__hint">当前 {{ shot.assets.length }} 项关联资产将保持不变；如需调整，请前往资产管理。</p>
+      <el-alert v-if="validationMessage || requestError" class="shot-form__alert" :type="requestError ? 'error' : 'warning'" :closable="false" show-icon :title="requestError?.title || '请检查表单'"><div class="form-alert-content"><p>{{ requestError?.message || validationMessage }}</p><el-button v-if="requestError?.status === 409" link type="primary" @click="emit('refresh')">刷新镜头后重试</el-button></div></el-alert>
       <footer><el-button :disabled="busy" @click="closeDialog">取消</el-button><el-button type="primary" :loading="busy" :disabled="!canSubmit" @click="submit">{{ isEdit ? '保存修改' : '创建镜头' }}</el-button></footer>
     </el-form>
   </ProjectModal>

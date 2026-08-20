@@ -111,7 +111,7 @@ async function loadDetail() {
     loading.value = false
     errorState.value = {
       title: '任务地址无效',
-      message: '任务 ID 必须是正整数。',
+      message: '请返回任务工作台并重新打开该任务。',
       retryable: false
     }
     return
@@ -175,7 +175,7 @@ async function beginTask() {
   try {
     const response = await startTask(operation.taskId, { lockVersion: operation.lockVersion })
     if (!isCurrentRouteOperation(operation)) {
-      ElMessage.success('任务已开始；当前页面未自动刷新。')
+      ElMessage.success('任务已开始，请返回原任务查看最新结果。')
       return
     }
     task.value = response.data
@@ -191,7 +191,7 @@ async function beginTask() {
 
 async function handleSaved(_result, operationContext) {
   if (disposed || !isActiveEdit(operationContext)) {
-    ElMessage.success('任务已保存；当前页面未自动刷新。')
+    ElMessage.success('任务已保存，请返回原任务查看最新结果。')
     return
   }
   closeEditDialog()
@@ -211,7 +211,7 @@ async function handleVersionCommitted(_status, operationContext) {
     Number(operationContext?.taskId) !== taskId.value ||
     Number(operationContext?.operationGeneration) !== routeContext.value?.operationGeneration
   ) {
-    ElMessage.success('版本已发布；当前页面未自动刷新。')
+    ElMessage.success('版本已发布，请返回原任务查看最新结果。')
     return
   }
   ElMessage.success('新版本已发布并创建自动审核单')
@@ -283,7 +283,6 @@ onBeforeUnmount(() => {
           <el-descriptions class="task-fields" :column="4" border>
             <el-descriptions-item label="主制作人">{{ taskAssigneeLabel(task.assignee) }}</el-descriptions-item>
             <el-descriptions-item label="截止日期"><el-tag :type="tagTypeFromTone(taskDueState(task.dueDate).tone)" size="small" effect="plain" round>{{ taskDueState(task.dueDate).label }}</el-tag></el-descriptions-item>
-            <el-descriptions-item label="任务锁版本">{{ task.lockVersion }}</el-descriptions-item>
             <el-descriptions-item label="已提交版本">{{ task.versionCount }}</el-descriptions-item>
           </el-descriptions>
         </el-card>
@@ -295,7 +294,7 @@ onBeforeUnmount(() => {
           <p>{{ task.target.targetDescription || '暂无对象说明' }}</p>
           <el-descriptions class="task-fields" :column="2" border>
             <el-descriptions-item label="类型"><el-tag :type="tagTypeFromTone(taskKindMeta(task.taskKind).tone)" size="small" effect="plain" round>{{ taskKindMeta(task.taskKind).label }}</el-tag></el-descriptions-item>
-            <el-descriptions-item label="生命周期"><el-tag :type="tagTypeFromTone(task.target.lifecycleStatus === 'active' ? 'success' : 'muted')" size="small" effect="plain" round>{{ task.target.lifecycleStatus === 'active' ? '活动' : '已归档' }}</el-tag></el-descriptions-item>
+            <el-descriptions-item label="对象状态"><el-tag :type="tagTypeFromTone(task.target.lifecycleStatus === 'active' ? 'success' : 'muted')" size="small" effect="plain" round>{{ task.target.lifecycleStatus === 'active' ? '活动' : '已归档' }}</el-tag></el-descriptions-item>
           </el-descriptions>
           <el-button v-if="targetRoute" class="text-action" link type="primary" @click="router.push(targetRoute)">查看{{ taskKindMeta(task.taskKind).shortLabel }}详情</el-button>
         </el-card>

@@ -81,6 +81,6 @@ export function taskErrorState(error, fallbackTitle = '任务加载失败') {
   if (status === 403) return { ...base, title: '没有任务访问权限', retryable: false }
   if (status === 404) return { ...base, title: '任务不存在', retryable: false }
   if (status === 409) return { ...base, title: '任务已发生变更', retryable: true }
-  if (status >= 500 || status === 0) return { ...base, title: '任务服务暂不可用', retryable: true }
+  if (status >= 500 || status === 0) return { ...base, title: '任务暂时无法打开', retryable: true }
   return { ...base, title: fallbackTitle }
 }

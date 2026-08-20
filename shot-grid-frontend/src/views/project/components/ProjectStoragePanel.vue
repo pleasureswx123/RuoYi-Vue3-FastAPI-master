@@ -93,7 +93,7 @@ async function loadOperations() {
     operations.value = Array.isArray(response.rows) ? response.rows : []
     total.value = Number(response.total || 0)
   } catch (error) {
-    if (error?.code !== 'ERR_CANCELED') operationsError.value = projectErrorState(error, '目录操作诊断加载失败')
+    if (error?.code !== 'ERR_CANCELED') operationsError.value = projectErrorState(error, '目录操作记录加载失败')
   } finally { operationsLoading.value = false }
 }
 
@@ -106,7 +106,7 @@ async function copyPath() {
     await navigator.clipboard.writeText(storage.value.projectPathSnapshot)
     ElMessage.success('NAS 路径已复制')
   } catch {
-    ElMessage.error('浏览器未允许复制，请手动选择路径文本')
+    ElMessage.error('复制未成功，请手动选择并复制路径')
   }
 }
 
@@ -193,7 +193,7 @@ onBeforeUnmount(() => { storageController?.abort(); operationsController?.abort(
   <el-card class="detail-panel storage-panel" shadow="never">
     <template #header>
       <header class="detail-panel__heading">
-        <div><p class="sg-eyebrow">FILE & NAS</p><h2>存储状态与目录诊断</h2><span>浏览器只提供查看和复制 UNC 路径，不假装直接打开共享目录。</span></div>
+        <div><p class="sg-eyebrow">FILE & NAS</p><h2>项目存储与目录状态</h2><span>可在此查看或复制项目 NAS 路径，并跟踪目录创建与重试记录。</span></div>
         <el-button :icon="Refresh" circle aria-label="刷新存储状态" :loading="loading || operationsLoading" @click="refreshAll" />
       </header>
     </template>
@@ -208,22 +208,22 @@ onBeforeUnmount(() => { storageController?.abort(); operationsController?.abort(
           <div class="storage-path"><code>{{ storage.projectPathSnapshot }}</code><el-button text :icon="CopyDocument" @click="copyPath">复制路径</el-button></div>
         </el-descriptions-item>
       </el-descriptions>
-      <el-alert v-if="storage.lastErrorMessage" :title="storage.lastErrorKey || 'STORAGE_ERROR'" :description="storage.lastErrorMessage" type="error" show-icon :closable="false" />
+      <el-alert v-if="storage.lastErrorMessage" title="项目存储异常" :description="storage.lastErrorMessage" type="error" show-icon :closable="false" />
       <el-button v-if="canRetryProject && storage.storageStatus === 'failed'" type="warning" @click="openProjectRetry">重试项目初始目录</el-button>
     </el-card>
-    <el-empty v-else :image-size="64" description="当前项目尚无存储状态快照" />
+    <el-empty v-else :image-size="64" description="当前项目尚无存储信息" />
 
     <template v-if="canDiagnose">
       <el-form :model="filters" class="operation-toolbar" size="large" inline aria-label="目录操作筛选">
         <strong>目录操作记录</strong>
         <el-form-item prop="operationStatus">
           <el-select v-model="filters.operationStatus" class="sg-select" placeholder="全部状态" aria-label="目录操作状态" @change="filters.pageNum = 1; loadOperations()">
-            <el-option label="全部状态" value="" /><el-option label="等待执行" value="pending" /><el-option label="执行中" value="processing" /><el-option label="成功" value="succeeded" /><el-option label="等待重试" value="retry_wait" /><el-option label="失败" value="failed" /><el-option label="等待补偿" value="compensation_pending" /><el-option label="已补偿" value="compensated" /><el-option label="补偿失败" value="compensation_failed" />
+            <el-option label="全部状态" value="" /><el-option label="等待执行" value="pending" /><el-option label="执行中" value="processing" /><el-option label="成功" value="succeeded" /><el-option label="等待重试" value="retry_wait" /><el-option label="失败" value="failed" /><el-option label="等待恢复" value="compensation_pending" /><el-option label="已恢复" value="compensated" /><el-option label="恢复失败" value="compensation_failed" />
           </el-select>
         </el-form-item>
         <el-form-item prop="operationType">
           <el-select v-model="filters.operationType" class="sg-select" placeholder="全部类型" aria-label="目录操作类型" @change="filters.pageNum = 1; loadOperations()">
-            <el-option label="全部类型" value="" /><el-option label="项目初始化" value="initialize_project" /><el-option label="集目录" value="ensure_episode_directory" /><el-option label="镜头目录" value="ensure_shot_directory" /><el-option label="资产目录" value="ensure_asset_directory" /><el-option label="目录对账" value="reconcile_directory" />
+            <el-option label="全部类型" value="" /><el-option label="项目初始化" value="initialize_project" /><el-option label="集目录" value="ensure_episode_directory" /><el-option label="镜头目录" value="ensure_shot_directory" /><el-option label="资产目录" value="ensure_asset_directory" /><el-option label="目录核验" value="reconcile_directory" />
           </el-select>
         </el-form-item>
       </el-form>
@@ -241,9 +241,9 @@ onBeforeUnmount(() => { storageController?.abort(); operationsController?.abort(
         <el-pagination v-if="total > filters.pageSize" class="operation-pagination" background layout="total, prev, pager, next" :current-page="filters.pageNum" :page-size="filters.pageSize" :total="total" :disabled="operationsLoading" @current-change="changePage" />
       </template>
     </template>
-    <el-alert v-else class="diagnostic-note" title="目录操作诊断仅对项目管理人或跨项目管理员开放" type="info" show-icon :closable="false" />
+    <el-alert v-else class="diagnostic-note" title="目录操作记录仅对项目管理人或跨项目管理员开放" type="info" show-icon :closable="false" />
 
-    <ProjectModal v-if="retryTarget" title="人工重试目录操作" description="重试会创建新的目录操作记录，不覆盖原失败记录。" :busy="retryBusy" @close="closeRetryDialog">
+    <ProjectModal v-if="retryTarget" title="人工重试目录操作" description="重试后会新增一条操作记录，原失败记录将继续保留。" :busy="retryBusy" @close="closeRetryDialog">
       <el-form ref="retryFormRef" :model="retryForm" :rules="retryRules" class="retry-form" label-position="top">
         <el-form-item label="重试原因" prop="reason" required><el-input v-model="retryForm.reason" type="textarea" :rows="4" maxlength="500" show-word-limit /></el-form-item>
         <el-alert v-if="retryError" :title="retryError.title" type="error" show-icon :closable="false"><span>{{ retryError.message }}</span><el-button v-if="retryError.status === 409" link type="danger" @click="closeRetryDialog(); refreshAll()">刷新最新状态</el-button></el-alert>
@@ -262,7 +262,7 @@ onBeforeUnmount(() => { storageController?.abort(); operationsController?.abort(
         <el-descriptions-item label="执行次数">{{ operationDetail.attemptCount }}</el-descriptions-item>
         <el-descriptions-item label="开始时间">{{ formatDateTime(operationDetail.startedTime) }}</el-descriptions-item>
         <el-descriptions-item label="完成时间">{{ formatDateTime(operationDetail.completedTime) }}</el-descriptions-item>
-        <el-descriptions-item v-if="operationDetail.lastErrorMessage" label="最近错误">{{ operationDetail.lastErrorKey }} · {{ operationDetail.lastErrorMessage }}</el-descriptions-item>
+        <el-descriptions-item v-if="operationDetail.lastErrorMessage" label="最近错误">{{ operationDetail.lastErrorMessage }}</el-descriptions-item>
       </el-descriptions>
       <el-empty v-else description="目录操作详情不可用" />
     </ProjectModal>

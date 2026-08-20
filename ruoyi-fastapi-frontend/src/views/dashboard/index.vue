@@ -1,752 +1,534 @@
 <template>
-  <div>
-    <AConfigProvider
-      :theme="{
-        algorithm: settingsStore.isDark
-          ? theme.darkAlgorithm
-          : theme.defaultAlgorithm,
-      }"
-    >
-      <div class="pageHeaderContent">
-        <div class="avatar">
-          <a-avatar size="large" :src="currentUser.avatar" />
-        </div>
-        <div class="content">
-          <div class="contentTitle">
-            早安，
-            {{ currentUser.name }}
-            ，祝你开心每一天！
-          </div>
-          <div>{{ currentUser.title }} |{{ currentUser.group }}</div>
-        </div>
-        <div class="extraContent">
-          <div class="statItem">
-            <a-statistic title="项目数" :value="56" />
-          </div>
-          <div class="statItem">
-            <a-statistic title="团队内排名" :value="8" suffix="/ 24" />
-          </div>
-          <div class="statItem">
-            <a-statistic title="项目访问" :value="2223" />
+  <main class="platform-home">
+    <section class="welcome-panel" aria-labelledby="platform-home-title">
+      <div class="welcome-panel__identity">
+        <el-avatar
+          :size="72"
+          :src="userStore.avatar"
+          :alt="`${displayName}的头像`"
+          class="welcome-panel__avatar"
+        >
+          <el-icon><UserFilled /></el-icon>
+        </el-avatar>
+
+        <div class="welcome-panel__content">
+          <p class="welcome-panel__eyebrow">SHOT GRID ADMINISTRATION</p>
+          <h1 id="platform-home-title">{{ greeting }}，{{ displayName }}</h1>
+          <p class="welcome-panel__description">
+            在这里维护 Shot Grid 的账号权限、存储资源和平台运行状态，只展示当前账号可使用的管理入口。
+          </p>
+          <div class="welcome-panel__roles" aria-label="当前账号角色">
+            <span class="welcome-panel__roles-label">当前身份</span>
+            <el-tag
+              v-for="role in displayRoles"
+              :key="role.key"
+              :type="role.type"
+              effect="plain"
+              round
+            >
+              {{ role.label }}
+            </el-tag>
+            <el-tag v-if="displayRoles.length === 0" type="info" effect="plain" round>
+              已登录用户
+            </el-tag>
           </div>
         </div>
       </div>
 
-      <div style="padding: 10px">
-        <a-row :gutter="24">
-          <a-col :xl="16" :lg="24" :md="24" :sm="24" :xs="24">
-            <a-card
-              class="projectList"
-              :style="{ marginBottom: '24px' }"
-              title="进行中的项目"
-              :bordered="false"
-              :loading="false"
-              :body-style="{ padding: 0 }"
-            >
-              <template #extra>
-                <a href="">
-                  <span style="color: var(--el-color-primary)">全部项目</span>
-                </a>
-              </template>
-              <a-card-grid
-                v-for="item in projectNotice"
-                :key="item.id"
-                class="projectGrid"
-              >
-                <a-card
-                  :body-style="{ padding: 0 }"
-                  style="box-shadow: none"
-                  :bordered="false"
+      <el-button type="primary" plain :icon="User" @click="openPage('/user/profile')">
+        个人中心
+      </el-button>
+    </section>
+
+    <el-row :gutter="20" class="home-layout">
+      <el-col :xs="24" :lg="16">
+        <el-card class="home-card navigation-card" shadow="never">
+          <template #header>
+            <div class="card-heading">
+              <div>
+                <p class="card-heading__eyebrow">MANAGEMENT</p>
+                <h2>管理工作台</h2>
+              </div>
+            </div>
+          </template>
+
+          <div v-if="accessibleEntries.length" class="navigation-grid">
+            <article v-for="entry in accessibleEntries" :key="entry.path" class="navigation-item">
+              <div class="navigation-item__icon" aria-hidden="true">
+                <el-icon><component :is="entry.icon" /></el-icon>
+              </div>
+              <div class="navigation-item__body">
+                <h3>{{ entry.title }}</h3>
+                <p>{{ entry.description }}</p>
+                <el-button
+                  link
+                  type="primary"
+                  :icon="ArrowRight"
+                  @click="openPage(entry.path)"
                 >
-                  <a-card-meta :description="item.description" class="w-full">
-                    <template #title>
-                      <div class="cardTitle">
-                        <a-avatar size="small" :src="item.logo" />
-                        <a :href="item.href">
-                          {{ item.title }}
-                        </a>
-                      </div>
-                    </template>
-                  </a-card-meta>
-                  <div class="projectItemContent">
-                    <a :href="item.memberLink">
-                      {{ item.member || "" }}
-                    </a>
-                    <span class="datetime" ml-2 :title="item.updatedAt">
-                      {{ item.updatedAt }}
-                    </span>
-                  </div>
-                </a-card>
-              </a-card-grid>
-            </a-card>
-            <a-card
-              :body-style="{ padding: 0 }"
-              :bordered="false"
-              class="activeCard"
-              title="动态"
-              :loading="false"
-            >
-              <a-list :data-source="activities" class="activitiesList">
-                <template #renderItem="{ item }">
-                  <a-list-item :key="item.id">
-                    <a-list-item-meta>
-                      <template #title>
-                        <span>
-                          <a class="username">{{ item.user.name }}</a
-                          >&nbsp;
-                          <span class="event">
-                            <span>{{ item.template1 }}</span
-                            >&nbsp;
-                            <a href="" style="color: var(--el-color-primary)">
-                              {{ item?.group?.name }} </a
-                            >&nbsp; <span>{{ item.template2 }}</span
-                            >&nbsp;
-                            <a href="" style="color: var(--el-color-primary)">
-                              {{ item?.project?.name }}
-                            </a>
-                          </span>
-                        </span>
-                      </template>
-                      <template #avatar>
-                        <a-avatar :src="item.user.avatar" />
-                      </template>
-                      <template #description>
-                        <span class="datetime" :title="item.updatedAt">
-                          {{ item.updatedAt }}
-                        </span>
-                      </template>
-                    </a-list-item-meta>
-                  </a-list-item>
-                </template>
-              </a-list>
-            </a-card>
-          </a-col>
-          <a-col :xl="8" :lg="24" :md="24" :sm="24" :xs="24">
-            <a-card
-              :style="{ marginBottom: '24px' }"
-              title="快速开始 / 便捷导航"
-              :bordered="false"
-              :body-style="{ padding: 0 }"
-            >
-              <EditableLinkGroup />
-            </a-card>
-            <a-card
-              :style="{ marginBottom: '24px' }"
-              :bordered="false"
-              title="XX 指数"
-            >
-              <div class="chart">
-                <div ref="radarContainer" />
+                  进入管理
+                </el-button>
               </div>
-            </a-card>
-            <a-card
-              :body-style="{ paddingTop: '12px', paddingBottom: '12px' }"
-              :bordered="false"
-              title="团队"
-            >
-              <div class="members">
-                <a-row :gutter="48">
-                  <a-col
-                    v-for="item in projectNotice"
-                    :key="`members-item-${item.id}`"
-                    :span="12"
-                  >
-                    <a :href="item.href">
-                      <a-avatar :src="item.logo" size="small" />
-                      <span class="member">{{ item.member }}</span>
-                    </a>
-                  </a-col>
-                </a-row>
+            </article>
+          </div>
+
+          <el-empty
+            v-else
+            :image-size="88"
+            description="当前账号暂无可用的管理入口，请联系超级管理员配置角色与菜单权限。"
+          />
+        </el-card>
+      </el-col>
+
+      <el-col :xs="24" :lg="8">
+        <el-card class="home-card responsibility-card" shadow="never">
+          <template #header>
+            <div class="card-heading">
+              <div>
+                <p class="card-heading__eyebrow">RESPONSIBILITIES</p>
+                <h2>平台治理职责</h2>
               </div>
-            </a-card>
-          </a-col>
-        </a-row>
-      </div>
-    </AConfigProvider>
-  </div>
+            </div>
+          </template>
+
+          <el-timeline>
+            <el-timeline-item
+              v-for="item in responsibilities"
+              :key="item.title"
+              :type="item.type"
+              :hollow="true"
+            >
+              <h3>{{ item.title }}</h3>
+              <p>{{ item.description }}</p>
+            </el-timeline-item>
+          </el-timeline>
+        </el-card>
+
+        <el-alert
+          class="permission-alert"
+          title="权限边界说明"
+          type="info"
+          :closable="false"
+          show-icon
+        >
+          <template #default>
+            具体数据和可执行操作以当前账号的授权范围为准；如需调整，请联系平台超级管理员。
+          </template>
+        </el-alert>
+      </el-col>
+    </el-row>
+  </main>
 </template>
 
-<script>
-import {
-  Statistic,
-  Row,
-  Col,
-  Card,
-  CardGrid,
-  CardMeta,
-  List,
-  ListItem,
-  ListItemMeta,
-  Avatar,
-  ConfigProvider,
-  theme,
-} from "ant-design-vue";
-import "ant-design-vue/dist/reset.css";
-
-export default {
-  components: {
-    AStatistic: Statistic,
-    ARow: Row,
-    ACol: Col,
-    ACard: Card,
-    ACardGrid: CardGrid,
-    ACardMeta: CardMeta,
-    AList: List,
-    AListItem: ListItem,
-    AListItemMeta: ListItemMeta,
-    AAvatar: Avatar,
-    AConfigProvider: ConfigProvider,
-  },
-};
-</script>
-
 <script setup>
-import { Radar } from "@antv/g2plot";
-import EditableLinkGroup from "./editable-link-group.vue";
-import useSettingsStore from "@/store/modules/settings";
-
-const settingsStore = useSettingsStore();
+import {
+  ArrowRight,
+  Connection,
+  Document,
+  FolderOpened,
+  Key,
+  Menu,
+  Monitor,
+  SetUp,
+  Tickets,
+  User,
+  UserFilled
+} from '@element-plus/icons-vue'
+import useUserStore from '@/store/modules/user'
+import usePermissionStore from '@/store/modules/permission'
 
 defineOptions({
-  name: "DashBoard",
-});
+  name: 'DashBoard'
+})
 
-const currentUser = {
-  avatar: "https://gw.alipayobjects.com/zos/rmsportal/BiazfanxmamNRoxxVxka.png",
-  name: "吴彦祖",
-  userid: "00000001",
-  email: "antdesign@alipay.com",
-  signature: "海纳百川，有容乃大",
-  title: "交互专家",
-  group: "蚂蚁金服－某某某事业群－某某平台部－某某技术部－UED",
-};
+const router = useRouter()
+const userStore = useUserStore()
+const permissionStore = usePermissionStore()
 
-const projectNotice = [
-  {
-    id: "xxx1",
-    title: "Alipay",
-    logo: "https://gw.alipayobjects.com/zos/rmsportal/WdGqmHpayyMjiEhcKoVE.png",
-    description: "那是一种内在的东西，他们到达不了，也无法触及的",
-    updatedAt: "几秒前",
-    member: "科学搬砖组",
-    href: "",
-    memberLink: "",
-  },
-  {
-    id: "xxx2",
-    title: "Angular",
-    logo: "https://gw.alipayobjects.com/zos/rmsportal/zOsKZmFRdUtvpqCImOVY.png",
-    description: "希望是一个好东西，也许是最好的，好东西是不会消亡的",
-    updatedAt: "6 年前",
-    member: "全组都是吴彦祖",
-    href: "",
-    memberLink: "",
-  },
-  {
-    id: "xxx3",
-    title: "Ant Design",
-    logo: "https://gw.alipayobjects.com/zos/rmsportal/dURIMkkrRFpPgTuzkwnB.png",
-    description: "城镇中有那么多的酒馆，她却偏偏走进了我的酒馆",
-    updatedAt: "几秒前",
-    member: "中二少女团",
-    href: "",
-    memberLink: "",
-  },
-  {
-    id: "xxx4",
-    title: "Ant Design Pro",
-    logo: "https://gw.alipayobjects.com/zos/rmsportal/sfjbOqnsXXJgNCjCzDBL.png",
-    description: "那时候我只会想自己想要什么，从不想自己拥有什么",
-    updatedAt: "6 年前",
-    member: "程序员日常",
-    href: "",
-    memberLink: "",
-  },
-  {
-    id: "xxx5",
-    title: "Bootstrap",
-    logo: "https://gw.alipayobjects.com/zos/rmsportal/siCrBXXhmvTQGWPNLBow.png",
-    description: "凛冬将至",
-    updatedAt: "6 年前",
-    member: "高逼格设计天团",
-    href: "",
-    memberLink: "",
-  },
-  {
-    id: "xxx6",
-    title: "React",
-    logo: "https://gw.alipayobjects.com/zos/rmsportal/kZzEzemZyKLKFsojXItE.png",
-    description: "生命就像一盒巧克力，结果往往出人意料",
-    updatedAt: "6 年前",
-    member: "骗你来学计算机",
-    href: "",
-    memberLink: "",
-  },
-];
+const roleMeta = {
+  admin: { label: '平台超级管理员', type: 'danger' },
+  shotgrid_platform_admin: { label: 'Shot Grid 平台管理员', type: 'warning' },
+  shotgrid_admin: { label: '项目管理人', type: 'primary' },
+  shotgrid_creator: { label: '制作人员', type: 'success' }
+}
 
-const activities = [
+const managementEntries = [
   {
-    id: "trend-1",
-    updatedAt: "几秒前",
-    user: {
-      name: "曲丽丽",
-      avatar:
-        "https://gw.alipayobjects.com/zos/rmsportal/BiazfanxmamNRoxxVxka.png",
-    },
-    group: {
-      name: "高逼格设计天团",
-      link: "http://github.com/",
-    },
-    project: {
-      name: "六月迭代",
-      link: "http://github.com/",
-    },
-    template1: "在",
-    template2: "新建项目",
+    title: '用户管理',
+    description: '维护平台账号、部门归属、状态和基础资料。',
+    path: '/system/user',
+    permission: 'system:user:list',
+    icon: User
   },
   {
-    id: "trend-2",
-    updatedAt: "几秒前",
-    user: {
-      name: "付小小",
-      avatar:
-        "https://gw.alipayobjects.com/zos/rmsportal/cnrhVkzwxjPwAaCfPbdc.png",
-    },
-    group: {
-      name: "高逼格设计天团",
-      link: "http://github.com/",
-    },
-    project: {
-      name: "六月迭代",
-      link: "http://github.com/",
-    },
-    template1: "在",
-    template2: "新建项目",
+    title: '角色管理',
+    description: '配置角色的数据范围、菜单权限和用户关联。',
+    path: '/system/role',
+    permission: 'system:role:list',
+    icon: Key
   },
   {
-    id: "trend-3",
-    updatedAt: "几秒前",
-    user: {
-      name: "林东东",
-      avatar:
-        "https://gw.alipayobjects.com/zos/rmsportal/gaOngJwsRYRaVAuXXcmB.png",
-    },
-    group: {
-      name: "中二少女团",
-      link: "http://github.com/",
-    },
-    project: {
-      name: "六月迭代",
-      link: "http://github.com/",
-    },
-    template1: "在",
-    template2: "新建项目",
+    title: '菜单权限',
+    description: '维护管理端菜单、接口权限字符和路由入口。',
+    path: '/system/menu',
+    permission: 'system:menu:list',
+    icon: Menu
   },
   {
-    id: "trend-4",
-    updatedAt: "几秒前",
-    user: {
-      name: "周星星",
-      avatar:
-        "https://gw.alipayobjects.com/zos/rmsportal/WhxKECPNujWoWEFNdnJE.png",
-    },
-    group: {
-      name: "5 月日常迭代",
-      link: "http://github.com/",
-    },
-    template1: "将",
-    template2: "更新至已发布状态",
+    title: 'NAS 根目录',
+    description: '维护 Shot Grid 可选存储根目录并执行可达性探测。',
+    path: '/system/nas',
+    permission: 'shotgrid:storageRoot:query',
+    icon: FolderOpened
   },
   {
-    id: "trend-5",
-    updatedAt: "几秒前",
-    user: {
-      name: "朱偏右",
-      avatar:
-        "https://gw.alipayobjects.com/zos/rmsportal/ubnKSIfAJTxIgXOKlciN.png",
-    },
-    group: {
-      name: "工程效能",
-      link: "http://github.com/",
-    },
-    project: {
-      name: "留言",
-      link: "http://github.com/",
-    },
-    template1: "在",
-    template2: "发布了",
+    title: '文件管理',
+    description: '查看受保护文件、业务引用、保留策略和存储状态。',
+    path: '/system/file',
+    permission: 'system:file:list',
+    icon: Document
   },
   {
-    id: "trend-6",
-    updatedAt: "几秒前",
-    user: {
-      name: "乐哥",
-      avatar:
-        "https://gw.alipayobjects.com/zos/rmsportal/jZUIxmJycoymBprLOUbT.png",
-    },
-    group: {
-      name: "程序员日常",
-      link: "http://github.com/",
-    },
-    project: {
-      name: "品牌迭代",
-      link: "http://github.com/",
-    },
-    template1: "在",
-    template2: "新建项目",
+    title: '插件管理',
+    description: '检查插件状态、依赖、配置以及生命周期计划。',
+    path: '/system/plugin',
+    permission: 'system:plugin:list',
+    icon: SetUp
   },
-];
+  {
+    title: '在线用户',
+    description: '查看当前在线会话并处理异常登录状态。',
+    path: '/monitor/online',
+    permission: 'monitor:online:list',
+    icon: Connection
+  },
+  {
+    title: '服务监控',
+    description: '查看服务器、运行环境和资源使用情况。',
+    path: '/monitor/server',
+    permission: 'monitor:server:list',
+    icon: Monitor
+  },
+  {
+    title: '操作日志',
+    description: '追踪平台管理操作，辅助安全审计和问题定位。',
+    path: '/system/log/operlog',
+    permission: 'monitor:operlog:list',
+    icon: Tickets
+  }
+]
 
-const radarContainer = ref();
-const radarData = [
+const responsibilities = [
   {
-    name: "个人",
-    label: "引用",
-    value: 10,
+    title: '账号与授权',
+    description: '保持用户、角色、菜单和数据范围一致，遵循最小授权原则。',
+    type: 'primary'
   },
   {
-    name: "个人",
-    label: "口碑",
-    value: 8,
+    title: '存储与文件治理',
+    description: '维护 NAS 根目录可用性，关注文件引用、访问控制和保留策略。',
+    type: 'warning'
   },
   {
-    name: "个人",
-    label: "产量",
-    value: 4,
-  },
-  {
-    name: "个人",
-    label: "贡献",
-    value: 5,
-  },
-  {
-    name: "个人",
-    label: "热度",
-    value: 7,
-  },
-  {
-    name: "团队",
-    label: "引用",
-    value: 3,
-  },
-  {
-    name: "团队",
-    label: "口碑",
-    value: 9,
-  },
-  {
-    name: "团队",
-    label: "产量",
-    value: 6,
-  },
-  {
-    name: "团队",
-    label: "贡献",
-    value: 3,
-  },
-  {
-    name: "团队",
-    label: "热度",
-    value: 1,
-  },
-  {
-    name: "部门",
-    label: "引用",
-    value: 4,
-  },
-  {
-    name: "部门",
-    label: "口碑",
-    value: 1,
-  },
-  {
-    name: "部门",
-    label: "产量",
-    value: 6,
-  },
-  {
-    name: "部门",
-    label: "贡献",
-    value: 5,
-  },
-  {
-    name: "部门",
-    label: "热度",
-    value: 7,
-  },
-];
-let radar;
-onMounted(() => {
-  radar = new Radar(radarContainer.value, {
-    data: radarData,
-    xField: "label",
-    yField: "value",
-    seriesField: "name",
-    point: {
-      size: 4,
-    },
-    legend: {
-      layout: "horizontal",
-      position: "bottom",
-    },
-  });
-  radar.render();
-});
+    title: '运行与安全审计',
+    description: '通过在线会话、服务状态和操作日志及时发现平台异常。',
+    type: 'success'
+  }
+]
 
-onBeforeUnmount(() => {
-  radar?.destroy?.();
-});
+const displayName = computed(() => userStore.nickName || userStore.name || '管理员')
+
+const greeting = '欢迎回来'
+
+const displayRoles = computed(() => {
+  return (userStore.roles || []).map((role) => ({
+    key: role,
+    ...(roleMeta[role] || { label: role, type: 'info' })
+  }))
+})
+
+const accessibleEntries = computed(() => {
+  const permissions = userStore.permissions || []
+  const isSuperAdmin = permissions.includes('*:*:*')
+  return managementEntries.filter((entry) => {
+    const hasPermission = isSuperAdmin || permissions.includes(entry.permission)
+    return hasPermission && hasRegisteredRoute(permissionStore.routes, entry.path)
+  })
+})
+
+function normalizeRoutePath(parentPath, routePath) {
+  if (routePath.startsWith('/')) return routePath.replace(/\/+$/, '') || '/'
+  return `${parentPath}/${routePath}`.replace(/\/{2,}/g, '/').replace(/\/+$/, '') || '/'
+}
+
+function hasRegisteredRoute(routes, targetPath, parentPath = '') {
+  return (routes || []).some((route) => {
+    if (!route?.path || route.path.includes(':pathMatch')) return false
+
+    const currentPath = normalizeRoutePath(parentPath, route.path)
+    if (currentPath === targetPath) return true
+    return hasRegisteredRoute(route.children, targetPath, currentPath)
+  })
+}
+
+function openPage(path) {
+  router.push(path)
+}
 </script>
 
-<style scoped lang="less">
-.textOverflow() {
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  word-break: break-all;
+<style scoped lang="scss">
+.platform-home {
+  min-height: 100%;
+  padding: 24px;
+  background:
+    radial-gradient(circle at 88% 0%, color-mix(in srgb, var(--el-color-primary) 9%, transparent), transparent 34%),
+    var(--el-bg-color-page);
 }
 
-// mixins for clearfix
-// ------------------------
-.clearfix() {
-  zoom: 1;
-  &::before,
-  &::after {
-    display: table;
-    content: " ";
-  }
-  &::after {
-    clear: both;
-    height: 0;
-    font-size: 0;
-    visibility: hidden;
-  }
-}
-
-.activitiesList {
-  padding: 0 24px 8px 24px;
-  .username {
-    color: var(--el-text-color-regular);
-  }
-  .event {
-    font-weight: normal;
-  }
-}
-
-.pageHeaderContent {
+.welcome-panel {
   display: flex;
-  padding: 12px;
-  margin-bottom: 24px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 28px 30px;
+  margin-bottom: 20px;
+  overflow: hidden;
+  background:
+    linear-gradient(120deg, color-mix(in srgb, var(--el-color-primary) 10%, var(--el-bg-color-overlay)), var(--el-bg-color-overlay) 55%),
+    var(--el-bg-color-overlay);
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 14px;
   box-shadow: var(--el-box-shadow-light);
-  .avatar {
-    flex: 0 1 72px;
-    & > span {
-      display: block;
-      width: 72px;
-      height: 72px;
-      border-radius: 72px;
-    }
+}
+
+.welcome-panel__identity {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.welcome-panel__avatar {
+  flex: 0 0 auto;
+  color: var(--el-color-primary);
+  background: var(--el-color-primary-light-9);
+  border: 2px solid color-mix(in srgb, var(--el-color-primary) 28%, transparent);
+
+  .el-icon {
+    font-size: 32px;
   }
-  .content {
-    position: relative;
-    top: 4px;
-    flex: 1 1 auto;
-    margin-left: 24px;
+}
+
+.welcome-panel__content {
+  min-width: 0;
+  margin-left: 22px;
+
+  h1 {
+    margin: 2px 0 8px;
+    color: var(--el-text-color-primary);
+    font-size: clamp(24px, 3vw, 34px);
+    line-height: 1.3;
+  }
+}
+
+.welcome-panel__eyebrow,
+.card-heading__eyebrow {
+  margin: 0;
+  color: var(--el-color-primary);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.13em;
+}
+
+.welcome-panel__description {
+  max-width: 760px;
+  margin: 0;
+  color: var(--el-text-color-regular);
+  font-size: 14px;
+  line-height: 1.8;
+}
+
+.welcome-panel__roles {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.welcome-panel__roles-label {
+  margin-right: 2px;
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
+}
+
+.home-layout > .el-col {
+  margin-bottom: 20px;
+}
+
+.home-card {
+  height: 100%;
+  border-radius: 12px;
+
+  :deep(.el-card__header) {
+    padding: 20px 22px 16px;
+  }
+
+  :deep(.el-card__body) {
+    padding: 20px 22px 22px;
+  }
+}
+
+.card-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+
+  h2 {
+    margin: 4px 0 0;
+    color: var(--el-text-color-primary);
+    font-size: 19px;
+  }
+}
+
+.navigation-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.navigation-item {
+  display: flex;
+  gap: 14px;
+  min-width: 0;
+  padding: 17px;
+  background: var(--el-fill-color-extra-light);
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 10px;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+
+  &:hover {
+    border-color: color-mix(in srgb, var(--el-color-primary) 45%, var(--el-border-color));
+    box-shadow: var(--el-box-shadow-lighter);
+    transform: translateY(-1px);
+  }
+}
+
+.navigation-item__icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 42px;
+  width: 42px;
+  height: 42px;
+  color: var(--el-color-primary);
+  background: var(--el-color-primary-light-9);
+  border-radius: 10px;
+
+  .el-icon {
+    font-size: 22px;
+  }
+}
+
+.navigation-item__body {
+  min-width: 0;
+
+  h3 {
+    margin: 0 0 6px;
+    color: var(--el-text-color-primary);
+    font-size: 16px;
+  }
+
+  p {
+    min-height: 44px;
+    margin: 0 0 6px;
     color: var(--el-text-color-secondary);
-    line-height: 22px;
-    .contentTitle {
-      margin-bottom: 12px;
-      color: var(--el-text-color-primary);
-      font-weight: 500;
-      font-size: 20px;
-      line-height: 28px;
-    }
+    font-size: 13px;
+    line-height: 1.65;
+  }
+
+  .el-button {
+    padding: 0;
   }
 }
 
-.extraContent {
-  .clearfix();
+.responsibility-card {
+  height: auto;
+  margin-bottom: 20px;
 
-  float: right;
-  white-space: nowrap;
-  .statItem {
-    position: relative;
-    display: inline-block;
-    padding: 0 32px;
-    > p:first-child {
-      margin-bottom: 4px;
-      color: var(--el-text-color-secondary);
-      font-size: 14px;
-      line-height: 22px;
-    }
-    > p {
-      margin: 0;
-      color: var(--el-text-color-primary);
-      font-size: 30px;
-      line-height: 38px;
-      > span {
-        color: var(--el-text-color-secondary);
-        font-size: 20px;
-      }
-    }
-    &::after {
-      position: absolute;
-      top: 8px;
-      right: 0;
-      width: 1px;
-      height: 40px;
-      background-color: var(--el-border-color);
-      content: "";
-    }
-    &:last-child {
-      padding-right: 0;
-      &::after {
-        display: none;
-      }
-    }
+  :deep(.el-timeline) {
+    padding-left: 3px;
   }
-}
 
-.members {
-  a {
-    display: block;
-    height: 24px;
-    margin: 12px 0;
-    color: var(--el-text-color-regular);
-    transition: all 0.3s;
-    .textOverflow();
-    .member {
-      margin-left: 12px;
-      font-size: 14px;
-      line-height: 24px;
-      vertical-align: top;
-    }
-    &:hover {
-      color: var(--el-color-primary);
-    }
+  :deep(.el-timeline-item:last-child) {
+    padding-bottom: 0;
   }
-}
 
-.projectList {
-  :deep(.ant-card-meta-description) {
-    height: 44px;
-    overflow: hidden;
+  h3 {
+    margin: 0 0 6px;
+    color: var(--el-text-color-primary);
+    font-size: 15px;
+  }
+
+  p {
+    margin: 0;
     color: var(--el-text-color-secondary);
-    line-height: 22px;
-  }
-  .cardTitle {
-    font-size: 0;
-    a {
-      display: inline-block;
-      height: 24px;
-      margin-left: 12px;
-      color: var(--el-text-color-primary);
-      font-size: 14px;
-      line-height: 24px;
-      vertical-align: top;
-      &:hover {
-        color: var(--el-color-primary);
-      }
-    }
-  }
-  .projectGrid {
-    width: 33.33%;
-  }
-  .projectItemContent {
-    display: flex;
-    flex-basis: 100%;
-    height: 20px;
-    margin-top: 8px;
-    overflow: hidden;
-    font-size: 12px;
-    line-height: 20px;
-    .textOverflow();
-    a {
-      display: inline-block;
-      flex: 1 1 0;
-      color: var(--el-text-color-secondary);
-      .textOverflow();
-      &:hover {
-        color: var(--el-color-primary);
-      }
-    }
-    .datetime {
-      flex: 0 0 auto;
-      float: right;
-      color: var(--el-text-color-placeholder);
-    }
+    font-size: 13px;
+    line-height: 1.7;
   }
 }
 
-.datetime {
-  color: var(--el-text-color-placeholder);
-}
+.permission-alert {
+  align-items: flex-start;
+  border: 1px solid var(--el-color-info-light-7);
 
-@media screen and (max-width: 1200px) and (min-width: 992px) {
-  .activeCard {
-    margin-bottom: 24px;
-  }
-  .members {
-    margin-bottom: 0;
-  }
-  .extraContent {
-    margin-left: -44px;
-    .statItem {
-      padding: 0 16px;
-    }
+  :deep(.el-alert__description) {
+    line-height: 1.65;
   }
 }
 
-@media screen and (max-width: 992px) {
-  .activeCard {
-    margin-bottom: 24px;
-  }
-  .members {
-    margin-bottom: 0;
-  }
-  .extraContent {
-    float: none;
-    margin-right: 0;
-    .statItem {
-      padding: 0 16px;
-      text-align: left;
-      &::after {
-        display: none;
-      }
-    }
+@media (max-width: 1100px) {
+  .navigation-grid {
+    grid-template-columns: 1fr;
   }
 }
 
-@media screen and (max-width: 768px) {
-  .extraContent {
-    margin-left: -16px;
+@media (max-width: 767px) {
+  .platform-home {
+    padding: 14px;
   }
-  .projectList {
-    .projectGrid {
-      width: 50%;
-    }
+
+  .welcome-panel {
+    align-items: stretch;
+    flex-direction: column;
+    padding: 22px 20px;
+  }
+
+  .welcome-panel__identity {
+    align-items: flex-start;
+  }
+
+  .welcome-panel__avatar {
+    width: 56px;
+    height: 56px;
+  }
+
+  .welcome-panel__content {
+    margin-left: 14px;
   }
 }
 
-@media screen and (max-width: 576px) {
-  .pageHeaderContent {
-    display: block;
-    .content {
-      margin-left: 0;
-    }
+@media (max-width: 480px) {
+  .welcome-panel__avatar {
+    display: none;
   }
-  .extraContent {
-    .statItem {
-      float: none;
-    }
-  }
-}
 
-@media screen and (max-width: 480px) {
-  .projectList {
-    .projectGrid {
-      width: 100%;
-    }
+  .welcome-panel__content {
+    margin-left: 0;
+  }
+
+  .navigation-item {
+    padding: 14px;
   }
 }
 </style>

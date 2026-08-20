@@ -207,7 +207,7 @@ function schedulePoll(generation, targetTaskId, targetOperationGeneration, immed
   stopPolling()
   if (!props.canQuery || !submission.value || isSubmissionTerminal(submission.value.submissionStatus)) return
   if (pollAttemptCount >= MAX_AUTOMATIC_POLL_ATTEMPTS) {
-    pauseAutomaticPolling('已达到本轮自动刷新上限，提交本身仍保留；请稍后手动刷新。')
+    pauseAutomaticPolling('已达到本轮自动刷新次数，提交仍会继续处理；请稍后手动刷新。')
     return
   }
   const delay = immediate
@@ -254,7 +254,7 @@ async function pollSubmission(generation, targetTaskId, targetOperationGeneratio
     }
     consecutivePollErrors += 1
     if (consecutivePollErrors >= MAX_CONSECUTIVE_POLL_ERRORS) {
-      pauseAutomaticPolling('连续 3 次刷新失败，为避免故障请求循环已暂停；提交不会因此被撤销。')
+      pauseAutomaticPolling('连续 3 次刷新失败，自动刷新已暂停；提交仍会继续处理。')
       return
     }
     const baseDelay = Math.max(250, Number(props.pollInterval) || 2000)
@@ -275,7 +275,7 @@ async function recoverCurrentSubmission() {
     if (props.hasUncommittedSubmission) {
       requestError.value = versionErrorState({
         httpStatus: 403,
-        message: '任务存在未完成版本提交，但当前账号无权恢复其状态'
+        message: '任务有正在处理的版本提交，但当前账号无法查看进度'
       }, '无法确认当前版本提交')
     }
     return
@@ -385,7 +385,7 @@ function validateChangelog(_rule, value, callback) {
   if (!normalized) return callback(new Error('请填写本轮修改说明'))
   if (normalized.length > 5000) return callback(new Error('本轮修改说明不能超过 5000 个字符'))
   if (Array.from(normalized).some(character => character !== ' ' && /[\p{C}\p{Z}]/u.test(character))) {
-    return callback(new Error('修改说明不能包含换行、Tab 或其他控制字符'))
+    return callback(new Error('修改说明不能换行或包含不可见字符'))
   }
   callback()
 }
@@ -440,7 +440,7 @@ async function submitVersion() {
   const controller = new AbortController()
   workflowController?.abort()
   workflowController = controller
-  let failureTitle = '版本提交预检失败'
+  let failureTitle = '提交前检查未通过'
 
   try {
     if (!uploadResult.value) {
@@ -464,7 +464,7 @@ async function submitVersion() {
         selectedFile.value !== targetFile
       ) return
       if (!canSubmit.value) {
-        const permissionError = new Error('提交权限或任务动作已发生变化，未上传文件')
+        const permissionError = new Error('提交权限或任务状态已发生变化，文件尚未上传')
         permissionError.httpStatus = 403
         throw permissionError
       }
@@ -476,11 +476,11 @@ async function submitVersion() {
         preflightResponse.data.fileExtension !== declaredExtension ||
         !preflightResponse.data.allowedActions?.includes('version.add')
       ) {
-        throw new Error('版本提交预检响应与当前任务不一致，未上传文件')
+        throw new Error('提交检查结果与当前任务不一致，文件尚未上传')
       }
       openIssueSnapshotHash.value = preflightResponse.data.openIssueSnapshotHash
 
-      failureTitle = '受保护文件上传失败'
+      failureTitle = '版本文件上传失败'
       phase.value = 'uploading'
       uploadProgress.value = 0
       const response = await uploadProtectedVersionFile(targetFile, {
@@ -498,7 +498,7 @@ async function submitVersion() {
         selectedFile.value !== targetFile
       ) return
       if (!response?.fileId || response?.accessType !== 'private') {
-        throw new Error('平台上传响应缺少私有文件 ID，未创建版本提交')
+        throw new Error('文件上传结果异常，版本尚未提交')
       }
       uploadResult.value = {
         fileId: response.fileId,
@@ -609,10 +609,10 @@ onBeforeUnmount(() => {
       <div>
         <p class="sg-eyebrow">UPLOAD &amp; PUBLISH</p>
         <h3>提交新版本</h3>
-        <p>先上传到平台私有文件区，再由后台发布到 NAS 并创建不可覆盖版本。</p>
+        <p>上传制作成果并生成不可覆盖的正式版本；完成后将自动进入审核。</p>
       </div>
       <el-button v-if="submission && canQuery" :icon="Refresh" :disabled="isBusy" @click="refreshSubmissionStatus">刷新状态</el-button>
-      <el-button v-else-if="!recoveryResolved && !recovering && canQuery" :icon="Refresh" @click="recoverCurrentSubmission">重试检查</el-button>
+      <el-button v-else-if="!recoveryResolved && !recovering && canQuery" :icon="Refresh" @click="recoverCurrentSubmission">重新检查</el-button>
     </div>
 
     <el-skeleton v-if="recovering" class="recovering-state" :rows="4" animated />
@@ -623,16 +623,16 @@ onBeforeUnmount(() => {
       v-if="requestError || validationMessage"
       class="version-error"
       :title="requestError?.title || '请检查提交内容'"
-      :description="[requestError?.message || validationMessage, requestError?.errorKey].filter(Boolean).join(' · ')"
+      :description="requestError?.message || validationMessage"
       type="error"
       :closable="false"
       show-icon
     />
 
     <el-alert v-if="submission?.submissionStatus === 'failed'" class="submission-actions" title="必须恢复当前失败提交" type="error" :closable="false" show-icon>
-      <span class="submission-actions__description">失败提交会继续占用该任务的版本号和源文件引用，不能另传文件绕过。</span>
+      <span class="submission-actions__description">当前失败提交仍需处理，不能另选文件创建新版本。</span>
       <el-button type="primary" :loading="phase === 'retrying'" :disabled="!canRetry" @click="retryFailedSubmission">
-        {{ canRetry ? '人工重试当前提交' : '当前账号没有重试权限' }}
+        {{ canRetry ? '重试当前提交' : '当前账号没有重试权限' }}
       </el-button>
     </el-alert>
 
@@ -693,15 +693,15 @@ onBeforeUnmount(() => {
         </el-collapse-item>
       </el-collapse>
 
-      <el-progress v-if="phase === 'uploading'" class="upload-progress" :percentage="uploadProgress" :stroke-width="8" :status="uploadProgress >= 100 ? 'success' : undefined" aria-label="平台私有文件上传进度" />
-      <el-alert v-if="uploadedOnly" class="uploaded-boundary" title="平台私有文件已上传，正式版本尚未形成" type="warning" :closable="false" show-icon>
-        <span class="submission-actions__description">文件与说明已锁定，请用同一幂等请求重放，避免已受理的超时请求被误判为失败。</span>
+      <el-progress v-if="phase === 'uploading'" class="upload-progress" :percentage="uploadProgress" :stroke-width="8" :status="uploadProgress >= 100 ? 'success' : undefined" aria-label="版本文件上传进度" />
+      <el-alert v-if="uploadedOnly" class="uploaded-boundary" title="文件已上传，正式版本尚未生成" type="warning" :closable="false" show-icon>
+        <span class="submission-actions__description">文件与说明已锁定，请直接重试提交；若放弃当前文件，可重新选择。</span>
         <el-button v-if="canDiscardUploadedFile" text @click="discardUploadedFile">放弃已上传文件并重新选择</el-button>
       </el-alert>
 
       <footer>
-        <p v-if="!canSubmit">后端动作镜像与平台 <code>shotgrid:version:add</code> 权限需同时满足；任务还须处于制作中或退回修改。</p>
-        <p v-else>提交受理后会显示 pending → publishing → published → committing → committed 的真实状态。</p>
+        <p v-if="!canSubmit">当前账号或任务状态不允许提交新版本；任务需处于制作中或退回修改。</p>
+        <p v-else>提交后可在此查看文件保存、版本生成和审核准备进度。</p>
         <el-button
           type="primary"
           :loading="isBusy"

@@ -60,7 +60,7 @@ vi.mock('@/api/shot-grid/assets', () => ({
 }))
 
 const projectRow = { projectId: 8, projectCode: 'LCFR', projectName: '罗刹夫人' }
-const memberRow = { userId: 7, userName: 'producer', nickName: '杨景锋', producerCode: 'YJF' }
+const memberRow = { userId: 7, userName: '杨景锋', nickName: 'YJF', producerCode: 'YJF' }
 const assetRow = {
   assetId: 31,
   projectId: 8,

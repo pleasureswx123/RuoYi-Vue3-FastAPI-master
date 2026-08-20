@@ -859,7 +859,7 @@ class ShotGridVersionSubmissionService:
             return
         assignee_user_id = task.assignee_user_id if hasattr(task, 'assignee_user_id') else task['assignee_user_id']
         if access.project_role != 'creator' or assignee_user_id != actor_id:
-            raise shot_grid_error(403, 'SG_PROJECT_ACCESS_DENIED', '只有任务负责人或项目总监可以提交版本')
+            raise shot_grid_error(403, 'SG_PROJECT_ACCESS_DENIED', '只有任务负责人或项目管理人可以提交版本')
 
     @staticmethod
     def _require_submission_access(
@@ -991,10 +991,7 @@ class ShotGridVersionSubmissionService:
             int(submission.submission_id),
         )
         requested_responses = sorted(
-            (
-                {'issue_id': item.issue_id, 'response_text': item.response_text}
-                for item in command.issue_responses
-            ),
+            ({'issue_id': item.issue_id, 'response_text': item.response_text} for item in command.issue_responses),
             key=lambda item: item['issue_id'],
         )
         if (

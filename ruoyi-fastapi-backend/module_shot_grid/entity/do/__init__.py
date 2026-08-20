@@ -12,6 +12,7 @@ from module_shot_grid.entity.do.asset_do import (
 from module_shot_grid.entity.do.import_do import ShotGridImportBatch
 from module_shot_grid.entity.do.project_do import (
     ShotGridEpisode,
+    ShotGridManagedUserRole,
     ShotGridProject,
     ShotGridProjectMember,
     ShotGridScene,
@@ -44,6 +45,7 @@ __all__ = [
     'ShotGridEpisode',
     'ShotGridImportBatch',
     'ShotGridIssueVerification',
+    'ShotGridManagedUserRole',
     'ShotGridMediaDerivation',
     'ShotGridNote',
     'ShotGridProject',

@@ -34,6 +34,15 @@ export function getStorageRootOptions(options = {}) {
   })
 }
 
+export function getProjectRoleOptions(options = {}) {
+  return request({
+    url: '/shot-grid/project-role-options',
+    method: 'get',
+    signal: options.signal,
+    silentError: true
+  })
+}
+
 export function previewProjectPath(storageRootId, data, options = {}) {
   return request({
     url: `/shot-grid/storage-roots/${assertPositiveId(storageRootId, 'NAS 根目录')}/project-path-preview`,
@@ -126,6 +135,15 @@ export function getProjectMembers(projectId, params = {}, options = {}) {
     url: projectUrl(projectId, '/members'),
     method: 'get',
     params,
+    signal: options.signal,
+    silentError: true
+  })
+}
+
+export function getProjectMemberRoleOptions(projectId, options = {}) {
+  return request({
+    url: projectUrl(projectId, '/role-options'),
+    method: 'get',
     signal: options.signal,
     silentError: true
   })

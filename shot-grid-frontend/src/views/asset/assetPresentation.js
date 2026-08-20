@@ -20,15 +20,15 @@ const DIRECTORY_META = {
 }
 
 export function assetTypeMeta(assetType) {
-  return TYPE_META[assetType] || { label: assetType || '未知类型', tone: 'muted' }
+  return TYPE_META[assetType] || { label: '未知资产类型', tone: 'muted' }
 }
 
 export function assetStatusMeta(status) {
-  return STATUS_META[status] || { label: status || '未知状态', tone: 'muted' }
+  return STATUS_META[status] || { label: '未知资产状态', tone: 'muted' }
 }
 
 export function assetDirectoryStatusMeta(status) {
-  return DIRECTORY_META[status] || { label: status || '未知目录状态', tone: 'muted' }
+  return DIRECTORY_META[status] || { label: '未知目录状态', tone: 'muted' }
 }
 
 export function formatAssetDateTime(value) {
@@ -51,7 +51,7 @@ export function assetErrorState(error, fallbackTitle = '资产数据加载失败
   if (status === 403) return { ...context, title: '没有资产访问权限', retryable: false }
   if (status === 404) return { ...context, title: '资产或项目不存在', retryable: false }
   if (status === 409) return { ...context, title: '资产状态已发生变化', retryable: true }
-  if (status === 410) return { ...context, title: '导入预检已过期', retryable: false }
+  if (status === 410) return { ...context, title: '导入检查已过期', retryable: false }
   if (status === 413) return { ...context, title: 'Excel 文件过大', retryable: false }
   if (status === 422 || status === 400) return { ...context, title: '资产数据校验失败', retryable: false }
   return { ...context, title: fallbackTitle, retryable: status >= 500 || status === 0 }
@@ -59,7 +59,7 @@ export function assetErrorState(error, fallbackTitle = '资产数据加载失败
 
 export function groupAssetPreviewRows(rows = []) {
   return rows.reduce((groups, row) => {
-    const key = row.sheetName || '未知 Sheet'
+    const key = row.sheetName || '未知工作表'
     if (!groups[key]) groups[key] = []
     groups[key].push(row)
     return groups
@@ -79,8 +79,17 @@ export function resolveAssetThumbnail(asset) {
 
 export function memberLabel(member) {
   if (!member) return '未分配'
-  const name = member.nickName || member.userName || `用户 ${member.userId}`
-  return name
+  const userName = String(member.userName || '').trim()
+  const nickName = String(member.nickName || '').trim()
+  if (userName && nickName && userName !== nickName) return `${userName}（${nickName}）`
+  return userName || nickName || `用户 ${member.userId}`
+}
+
+export function memberUserName(member) {
+  if (!member) return '未分配'
+  return String(member.userName || '').trim()
+    || String(member.nickName || '').trim()
+    || `用户 ${member.userId}`
 }
 
 export function assetAssigneeSummary(assigneeUserIds, members = []) {
@@ -91,7 +100,7 @@ export function assetAssigneeSummary(assigneeUserIds, members = []) {
   const memberById = new Map((Array.isArray(members) ? members : [])
     .filter(member => Number.isSafeInteger(Number(member?.userId)) && Number(member.userId) > 0)
     .map(member => [Number(member.userId), member]))
-  const visible = ids.flatMap(id => memberById.has(id) ? [memberLabel(memberById.get(id))] : [])
+  const visible = ids.flatMap(id => memberById.has(id) ? [memberUserName(memberById.get(id))] : [])
   const unavailableCount = ids.length - visible.length
   if (unavailableCount > 0) visible.push(`另 ${unavailableCount} 人不可分配`)
   return visible.join('、')

@@ -28,12 +28,6 @@ const formRules = {
   requirements: [{ max: 4000, message: '制作要求不能超过 4000 个字符', trigger: 'blur' }]
 }
 
-function detailsText(details) {
-  if (!details) return ''
-  if (typeof details === 'string') return details
-  try { return JSON.stringify(details) } catch { return '后端返回了额外诊断信息' }
-}
-
 async function submit() {
   if (saving.value) return
   requestError.value = null
@@ -62,7 +56,7 @@ async function submit() {
 <template>
   <ProjectModal
     :title="`编辑任务 · ${task.taskName}`"
-    description="保存制作要求、优先级和截止日期的完整快照；并发变更时后端会拒绝旧锁版本。"
+    description="保存制作要求、优先级和截止日期；若任务已被他人更新，请刷新后再保存。"
     :busy="saving"
     @close="emit('close')"
   >
@@ -83,7 +77,7 @@ async function submit() {
       </el-form-item>
 
       <el-alert v-if="requestError" class="task-edit-form__alert" type="error" :closable="false" show-icon :title="requestError.title">
-        <div class="form-alert-content"><p>{{ requestError.message }}</p><code v-if="requestError.errorKey">{{ requestError.errorKey }}</code><small v-if="requestError.details">{{ detailsText(requestError.details) }}</small><el-button v-if="requestError.status === 409" link type="primary" @click="emit('refresh', operationContext)">刷新任务后重试</el-button></div>
+        <div class="form-alert-content"><p>{{ requestError.message }}</p><el-button v-if="requestError.status === 409" link type="primary" @click="emit('refresh', operationContext)">刷新任务后重试</el-button></div>
       </el-alert>
 
       <footer>

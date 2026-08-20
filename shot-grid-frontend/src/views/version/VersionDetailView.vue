@@ -76,11 +76,11 @@ onBeforeUnmount(() => {
 <template>
   <section class="sg-page version-detail-view">
     <header class="view-heading">
-      <div><p class="sg-eyebrow">VERSION</p><h2>版本详情</h2><p>通过专用受保护接口查看不可覆盖的版本文件。</p></div>
+      <div><p class="sg-eyebrow">VERSION</p><h2>版本详情</h2><p>查看版本文件、提交说明与审核信息，历史版本始终保留。</p></div>
       <div><el-button :icon="ArrowLeft" @click="router.back()">返回</el-button><el-button :icon="Refresh" :loading="loading" @click="loadVersion">刷新</el-button></div>
     </header>
     <el-skeleton v-if="loading" class="view-state" :rows="6" animated />
-    <el-alert v-else-if="errorState" class="view-state is-error" :title="errorState.title" :description="[errorState.message, errorState.errorKey].filter(Boolean).join(' · ')" type="error" :closable="false" show-icon />
+    <el-alert v-else-if="errorState" class="view-state is-error" :title="errorState.title" :description="errorState.message" type="error" :closable="false" show-icon />
     <VersionDetailCard v-else-if="version" :version="version" :can-download="canDownload" />
     <el-empty v-else class="view-state" description="当前没有可展示的版本详情" />
   </section>

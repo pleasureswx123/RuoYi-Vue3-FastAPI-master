@@ -15,7 +15,7 @@ import ProtectedThumbnail from '@/views/shot/components/ProtectedThumbnail.vue'
 import ShotDetailView from '@/views/shot/ShotDetailView.vue'
 import ShotFormDialog from '@/views/shot/components/ShotFormDialog.vue'
 import ShotImportDialog from '@/views/shot/components/ShotImportDialog.vue'
-import { directoryStatusMeta, formatShotDuration, shotErrorState, shotStatusMeta } from '@/views/shot/shotPresentation'
+import { directoryStatusMeta, formatShotDuration, shotAssigneeName, shotAssigneeOptionLabel, shotErrorState, shotStatusMeta } from '@/views/shot/shotPresentation'
 
 const route = useRoute()
 const router = useRouter()
@@ -255,7 +255,7 @@ async function loadProjectContext() {
     await loadScenes(false)
     await loadShots(controller)
   } catch (error) {
-    if (error?.code !== 'ERR_CANCELED') shotsError.value = shotErrorState(error, '镜头项目上下文加载失败')
+    if (error?.code !== 'ERR_CANCELED') shotsError.value = shotErrorState(error, '项目镜头信息加载失败')
   } finally {
     if (shotController === controller) shotsLoading.value = false
   }
@@ -418,7 +418,7 @@ async function confirmBatchAssign() {
   assigning.value = true
   try {
     await batchAssignShotTasks(targetProjectId, assigneeUserId, items)
-    ElMessage.success(`已将 ${items.length} 个镜头分配给 ${member.nickName || member.userName}`)
+    ElMessage.success(`已将 ${items.length} 个镜头分配给 ${shotAssigneeName(member)}`)
     if (currentProjectId.value === targetProjectId) {
       showBatchAssign.value = false
       resetBatchAssignForm()
@@ -463,7 +463,7 @@ async function openEditDialog(shot) {
     editContext.value = Object.freeze({ projectId: targetProjectId, shotId: targetShotId, operationGeneration: generation })
     showEdit.value = true
   } catch (error) {
-    const state = shotErrorState(error, '镜头编辑数据加载失败')
+    const state = shotErrorState(error, '镜头信息加载失败')
     ElMessage.error(`${state.title}：${state.message}`)
   } finally {
     if (editingShotId.value === targetShotId) editingShotId.value = null
@@ -495,7 +495,7 @@ async function handleEdited(_result, operationContext) {
 
 async function handleEditRefresh() {
   closeEditDialog()
-  ElMessage.warning('镜头数据已变化，请从最新列表重新打开编辑')
+  ElMessage.warning('镜头信息已更新，请从最新列表重新打开')
   await loadShots()
 }
 
@@ -558,7 +558,7 @@ function closeImportDialog() {
 }
 
 function notifyDetachedOperation() {
-  ElMessage.success('操作已完成；当前项目未自动刷新。')
+  ElMessage.success('操作已完成，请切回原项目查看最新结果。')
 }
 
 function isActiveOperation(targetProjectId, targetGeneration, operationContext) {
@@ -639,19 +639,19 @@ onBeforeUnmount(() => { disposed = true; projectController?.abort(); shotControl
 <template>
   <section class="sg-page shot-page">
     <header class="sg-page-heading shot-heading">
-      <div><p class="sg-eyebrow">SHOTS</p><h2 class="sg-page-title">镜头管理</h2><p class="sg-page-description">同一份服务端分页结果支持表格、卡片和故事板三种视图；所有写入均受项目角色与接口权限约束。</p></div>
+      <div><p class="sg-eyebrow">SHOTS</p><h2 class="sg-page-title">镜头管理</h2><p class="sg-page-description">按项目查看和维护镜头，可在表格、卡片与故事板之间灵活切换。</p></div>
       <div class="shot-heading__actions"><el-button v-if="canImport" :icon="Upload" @click="openImportDialog">导入 Excel</el-button><el-button v-if="canCreate" type="primary" :icon="Plus" @click="openCreateDialog">新建镜头</el-button></div>
     </header>
 
     <ProjectStatePanel v-if="projectsError" :title="projectsError.title" :message="projectsError.message" :retryable="projectsError.retryable" @retry="loadProjects" />
     <template v-else>
-      <el-form ref="projectContextForm" :model="projectContext" :rules="projectContextRules" class="project-context" size="large" inline label-position="top" aria-label="项目上下文">
+      <el-form ref="projectContextForm" :model="projectContext" :rules="projectContextRules" class="project-context" size="large" inline label-position="top" aria-label="项目选择">
         <el-form-item label="当前项目" prop="projectId"><el-select v-model="projectContext.projectId" class="sg-select" :placeholder="projectsLoading ? '正在加载项目…' : '请选择项目'" :disabled="projectsLoading"><el-option :label="projectsLoading ? '正在加载项目…' : '请选择项目'" value="" /><el-option v-for="item in projects" :key="item.projectId" :label="`${item.projectCode} · ${item.projectName}`" :value="String(item.projectId)" /></el-select></el-form-item>
         <el-form-item v-if="canViewAll" label="项目范围" prop="scope"><el-select v-model="projectContext.scope" class="sg-select" placeholder="我的项目"><el-option label="我的项目" value="" /><el-option label="全部项目" value="all" /></el-select></el-form-item>
         <div v-if="project" class="project-context__tags"><el-tag size="small" effect="plain" round type="primary">{{ project.projectTypeName }}</el-tag><el-tag size="small" effect="plain" round type="info">{{ project.aspectRatio }}</el-tag><el-tag size="small" effect="plain" round :type="projectRoleMeta(project.myProjectRole).type">我的角色：{{ projectRoleMeta(project.myProjectRole).label }}</el-tag><el-tag size="small" effect="plain" round :type="tagTypeFromTone(storageMeta(project.storageStatus).tone)">{{ storageMeta(project.storageStatus).label }}</el-tag></div>
       </el-form>
 
-      <el-empty v-if="!projectContext.projectId && !projectsLoading" class="shot-empty" description="当前范围暂无可选项目"><p>请先创建项目或加入项目成员范围；具备跨项目权限时也可以切换“全部项目”。</p></el-empty>
+      <el-empty v-if="!projectContext.projectId && !projectsLoading" class="shot-empty" description="当前范围暂无可选项目"><p>请先创建项目，或请项目管理人将你加入项目；如可查看全部项目，也可切换“全部项目”。</p></el-empty>
 
       <template v-else-if="projectContext.projectId">
         <el-form ref="shotFilterForm" :model="query" :rules="shotFilterRules" class="shot-filters" size="large" aria-label="镜头筛选">
@@ -668,7 +668,7 @@ onBeforeUnmount(() => { disposed = true; projectController?.abort(); shotControl
             <el-select v-model="query.shotStatus" class="sg-select" placeholder="全部状态" aria-label="按状态筛选" @change="submitFilters"><el-option label="全部状态" value="" /><el-option v-for="status in ['unassigned','not_started','in_progress','reviewing','revision','completed']" :key="status" :label="shotStatusMeta(status).label" :value="status" /></el-select>
           </el-form-item>
           <el-form-item class="shot-filter-item" prop="assigneeUserId">
-            <el-select v-model="query.assigneeUserId" class="sg-select" placeholder="全部制作人" aria-label="按制作人筛选" @change="submitFilters"><el-option label="全部制作人" value="" /><el-option v-for="member in creatorMembers" :key="member.userId" :label="member.userName ? `${member.nickName}（${member.userName}）` : member.nickName" :value="String(member.userId)" /></el-select>
+            <el-select v-model="query.assigneeUserId" class="sg-select" placeholder="全部制作人" aria-label="按制作人筛选" @change="submitFilters"><el-option label="全部制作人" value="" /><el-option v-for="member in creatorMembers" :key="member.userId" :label="shotAssigneeOptionLabel(member)" :value="String(member.userId)" /></el-select>
           </el-form-item>
           <el-form-item class="shot-filter-actions">
             <el-button type="primary" :icon="Search" :loading="shotsLoading" @click="submitFilters">查询</el-button>
@@ -708,8 +708,8 @@ onBeforeUnmount(() => { disposed = true; projectController?.abort(); shotControl
             <el-table-column label="场景 / 角色" width="160">
               <template #default="scope"><div v-if="scope?.row" class="shot-assets"><el-tag v-for="asset in scope.row.environmentAssets" :key="`environment-${asset.assetId}`" :type="tagTypeFromTone('environment')" size="small" effect="plain" round>场景 · {{ asset.assetName }}</el-tag><el-tag v-for="asset in scope.row.characterAssets" :key="`character-${asset.assetId}`" :type="tagTypeFromTone('character')" size="small" effect="plain" round>角色 · {{ asset.assetName }}</el-tag><span v-if="!scope.row.environmentAssets.length && !scope.row.characterAssets.length" class="shot-assets__empty">—</span></div></template>
             </el-table-column>
-            <el-table-column label="制作人" width="60">
-              <template #default="scope"><span v-if="scope?.row">{{ scope.row.assignee?.nickName || '未分配' }}</span></template>
+            <el-table-column label="制作人" width="110">
+              <template #default="scope"><span v-if="scope?.row">{{ shotAssigneeName(scope.row.assignee, members) }}</span></template>
             </el-table-column>
             <el-table-column label="状态" width="125">
               <template #default="scope"><div v-if="scope?.row" class="shot-status"><el-tag :type="tagTypeFromTone(shotStatusMeta(scope.row.status).tone)" size="small" effect="light" round>{{ shotStatusMeta(scope.row.status).label }}</el-tag><el-tag :type="tagTypeFromTone(directoryStatusMeta(scope.row.directoryStatus).tone)" size="small" effect="plain" round>{{ directoryStatusMeta(scope.row.directoryStatus).label }}</el-tag></div></template>
@@ -737,9 +737,9 @@ onBeforeUnmount(() => { disposed = true; projectController?.abort(); shotControl
           </el-table>
         </div>
 
-        <div v-else-if="viewMode === 'card'" class="shot-grid" :class="{ 'is-refreshing':shotsLoading }"><el-card v-for="shot in shots" :key="shot.shotId" class="shot-card" shadow="hover" role="link" tabindex="0" @click="openShot(shot)" @keydown.enter="openShot(shot)" @keydown.space.prevent="openShot(shot)"><div class="shot-card__media"><ProtectedThumbnail class="shot-thumb" :thumbnail="shot.thumbnail" :video="shot.proxyMedia" :alt="`${shot.shotCode} 缩略图`" /><span class="shot-card__duration">{{ formatShotDuration(shot.durationMs) }}</span></div><header><div><small>{{ shot.episodeCode }} / {{ shot.sceneCode }}</small><h3>{{ shot.shotCode }}</h3></div><el-tag :type="tagTypeFromTone(shotStatusMeta(shot.status).tone)" size="small" effect="light" round>{{ shotStatusMeta(shot.status).label }}</el-tag></header><p>{{ shot.description }}</p><footer><span>{{ shot.assignee?.nickName || '未分配制作人' }}</span><span>{{ shot.shotSize || '未设景别' }}</span></footer></el-card></div>
+        <div v-else-if="viewMode === 'card'" class="shot-grid" :class="{ 'is-refreshing':shotsLoading }"><el-card v-for="shot in shots" :key="shot.shotId" class="shot-card" shadow="hover" role="link" tabindex="0" @click="openShot(shot)" @keydown.enter="openShot(shot)" @keydown.space.prevent="openShot(shot)"><div class="shot-card__media"><ProtectedThumbnail class="shot-thumb" :thumbnail="shot.thumbnail" :video="shot.proxyMedia" :alt="`${shot.shotCode} 缩略图`" /><span class="shot-card__duration">{{ formatShotDuration(shot.durationMs) }}</span></div><header><div><small>{{ shot.episodeCode }} / {{ shot.sceneCode }}</small><h3>{{ shot.shotCode }}</h3></div><el-tag :type="tagTypeFromTone(shotStatusMeta(shot.status).tone)" size="small" effect="light" round>{{ shotStatusMeta(shot.status).label }}</el-tag></header><p>{{ shot.description }}</p><footer><span>{{ shotAssigneeName(shot.assignee, members) }}</span><span>{{ shot.shotSize || '未设景别' }}</span></footer></el-card></div>
 
-        <div v-else class="storyboard" :class="{ 'is-refreshing':shotsLoading }"><el-card v-for="(shot,index) in shots" :key="shot.shotId" class="story-frame" shadow="hover" role="link" tabindex="0" @click="openShot(shot)" @keydown.enter="openShot(shot)" @keydown.space.prevent="openShot(shot)"><span class="story-frame__index">{{ String((query.pageNum-1)*query.pageSize+index+1).padStart(3,'0') }}</span><ProtectedThumbnail class="shot-thumb" :thumbnail="shot.thumbnail" :video="shot.proxyMedia" :alt="`${shot.shotCode} 缩略图`" /><div><strong>{{ shot.episodeCode }} · {{ shot.sceneCode }} · {{ shot.shotCode }}</strong><p>{{ shot.description }}</p><small>{{ formatShotDuration(shot.durationMs) }} · {{ shot.shotSize || '未设景别' }} · {{ shot.assignee?.nickName || '未分配' }}</small></div></el-card></div>
+        <div v-else class="storyboard" :class="{ 'is-refreshing':shotsLoading }"><el-card v-for="(shot,index) in shots" :key="shot.shotId" class="story-frame" shadow="hover" role="link" tabindex="0" @click="openShot(shot)" @keydown.enter="openShot(shot)" @keydown.space.prevent="openShot(shot)"><span class="story-frame__index">{{ String((query.pageNum-1)*query.pageSize+index+1).padStart(3,'0') }}</span><ProtectedThumbnail class="shot-thumb" :thumbnail="shot.thumbnail" :video="shot.proxyMedia" :alt="`${shot.shotCode} 缩略图`" /><div><strong>{{ shot.episodeCode }} · {{ shot.sceneCode }} · {{ shot.shotCode }}</strong><p>{{ shot.description }}</p><small>{{ formatShotDuration(shot.durationMs) }} · {{ shot.shotSize || '未设景别' }} · {{ shotAssigneeName(shot.assignee, members) }}</small></div></el-card></div>
 
         <el-pagination v-if="shots.length" class="shot-pagination" background layout="prev, pager, next, total" :current-page="query.pageNum" :page-size="query.pageSize" :total="total" :disabled="shotsLoading" aria-label="镜头分页" @current-change="changePage" />
       </template>
@@ -751,7 +751,7 @@ onBeforeUnmount(() => { disposed = true; projectController?.abort(); shotControl
     <el-dialog v-model="showBatchAssign" class="shot-batch-assign-dialog" :title="batchAssignLabel" width="520px" append-to-body :close-on-click-modal="!assigning" :close-on-press-escape="!assigning" :show-close="!assigning" @closed="resetBatchAssignForm">
       <el-form ref="batchAssignFormRef" :model="batchAssignForm" :rules="batchAssignRules" class="batch-assign-form" label-position="top" aria-label="镜头批量分配表单">
         <div class="batch-assign-summary"><strong>已选择 {{ selectedShots.length }} 个镜头</strong><span v-if="hasAssignedSelection">其中包含已分配镜头，确认后将改派到新的制作人。</span><span v-else>确认后将为所选镜头创建制作任务。</span></div>
-        <el-form-item label="新的制作人" prop="assigneeUserId" required><el-select v-model="batchAssignForm.assigneeUserId" placeholder="请选择项目制作人员" aria-label="批量分配制作人" :disabled="assigning"><el-option v-for="member in creatorMembers" :key="member.userId" :label="member.userName ? `${member.nickName}（${member.userName}）` : member.nickName" :value="String(member.userId)" /></el-select></el-form-item>
+        <el-form-item label="新的制作人" prop="assigneeUserId" required><el-select v-model="batchAssignForm.assigneeUserId" placeholder="请选择项目制作人员" aria-label="批量分配制作人" :disabled="assigning"><el-option v-for="member in creatorMembers" :key="member.userId" :label="shotAssigneeOptionLabel(member)" :value="String(member.userId)" /></el-select></el-form-item>
       </el-form>
       <template #footer><el-button :disabled="assigning" @click="closeBatchAssignDialog()">取消</el-button><el-button type="primary" :loading="assigning" :disabled="assigning" @click="confirmBatchAssign">确认{{ hasAssignedSelection ? '重新分配' : '分配' }}</el-button></template>
     </el-dialog>

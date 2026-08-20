@@ -14,11 +14,29 @@ const DIRECTORY_META = {
 }
 
 export function shotStatusMeta(status) {
-  return STATUS_META[status] || { label: status || '未知', tone: 'muted' }
+  return STATUS_META[status] || { label: '未知镜头状态', tone: 'muted' }
 }
 
 export function directoryStatusMeta(status) {
-  return DIRECTORY_META[status] || { label: status || '未知', tone: 'muted' }
+  return DIRECTORY_META[status] || { label: '未知目录状态', tone: 'muted' }
+}
+
+export function shotAssigneeName(assignee, members = []) {
+  if (!assignee) return '未分配'
+  const userId = Number(assignee.userId)
+  const member = (Array.isArray(members) ? members : [])
+    .find(item => Number(item?.userId) === userId)
+  return String(member?.userName || assignee.userName || '').trim()
+    || String(member?.nickName || assignee.nickName || '').trim()
+    || `用户 ${assignee.userId}`
+}
+
+export function shotAssigneeOptionLabel(member) {
+  if (!member) return '未分配'
+  const userName = String(member.userName || '').trim()
+  const nickName = String(member.nickName || '').trim()
+  if (userName && nickName && userName !== nickName) return `${userName}（${nickName}）`
+  return userName || nickName || `用户 ${member.userId}`
 }
 
 export function formatShotDuration(durationMs) {
@@ -34,7 +52,7 @@ export function secondsToDurationMs(value) {
   const rawDurationMs = seconds * 1000
   const durationMs = Math.round(rawDurationMs)
   if (!Number.isSafeInteger(durationMs) || Math.abs(rawDurationMs - durationMs) > 1e-6) {
-    throw new TypeError('镜头时长最多精确到 1 毫秒，且必须在安全整数范围内')
+    throw new TypeError('镜头时长最多精确到 1 毫秒，且数值不能过大')
   }
   return durationMs
 }
@@ -59,15 +77,15 @@ export function shotErrorState(error, fallbackTitle = '镜头数据加载失败'
   if (status === 403) return { ...context, title: '没有镜头访问权限', retryable: false }
   if (status === 404) return { ...context, title: '镜头或项目不存在', retryable: false }
   if (status === 409) return { ...context, title: '镜头状态已发生变化', retryable: true }
-  if (status === 410) return { ...context, title: '导入预检已过期', retryable: false }
+  if (status === 410) return { ...context, title: '导入检查结果已过期', retryable: false }
   if (status === 413) return { ...context, title: 'Excel 文件过大', retryable: false }
-  if (status === 422 || status === 400) return { ...context, title: '镜头数据校验失败', retryable: false }
+  if (status === 422 || status === 400) return { ...context, title: '镜头信息有误', retryable: false }
   return { ...context, title: fallbackTitle, retryable: status >= 500 || status === 0 }
 }
 
 export function groupPreviewRows(rows = []) {
   return rows.reduce((groups, row) => {
-    const key = row.sheetName || '未知 Sheet'
+    const key = row.sheetName || '未知工作表'
     if (!groups[key]) groups[key] = []
     groups[key].push(row)
     return groups

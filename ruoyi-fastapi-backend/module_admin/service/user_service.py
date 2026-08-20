@@ -39,6 +39,12 @@ from module_admin.service.config_service import ConfigService
 from module_admin.service.dept_service import DeptService
 from module_admin.service.post_service import PostService
 from module_admin.service.role_service import RoleService
+from module_admin.service.shot_grid_role_guard import (
+    ensure_user_deletion_safe,
+    ensure_user_role_deletion_safe,
+    ensure_user_role_replacement_safe,
+    lock_user_role_mutation,
+)
 from utils.common_util import CamelCaseUtil
 from utils.excel_util import ExcelUtil
 from utils.pwd_util import PwdUtil
@@ -259,13 +265,12 @@ class UserService:
             try:
                 await UserDao.edit_user_dao(query_db, edit_user)
                 if page_object.type not in {'status', 'avatar', 'pwd'}:
-                    await UserDao.delete_user_role_dao(query_db, UserRoleModel(userId=page_object.user_id))
+                    await cls._replace_user_roles_preserving_shot_grid(
+                        query_db,
+                        int(page_object.user_id),
+                        page_object.role_ids or [],
+                    )
                     await UserDao.delete_user_post_dao(query_db, UserPostModel(userId=page_object.user_id))
-                    if page_object.role_ids:
-                        for role in page_object.role_ids:
-                            await UserDao.add_user_role_dao(
-                                query_db, UserRoleModel(userId=page_object.user_id, roleId=role)
-                            )
                     if page_object.post_ids:
                         for post in page_object.post_ids:
                             await UserDao.add_user_post_dao(
@@ -291,6 +296,7 @@ class UserService:
         if page_object.user_ids:
             user_id_list = page_object.user_ids.split(',')
             try:
+                await ensure_user_deletion_safe(query_db, {int(user_id) for user_id in user_id_list})
                 for user_id in user_id_list:
                     user_id_dict = {
                         'userId': user_id,
@@ -629,9 +635,11 @@ class UserService:
         if page_object.user_id and page_object.role_ids:
             role_id_list = page_object.role_ids.split(',')
             try:
-                await UserDao.delete_user_role_by_user_and_role_dao(query_db, UserRoleModel(userId=page_object.user_id))
-                for role_id in role_id_list:
-                    await UserDao.add_user_role_dao(query_db, UserRoleModel(userId=page_object.user_id, roleId=role_id))
+                await cls._replace_user_roles_preserving_shot_grid(
+                    query_db,
+                    int(page_object.user_id),
+                    role_id_list,
+                )
                 await query_db.commit()
                 return CrudResponseModel(is_success=True, message='分配成功')
             except Exception as e:
@@ -639,7 +647,11 @@ class UserService:
                 raise e
         elif page_object.user_id and not page_object.role_ids:
             try:
-                await UserDao.delete_user_role_by_user_and_role_dao(query_db, UserRoleModel(userId=page_object.user_id))
+                await cls._replace_user_roles_preserving_shot_grid(
+                    query_db,
+                    int(page_object.user_id),
+                    [],
+                )
                 await query_db.commit()
                 return CrudResponseModel(is_success=True, message='分配成功')
             except Exception as e:
@@ -648,6 +660,7 @@ class UserService:
         elif page_object.user_ids and page_object.role_id:
             user_id_list = page_object.user_ids.split(',')
             try:
+                await lock_user_role_mutation(query_db, {int(user_id) for user_id in user_id_list})
                 for user_id in user_id_list:
                     user_role = await cls.detail_user_role_services(
                         query_db, UserRoleModel(userId=user_id, roleId=page_object.role_id)
@@ -677,6 +690,11 @@ class UserService:
         if (page_object.user_id and page_object.role_id) or (page_object.user_ids and page_object.role_id):
             if page_object.user_id and page_object.role_id:
                 try:
+                    await ensure_user_role_deletion_safe(
+                        query_db,
+                        {int(page_object.user_id)},
+                        int(page_object.role_id),
+                    )
                     await UserDao.delete_user_role_by_user_and_role_dao(
                         query_db, UserRoleModel(userId=page_object.user_id, roleId=page_object.role_id)
                     )
@@ -688,6 +706,11 @@ class UserService:
             elif page_object.user_ids and page_object.role_id:
                 user_id_list = page_object.user_ids.split(',')
                 try:
+                    await ensure_user_role_deletion_safe(
+                        query_db,
+                        {int(user_id) for user_id in user_id_list},
+                        int(page_object.role_id),
+                    )
                     for user_id in user_id_list:
                         await UserDao.delete_user_role_by_user_and_role_dao(
                             query_db, UserRoleModel(userId=user_id, roleId=page_object.role_id)
@@ -714,3 +737,31 @@ class UserService:
         user_role = await UserDao.get_user_role_detail(query_db, page_object)
 
         return user_role
+
+    @classmethod
+    async def _replace_user_roles_preserving_shot_grid(
+        cls,
+        query_db: AsyncSession,
+        user_id: int,
+        role_ids: list[int | str],
+    ) -> None:
+        """替换普通平台角色，同时原样保留 Shot Grid 受保护关系。"""
+
+        desired_role_ids = {int(role_id) for role_id in role_ids}
+        protected_existing_role_ids = await ensure_user_role_replacement_safe(
+            query_db,
+            user_id,
+            desired_role_ids,
+        )
+        await UserDao.delete_user_roles_except_dao(
+            query_db,
+            user_id,
+            protected_existing_role_ids,
+        )
+        for role_id in role_ids:
+            if int(role_id) in protected_existing_role_ids:
+                continue
+            await UserDao.add_user_role_dao(
+                query_db,
+                UserRoleModel(userId=user_id, roleId=role_id),
+            )

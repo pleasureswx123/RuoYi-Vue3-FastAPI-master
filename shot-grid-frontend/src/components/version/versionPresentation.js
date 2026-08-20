@@ -3,37 +3,37 @@ const SUBMISSION_STATUS = Object.freeze({
     label: '等待发布',
     tone: 'warning',
     step: 0,
-    description: '提交已受理，尚未开始写入 NAS，也尚未形成正式版本。'
+    description: '提交已受理，正在等待处理；正式版本生成前请勿重复提交。'
   },
   publishing: {
     label: '正在发布',
     tone: 'warning',
     step: 1,
-    description: '后台正在校验源文件并写入 NAS 临时文件，尚未形成正式版本。'
+    description: '文件正在保存到项目 NAS，完成前请耐心等待。'
   },
   published: {
-    label: '文件已发布',
+    label: '文件已保存',
     tone: 'warning',
     step: 2,
-    description: 'NAS 文件已完成原子发布，正式版本记录仍在创建中。'
+    description: '文件已保存到项目 NAS，正在生成正式版本。'
   },
   committing: {
-    label: '正在落库',
+    label: '正在生成版本',
     tone: 'warning',
     step: 3,
-    description: '正在创建正式版本、文件引用和自动审核单。'
+    description: '正在整理版本信息并创建审核任务。'
   },
   committed: {
-    label: '版本已形成',
+    label: '版本已生成',
     tone: 'success',
     step: 4,
-    description: '正式版本与自动审核单已创建，上传链路完成。'
+    description: '正式版本和审核任务已创建，可以继续后续工作。'
   },
   failed: {
     label: '发布失败',
     tone: 'danger',
     step: -1,
-    description: '正式版本尚未形成；请查看诊断后人工重试。'
+    description: '正式版本尚未生成；请重试，或联系项目管理人处理。'
   }
 })
 
@@ -48,9 +48,9 @@ const STATUS_HTTP_COPY = Object.freeze({
   403: ['无权访问版本', '当前账号不是该资源的授权成员，或缺少所需版本权限。'],
   404: ['版本资源不存在', '任务、提交或版本可能已删除，也可能当前账号不可见。'],
   409: ['版本状态发生冲突', '请保留当前文件并刷新任务状态后重试。'],
-  413: ['文件超过上传上限', '平台私有文件当前单文件上限为 100 MiB。'],
-  416: ['文件读取范围无效', '请重新发起完整下载，或刷新版本文件信息。'],
-  500: ['版本服务异常', '服务暂时不可用，当前操作没有被视为成功。']
+  413: ['文件超过上传上限', '单个版本文件不能超过 100 MiB。'],
+  416: ['文件下载信息已失效', '请重新下载，或刷新版本文件信息后重试。'],
+  500: ['版本处理异常', '暂时无法完成操作，请稍后重试。']
 })
 
 export function submissionStatusMeta(status) {
@@ -58,12 +58,12 @@ export function submissionStatusMeta(status) {
     label: '未知状态',
     tone: 'neutral',
     step: -1,
-    description: '后端返回了前端尚未识别的提交状态，请刷新后重试。'
+    description: '暂时无法识别当前提交进度，请刷新后重试。'
   }
 }
 
 export function versionStatusMeta(status) {
-  return VERSION_STATUS[status] || { label: status || '未知', tone: 'neutral' }
+  return VERSION_STATUS[status] || { label: '未知状态', tone: 'neutral' }
 }
 
 export function formatVersionDateTime(value) {
@@ -90,7 +90,7 @@ export function formatFileSize(value) {
 export function versionErrorState(error, fallbackTitle = '版本操作失败') {
   const status = Number(error?.httpStatus || error?.status || 0)
   const normalizedStatus = status >= 500 ? 500 : status
-  const [title, description] = STATUS_HTTP_COPY[normalizedStatus] || [fallbackTitle, '请求未完成，请稍后重试。']
+  const [title, description] = STATUS_HTTP_COPY[normalizedStatus] || [fallbackTitle, '操作未完成，请稍后重试。']
   return {
     title,
     message: error?.message || description,

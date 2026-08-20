@@ -70,7 +70,7 @@ async function submit() {
           <el-option v-for="item in candidates" :key="item.autoVersionId" :value="item.autoVersionId" :label="`${item.versionNumber} · ${item.reviewListName}`" />
         </el-select>
       </el-form-item>
-      <p class="dialog-tip">创建后先保持草稿，可继续调整版本集合和顺序；激活后集合冻结。</p>
+      <p class="dialog-tip">创建后先保持草稿，可继续调整版本和顺序；激活后将不能再调整。</p>
     </el-form>
     <template #footer><el-button @click="dialogVisible = false">取消</el-button><el-button type="primary" :loading="busy" @click="submit">创建审核单</el-button></template>
   </el-dialog>

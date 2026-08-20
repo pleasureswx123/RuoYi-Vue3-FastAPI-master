@@ -253,7 +253,7 @@ async function runPreview() {
     selectedKeys.value = new Set((response.data?.rows || []).filter(row => rowCanImport(row)).map(row => rowKey(row)))
     await syncPreviewTableSelections()
   } catch (error) {
-    if (error?.code !== 'ERR_CANCELED') requestError.value = shotErrorState(error, '镜头 Excel 预检查失败')
+    if (error?.code !== 'ERR_CANCELED') requestError.value = shotErrorState(error, '镜头 Excel 检查失败')
   } finally {
     if (previewController === controller) previewing.value = false
   }
@@ -288,7 +288,7 @@ async function downloadTemplate() {
 async function commitImport() {
   validationMessage.value = ''
   requestError.value = null
-  if (!preview.value?.importToken) { validationMessage.value = '预检 Token 不存在，请重新预检'; return }
+  if (!preview.value?.importToken) { validationMessage.value = '导入准备信息已失效，请重新检查文件'; return }
   if (selectedPreviewRows.value.length !== selectedRows.value.length) {
     validationMessage.value = '选中行仍有未解决的制作人问题，请先改选或清空制作人'
     return
@@ -309,32 +309,26 @@ function issueText(issue) {
   return [issue.fieldName, issue.message].filter(Boolean).join('：')
 }
 
-function detailsText(details) {
-  if (!details) return ''
-  if (typeof details === 'string') return details
-  try { return JSON.stringify(details) } catch { return '后端返回了额外诊断信息' }
-}
-
 onBeforeUnmount(() => { previewController?.abort(); downloadController?.abort() })
 </script>
 
 <template>
-  <ProjectModal title="导入镜头 Excel" :description="`预检 ${projectName || '当前项目'} 的全部可见 EPnnn Sheet，确认跨 Sheet 行后再以单事务正式提交。`" :busy="isBusy" wide @close="emit('close')">
+  <ProjectModal title="导入镜头 Excel" :description="`检查 ${projectName || '当前项目'} 中所有可见的 EPnnn 工作表，确认需要导入的镜头后统一提交。`" :busy="isBusy" wide @close="emit('close')">
     <div class="import-flow">
       <section class="file-picker" :class="{ 'has-file': file }">
         <el-icon><UploadFilled /></el-icon>
-        <div><strong>{{ file?.name || '选择镜头 Excel 工作簿' }}</strong><p>{{ file ? `${(file.size / 1024).toFixed(1)} KiB` : '仅支持 .xlsx，最大 10 MiB；每个可见 EPnnn Sheet 表示一集。' }}</p></div>
+        <div><strong>{{ file?.name || '选择镜头 Excel 工作簿' }}</strong><p>{{ file ? `${(file.size / 1024).toFixed(1)} KiB` : '仅支持 .xlsx，最大 10 MiB；每个可见 EPnnn 工作表表示一集。' }}</p></div>
         <el-button link type="primary" :loading="downloading" :disabled="isBusy" @click="downloadTemplate">下载官方模板</el-button>
         <el-upload ref="uploadRef" class="file-picker__upload" action="#" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" :auto-upload="false" :show-file-list="false" :limit="1" :disabled="isBusy" :on-change="chooseFile" :on-exceed="replaceFile"><el-button :icon="UploadFilled" :disabled="isBusy">{{ file ? '更换文件' : '选择文件' }}</el-button></el-upload>
-        <el-button type="primary" :loading="previewing" :disabled="!file || committing" @click="runPreview">{{ preview ? '重新预检' : '开始预检' }}</el-button>
+        <el-button type="primary" :loading="previewing" :disabled="!file || committing" @click="runPreview">{{ preview ? '重新检查' : '检查文件' }}</el-button>
       </section>
 
-      <el-alert v-if="validationMessage || requestError" class="import-alert" :type="requestError ? 'error' : 'warning'" :closable="false" show-icon :title="requestError?.title || '请检查导入条件'"><div class="import-alert__content"><p>{{ requestError?.message || validationMessage }}</p><code v-if="requestError?.errorKey">{{ requestError.errorKey }}</code><small v-if="requestError?.details">{{ detailsText(requestError.details) }}</small></div></el-alert>
+      <el-alert v-if="validationMessage || requestError" class="import-alert" :type="requestError ? 'error' : 'warning'" :closable="false" show-icon :title="requestError?.title || '请检查导入条件'"><div class="import-alert__content"><p>{{ requestError?.message || validationMessage }}</p></div></el-alert>
 
       <section v-if="commitResult" class="import-success" role="status">
-        <div><p class="sg-eyebrow">IMPORT COMPLETE</p><h3>镜头已按单事务完成导入</h3><p>{{ commitResult.idempotentReplay ? '本次返回来自后端幂等结果快照，没有重复创建数据。' : '正式提交成功；页面列表已可以刷新。' }}</p></div>
+        <div><p class="sg-eyebrow">IMPORT COMPLETE</p><h3>镜头导入完成</h3><p>{{ commitResult.idempotentReplay ? '系统已确认本次导入完成，没有重复创建数据。' : '所选镜头已成功导入。' }}</p></div>
         <div class="import-success__metrics">
-          <el-statistic title="提交行" :value="Number(commitResult.committedRows || 0)" />
+          <el-statistic title="已导入行" :value="Number(commitResult.committedRows || 0)" />
           <el-statistic title="新建集" :value="Number(commitResult.createdEpisodes || 0)" />
           <el-statistic title="新建场次" :value="Number(commitResult.createdScenes || 0)" />
           <el-statistic title="新建镜头" :value="Number(commitResult.createdShots || 0)" />
@@ -350,11 +344,11 @@ onBeforeUnmount(() => { previewController?.abort(); downloadController?.abort() 
           <div><span class="shot-preview-summary__label">含警告行</span><el-tag class="shot-preview-summary__tag" size="small" effect="plain" round type="warning">{{ preview.summary.warningRows }}</el-tag></div>
           <div><span class="shot-preview-summary__label">错误行</span><el-tag class="shot-preview-summary__tag" size="small" effect="plain" round type="danger">{{ preview.summary.errorRows }}<template v-if="overriddenRowCount"> · 已改选 {{ overriddenRowCount }}</template></el-tag></div>
           <div><span class="shot-preview-summary__label">集 / 场次 / 镜头</span><strong class="shot-preview-summary__value">{{ preview.summary.distinctEpisodes }} / {{ preview.summary.distinctScenes }} / {{ preview.summary.distinctShots }}</strong></div>
-          <div><span class="shot-preview-summary__label">Token 到期</span><strong class="shot-preview-summary__value">{{ new Date(preview.expiresAt).toLocaleTimeString('zh-CN') }}</strong></div>
+          <div><span class="shot-preview-summary__label">检查结果有效至</span><strong class="shot-preview-summary__value">{{ new Date(preview.expiresAt).toLocaleTimeString('zh-CN') }}</strong></div>
         </section>
 
         <section v-if="preview.workbookWarnings?.length" class="workbook-warnings">
-          <strong>工作簿级警告</strong><ul><li v-for="issue in preview.workbookWarnings" :key="`${issue.errorKey}-${issue.message}`">{{ issue.message }} <code>{{ issue.errorKey }}</code></li></ul>
+          <strong>工作簿提醒</strong><ul><li v-for="issue in preview.workbookWarnings" :key="`${issue.errorKey}-${issue.message}`">{{ issue.message }}</li></ul>
         </section>
 
         <div class="selection-toolbar"><span>已选 {{ selectedPreviewRows.length }} 行 · {{ selectedRows.length }} 条可导入</span><el-button v-if="selectedPreviewRows.length" type="primary" plain @click="openBatchAssignDialog">批量分配</el-button></div>
@@ -378,12 +372,12 @@ onBeforeUnmount(() => { previewController?.abort(); downloadController?.abort() 
               <el-table-column label="色调参考" min-width="160"><template #default="{ row }"><div class="long-text-cell">{{ row.normalized?.colorReference || '—' }}</div></template></el-table-column>
               <el-table-column label="备注" min-width="160"><template #default="{ row }"><div class="long-text-cell">{{ row.normalized?.remark || '—' }}</div></template></el-table-column>
               <el-table-column label="场景需求" min-width="160"><template #default="{ row }">{{ row.normalized?.assetRequirements?.map(item => item.rawName).join('、') || '—' }}</template></el-table-column>
-              <el-table-column label="预检结果" min-width="250"><template #default="{ row }"><div class="issue-list"><el-tag v-if="selectedAssigneeId(row)" type="success" effect="plain" size="small">已选择：{{ assigneeLabel(selectedAssigneeId(row)) }}</el-tag><el-tag v-else-if="hasAssigneeChoice(row)" type="success" effect="plain" size="small">将以未分配状态导入</el-tag><el-tag v-else-if="row.canImport && !row.warnings.length" type="success" effect="plain" size="small">可导入</el-tag><el-tag v-for="issue in visibleWarnings(row)" :key="`w-${issue.errorKey}-${issue.fieldName}`" type="warning" effect="plain" size="small">{{ issueText(issue) }}</el-tag><el-tag v-for="issue in visibleErrors(row)" :key="`e-${issue.errorKey}-${issue.fieldName}`" type="danger" effect="plain" size="small">{{ issueText(issue) }}</el-tag></div></template></el-table-column>
+              <el-table-column label="检查结果" min-width="250"><template #default="{ row }"><div class="issue-list"><el-tag v-if="selectedAssigneeId(row)" type="success" effect="plain" size="small">已选择：{{ assigneeLabel(selectedAssigneeId(row)) }}</el-tag><el-tag v-else-if="hasAssigneeChoice(row)" type="success" effect="plain" size="small">将以未分配状态导入</el-tag><el-tag v-else-if="row.canImport && !row.warnings.length" type="success" effect="plain" size="small">可导入</el-tag><el-tag v-for="issue in visibleWarnings(row)" :key="`w-${issue.errorKey}-${issue.fieldName}`" type="warning" effect="plain" size="small">{{ issueText(issue) }}</el-tag><el-tag v-for="issue in visibleErrors(row)" :key="`e-${issue.errorKey}-${issue.fieldName}`" type="danger" effect="plain" size="small">{{ issueText(issue) }}</el-tag></div></template></el-table-column>
             </el-table>
           </div>
         </section>
 
-        <footer><div><strong>正式提交将全量回滚任一失败行</strong><p>系统内部以 Sheet 和源数据行共同定位，重复点击会复用同一幂等键。</p></div><el-button :disabled="isBusy" @click="emit('close')">取消</el-button><el-button type="primary" :loading="committing" :disabled="!selectedRows.length" @click="commitImport">正式导入 {{ selectedRows.length }} 行</el-button></footer>
+        <footer><div><strong>所选内容将作为一批导入</strong><p>任一所选行失败时，本次导入都不会保存；系统会自动避免重复导入。</p></div><el-button :disabled="isBusy" @click="emit('close')">取消</el-button><el-button type="primary" :loading="committing" :disabled="!selectedRows.length" @click="commitImport">正式导入 {{ selectedRows.length }} 行</el-button></footer>
       </template>
     </div>
 

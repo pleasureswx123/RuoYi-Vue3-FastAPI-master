@@ -12,6 +12,7 @@ from module_admin.entity.do.menu_do import SysMenu
 from module_admin.entity.vo.menu_vo import DeleteMenuModel, MenuModel, MenuQueryModel, MenuSortModel, MenuTreeModel
 from module_admin.entity.vo.role_vo import RoleMenuQueryModel
 from module_admin.entity.vo.user_vo import CurrentUserModel
+from module_admin.service.shot_grid_role_guard import validate_menu_mutation
 from utils.common_util import CamelCaseUtil
 from utils.log_util import logger
 from utils.string_util import StringUtil
@@ -179,6 +180,7 @@ class MenuService:
                 raise ServiceException(message=f'修改菜单{page_object.menu_name}失败，路由名称或地址已存在')
             try:
                 await MenuDao.edit_menu_dao(query_db, edit_menu)
+                await validate_menu_mutation(query_db, int(page_object.menu_id))
                 await query_db.commit()
                 return CrudResponseModel(is_success=True, message='更新成功')
             except Exception as e:

@@ -60,6 +60,30 @@ async def test_member_candidates_can_be_limited_to_one_department() -> None:
 
 
 @pytest.mark.asyncio
+async def test_project_member_candidates_exclude_existing_active_members_before_pagination() -> None:
+    page_result = MagicMock()
+    page_result.mappings.return_value = []
+    db = AsyncMock()
+    db.scalar.return_value = 0
+    db.execute.return_value = page_result
+
+    await ShotGridProjectOptionDao.get_member_candidate_page(
+        db,
+        ShotGridMemberCandidateQueryModel(pageNum=2, pageSize=10),
+        SysUser.user_id > 0,
+        project_id=1001,
+    )
+
+    count_sql = _postgresql_sql(db.scalar.await_args.args[0])
+    rows_sql = _postgresql_sql(db.execute.await_args.args[0])
+    for sql in (count_sql, rows_sql):
+        assert 'NOT (EXISTS (SELECT sg_project_member.user_id' in sql
+        assert 'sg_project_member.project_id = 1001' in sql
+        assert "sg_project_member.member_status = 'active'" in sql
+    assert 'LIMIT 10 OFFSET 10' in rows_sql
+
+
+@pytest.mark.asyncio
 async def test_shot_assignee_options_apply_membership_account_and_nickname_guards() -> None:
     page_result = MagicMock()
     page_result.mappings.return_value = []

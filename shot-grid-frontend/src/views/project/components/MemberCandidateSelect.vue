@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onBeforeUnmount, ref } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { Search } from '@element-plus/icons-vue'
 
 import { getMemberCandidatePage, getProjectMemberCandidatePage } from '@/api/shot-grid/projects'
@@ -9,6 +9,7 @@ const props = defineProps({
   projectId: { type: Number, default: null },
   departmentId: { type: Number, default: null },
   excludeIds: { type: Array, default: () => [] },
+  disabled: { type: Boolean, default: false },
   placeholder: { type: String, default: '按账号或姓名搜索平台用户' }
 })
 const emit = defineEmits(['select'])
@@ -26,6 +27,7 @@ const visibleCandidates = computed(() =>
 )
 
 async function search(nextKeyword = keyword.value) {
+  if (props.disabled) return
   clearTimeout(timer)
   keyword.value = String(nextKeyword || '')
   controller?.abort()
@@ -62,6 +64,7 @@ function scheduleSearch(nextKeyword = '') {
 }
 
 function choose(userId) {
+  if (props.disabled) return
   const candidate = visibleCandidates.value.find(item => String(item.userId) === String(userId))
   if (!candidate) return
   emit('select', candidate)
@@ -72,8 +75,21 @@ function choose(userId) {
 }
 
 function openSelect(visible) {
-  if (visible && !candidates.value.length && !loading.value) search(keyword.value)
+  if (visible && !props.disabled && !candidates.value.length && !loading.value) search(keyword.value)
 }
+
+watch(
+  () => props.disabled,
+  disabled => {
+    if (!disabled) return
+    clearTimeout(timer)
+    controller?.abort()
+    loading.value = false
+    selectedUserId.value = ''
+    candidates.value = []
+    errorState.value = null
+  }
+)
 
 onBeforeUnmount(() => {
   clearTimeout(timer)
@@ -91,6 +107,7 @@ onBeforeUnmount(() => {
       clearable
       :remote-method="scheduleSearch"
       :loading="loading"
+      :disabled="disabled"
       :placeholder="placeholder"
       popper-class="candidate-select__popper"
       loading-text="正在查询平台用户…"

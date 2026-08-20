@@ -1,4 +1,4 @@
-import { ElButton, ElDatePicker, ElForm, ElFormItem, ElIcon, ElInput, ElTag } from 'element-plus'
+import { ElAlert, ElButton, ElDatePicker, ElForm, ElFormItem, ElIcon, ElInput, ElTag } from 'element-plus'
 import { createPinia, setActivePinia } from 'pinia'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
@@ -72,7 +72,7 @@ function installSession(permissions = []) {
   return pinia
 }
 
-async function mountWorkbench(permissions = ['shotgrid:task:list']) {
+async function mountWorkbench(permissions = ['shotgrid:task:list', 'shotgrid:version:list']) {
   const pinia = installSession(permissions)
   const router = createRouter({
     history: createMemoryHistory(),
@@ -86,7 +86,7 @@ async function mountWorkbench(permissions = ['shotgrid:task:list']) {
   await router.push('/workbench')
   await router.isReady()
   const wrapper = mount(WorkbenchView, {
-    global: { plugins: [pinia, router], components: { ElButton, ElDatePicker, ElForm, ElFormItem, ElIcon, ElInput, ElTag } }
+    global: { plugins: [pinia, router], components: { ElAlert, ElButton, ElDatePicker, ElForm, ElFormItem, ElIcon, ElInput, ElTag } }
   })
   await flushPromises()
   return { wrapper, router }
@@ -140,9 +140,15 @@ describe('真实任务工作台', () => {
   })
 
   it('展示跨项目真实任务，并提交服务端分页筛选', async () => {
+    getMineReviewListPage.mockClear()
     const { wrapper, router } = await mountWorkbench()
     expect(wrapper.text()).toContain('我的制作任务')
     expect(wrapper.text()).not.toContain('其他可访问模块')
+    expect(wrapper.text()).not.toContain('待我审核')
+    expect(wrapper.find('.review-queue').exists()).toBe(false)
+    expect(wrapper.find('.recent-submissions').exists()).toBe(true)
+    expect(wrapper.find('.task-workbench').element.nextElementSibling).toBe(wrapper.find('.recent-submissions').element)
+    expect(getMineReviewListPage).not.toHaveBeenCalled()
     expect(wrapper.text()).toContain('罗刹夫人')
     expect(wrapper.find('.task-row').text()).toContain('杨景锋')
 
@@ -215,7 +221,12 @@ describe('真实任务工作台', () => {
       versionCount: 3
     }], total: 1 })
 
-    const { wrapper } = await mountWorkbench()
+    const { wrapper } = await mountWorkbench([
+      'shotgrid:task:list',
+      'shotgrid:version:list',
+      'shotgrid:reviewList:list',
+      'shotgrid:version:review'
+    ])
     expect(findTag(wrapper, '1 项我的任务').props()).toMatchObject({ type: 'info', size: 'small', effect: 'plain', round: true })
     expect(findTag(wrapper, '资产').props()).toMatchObject({ type: 'primary', size: 'small', effect: 'plain', round: true })
     expect(findTag(wrapper, '待修订').props()).toMatchObject({ type: 'danger', effect: 'light', round: true })
@@ -223,7 +234,10 @@ describe('真实任务工作台', () => {
     expect(findTag(wrapper, '紧急').props()).toMatchObject({ type: 'danger', effect: 'plain', round: true })
     expect(findTag(wrapper, '最终版本').props()).toMatchObject({ type: 'success', effect: 'plain', round: true })
     expect(findTag(wrapper, '人工批量').props()).toMatchObject({ type: 'primary', size: 'small', effect: 'plain', round: true })
-    expect(wrapper.find('.activity-grid').text()).toContain('LCFR · 3 个版本')
+    expect(wrapper.find('.review-queue').text()).toContain('LCFR · 3 个版本')
+    expect(wrapper.find('.recent-submissions').text()).toContain('V001 · 完成首版')
+    expect(wrapper.find('.review-queue').element.nextElementSibling).toBe(wrapper.find('.task-workbench').element)
+    expect(wrapper.find('.task-workbench').element.nextElementSibling).toBe(wrapper.find('.recent-submissions').element)
     expect(wrapper.find('.task-row__kind').exists()).toBe(false)
     expect(wrapper.find('.status-chip').exists()).toBe(false)
     expect(wrapper.find('.priority-chip').exists()).toBe(false)

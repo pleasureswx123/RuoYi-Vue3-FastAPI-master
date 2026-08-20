@@ -49,6 +49,25 @@ def _patch_create_dependencies(monkeypatch: pytest.MonkeyPatch) -> dict[str, Asy
             )
         ),
         'get_users': AsyncMock(return_value={1, 2}),
+        'lock_users': AsyncMock(),
+        'sync_roles': AsyncMock(
+            return_value=[
+                {
+                    'userId': 1,
+                    'grantedRoleKeys': ['shotgrid_admin'],
+                    'revokedRoleKeys': [],
+                    'requiredPreservedRoleKeys': [],
+                    'externalPreservedRoleKeys': [],
+                },
+                {
+                    'userId': 2,
+                    'grantedRoleKeys': ['shotgrid_creator'],
+                    'revokedRoleKeys': [],
+                    'requiredPreservedRoleKeys': [],
+                    'externalPreservedRoleKeys': [],
+                },
+            ]
+        ),
         'get_path': AsyncMock(return_value=None),
         'add_member': AsyncMock(),
         'add_storage': AsyncMock(),
@@ -66,6 +85,8 @@ def _patch_create_dependencies(monkeypatch: pytest.MonkeyPatch) -> dict[str, Asy
         'get_by_code': 'ShotGridProjectDao.get_project_by_code',
         'lock_root': 'ShotGridProjectStorageDao.lock_storage_root',
         'get_users': 'ShotGridProjectMemberDao.get_active_users',
+        'lock_users': 'ShotGridPlatformRoleService.lock_target_users',
+        'sync_roles': 'ShotGridPlatformRoleService.synchronize_user_roles',
         'get_path': 'ShotGridProjectStorageDao.get_storage_by_path_key',
         'add_member': 'ShotGridProjectMemberDao.add_member',
         'add_storage': 'ShotGridProjectStorageDao.add_storage',
@@ -100,6 +121,8 @@ async def test_create_project_commits_project_members_storage_outbox_and_audit(
     assert operation.aggregate_id == PROJECT_ID
     assert operation.target_relative_path == r'AI影视短片\罗刹夫人'
     mocks['audit'].assert_awaited_once()
+    audit_call = mocks['audit'].await_args.kwargs
+    assert audit_call['result']['platformRoleChanges'][0]['grantedRoleKeys'] == ['shotgrid_admin']
     db.commit.assert_awaited_once()
     db.rollback.assert_not_awaited()
 

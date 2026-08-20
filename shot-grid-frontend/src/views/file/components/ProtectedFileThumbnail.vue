@@ -152,7 +152,7 @@ onBeforeUnmount(() => {
     @close="closeVideoPreview"
   >
     <ElSkeleton v-if="videoState === 'loading'" class="file-video-preview__state" :rows="5" animated />
-    <ElResult v-else-if="videoState === 'error'" class="file-video-preview__state is-error" icon="error" title="视频加载失败" sub-title="受保护视频未能加载，请重试。"><template #extra><ElButton @click="openVideoPreview">重试</ElButton></template></ElResult>
+    <ElResult v-else-if="videoState === 'error'" class="file-video-preview__state is-error" icon="error" title="视频加载失败" sub-title="视频暂时无法加载，请重试。"><template #extra><ElButton @click="openVideoPreview">重试</ElButton></template></ElResult>
     <video
       v-else-if="videoState === 'ready'"
       class="file-video-preview__player"

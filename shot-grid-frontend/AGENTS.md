@@ -35,7 +35,7 @@ Shot Grid 的任何需求拆解、表设计、API 设计、前端类型定义和
 
 ## 2. 项目定位与系统边界
 
-`shot-grid-frontend` 是面向 AI 影视制作成员、项目总监和内部审核人员的独立业务应用，不是第二套系统管理后台。
+`shot-grid-frontend` 是面向 AI 影视制作成员、项目管理人和内部审核人员的独立业务应用，不是第二套系统管理后台。
 
 ```text
 shot-grid-frontend
@@ -116,9 +116,15 @@ ruoyi-fastapi-frontend
 ### 4.1 用户与项目成员
 
 - 用户必须复用 RuoYi 的 `sys_user`，不得再创建一套业务登录账号或独立 `users` 表。
-- 全局系统角色与项目内角色是两层概念。管理员来自平台权限；项目总监、制作人员等身份由项目成员关系表达。
+- 全局系统角色与项目内角色是两层概念。管理员来自平台权限；项目管理人、制作人员等身份由项目成员关系表达。
+- 两层角色语义不得合并，但 Shot Grid 项目创建、成员新增/恢复、项目角色变更、成员移除必须调用 Shot Grid 专用后端服务，对固定映射 `director -> shotgrid_admin`、`creator -> shotgrid_creator` 执行 `sys_user_role` 增量绑定；独立业务前端只提交 `projectRole`，不得传平台 `roleId`、`roleKey`、菜单 ID，也不得调用任何 `/system/*` 接口。
+- `sg_managed_user_role` 只标记由 Shot Grid 新建并负责撤回的 `sys_user_role` 关系。已有但无来源标记的平台角色只能复用、不得被 Shot Grid 接管或删除；只有来源标记存在且该用户已无任何 `member_status='active'` 项目成员关系依赖对应映射角色时，专用服务才可撤回该一条绑定，禁止全量重写用户角色。归档项目的活动成员仍需历史只读访问并继续计入依赖，项目归档不在本轮角色同步触发链。
+- `shotgrid_admin`、`shotgrid_creator` 两个受管平台角色包至少包含启用的 `shotgrid:navigation:list` 和一个启用的 Shot Grid 业务导航权限，且均不得复用平台超级管理员、包含 `*:*:*`、`shotgrid:project:all`、任何非 `shotgrid:` 权限或 NAS 存储根管理写权限（包括 `shotgrid:storageRoot:add`、`shotgrid:storageRoot:edit`、`shotgrid:storageRoot:probe` 及后续等价写权限）。存储根管理员和跨项目平台管理员继续使用不受 Shot Grid 项目成员服务管理的独立平台角色。
+- 管理端对固定角色、角色菜单和用户角色的写操作必须经过 Shot Grid 保护链：固定角色键不得改名或删除，启用角色的菜单包必须继续满足安全约束，活动项目成员所需或带来源标记的用户角色关系不得从通用管理入口删除。存量成员只能由同时具有 `shotgrid:project:all` 和 `system:user:edit` 的管理员调用 `POST /shot-grid/platform-role-bindings/reconcile` 统一对账。
+- 最终授权始终是“有效登录态 AND 平台接口权限 AND 活动项目成员/数据范围 AND 项目角色 AND 资源归属/状态/`allowedActions`”；平台角色包不直接授予项目访问，项目成员关系也不绕过平台权限。
+- 项目/成员写事务必须把项目成员变化、受管 `sys_user_role` 增量、`sg_managed_user_role` 来源标记和领域审计作为同一数据库原子结果；成功提交后通过 `ApiGroup.USER_PERMISSION_MUTATION` 清理平台身份、角色、菜单和路由相关缓存。`/shot-grid/navigation` 本身不缓存，但目标用户已经打开的 SPA 不会自动刷新 Pinia 身份/导航快照，必须刷新页面、重新初始化会话或重新登录后才能获得正确导航和按钮状态。
 - 每个项目必须有明确的成员关系和项目角色。仅在前端隐藏项目入口不构成数据权限。
-- 项目必须保存经确认且唯一的项目代号，并直接作为业务文件名前缀；不得再维护一个可与项目代号漂移的 `file_prefix` 业务值。制作任务负责人统一使用平台用户 `sys_user.nick_name` 作为制作人标识；Shot Grid 不再单独采集或维护项目级制作人缩写。
+- 项目必须保存经确认且唯一的项目代号，并直接作为业务文件名前缀；不得再维护一个可与项目代号漂移的 `file_prefix` 业务值。制作任务负责人继续使用平台用户 `sys_user.nick_name` 派生文件名中的制作人标识，业务页面中的制作人名称优先展示 `sys_user.user_name`，昵称仅作为选择项补充信息和历史数据回退；Shot Grid 不再单独采集或维护项目级制作人缩写。
 
 ### 4.2 镜头、资产与任务
 
@@ -301,15 +307,15 @@ ruoyi-fastapi-frontend
 - `/shot-grid/navigation` 的 `routeKey` 只接受 `workbench`、`projects`、`shots`、`assets`、`reviews`、`files`。前端同时校验本地路径，拒绝未知键、重复键和路径不匹配项，不接受后端注入组件路径。
 - 统一 `ApiError` 保留 `status`、`httpStatus`、`code`、`errorKey`、`data`、`details` 和原始响应；401 清理本地会话并回登录，403 进入无权限页，404 与 5xx 分别展示不存在和服务异常，服务异常不得伪装成空数据。
 - 项目列表调用 `GET /shot-grid/projects`，普通用户保持成员范围；只有具备 `shotgrid:project:all` 时才显示并提交显式 `scope=all`。列表包含搜索、状态、范围、排序和服务端分页，加载失败不能伪装为空数据。
-- 创建项目只从 `GET /shot-grid/storage-roots/options` 选择后端判定为 `enabled + healthy` 的根目录；选项包含已授权项目创建人可见的规范化 UNC 根路径，选中后直接显示。项目目录名称由项目名称唯一生成；根目录或项目名称变化时，前端防抖调用 `POST /shot-grid/storage-roots/{storageRootId}/project-path-preview`，自动展示后端计算的完整项目路径和占用状态，不设置额外“预览路径”按钮。创建成员从 `GET /shot-grid/member-candidates` 选择有效平台用户。创建表单不采集非主流程必需的计划总时长和交付日期；项目管理者与其他初始成员候选固定携带当前登录账号的 `deptId`，只展示同部门账号。已创建项目的成员维护改用 `GET /shot-grid/projects/{projectId}/member-candidates`，由后端同时校验 `shotgrid:member:add`、项目总监角色和 `DataScope(SysUser)`。候选响应只允许安全身份摘要，前端不得要求后端返回密码、联系方式或完整用户实体。
+- 创建项目只从 `GET /shot-grid/storage-roots/options` 选择后端判定为 `enabled + healthy` 的根目录；选项包含已授权项目创建人可见的规范化 UNC 根路径，选中后直接显示。项目目录名称由项目名称唯一生成；根目录或项目名称变化时，前端防抖调用 `POST /shot-grid/storage-roots/{storageRootId}/project-path-preview`，自动展示后端计算的完整项目路径和占用状态，不设置额外“预览路径”按钮。创建成员从 `GET /shot-grid/member-candidates` 选择有效平台用户。创建表单不采集非主流程必需的计划总时长和交付日期；项目管理人与其他初始成员候选固定携带当前登录账号的 `deptId`，只展示同部门账号。已创建项目的成员维护改用 `GET /shot-grid/projects/{projectId}/member-candidates`，由后端同时校验 `shotgrid:member:add`、项目管理人角色和 `DataScope(SysUser)`。候选响应只允许安全身份摘要，前端不得要求后端返回密码、联系方式或完整用户实体。
 - NAS 根目录由 5173 平台管理端的“系统管理 → NAS 根目录”维护，独立业务端不允许录入或修改 UNC 根路径。管理端新增配置后必须调用后端真实读写删除探测；只有探测结果为 `healthy` 且配置已启用时，5174 创建项目下拉框才显示该根目录。
 - 创建项目必须携带稳定 `X-Idempotency-Key`。后端 HTTP 202 只表示项目、成员、存储绑定和初始化 Outbox 已受理；页面必须显示“正在初始化”，不能在 `storageStatus=ready` 前把物理 NAS 初始化描述为成功。逻辑 `healthy` 根目录选项或测试夹具也不等于真实 UNC 可访问、可写或 Worker 已验收。
 - 项目详情页使用真实详情与概览聚合，并按后端 `allowedActions`、平台权限和项目角色控制编辑、归档、成员维护、路径查看与目录重试。普通编辑提交完整可编辑字段和当前 `lockVersion`；项目代号、NAS 绑定与状态不在普通 PUT 中修改，归档走独立动作。
-- 项目成员候选与成员列表是不同资源；`GET /shot-grid/projects/{projectId}/members` 支持可选 `projectRole=director|creator`，不传角色时返回全部活动成员。添加、角色修改和移除分别走项目成员接口；不提供独立制作人缩写输入。前端按钮显隐不能代替后端在项目行锁内重新校验操作者仍为项目总监。
+- 项目成员候选与成员列表是不同资源；`GET /shot-grid/projects/{projectId}/members` 支持可选 `projectRole=director|creator`，不传角色时返回全部活动成员。添加、角色修改和移除分别走项目成员接口；不提供独立制作人缩写输入。前端按钮显隐不能代替后端在项目行锁内重新校验操作者仍为项目管理人。
 - 项目存储面板可以查看授权后的路径快照、复制路径、查询目录操作分页/详情并发起人工重试；浏览器未确认桌面协议处理器前不提供“打开 UNC”。生产 Docker/Nginx 代码固定把页面部署在 `/shot-grid-app/`，并把 `/prod-api/...` 剥离前缀后代理到后端，同时保留 SPA 深链回退；该配置已在隔离项目管理子集的真实浏览器旅程中验证，完整系统与真实 UNC/NAS 验收边界仍见本文件末尾说明。
 - 镜头列表以 `GET /shot-grid/projects/{projectId}/shots` 为唯一数据源，项目、集、场次、状态和制作人筛选与服务端分页在表格、卡片、故事板之间保持一致；表格首列允许选择当前页中可分配或可删除的镜头。批量分配使用 `POST /shot-grid/projects/{projectId}/shots/batch-assign`；列表工具栏只保留批量分配/重新分配按钮，点击后在弹窗内选择新的制作人，再提交统一 `assigneeUserId` 与每行 `shotId/taskLockVersion`。批量分配只修改用户当前明确勾选的镜头，服务端按单镜头分配规则整批事务提交。行尾提供详情、编辑、删除，批量删除使用 `POST /shot-grid/projects/{projectId}/shots/batch-delete` 并提交每行 `shotId/lockVersion`。服务端必须在同一事务内重查任务状态，任务一旦开始则整批拒绝删除；未开始任务与镜头一并写为 `del_flag='2'`，释放集内镜头号，保证删除后可重新创建或导入同编号镜头。项目切换、筛选变化和卸载会取消旧请求，防止跨项目迟到响应覆盖当前状态。项目切换还必须关闭创建/导入/编辑弹窗，并清空旧项目的预检 Token、幂等键、选中行和问题明细，禁止跨项目提交旧会话。创建、导入、编辑和分配弹窗还要携带单调递增的 `operationGeneration`；即使切走后返回同一项目或镜头并重开同类弹窗，旧请求迟到事件也不得关闭新弹窗或刷新当前上下文。
 - 制作人选择使用分页 `GET /shot-grid/projects/{projectId}/shot-assignee-options`，只展示后端返回的 `projectRole=creator` 活动项目成员安全摘要；镜头 Excel 导入下拉和正式提交复核使用同一角色约束。前端选项和按钮显隐不替代创建、编辑或分配接口的服务端授权与成员状态复核。
-- 镜头详情使用真实详情响应展示制作字段、关联资产、唯一任务、最新版本/反馈与 `allowedActions`。列表、卡片和故事板的详情入口从右侧打开 Element Plus Drawer，复用独立详情路由的同一组件；关闭时销毁实例并取消请求，编辑、分配或删除成功后刷新当前列表且不丢失筛选与分页。独立详情路由继续用于深链与刷新恢复。详情通过独立弹窗执行创建/编辑、分配/改派和归档。创建/导入按钮同时要求平台权限、项目总监能力、项目不是 `completed/archived` 且 `storageStatus=ready`；后端仍是最终门禁。
+- 镜头详情使用真实详情响应展示制作字段、关联资产、唯一任务、最新版本/反馈与 `allowedActions`。列表、卡片和故事板的详情入口从右侧打开 Element Plus Drawer，复用独立详情路由的同一组件；关闭时销毁实例并取消请求，编辑、分配或删除成功后刷新当前列表且不丢失筛选与分页。独立详情路由继续用于深链与刷新恢复。详情通过独立弹窗执行创建/编辑、分配/改派和归档。创建/导入按钮同时要求平台权限、项目管理人能力、项目不是 `completed/archived` 且 `storageStatus=ready`；后端仍是最终门禁。
 - 缩略图 URL 只接受后端版本文件的受保护相对下载路径，必须通过统一请求层获取 Blob 并创建临时 Object URL；403/404 显示安全占位，取消、切换或卸载时中止请求并 `URL.revokeObjectURL()`。不得把鉴权下载 URL 直接当公开 `<img src>`，也不得持久化 Blob。
 - 镜头导入弹窗调用鉴权 `GET /shot-grid/imports/shots/template` 下载 `shot-v1`，上传 `.xlsx` 后调用 preview 展示工作簿/行级错误与警告；结构汇总按已生成 `normalized` 的行统计，制作人或资产数据库匹配错误不得缩减集、场次和镜头数。页面“有效行”必须按当前行级改选结果实时计算，解决制作人问题后立即增加，不得一直显示后端首次预检快照；错误行保留原始数量并展示已改选数量。预检表隐藏内部物理行号，但必须展示规范化结果中的制作内容、景别、机位、镜头运动、焦段、台词、音效、色调参考、备注和场景需求。制作人列可留空，预检支持逐行或批量覆盖为项目制作人员，也支持显式清空并以未分配状态导入。提交使用 `selectedRows[{sheetName,rowNumber,assigneeUserId?}]`，并携带组件内稳定 `X-Idempotency-Key`。明文 Token 和幂等键只保存在当前弹窗内存，不写 localStorage、日志或 URL；重新选择文件会开启新预检会话。
 - 资产列表以 `GET /shot-grid/projects/{projectId}/assets` 为唯一数据源，项目、类型、聚合状态、制作人和关键字筛选及服务端分页在表格、卡片和类型看板之间共享；项目切换、筛选变化和卸载必须取消旧请求并清理旧项目的资产、选项、弹窗及导入会话。

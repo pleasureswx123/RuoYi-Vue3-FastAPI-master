@@ -1,4 +1,21 @@
-import { ElButton, ElCard, ElEmpty, ElForm, ElFormItem, ElIcon, ElInput, ElPagination, ElProgress, ElSkeleton, ElTag } from 'element-plus'
+import {
+  ElAlert,
+  ElButton,
+  ElCard,
+  ElDescriptions,
+  ElDescriptionsItem,
+  ElEmpty,
+  ElForm,
+  ElFormItem,
+  ElIcon,
+  ElInput,
+  ElPagination,
+  ElProgress,
+  ElSkeleton,
+  ElTable,
+  ElTableColumn,
+  ElTag
+} from 'element-plus'
 import { createPinia, setActivePinia } from 'pinia'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
@@ -10,9 +27,11 @@ import {
   archiveProject,
   createProject,
   getProjectDetail,
+  getProjectMemberRoleOptions,
   getProjectMembers,
   getProjectOverview,
   getProjectPage,
+  getProjectRoleOptions,
   getProjectStorage,
   getStorageOperationPage,
   getStorageRootOptions,
@@ -40,9 +59,11 @@ vi.mock('@/api/shot-grid/projects', () => ({
   archiveProject: vi.fn(),
   createProject: vi.fn(),
   getProjectDetail: vi.fn(),
+  getProjectMemberRoleOptions: vi.fn(),
   getProjectMembers: vi.fn(),
   getProjectOverview: vi.fn(),
   getProjectPage: vi.fn(),
+  getProjectRoleOptions: vi.fn(),
   getProjectStorage: vi.fn(),
   getStorageOperationDetail: vi.fn(),
   getStorageOperationPage: vi.fn(),
@@ -55,7 +76,23 @@ vi.mock('@/api/shot-grid/projects', () => ({
   updateProjectMember: vi.fn()
 }))
 
-const formComponents = { ElButton, ElForm, ElFormItem, ElIcon, ElInput, ElTag }
+const formComponents = {
+  ElAlert,
+  ElButton,
+  ElCard,
+  ElDescriptions,
+  ElDescriptionsItem,
+  ElEmpty,
+  ElForm,
+  ElFormItem,
+  ElIcon,
+  ElInput,
+  ElPagination,
+  ElSkeleton,
+  ElTable,
+  ElTableColumn,
+  ElTag
+}
 const projectModalStub = {
   name: 'ProjectModal',
   template: '<section class="project-modal-stub"><slot /></section>'
@@ -82,6 +119,23 @@ const projectRow = {
   plannedDurationMs: 5_400_000,
   overallProgress: 40
 }
+
+const projectRoleOptions = [
+  {
+    projectRole: 'director',
+    projectRoleLabel: '项目管理人',
+    systemRoleId: 11,
+    systemRoleKey: 'shotgrid_admin',
+    systemRoleName: 'Shot Grid 项目管理人'
+  },
+  {
+    projectRole: 'creator',
+    projectRoleLabel: '制作人员',
+    systemRoleId: 12,
+    systemRoleKey: 'shotgrid_creator',
+    systemRoleName: 'Shot Grid 制作人员'
+  }
+]
 
 async function mountProjectList(permissions = []) {
   const pinia = createPinia()
@@ -111,6 +165,8 @@ describe('项目管理页面', () => {
     getProjectPage.mockResolvedValue({ rows: [projectRow], total: 1, hasNext: false })
     getProjectDetail.mockResolvedValue({ data: { ...projectRow, allowedActions: [] } })
     getProjectOverview.mockResolvedValue({ data: { overallProgress: 40 } })
+    getProjectRoleOptions.mockResolvedValue({ data: projectRoleOptions })
+    getProjectMemberRoleOptions.mockResolvedValue({ data: projectRoleOptions })
     getStorageRootOptions.mockResolvedValue({ data: [{ storageRootId: 7, rootName: '主存储', rootCode: 'MAIN', uncRootPath: '\\\\nas\\shot-grid' }] })
     previewProjectPath.mockResolvedValue({ data: { projectPathPreview: '\\\\nas\\shot-grid\\罗刹夫人', pathConflict: false } })
     createProject.mockResolvedValue({ data: { projectId: 8 } })
@@ -308,6 +364,24 @@ describe('项目管理页面', () => {
     resolveCreate({ data: { projectId: 8 } })
     await flushPromises()
     expect(wrapper.emitted('created')).toEqual([[{ projectId: 8 }]])
+    wrapper.unmount()
+  })
+
+  it('项目角色映射不完整时明确提示并禁止创建', async () => {
+    getProjectRoleOptions.mockResolvedValue({ data: [projectRoleOptions[1]] })
+    const wrapper = mount(ProjectCreateDialog, {
+      props: { currentUser: { userId: 1, userName: 'admin', nickName: '管理员', dept: null } },
+      global: {
+        components: formComponents,
+        stubs: { ProjectModal: projectModalStub, MemberCandidateSelect: true }
+      }
+    })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('项目角色配置缺失')
+    expect(wrapper.text()).toContain('项目管理人')
+    expect(buttonByText(wrapper, '创建并初始化 NAS').props('disabled')).toBe(true)
+    expect(createProject).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 

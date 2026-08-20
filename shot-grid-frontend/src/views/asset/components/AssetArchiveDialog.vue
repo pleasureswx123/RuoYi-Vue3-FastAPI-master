@@ -70,10 +70,10 @@ function closeDialog() {
 </script>
 
 <template>
-  <ProjectModal :title="targetIsItem ? '归档制作分项' : '归档资产'" :description="targetIsItem ? `${asset.assetName} · ${item.productionItem || '未命名制作分项'}；历史任务与版本不会被级联删除。` : `${asset.assetName}；资产及历史版本将保留，归档后不再进入活动生产。`" :busy="saving" @close="closeDialog">
+  <ProjectModal :title="targetIsItem ? '归档制作分项' : '归档资产'" :description="targetIsItem ? `${asset.assetName} · ${item.productionItem || '未命名制作分项'}；历史任务与版本将继续保留。` : `${asset.assetName}；资产及历史版本将保留，归档后不再进入活动生产。`" :busy="saving" @close="closeDialog">
     <el-form ref="archiveForm" :model="form" :rules="archiveRules" class="archive-form" label-position="top" aria-label="资产归档表单">
-      <el-alert title="这是受控业务动作" description="请填写可审计原因并确认归档目标。" type="warning" show-icon :closable="false" />
-      <el-alert v-if="requestError" :title="requestError.title" type="error" show-icon :closable="false"><span>{{ requestError.message }}</span><code v-if="requestError.errorKey">{{ requestError.errorKey }}</code><el-button v-if="requestError.status === 409" link type="danger" @click="emit('refresh')">刷新后重试</el-button></el-alert>
+      <el-alert title="请确认归档" description="请填写归档原因并确认目标；归档后历史记录仍会保留。" type="warning" show-icon :closable="false" />
+      <el-alert v-if="requestError" :title="requestError.title" type="error" show-icon :closable="false"><span>{{ requestError.message }}</span><el-button v-if="requestError.status === 409" link type="danger" @click="emit('refresh')">刷新后重试</el-button></el-alert>
       <el-form-item label="归档原因" prop="reason">
         <el-input v-model="form.reason" type="textarea" :rows="4" maxlength="500" show-word-limit :disabled="saving" placeholder="说明归档原因" />
       </el-form-item>

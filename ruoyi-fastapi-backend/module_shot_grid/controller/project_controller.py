@@ -6,10 +6,12 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import ColumnElement
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from common.annotation.cache_annotation import ApiCacheEvict
 from common.aspect.data_scope import DataScopeDependency
 from common.aspect.db_seesion import DBSessionDependency
 from common.aspect.interface_auth import UserInterfaceAuthDependency
 from common.aspect.pre_auth import CurrentUserDependency, PreAuthDependency
+from common.constant import ApiGroup
 from common.router import APIRouterPro
 from common.vo import DataResponseModel, PageResponseModel
 from module_admin.entity.do.user_do import SysUser
@@ -65,6 +67,7 @@ async def get_shot_grid_project_list(
     response_model=ShotGridProjectCreationAcceptedResponseModel,
     dependencies=[UserInterfaceAuthDependency('shotgrid:project:add')],
 )
+@ApiCacheEvict(namespaces=ApiGroup.USER_PERMISSION_MUTATION, evict_response_codes={202})
 async def create_shot_grid_project(
     request: Request,
     command: ShotGridProjectCreateModel,
