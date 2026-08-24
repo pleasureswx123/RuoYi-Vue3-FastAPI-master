@@ -1,0 +1,9 @@
+.git
+.env.development
+.env.staging
+node_modules
+dist
+package-lock.json
+npm-debug.log*
+*.orig
+.DS_Store

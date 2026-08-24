@@ -1,0 +1,57 @@
+name: Frontend Checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  shot-grid:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: shot-grid-frontend
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: shot-grid-frontend/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run test
+      - run: npm run build:prod
+
+  admin-frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ruoyi-fastapi-frontend
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+      - name: 安装依赖（当前仓库未跟踪管理端锁文件）
+        run: npm install --no-audit --no-fund
+      - run: npm run test:plugin
+      - run: npm run build:prod
+
+  deployment-config:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: 生成一次性校验环境
+        run: bash deploy/init-env.sh 192.168.10.122
+      - name: 校验生产 Compose
+        env:
+          RUOYI_ENV_FILE: ./deploy/.env.production
+          APP_RELEASE_ID: ci
+        run: docker compose --project-name ruoyi-shot-grid-prod --env-file deploy/.env.production -f docker-compose.prod.yml config --quiet
+      - name: 校验部署脚本语法
+        run: bash -n deploy/init-env.sh deploy/deploy.sh deploy/status.sh deploy/rollback.sh ruoyi-fastapi-backend/docker/entrypoint.prod.sh

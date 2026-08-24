@@ -31,6 +31,7 @@ class AppSettings(BaseSettings):
     app_disable_redoc: bool = False
     app_trusted_proxy_ips: str = '127.0.0.1,::1'
     app_trusted_proxy_hops: int = 1
+    app_cors_allowed_origins: str = '*'
     app_default_enabled_plugins: str = 'ai'
 
 

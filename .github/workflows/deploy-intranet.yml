@@ -1,0 +1,55 @@
+name: Deploy Intranet Production
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 要部署的分支、标签或提交 SHA
+        required: true
+        default: main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ruoyi-shot-grid-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: 部署到 192.168.10.122
+    runs-on: [self-hosted, linux, x64, ruoyi-prod]
+    environment: intranet-production
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref }}
+          clean: true
+
+      - name: 只允许部署 main 已包含的提交
+        run: |
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor HEAD origin/main || {
+            echo '拒绝把尚未进入 main 的代码交给生产 Runner 执行。' >&2
+            exit 1
+          }
+
+      - name: 核对服务器本地密钥文件
+        run: |
+          test -r /etc/ruoyi-shot-grid/production.env
+          test "$(stat -c '%a' /etc/ruoyi-shot-grid/production.env)" = 600
+
+      - name: 一键发布
+        env:
+          RUOYI_ENV_FILE: /etc/ruoyi-shot-grid/production.env
+          RUOYI_DEPLOY_STATE_DIR: /var/lib/ruoyi-shot-grid
+          SERVER_IP: 192.168.10.122
+        run: bash deploy/deploy.sh
+
+      - name: 失败时输出本项目状态
+        if: failure()
+        env:
+          RUOYI_ENV_FILE: /etc/ruoyi-shot-grid/production.env
+          RUOYI_DEPLOY_STATE_DIR: /var/lib/ruoyi-shot-grid
+        run: bash deploy/status.sh || true

@@ -1,0 +1,151 @@
+name: ${COMPOSE_PROJECT_NAME:-ruoyi-shot-grid-prod}
+
+x-logging: &default-logging
+  driver: local
+  options:
+    max-size: "20m"
+    max-file: "5"
+
+x-runtime-env: &runtime-env
+  env_file:
+    - ${RUOYI_ENV_FILE:-./deploy/.env.production}
+
+services:
+  postgres:
+    <<: *runtime-env
+    image: docker.m.daocloud.io/library/postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_INITDB_ARGS: --encoding=UTF8 --lc-collate=C --lc-ctype=C
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./ruoyi-fastapi-backend/sql/ruoyi-fastapi-pg.sql:/docker-entrypoint-initdb.d/10-ruoyi-fastapi-pg.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    logging: *default-logging
+    mem_limit: 4g
+    shm_size: 256m
+    networks: [app_network]
+
+  redis:
+    <<: *runtime-env
+    image: docker.m.daocloud.io/library/redis:7-alpine
+    restart: unless-stopped
+    command:
+      - sh
+      - -ec
+      - exec redis-server --appendonly yes --appendfsync everysec --requirepass "$$REDIS_PASSWORD" --maxmemory 768mb --maxmemory-policy noeviction
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" --no-auth-warning ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    logging: *default-logging
+    mem_limit: 1g
+    networks: [app_network]
+
+  backend:
+    <<: *runtime-env
+    build:
+      context: ./ruoyi-fastapi-backend
+      dockerfile: Dockerfile.prod
+    image: ruoyi-shot-grid-backend:${APP_RELEASE_ID:-local}
+    restart: unless-stopped
+    init: true
+    environment:
+      APP_ENV: production
+      APP_RELEASE_ID: ${APP_RELEASE_ID:-local}
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USERNAME: ${POSTGRES_USER}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      DB_DATABASE: ${POSTGRES_DB}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    volumes:
+      - backend_files:/app/vf_admin
+    depends_on:
+      postgres:
+        condition: service_healthy
+        restart: true
+      redis:
+        condition: service_healthy
+        restart: true
+    healthcheck:
+      test: ["CMD", "ruoyi", "ops", "health", "--env=production", "--output=json"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 90s
+    stop_grace_period: 60s
+    logging: *default-logging
+    mem_limit: 6g
+    networks: [app_network]
+
+  admin-frontend:
+    build:
+      context: ./ruoyi-fastapi-frontend
+      dockerfile: Dockerfile.prod
+    image: ruoyi-shot-grid-admin-frontend:${APP_RELEASE_ID:-local}
+    restart: unless-stopped
+    environment:
+      BACKEND_UPSTREAM: http://backend:9099
+    ports:
+      - "${BIND_ADDRESS:-0.0.0.0}:${ADMIN_PORT:-12580}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+        restart: true
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging: *default-logging
+    mem_limit: 512m
+    networks: [app_network]
+
+  shot-grid-frontend:
+    build:
+      context: ./shot-grid-frontend
+      dockerfile: Dockerfile
+    image: ruoyi-shot-grid-business-frontend:${APP_RELEASE_ID:-local}
+    restart: unless-stopped
+    environment:
+      BACKEND_UPSTREAM: http://backend:9099
+    ports:
+      - "${BIND_ADDRESS:-0.0.0.0}:${SHOT_GRID_PORT:-12581}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+        restart: true
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging: *default-logging
+    mem_limit: 512m
+    networks: [app_network]
+
+volumes:
+  postgres_data:
+  redis_data:
+  backend_files:
+
+networks:
+  app_network:
+    driver: bridge

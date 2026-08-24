@@ -12,3 +12,6 @@ dist
 *.egg-info
 logs
 vf_admin
+tests
+docs
+*.orig

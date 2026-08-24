@@ -1,0 +1,31 @@
+FROM python:3.11.15-slim-bookworm
+
+ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+WORKDIR /app
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential ffmpeg gosu libpq-dev \
+    && rm -rf /var/lib/apt/lists/* \
+    && addgroup --system app \
+    && adduser --system --ingroup app --home /app app
+
+COPY requirements-pg.txt pyproject.toml ./
+COPY cli ./cli
+RUN python -m pip install --no-cache-dir --index-url "${PIP_INDEX_URL}" -r requirements-pg.txt
+
+COPY . .
+COPY docker/entrypoint.prod.sh /usr/local/bin/ruoyi-entrypoint
+
+RUN chmod 0755 /usr/local/bin/ruoyi-entrypoint \
+    && mkdir -p /app/logs /app/caches /app/vf_admin \
+    && chown app:app /app/logs /app/caches /app/vf_admin
+
+EXPOSE 9099
+
+ENTRYPOINT ["/usr/local/bin/ruoyi-entrypoint"]
+CMD ["ruoyi", "app", "run", "--env=production"]

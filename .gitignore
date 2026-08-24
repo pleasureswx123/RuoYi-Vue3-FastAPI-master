@@ -152,3 +152,7 @@ cython_debug/
 .opencode/
 .qoder/
 .trae/
+
+# 生产部署运行时文件
+/.deploy/
+/deploy/.env.production

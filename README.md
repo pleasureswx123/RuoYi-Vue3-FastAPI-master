@@ -218,15 +218,162 @@ python -m pytest -v
 - 缩略图和代理媒体必须由媒体 Worker 派生，不得用原始大文件冒充代理媒体。
 - 真实 NAS 验收必须覆盖正式 Windows 服务账号、共享 ACL、目录创建、版本发布和故障恢复。
 
-## 部署说明
+## 公司内网生产部署（192.168.10.122）
 
-`docker-compose.pg.yml` 提供 PostgreSQL 完整拓扑参考，但生产上线前仍必须完成环境化配置和安全验收，包括：
+生产部署必须使用根目录的 `docker-compose.prod.yml`，不要使用历史参考文件 `docker-compose.pg.yml`。新生产栈固定使用独立 Compose 项目名 `ruoyi-shot-grid-prod`，不会复用、停止或重建服务器上的旧容器、网络和数据卷。
 
-- 替换全部默认密码、JWT Secret、RSA 密钥和第三方 Provider Key；
-- 为 PostgreSQL、Redis 和业务文件配置可恢复的持久化与备份；
-- 收紧 CORS、数据库端口、Redis 端口和反向代理访问边界；
-- 配置 Windows NAS/版本 Worker、FFmpeg 与正式服务账号；
-- 验证登录、权限、数据隔离、数据库写入、Redis 会话、文件下载和完整业务旅程。
+### 已核对的服务器边界
+
+2026-08-24 已只读确认：
+
+- Ubuntu 24.04、Docker 29.5.2、Docker Compose 5.1.4；
+- 约 31 GiB 内存、190 GiB 根盘可用；
+- `80/888/3000/5432/5555/6379/8000/39081/39082` 已被旧服务占用；
+- `12580/12581` 当前空闲；
+- 宿主机 Nginx 和全部旧容器不会被本部署修改。
+
+生产拓扑：
+
+```text
+内网用户
+  ├─ 192.168.10.122:12580 → 平台管理端 Nginx
+  └─ 192.168.10.122:12581 → Shot Grid Nginx
+                                  │
+                                  └─ /prod-api → backend:9099
+                                                       │
+                        ┌──────────────────────────────┼────────────────────────┐
+                        ▼                              ▼                        ▼
+                 独立 PostgreSQL                独立 Redis              独立业务文件卷
+                 不映射宿主端口                 不映射宿主端口          不复用旧项目数据
+```
+
+访问地址：
+
+- 平台管理端：<http://192.168.10.122:12580>
+- Shot Grid：<http://192.168.10.122:12581/shot-grid-app/>
+
+### 首次部署
+
+1. 在服务器准备专用目录，不要放入已有项目目录：
+
+```bash
+git clone https://github.com/pleasureswx123/RuoYi-Vue3-FastAPI-master.git /opt/ruoyi-shot-grid
+cd /opt/ruoyi-shot-grid
+git checkout main
+```
+
+2. 生成一次性的生产密码、JWT Secret 和 3072 位 RSA 密钥：
+
+```bash
+bash deploy/init-env.sh 192.168.10.122
+sudo install -d -m 0750 /etc/ruoyi-shot-grid /var/lib/ruoyi-shot-grid
+sudo install -m 0600 deploy/.env.production /etc/ruoyi-shot-grid/production.env
+```
+
+必须人工核对 `/etc/ruoyi-shot-grid/production.env` 中的端口、CORS、数据库名和 Worker 开关。该文件含真实密钥，只保留在服务器，禁止提交 Git、复制到聊天或写入 CI 日志。
+
+3. 执行首次发布：
+
+```bash
+cd /opt/ruoyi-shot-grid
+RUOYI_ENV_FILE=/etc/ruoyi-shot-grid/production.env \
+RUOYI_DEPLOY_STATE_DIR=/var/lib/ruoyi-shot-grid \
+SERVER_IP=192.168.10.122 \
+bash deploy/deploy.sh
+```
+
+发布脚本按以下顺序失败关闭：
+
+1. 校验密钥文件权限、占位符、候选端口和 Compose 配置；
+2. 在不停止旧版本的情况下构建三个新版本镜像；
+3. 只启动本项目独立 PostgreSQL/Redis 并等待健康；
+4. 创建 PostgreSQL `pg_dump` 备份；
+5. 使用新后端镜像执行 `ruoyi db upgrade --allow-prod --yes`；
+6. 执行应用、数据库、Redis 和传输加密预检；
+7. 切换应用容器并等待全部健康检查通过；
+8. 校验两个前端健康端点和后端 `ruoyi ops health`。
+
+脚本不会执行全局 Docker 清理，不会操作其他 Compose 项目，也不会执行 `down -v`。数据库迁移失败时不会切换应用镜像；切换阶段失败时会尝试恢复上一组应用镜像，但不会擅自降级数据库。
+
+### 后续一键快速部署
+
+代码必须先通过 CI、提交并推送到远程；本地 commit 不等于服务器可部署。
+
+从 Windows 开发机执行：
+
+```powershell
+.\deploy\remote-deploy.ps1
+```
+
+或登录服务器执行：
+
+```bash
+cd /opt/ruoyi-shot-grid
+git status --short
+git pull --ff-only origin main
+RUOYI_ENV_FILE=/etc/ruoyi-shot-grid/production.env \
+RUOYI_DEPLOY_STATE_DIR=/var/lib/ruoyi-shot-grid \
+SERVER_IP=192.168.10.122 \
+bash deploy/deploy.sh
+```
+
+服务器部署目录存在未提交改动时，远程脚本会拒绝覆盖。
+
+### GitHub Actions CD
+
+`.github/workflows/deploy-intranet.yml` 提供手动、单并发的生产发布入口。由于 `192.168.10.122` 是内网地址，GitHub 托管 Runner 无法直接访问，必须在公司内网安装专用 self-hosted Runner，并打上标签：
+
+```text
+self-hosted, linux, x64, ruoyi-prod
+```
+
+Runner 用户必须能使用 Docker，并只读访问 `/etc/ruoyi-shot-grid/production.env`，可写 `/var/lib/ruoyi-shot-grid`。Docker 组等价于宿主机高权限，只能使用专用 Runner，不得与不可信仓库共享。建议为 GitHub Environment `intranet-production` 配置人工审批；当前 CD 只允许手动选择明确的分支、标签或提交 SHA，不会在每次 push 后未经审批自动上线。
+
+已有后端、Ruff、Playwright 工作流已对齐实际 `main` 分支；新增前端工作流会检查两个前端和生产 Compose。管理端仍未跟踪 `package-lock.json`，因此其 `npm install` 与镜像构建仍有依赖漂移风险，不能声称完全可复现。
+
+### 状态、日志、备份与回滚
+
+查看状态：
+
+```bash
+cd /opt/ruoyi-shot-grid
+RUOYI_ENV_FILE=/etc/ruoyi-shot-grid/production.env \
+RUOYI_DEPLOY_STATE_DIR=/var/lib/ruoyi-shot-grid \
+bash deploy/status.sh
+```
+
+只查看本项目后端日志：
+
+```bash
+docker compose --project-name ruoyi-shot-grid-prod \
+  --env-file /etc/ruoyi-shot-grid/production.env \
+  -f /opt/ruoyi-shot-grid/docker-compose.prod.yml \
+  logs --tail=200 -f backend
+```
+
+生产默认设置 `DB_ECHO=false`、`LOG_FILE_ENABLED=false`，应用日志只写容器 stdout；Docker `local` 日志驱动限制为每个容器 20 MiB、最多 5 个文件。这样可以避免 SQL echo 和压缩日志持续占用磁盘/I/O，但仍应接入公司的集中日志与告警系统。
+
+每次迁移前的 PostgreSQL 备份保存在 `/var/lib/ruoyi-shot-grid/backups/`，默认保留 14 天。业务文件、PostgreSQL 和 Redis 分别保存在本项目独立命名卷中。备份只有在执行过恢复演练后才算可用；首次正式上线前必须额外把数据库备份和业务文件备份复制到服务器外部。
+
+回滚上一组应用镜像：
+
+```bash
+cd /opt/ruoyi-shot-grid
+RUOYI_ENV_FILE=/etc/ruoyi-shot-grid/production.env \
+RUOYI_DEPLOY_STATE_DIR=/var/lib/ruoyi-shot-grid \
+bash deploy/rollback.sh
+```
+
+也可以显式传入 release ID。该命令只回滚后端和两个前端镜像，不自动回退数据库；涉及不向后兼容迁移时，必须按备份恢复方案单独评审，不能直接执行 Alembic downgrade。
+
+### 稳定性与正式验收边界
+
+- 所有服务使用 `restart: unless-stopped`、健康检查、启动依赖门禁、60 秒后端优雅停止和独立日志轮转。
+- PostgreSQL、Redis、后端和两个前端均设有内存上限，避免新项目失控挤占旧项目资源。
+- 后端使用两个 Worker，并继续依赖 Redis Application Leader、租约和 fencing 保证调度正确性；不能把共享状态改成进程内变量。
+- 当前 Compose 是单后端服务的健康门禁发布，正常迭代切换时仍可能有数秒连接重试窗口，不等于蓝绿零停机。若业务要求发布过程零中断，需要在下一阶段增加双后端槽位和网关原子切流。
+- Ubuntu 容器可运行 FFmpeg 媒体派生 Worker，但不能承担 Windows UNC/NAS 目录 Worker 和版本发布 Worker。`SHOT_GRID_STORAGE_WORKER_ENABLED` 与 `SHOT_GRID_VERSION_WORKER_ENABLED` 必须保持关闭；真实 NAS 能力需要另行部署 Windows Worker，并完成服务账号、共享 ACL、目录创建、版本发布和故障恢复验收。
+- 首次上线完成不等于完整 E2E 通过。至少还要实际验证登录、权限、项目隔离、数据库写入、Redis 会话、文件上传/下载、媒体派生、版本审核、容器重启恢复和备份恢复。
 
 当前生产页面路径约定为 `/shot-grid-app/`，API 前缀为 `/prod-api/`。更详细的反向代理和业务边界见 `shot-grid-frontend/README.md`。
 

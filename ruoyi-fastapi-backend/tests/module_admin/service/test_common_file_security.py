@@ -12,7 +12,7 @@ from fastapi import BackgroundTasks, FastAPI, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import false
 
-from config.env import UploadConfig
+from config.env import AppConfig, UploadConfig
 from exceptions.exception import FileRangeNotSatisfiableException, ServiceException
 from middlewares.cors_middleware import add_cors_middleware
 from module_admin.dao.file_access_dao import FileAclDao
@@ -753,3 +753,19 @@ def test_cors_exposes_download_headers() -> None:
     assert 'accept-ranges' in expose_headers
     assert 'content-range' in expose_headers
     assert 'content-length' in expose_headers
+
+
+def test_cors_uses_configured_allowed_origins(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        AppConfig,
+        'app_cors_allowed_origins',
+        'http://192.168.10.122:12580, http://192.168.10.122:12581',
+    )
+    app = FastAPI()
+    add_cors_middleware(app)
+
+    cors_middleware = next(item for item in app.user_middleware if item.cls is CORSMiddleware)
+    assert cors_middleware.kwargs['allow_origins'] == [
+        'http://192.168.10.122:12580',
+        'http://192.168.10.122:12581',
+    ]
