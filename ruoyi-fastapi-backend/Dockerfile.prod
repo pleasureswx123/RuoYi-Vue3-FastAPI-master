@@ -21,7 +21,8 @@ RUN sed -ri \
 
 COPY requirements-pg.txt pyproject.toml ./
 COPY cli ./cli
-RUN python -m pip install --no-cache-dir --index-url "${PIP_INDEX_URL}" -r requirements-pg.txt
+ARG PIP_INSTALL_INDEX_URL=${PIP_INDEX_URL}
+RUN python -m pip install --no-cache-dir --index-url "${PIP_INSTALL_INDEX_URL}" -r requirements-pg.txt
 
 COPY . .
 COPY docker/entrypoint.prod.sh /usr/local/bin/ruoyi-entrypoint
