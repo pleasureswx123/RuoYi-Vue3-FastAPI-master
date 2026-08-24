@@ -27,7 +27,8 @@ RUN python -m pip install --no-cache-dir --index-url "${PIP_INSTALL_INDEX_URL}" 
 COPY . .
 COPY docker/entrypoint.prod.sh /usr/local/bin/ruoyi-entrypoint
 
-RUN chmod 0755 /usr/local/bin/ruoyi-entrypoint \
+RUN sed -i 's/\r$//' /usr/local/bin/ruoyi-entrypoint \
+    && chmod 0755 /usr/local/bin/ruoyi-entrypoint \
     && mkdir -p /app/logs /app/caches /app/vf_admin \
     && chown app:app /app/logs /app/caches /app/vf_admin
 
