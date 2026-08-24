@@ -334,16 +334,30 @@ onBeforeUnmount(() => {
       <el-empty v-else-if="!tasks.length" class="task-empty" :description="total ? '当前页没有任务' : '当前筛选暂无任务'"><p>任务由项目管理人在镜头或资产制作分项中分配。</p></el-empty>
       <div v-else class="task-list" :class="{ 'is-refreshing': loading }">
         <el-button v-for="item in tasks" :key="item.taskId" class="task-row" text @click="openTask(item)">
-          <el-tag class="task-kind-tag" :type="tagTypeFromTone(taskKindMeta(item.taskKind).tone)" size="small" effect="plain" round>{{ taskKindMeta(item.taskKind).shortLabel }}</el-tag>
+          <el-tag class="task-kind-tag" :type="tagTypeFromTone(taskKindMeta(item.taskKind).tone)" size="small"
+                  effect="plain" round>{{ taskKindMeta(item.taskKind).shortLabel }}
+          </el-tag>
           <span class="task-row__main">
-            <span class="task-row__heading"><strong>{{ item.taskName }}</strong><el-tag :type="tagTypeFromTone(taskStatusMeta(item.taskStatus).tone)" size="small" effect="light" round>{{ taskStatusMeta(item.taskStatus).label }}</el-tag></span>
-            <small>{{ item.project.projectCode }} · {{ item.project.projectName }} / {{ item.target.targetName }}</small>
+            <span class="task-row__heading"><strong>{{ item.taskName }}</strong><el-tag
+                :type="tagTypeFromTone(taskStatusMeta(item.taskStatus).tone)" size="small" effect="dark"
+                round>{{ taskStatusMeta(item.taskStatus).label }}</el-tag></span>
+            <small>{{ item.project.projectCode }} · {{ item.project.projectName }} / {{
+                item.target.targetName
+              }}</small>
             <span>{{ item.requirements || '暂无额外制作要求' }}</span>
           </span>
-          <span class="task-row__meta"><span>{{ taskAssigneeLabel(item.assignee) }}</span><span class="task-row__due"><el-tag :type="tagTypeFromTone(taskDueState(item.dueDate).tone)" size="small" effect="plain" round>{{ taskDueState(item.dueDate).label }}</el-tag></span></span>
-          <span class="task-row__version"><strong>{{ item.latestVersion?.versionNumber || '—' }}</strong><small>{{ item.versionCount }} 个版本</small></span>
-          <el-tag class="task-priority-tag" :type="tagTypeFromTone(taskPriorityMeta(item.priority).tone)" size="small" effect="plain" round>{{ taskPriorityMeta(item.priority).label }}</el-tag>
-          <el-icon class="task-row__arrow"><Right /></el-icon>
+          <span class="task-row__meta"><span>{{ taskAssigneeLabel(item.assignee) }}</span><span class="task-row__due"><el-tag
+              :type="tagTypeFromTone(taskDueState(item.dueDate).tone)" size="small" effect="light"
+              round>{{ taskDueState(item.dueDate).label }}</el-tag></span></span>
+          <span class="task-row__version"><strong>{{
+              item.latestVersion?.versionNumber || '—'
+            }}</strong><small>{{ item.versionCount }} 个版本</small></span>
+          <el-tag class="task-priority-tag" :type="tagTypeFromTone(taskPriorityMeta(item.priority).tone)" size="small"
+                  effect="plain" round>{{ taskPriorityMeta(item.priority).label }}
+          </el-tag>
+          <el-icon class="task-row__arrow">
+            <Right/>
+          </el-icon>
         </el-button>
       </div>
 
@@ -610,6 +624,7 @@ onBeforeUnmount(() => {
   cursor: pointer;
   background: var(--sg-surface);
   border: 0;
+  margin-left: 0;
 }
 
 .task-row:hover {
