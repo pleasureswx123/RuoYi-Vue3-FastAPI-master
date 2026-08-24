@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [string]$Server = 'root@192.168.10.122',
     [string]$RemotePath = '/opt/ruoyi-shot-grid',
