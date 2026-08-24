@@ -69,6 +69,6 @@ describe('资产展示模型', () => {
     expect(assetAssigneeSummary([7], members)).toBe('杨景锋')
     expect(assetAssigneeSummary([7, 99], members)).toBe('杨景锋、另 1 人不可分配')
     expect(assetAssigneeSummary([99], members)).toBe('另 1 人不可分配')
-    expect(assetAssigneeSummary([], members)).toBe('未分配')
+    expect(assetAssigneeSummary([], members)).toBe('-')
   })
 })

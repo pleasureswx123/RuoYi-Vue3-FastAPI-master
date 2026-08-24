@@ -22,6 +22,12 @@ let versionGeneration = 0
 let disposed = false
 
 const statusMeta = computed(() => versionStatusMeta(props.version?.versionStatus))
+const hiddenDerivedFileRoles = new Set(['thumbnail', 'proxy_media'])
+const deliveryFiles = computed(() => (
+  Array.isArray(props.version?.files)
+    ? props.version.files.filter(file => !hiddenDerivedFileRoles.has(file?.role))
+    : []
+))
 
 function safeDownloadName(value) {
   const normalized = Array.from(String(value || 'version-file'))
@@ -110,9 +116,9 @@ onBeforeUnmount(() => {
     </el-descriptions>
 
     <section class="version-files">
-      <div class="subheading"><strong>版本文件</strong><span>{{ version.files?.length || 0 }} 个</span></div>
-      <div v-if="version.files?.length" class="file-list">
-        <div v-for="file in version.files" :key="file.fileId" class="file-row">
+      <div class="subheading"><strong>版本文件</strong><span>{{ deliveryFiles.length }} 个交付文件</span></div>
+      <div v-if="deliveryFiles.length" class="file-list">
+        <div v-for="file in deliveryFiles" :key="file.fileId" class="file-row">
           <span class="file-icon"><el-icon><Document /></el-icon></span>
           <div>
             <strong>{{ file.businessFileName || file.originalName }}</strong>
@@ -131,7 +137,7 @@ onBeforeUnmount(() => {
           >下载</el-button>
         </div>
       </div>
-      <el-empty v-else class="empty-files" :image-size="54" description="当前版本没有可访问文件" />
+      <el-empty v-else class="empty-files" :image-size="54" description="当前版本没有可访问的交付文件" />
     </section>
 
     <el-alert v-if="downloadError" class="download-error" :title="downloadError.title" :description="downloadError.message" type="error" :closable="false" show-icon />

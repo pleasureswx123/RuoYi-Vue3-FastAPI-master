@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import os
 import shutil
+import subprocess
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -344,20 +345,22 @@ class ShotGridMediaDerivationService:
 
     @staticmethod
     async def _run_ffmpeg(executable: str, *args: str) -> None:
-        process = await asyncio.create_subprocess_exec(
-            executable,
-            *args,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.PIPE,
-        )
         try:
-            _stdout, stderr = await process.communicate()
-        except asyncio.CancelledError:
-            process.kill()
-            await process.wait()
-            raise
-        if process.returncode != 0:
-            safe_tail = stderr.decode(errors='replace')[-400:].replace('\r', ' ').replace('\n', ' ')
+            completed = await asyncio.to_thread(
+                subprocess.run,
+                [executable, *args],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+        except OSError as error:
+            raise MediaDerivationError(
+                'SG_MEDIA_TOOL_UNAVAILABLE',
+                '服务器无法启动 FFmpeg',
+                retryable=False,
+            ) from error
+        if completed.returncode != 0:
+            safe_tail = completed.stderr.decode(errors='replace')[-400:].replace('\r', ' ').replace('\n', ' ')
             raise MediaDerivationError(
                 'SG_MEDIA_DERIVATION_FAILED',
                 f'FFmpeg 无法解码或转换当前媒体：{safe_tail}'[:500],

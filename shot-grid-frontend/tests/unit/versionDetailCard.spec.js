@@ -68,6 +68,29 @@ describe('版本详情与受保护下载', () => {
     wrapper.unmount()
   })
 
+  it('版本文件列表不展示系统生成的缩略图和代理文件', () => {
+    const wrapper = mount(VersionDetailCard, {
+      ...mountOptions,
+      props: {
+        version: version(7, {
+          files: [
+            ...version().files,
+            { fileId: 'thumbnail-file', originalName: 'thumbnail.jpg', role: 'thumbnail', fileSize: 1024, contentType: 'image/jpeg' },
+            { fileId: 'proxy-file', originalName: 'proxy_media.mp4', role: 'proxy_media', fileSize: 1536, contentType: 'video/mp4' }
+          ]
+        }),
+        canDownload: true
+      }
+    })
+
+    expect(wrapper.find('.subheading').text()).toContain('1 个交付文件')
+    expect(wrapper.findAll('.file-row')).toHaveLength(1)
+    expect(wrapper.text()).toContain('WGZR_EP001_001_S001_YJF_V001_1.mov')
+    expect(wrapper.text()).not.toContain('thumbnail.jpg')
+    expect(wrapper.text()).not.toContain('proxy_media.mp4')
+    wrapper.unmount()
+  })
+
   it('版本切换与卸载会取消旧下载，迟到 Blob 不会生成 URL', async () => {
     let resolveDownload
     downloadProtectedVersionFile.mockImplementationOnce((_versionId, _fileId, options) => new Promise(resolve => {

@@ -66,7 +66,7 @@ const projectContext = reactive({ projectId: '', scope: '' })
 const batchAssignForm = reactive({ assigneeUserId: '' })
 const query = reactive({
   keyword: '', episodeId: '', sceneId: '', shotStatus: '', assigneeUserId: '',
-  pageNum: 1, pageSize: 20, orderByColumn: 'sortOrder', isAsc: 'ascending'
+  pageNum: 1, pageSize: 100, orderByColumn: 'sortOrder', isAsc: 'ascending'
 })
 let projectController = null
 let shotController = null
@@ -929,7 +929,18 @@ onBeforeUnmount(() => { disposed = true; destroyRowSortable(); projectController
               <template #default="scope"><span v-if="scope?.row">{{ shotAssigneeName(scope.row.assignee, members) }}</span></template>
             </el-table-column>
             <el-table-column label="状态" fixed="right" width="125">
-              <template #default="scope"><div v-if="scope?.row" class="shot-status"><el-tag class="shot-status-tag" :class="shotStatusTagClass(scope.row.status)" :type="tagTypeFromTone(shotStatusMeta(scope.row.status).tone)" size="small" effect="light" round>{{ shotStatusMeta(scope.row.status).label }}</el-tag><el-tag v-if="scope.row.directoryStatus === 'failed'" class="shot-directory-status" :type="tagTypeFromTone(directoryStatusMeta(scope.row.directoryStatus).tone)" size="small" effect="plain" round>{{ directoryStatusMeta(scope.row.directoryStatus).label }}</el-tag></div></template>
+              <template #default="scope">
+                <div v-if="scope?.row">
+                  <el-tag
+                          :type="tagTypeFromTone(shotStatusMeta(scope.row.status).tone)" size="small" effect="dark"
+                          round>{{ shotStatusMeta(scope.row.status).label }}
+                  </el-tag>
+                  <el-tag v-if="scope.row.directoryStatus === 'failed'"
+                          :type="tagTypeFromTone(directoryStatusMeta(scope.row.directoryStatus).tone)" size="small"
+                          effect="light" round>{{ directoryStatusMeta(scope.row.directoryStatus).label }}
+                  </el-tag>
+                </div>
+              </template>
             </el-table-column>
             <el-table-column label="操作" fixed="right" width="270">
               <template #default="scope">

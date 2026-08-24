@@ -97,7 +97,7 @@ export function assetAssigneeSummary(assigneeUserIds, members = []) {
   const ids = [...new Set((Array.isArray(assigneeUserIds) ? assigneeUserIds : [])
     .map(Number)
     .filter(id => Number.isSafeInteger(id) && id > 0))]
-  if (!ids.length) return '未分配'
+  if (!ids.length) return '-'
   const memberById = new Map((Array.isArray(members) ? members : [])
     .filter(member => Number.isSafeInteger(Number(member?.userId)) && Number(member.userId) > 0)
     .map(member => [Number(member.userId), member]))

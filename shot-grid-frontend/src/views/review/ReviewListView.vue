@@ -13,9 +13,7 @@ import ManualReviewDialog from '@/views/review/components/ManualReviewDialog.vue
 import { taskVersionStatusMeta } from '@/views/task/taskPresentation'
 import {
   formatReviewDateTime,
-  mediaDerivationStatusMeta,
   reviewErrorState,
-  reviewModeMeta,
   reviewStatusMeta
 } from './reviewPresentation'
 
@@ -144,10 +142,32 @@ onBeforeUnmount(() => {
       <ProjectStatePanel v-if="reviewsError" :title="reviewsError.title" :message="reviewsError.message" :retryable="reviewsError.retryable" @retry="loadReviews" />
       <el-card v-else-if="reviewsLoading && !reviews.length" class="review-loading" shadow="never" aria-busy="true"><el-skeleton animated :rows="6" /></el-card>
       <section v-else-if="reviews.length" class="review-list" :class="{ 'is-refreshing': reviewsLoading }">
-        <el-card v-for="item in reviews" :key="item.reviewListId" class="review-card" shadow="hover" role="link" tabindex="0" @click="router.push(`/reviews/${item.reviewListId}`)" @keydown.enter="router.push(`/reviews/${item.reviewListId}`)" @keydown.space.prevent="router.push(`/reviews/${item.reviewListId}`)">
-          <span class="review-card__preview"><ProtectedThumbnail v-if="item.thumbnail" :thumbnail="item.thumbnail" :alt="`${item.reviewListName} 缩略图`" /><span v-else class="review-card__icon"><el-icon><Tickets /></el-icon></span></span>
-          <div class="review-card__main"><div><strong>{{ item.reviewListName }}</strong><el-tag size="small" effect="plain" round :type="tagTypeFromTone(reviewModeMeta(item.reviewMode).tone)">{{ reviewModeMeta(item.reviewMode).label }}</el-tag><el-tag size="small" effect="plain" round :type="tagTypeFromTone(reviewStatusMeta(item.reviewStatus).tone)">{{ reviewStatusMeta(item.reviewStatus).label }}</el-tag><el-tag v-if="mediaDerivationStatusMeta(item.mediaDerivationStatus)" size="small" effect="plain" round :type="tagTypeFromTone(mediaDerivationStatusMeta(item.mediaDerivationStatus).tone)">{{ mediaDerivationStatusMeta(item.mediaDerivationStatus).label }}</el-tag></div><p>{{ item.description || (item.reviewMode === 'manual_batch' ? '人工集中审核单' : '单版本自动审核单') }}</p><small>{{ item.reviewMode === 'manual_batch' ? `${item.versionCount} 个版本` : `版本 ${item.versionNumber}` }} · 创建于 {{ formatReviewDateTime(item.createTime) }}</small></div>
-          <div class="review-card__meta"><span>{{ item.taskId ? `任务 #${item.taskId}` : '集中审核' }}</span><strong v-if="item.reviewMode === 'manual_batch'">{{ item.versionCount }} 项</strong><el-tag v-else size="small" effect="light" round :type="tagTypeFromTone(taskVersionStatusMeta(item.versionStatus).tone)">{{ taskVersionStatusMeta(item.versionStatus).label }}</el-tag></div>
+        <el-card v-for="item in reviews" :key="item.reviewListId" class="review-card" shadow="hover" role="link"
+                 tabindex="0" @click="router.push(`/reviews/${item.reviewListId}`)"
+                 @keydown.enter="router.push(`/reviews/${item.reviewListId}`)"
+                 @keydown.space.prevent="router.push(`/reviews/${item.reviewListId}`)">
+          <span class="review-card__preview"><ProtectedThumbnail v-if="item.thumbnail" :thumbnail="item.thumbnail"
+                                                                 :alt="`${item.reviewListName} 缩略图`"/><span v-else
+                                                                                                               class="review-card__icon"><el-icon><Tickets/></el-icon></span></span>
+          <div class="review-card__main">
+            <div><strong>{{ item.reviewListName }}</strong>
+              <el-tag size="small" effect="dark" round
+                      :type="tagTypeFromTone(reviewStatusMeta(item.reviewStatus).tone)">
+                {{ reviewStatusMeta(item.reviewStatus).label }}
+              </el-tag>
+            </div>
+            <p>{{
+                item.description || (item.reviewMode === 'manual_batch' ? '人工集中审核单' : '单版本自动审核单')
+              }}</p><small>{{
+              item.reviewMode === 'manual_batch' ? `${item.versionCount} 个版本` : `版本 ${item.versionNumber}`
+            }} · 创建于 {{ formatReviewDateTime(item.createTime) }}</small></div>
+          <div class="review-card__meta"><span>{{ item.taskId ? `任务 #${item.taskId}` : '集中审核' }}</span><strong
+              v-if="item.reviewMode === 'manual_batch'">{{ item.versionCount }} 项</strong>
+            <el-tag v-else size="small" effect="light" round
+                    :type="tagTypeFromTone(taskVersionStatusMeta(item.versionStatus).tone)">
+              {{ taskVersionStatusMeta(item.versionStatus).label }}
+            </el-tag>
+          </div>
         </el-card>
       </section>
       <el-empty v-else class="review-empty" :description="selectedProjectId ? '当前筛选没有审核单' : '当前范围暂无项目'"><p>{{ selectedProjectId ? '版本提交成功后，系统会自动创建一张单版本审核单。' : '请先创建或加入项目。' }}</p></el-empty>

@@ -214,7 +214,7 @@ onBeforeUnmount(cancelPending)
 .search-group header small { color: var(--sg-text-muted); }
 
 .search-result.el-button {
-  display: grid;
+  display: block;
   width: 100%;
   height: auto;
   min-height: 58px;

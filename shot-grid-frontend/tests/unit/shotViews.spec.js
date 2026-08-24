@@ -232,8 +232,7 @@ describe('镜头管理真实列表页', () => {
     expect(wrapper.text()).toContain('导入 Excel')
     expect(wrapper.text()).toContain('新建镜头')
     expect(findTag(wrapper, '场景 · 动力舱').props()).toMatchObject({ type: 'primary', size: 'small', effect: 'plain', round: true })
-    expect(findTag(wrapper, '制作中').props()).toMatchObject({ type: 'primary', effect: 'light', round: true })
-    expect(findTag(wrapper, '制作中').classes()).toEqual(expect.arrayContaining(['shot-status-tag', 'shot-status-tag--in_progress']))
+    expect(findTag(wrapper, '制作中').props()).toMatchObject({ type: 'primary', effect: 'dark', round: true })
     expect(wrapper.find('.shot-table-wrap').text()).not.toContain('目录已就绪')
     expect(wrapper.find('.shot-chip').exists()).toBe(false)
 
@@ -243,7 +242,6 @@ describe('镜头管理真实列表页', () => {
     expect(wrapper.find('.shot-card').exists()).toBe(true)
     expect(wrapper.find('.shot-card h3').text()).toBe('S001 · 第 1 镜')
     expect(wrapper.find('.shot-card header small').text()).toBe('EP001 / 001')
-    expect(findTag(wrapper, '制作中').classes()).toEqual(expect.arrayContaining(['shot-status-tag', 'shot-status-tag--in_progress']))
     viewSwitch.vm.$emit('update:modelValue', 'storyboard')
     await flushPromises()
     expect(wrapper.find('.story-frame').exists()).toBe(true)

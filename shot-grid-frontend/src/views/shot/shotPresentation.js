@@ -28,7 +28,7 @@ export function directoryStatusMeta(status) {
 }
 
 export function shotAssigneeName(assignee, members = []) {
-  if (!assignee) return '未分配'
+  if (!assignee) return '-'
   const userId = Number(assignee.userId)
   const member = (Array.isArray(members) ? members : [])
     .find(item => Number(item?.userId) === userId)

@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Box, Collection, Delete, Edit, Grid, List, Link, Plus, Refresh, RefreshLeft, Search, Upload } from '@element-plus/icons-vue'
+import { Box, Collection, Delete, Edit, Grid, List, Plus, Refresh, RefreshLeft, Search, Upload } from '@element-plus/icons-vue'
 
 import { archiveAsset, batchAssignAssetItemTasks, batchDeleteAssets, getAssetDetail, getAssetPage, listAssetAssignees } from '@/api/shot-grid/assets'
 import { assertPositiveId, getProjectDetail, getProjectPage } from '@/api/shot-grid/projects'
@@ -56,7 +56,7 @@ const query = reactive({
   assetStatus: '',
   assigneeUserId: '',
   pageNum: 1,
-  pageSize: 20,
+  pageSize: 100,
   orderByColumn: 'sortOrder',
   isAsc: 'ascending'
 })
@@ -95,7 +95,6 @@ const projectAllowsWrites = computed(() => project.value && !['completed', 'arch
 const canEdit = computed(() => isDirector.value && hasPermission('shotgrid:asset:edit') && projectAllowsWrites.value)
 const canDelete = computed(() => isDirector.value && hasPermission('shotgrid:asset:archive') && projectAllowsWrites.value)
 const canAssign = computed(() => isDirector.value && hasPermission('shotgrid:task:assign') && projectAllowsWrites.value)
-const canListRequirements = computed(() => hasPermission('shotgrid:assetRequirement:list'))
 const canResolveRequirements = computed(() => hasPermission('shotgrid:assetRequirement:resolve'))
 const canIgnoreRequirements = computed(() => hasPermission('shotgrid:assetRequirement:ignore'))
 const canRematchRequirements = computed(() => hasPermission('shotgrid:assetRequirement:rematch'))
@@ -492,11 +491,6 @@ function openImportDialog() {
   showImport.value = true
 }
 
-function openRequirementDialog() {
-  if (!currentProjectId.value) return
-  showRequirements.value = true
-}
-
 function closeCreateDialog() {
   showCreate.value = false
   createContext.value = null
@@ -609,7 +603,6 @@ onBeforeUnmount(() => {
         <p class="sg-page-description">在项目范围内统一管理角色、场景、道具及其制作分项，查看制作状态、负责人和缩略图。</p>
       </div>
       <div class="asset-heading__actions">
-        <el-button v-if="canListRequirements" :icon="Link" @click="openRequirementDialog">待匹配需求</el-button>
         <el-button v-if="canImport" :icon="Upload" @click="openImportDialog">导入 Excel</el-button>
         <el-button v-if="canCreate" type="primary" :icon="Plus" @click="openCreateDialog">新建资产</el-button>
       </div>
@@ -678,11 +671,13 @@ onBeforeUnmount(() => {
             <el-table-column label="类型 / 名称" width="170">
               <template #default="scope">
                 <div v-if="scope?.row" class="asset-identity">
-                  <el-tag size="small" effect="plain" round
+                  <el-tag size="small" effect="light" round
                           :type="tagTypeFromTone(assetTypeMeta(scope.row.assetType).tone)">
                     {{ assetTypeMeta(scope.row.assetType).label }}
                   </el-tag>
-                  <strong>{{ scope.row.assetName }}</strong><small>排序 {{ scope.row.sortOrder }}</small></div>
+                  <strong>{{ scope.row.assetName }}</strong>
+<!--                  <small>排序 {{ scope.row.sortOrder }}</small>-->
+                </div>
               </template>
             </el-table-column>
             <el-table-column label="说明" min-width="220">
@@ -698,14 +693,14 @@ onBeforeUnmount(() => {
             </el-table-column>
             <el-table-column label="状态" fixed="right" width="125">
               <template #default="scope">
-                <div v-if="scope?.row" class="asset-status">
-                  <el-tag class="asset-status-tag" :class="assetStatusTagClass(scope.row.assetStatus)"
+                <div v-if="scope?.row">
+                  <el-tag
                           :type="tagTypeFromTone(assetStatusMeta(scope.row.assetStatus).tone)" size="small"
-                          effect="light" round>{{ assetStatusMeta(scope.row.assetStatus).label }}
+                          effect="dark" round>{{ assetStatusMeta(scope.row.assetStatus).label }}
                   </el-tag>
-                  <el-tag v-if="scope.row.directoryStatus === 'failed'" class="asset-directory-status"
+                  <el-tag v-if="scope.row.directoryStatus === 'failed'"
                           :type="tagTypeFromTone(assetDirectoryStatusMeta(scope.row.directoryStatus).tone)" size="small"
-                          effect="plain" round>{{ assetDirectoryStatusMeta(scope.row.directoryStatus).label }}
+                          effect="light" round>{{ assetDirectoryStatusMeta(scope.row.directoryStatus).label }}
                   </el-tag>
                 </div>
               </template>

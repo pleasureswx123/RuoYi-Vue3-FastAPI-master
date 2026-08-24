@@ -373,6 +373,7 @@ defineExpose({ refresh: loadHistory })
                   </div>
 
                   <el-collapse v-if="hasVersionDetails(event.versionCycle)" class="version-cycle__details">
+                    <div class="version-cycle__detail-grid">
                     <el-collapse-item v-if="event.versionCycle.reviewActions?.length" class="version-cycle__detail-item" name="review-actions">
                       <template #title><span class="version-cycle__detail-title"><span>审核动作</span><el-tag size="small" type="info" effect="plain" round>{{ event.versionCycle.reviewActions.length }} 条</el-tag></span></template>
                       <div class="history-record-list">
@@ -417,6 +418,7 @@ defineExpose({ refresh: loadHistory })
                         </article>
                       </div>
                     </el-collapse-item>
+                    </div>
                   </el-collapse>
                 </section>
               </template>
@@ -507,16 +509,17 @@ defineExpose({ refresh: loadHistory })
 .version-cycle__file strong { overflow: hidden; color: var(--sg-text); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .version-cycle__file small { color: var(--sg-text-muted); font-size: 9px; }
 .version-cycle__actions { display: flex; flex: 0 0 auto; }
-.version-cycle__details { display: grid; padding-top: 12px; border-top: 1px solid var(--sg-border); border-bottom: 0; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
-.version-cycle__details:deep(.el-collapse-item) { min-width: 0; overflow: hidden; background: var(--sg-surface); border: 1px solid var(--sg-border); border-radius: 9px; transition: border-color 160ms ease, background 160ms ease; }
-.version-cycle__details:deep(.el-collapse-item.is-active) { grid-column: 1 / -1; border-color: color-mix(in srgb, var(--sg-accent) 38%, var(--sg-border)); }
-.version-cycle__details:deep(.el-collapse-item__header) { min-height: 46px; height: auto; padding: 0 12px 0 14px; color: var(--sg-text); background: transparent; border-bottom: 0; font-weight: 600; line-height: 1.35; }
+.version-cycle__details { padding-top: 12px; border-top: 1px solid var(--sg-border); border-bottom: 0; }
+.version-cycle__details:deep(.el-collapse-item) { display: block; width: 100%; min-width: 0; overflow: hidden; background: var(--sg-surface); border: 1px solid var(--sg-border); border-radius: 9px; transition: border-color 160ms ease, background 160ms ease; }
+.version-cycle__detail-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr)); gap: 10px; align-items: start; }
+.version-cycle__details:deep(.el-collapse-item.is-active) { border-color: color-mix(in srgb, var(--sg-accent) 38%, var(--sg-border)); }
+.version-cycle__details:deep(.el-collapse-item__header) { display: flex; width: 100%; min-width: 0; min-height: 46px; height: 46px; padding: 0 12px 0 14px; align-items: center; color: var(--sg-text); background: transparent; border-bottom: 0; font-weight: 600; line-height: 1.35; }
 .version-cycle__details:deep(.el-collapse-item__header:hover) { background: var(--sg-surface-soft); }
-.version-cycle__details:deep(.el-collapse-item__arrow) { margin-left: 10px; color: var(--sg-accent); font-size: 13px; }
+.version-cycle__details:deep(.el-collapse-item__arrow) { flex: 0 0 auto; margin: 0 0 0 10px; color: var(--sg-accent); font-size: 13px; }
 .version-cycle__details:deep(.el-collapse-item__wrap) { background: transparent; border-top: 1px solid var(--sg-border); border-bottom: 0; }
 .version-cycle__details:deep(.el-collapse-item__content) { padding: 12px; color: var(--sg-text-secondary); }
-.version-cycle__detail-title { display: flex; min-width: 0; flex: 1; align-items: center; justify-content: space-between; gap: 10px; }
-.version-cycle__detail-title > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.version-cycle__detail-title { display: grid; width: auto; height: 100%; min-width: 0; flex: 1 1 0%; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 10px; }
+.version-cycle__detail-title > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .version-cycle__detail-title:deep(.el-tag) { flex: 0 0 auto; }
 .history-record-list { display: grid; gap: 8px; }
 .history-record { display: grid; gap: 7px; padding: 11px 12px; background: var(--sg-surface); border: 1px solid var(--sg-border); border-radius: 8px; }
@@ -536,7 +539,5 @@ defineExpose({ refresh: loadHistory })
   .history-stage__heading > div { align-items: flex-start; flex-direction: column; }
   .history-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .history-timeline:deep(.el-timeline) { padding-left: 2px; }
-  .version-cycle__details { grid-template-columns: 1fr; }
-  .version-cycle__details:deep(.el-collapse-item.is-active) { grid-column: auto; }
 }
 </style>

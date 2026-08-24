@@ -1,3 +1,4 @@
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -59,3 +60,27 @@ async def test_video_derivation_fails_explicitly_without_ffmpeg(tmp_path: Path) 
             Path('derived/2026/08/40'),
             config,
         )
+
+
+@pytest.mark.asyncio
+async def test_ffmpeg_runs_in_worker_thread(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[list[str], dict[str, object]]] = []
+
+    def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        calls.append((command, kwargs))
+        return subprocess.CompletedProcess(command, 0, stderr=b'')
+
+    monkeypatch.setattr(subprocess, 'run', fake_run)
+
+    await ShotGridMediaDerivationService._run_ffmpeg('ffmpeg', '-version')
+
+    assert calls == [
+        (
+            ['ffmpeg', '-version'],
+            {
+                'stdout': subprocess.DEVNULL,
+                'stderr': subprocess.PIPE,
+                'check': False,
+            },
+        )
+    ]
