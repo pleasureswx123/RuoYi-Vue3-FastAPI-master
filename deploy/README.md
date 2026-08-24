@@ -153,19 +153,87 @@ docker volume inspect \
 
 不要在聊天、截图、Git、Issue 或 CI 日志中输出该文件内容。
 
-### 5.2 仓库里的环境文件
+生产配置的实际加载链如下：
+
+```text
+deploy/remote-deploy.ps1
+  → 设置 RUOYI_ENV_FILE=/etc/ruoyi-shot-grid/production.env
+  → deploy/deploy.sh 固定选择 docker-compose.prod.yml
+  → docker compose --env-file 读取 Compose 插值变量
+  → docker-compose.prod.yml 的 env_file 把同一文件注入运行容器
+  → backend 额外显式覆盖 DB_HOST=postgres、REDIS_HOST=redis 等容器网络地址
+```
+
+因此，服务器生产配置应修改 `/etc/ruoyi-shot-grid/production.env`，而不是修改仓库里的后端 `.env.*`。修改后还必须重新创建容器；单纯执行 `docker restart` 不会重新读取 Compose 环境文件。
+
+### 5.2 全部环境文件及生效范围
 
 | 文件 | 用途 | 是否直接用于当前生产 |
 | --- | --- | --- |
+| `/etc/ruoyi-shot-grid/production.env` | 服务器外部的真实生产配置，包含数据库、Redis、JWT、端口、CORS、日志和 Worker 配置 | **是，当前生产运行时唯一事实来源** |
 | `deploy/.env.production.example` | 生产配置模板和变量说明，不含真实密钥 | 用于初始化，不直接作为生产密钥文件 |
+| `deploy/.env.production` | `deploy/init-env.sh` 根据模板在仓库工作目录生成的本地生产配置，已被 Git 忽略 | 仅作为部署脚本未设置 `RUOYI_ENV_FILE` 时的后备路径；公司服务器当前不使用 |
 | `ruoyi-fastapi-backend/.env.dev` | Windows/宿主机本地开发 | 否 |
-| `ruoyi-fastapi-backend/.env.dockerpg` | 历史 PostgreSQL Compose 参考配置 | 否 |
-| `ruoyi-fastapi-backend/.env.dockermy` | 历史 MySQL Compose 参考配置 | 否 |
-| `ruoyi-fastapi-backend/.env.prod` | 后端旧的独立 `prod` 运行配置 | 当前生产使用 `APP_ENV=production` 和服务器环境变量，因此不以它为事实来源 |
-| `ruoyi-fastapi-frontend/.env.production` | 管理端 Vite 构建时写入 `/prod-api` 等公开配置 | 是，但只能包含公开前端配置 |
-| `shot-grid-frontend/.env.production` | Shot Grid Vite 构建时写入子路径和 `/prod-api` | 是，但只能包含公开前端配置 |
+| `ruoyi-fastapi-backend/.env.dockerpg` | 旧 `Dockerfile.pg` 使用 `--env=dockerpg` 时加载的 PostgreSQL 兼容配置 | 否，当前生产不使用 `Dockerfile.pg` |
+| `ruoyi-fastapi-backend/.env.dockermy` | 旧 `Dockerfile.my` 使用 `--env=dockermy` 时加载的 MySQL 兼容配置 | 否，当前生产不使用 MySQL |
+| `ruoyi-fastapi-backend/.env.prod` | 后端使用 `--env=prod` 时才会加载的旧独立运行配置 | 否；当前后端使用 `--env=production`，真实值由服务器环境变量注入。`prod` 与 `production` 不是同一个环境名 |
+| `ruoyi-fastapi-frontend/.env.production` | 管理端 Vite 生产构建配置，写入标题和同域 API 前缀 `/prod-api` | **是，只在镜像构建阶段生效**，不能包含秘密 |
+| `ruoyi-fastapi-frontend/.env.development` | 管理端 Vite 本地开发配置 | 否 |
+| `ruoyi-fastapi-frontend/.env.staging` | 管理端 Vite 预发布构建配置 | 否 |
+| `ruoyi-fastapi-frontend/.env.docker` | 管理端旧 Docker 构建配置 | 否 |
+| `shot-grid-frontend/.env.production` | Shot Grid Vite 生产构建配置，写入 `/prod-api` 和 `/shot-grid-app/` | **是，只在镜像构建阶段生效**，不能包含秘密 |
+| `shot-grid-frontend/.env.development` | Shot Grid 本地开发配置 | 否 |
 
 前端 `.env.production` 会打进浏览器静态文件，所以绝对不能放数据库密码、JWT Secret、API Key 或私钥。
+
+后端配置加载器会根据 `--env=<名称>` 尝试读取 `ruoyi-fastapi-backend/.env.<名称>`。当前生产命令是 `ruoyi app run --env=production`，仓库中没有后端 `.env.production`；生产值已经由 Compose 从服务器外部环境文件注入，且进程环境变量优先，不需要再复制一份后端生产 `.env`。
+
+### 5.3 哪个 Docker Compose 文件正在起作用
+
+| Compose 文件 | 包含的服务 | 使用场景 | 当前公司生产是否使用 |
+| --- | --- | --- | --- |
+| `docker-compose.prod.yml` | PostgreSQL 16、Redis 7、FastAPI 后端、管理前端、Shot Grid 前端 | 公司内网正式部署；独立网络、三个命名卷、日志轮转、健康门禁，仅映射 `12580/12581` | **是，唯一生效的生产 Compose 文件** |
+| `docker-compose.dev.yml` | 开发后端、PostgreSQL 14、Redis 7 | 本机开发；只绑定 `127.0.0.1:9099/15432/16379`，项目名为 `ruoyi-fastapi-local-dev` | 否 |
+| `docker-compose.pg.yml` | 旧 PostgreSQL 全栈、Redis、后端和两个前端 | 历史 PostgreSQL 兼容参考，固定暴露 `19099/15432/16379`，缺少当前生产安全和持久化边界 | 否，禁止用于 `192.168.10.122` 正式部署 |
+| `docker-compose.my.yml` | 旧 MySQL 全栈、Redis、后端和管理前端 | 历史 MySQL 兼容参考 | 否；当前主数据库是 PostgreSQL |
+| `ruoyi-fastapi-test/docker-compose.test.pg.yml` | PostgreSQL E2E 测试栈 | 独立自动化测试 | 否 |
+| `ruoyi-fastapi-test/docker-compose.test.my.yml` | MySQL E2E 测试栈 | MySQL 兼容测试 | 否 |
+
+当前生产发布脚本始终显式执行：
+
+```bash
+docker compose \
+  --project-name ruoyi-shot-grid-prod \
+  --env-file /etc/ruoyi-shot-grid/production.env \
+  -f /opt/ruoyi-shot-grid/docker-compose.prod.yml \
+  ...
+```
+
+不要在服务器上省略 `--project-name`、`--env-file` 或 `-f`，也不要把多个 Compose 文件拼接启动。否则可能读取错误配置、创建另一组容器和卷，或者占用其他项目端口。
+
+### 5.4 在服务器确认当前生效文件
+
+不查看任何密码即可通过容器的 Compose 标签确认实际运行来源：
+
+```bash
+cd /opt/ruoyi-shot-grid
+
+backend_id="$(docker compose \
+  --project-name ruoyi-shot-grid-prod \
+  --env-file /etc/ruoyi-shot-grid/production.env \
+  -f docker-compose.prod.yml \
+  ps -q backend)"
+
+docker inspect --format \
+  'project={{index .Config.Labels "com.docker.compose.project"}} config_files={{index .Config.Labels "com.docker.compose.project.config_files"}} environment_file={{index .Config.Labels "com.docker.compose.project.environment_file"}}' \
+  "$backend_id"
+```
+
+当前生产应输出：
+
+```text
+project=ruoyi-shot-grid-prod config_files=/opt/ruoyi-shot-grid/docker-compose.prod.yml environment_file=/etc/ruoyi-shot-grid/production.env
+```
 
 ## 6. 为什么当前 HTTP 要关闭 Web Crypto
 
