@@ -88,8 +88,21 @@ if [[ "${DEPLOY_PULL_BASE_IMAGES:-0}" = 1 ]]; then
     build_args+=(--pull)
 fi
 
-echo "构建发布镜像：$RELEASE_ID"
-"${COMPOSE[@]}" build "${build_args[@]}" backend admin-frontend shot-grid-frontend
+if [[ "${DEPLOY_SKIP_BUILD:-0}" = 1 ]]; then
+    echo "使用已预载的发布镜像：$RELEASE_ID"
+    required_images=(
+        "ruoyi-shot-grid-backend:$RELEASE_ID"
+        "ruoyi-shot-grid-admin-frontend:$RELEASE_ID"
+        "ruoyi-shot-grid-business-frontend:$RELEASE_ID"
+    )
+    for image_name in "${required_images[@]}"; do
+        docker image inspect "$image_name" >/dev/null 2>&1 \
+            || fail "缺少预载镜像 $image_name，不能跳过构建"
+    done
+else
+    echo "构建发布镜像：$RELEASE_ID"
+    "${COMPOSE[@]}" build "${build_args[@]}" backend admin-frontend shot-grid-frontend
+fi
 
 echo '启动并等待独立 PostgreSQL / Redis 健康'
 "${COMPOSE[@]}" up -d --wait --wait-timeout 180 postgres redis

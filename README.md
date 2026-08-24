@@ -295,6 +295,16 @@ bash deploy/deploy.sh
 
 脚本不会执行全局 Docker 清理，不会操作其他 Compose 项目，也不会执行 `down -v`。数据库迁移失败时不会切换应用镜像；切换阶段失败时会尝试恢复上一组应用镜像，但不会擅自降级数据库。
 
+如果生产服务器无法访问 Docker、npm 或 PyPI 镜像源，可在可信构建机从同一提交构建三个带 `APP_RELEASE_ID` 的镜像，通过 `docker save` / `docker load` 离线导入服务器。确认服务器同时存在以下三个精确标签后，发布时增加 `DEPLOY_SKIP_BUILD=1`：
+
+```text
+ruoyi-shot-grid-backend:<12位提交号>
+ruoyi-shot-grid-admin-frontend:<12位提交号>
+ruoyi-shot-grid-business-frontend:<12位提交号>
+```
+
+该开关只跳过镜像构建；端口隔离、PostgreSQL/Redis 健康、备份、Alembic 迁移、配置预检和应用健康门禁仍会完整执行。任一镜像缺失时脚本会失败关闭。
+
 ### 后续一键快速部署
 
 代码必须先通过 CI、提交并推送到远程；本地 commit 不等于服务器可部署。
