@@ -18,6 +18,53 @@
 | Redis | 本项目独立 Redis 7，不映射宿主机端口 |
 | 当前 HTTP 决策 | 仅在公司可信内网使用；传输层 Web Crypto 已关闭 |
 
+### 1.1 服务、地址、端口和持久化总表
+
+下表区分了“公司内网用户可以访问的宿主机地址”和“只有本项目容器可以访问的 Docker 内部地址”。没有映射宿主机端口的服务不能从办公电脑直接连接，这是生产隔离设计，不是漏配端口。
+
+| 服务 | 公司内网/宿主机访问地址 | 宿主机端口映射 | Docker 内部地址 | 数据保存位置 | 说明 |
+| --- | --- | --- | --- | --- | --- |
+| 平台管理前端 | `http://192.168.10.122:12580/` | `12580 → admin-frontend:80` | `http://admin-frontend:80` | 无持久化卷 | 浏览器入口；`/prod-api/*` 反向代理到后端 |
+| Shot Grid 前端 | `http://192.168.10.122:12581/shot-grid-app/` | `12581 → shot-grid-frontend:80` | `http://shot-grid-frontend:80/shot-grid-app/` | 无持久化卷 | 业务前端入口；`/prod-api/*` 反向代理到后端 |
+| FastAPI 后端 | 不直接开放；浏览器通过两个前端的 `/prod-api/` 访问 | 不映射宿主机端口 | `http://backend:9099` | `ruoyi-shot-grid-prod_backend_files` → 容器 `/app/vf_admin` → 宿主机 `/var/lib/docker/volumes/ruoyi-shot-grid-prod_backend_files/_data` | 登录、权限、业务规则、文件接口和数据库事务 |
+| PostgreSQL 16 | 不直接开放，不能使用 `192.168.10.122:5432` 连接 | 不映射宿主机端口 | `postgres:5432` | `ruoyi-shot-grid-prod_postgres_data` → 容器 `/var/lib/postgresql/data` → 宿主机 `/var/lib/docker/volumes/ruoyi-shot-grid-prod_postgres_data/_data` | 仅后端和运维命令可访问；用户名、密码和数据库名来自生产 `.env` |
+| Redis 7 | 不直接开放，不能使用 `192.168.10.122:6379` 连接 | 不映射宿主机端口 | `redis:6379` | `ruoyi-shot-grid-prod_redis_data` → 容器 `/data` → 宿主机 `/var/lib/docker/volumes/ruoyi-shot-grid-prod_redis_data/_data` | 登录会话、验证码、缓存、限流、日志流和多 Worker 协调 |
+
+当前外部端口边界只有：
+
+```text
+192.168.10.122:12580  平台管理前端
+192.168.10.122:12581  Shot Grid 前端
+```
+
+后端、PostgreSQL 和 Redis 共同位于 Docker 网络 `ruoyi-shot-grid-prod_app_network`。容器之间使用服务名 `backend`、`postgres`、`redis` 访问，不使用服务器内网 IP，也不依赖服务器上其他项目的数据库或 Redis。
+
+常用访问和诊断方式：
+
+```bash
+cd /opt/ruoyi-shot-grid
+
+# 查看后端健康、数据库和 Redis 连接状态
+docker compose --project-name ruoyi-shot-grid-prod \
+  --env-file /etc/ruoyi-shot-grid/production.env \
+  -f docker-compose.prod.yml \
+  exec -T backend ruoyi ops health --env=production --output=json
+
+# 进入本项目 PostgreSQL；密码不会出现在命令行参数中
+docker compose --project-name ruoyi-shot-grid-prod \
+  --env-file /etc/ruoyi-shot-grid/production.env \
+  -f docker-compose.prod.yml \
+  exec postgres sh -ec 'exec psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
+
+# 进入本项目 Redis 数据库；认证信息从容器环境变量读取
+docker compose --project-name ruoyi-shot-grid-prod \
+  --env-file /etc/ruoyi-shot-grid/production.env \
+  -f docker-compose.prod.yml \
+  exec redis sh -ec 'export REDISCLI_AUTH="$REDIS_PASSWORD"; exec redis-cli -n "${REDIS_DATABASE:-2}"'
+```
+
+不要为了使用数据库客户端而直接在 `docker-compose.prod.yml` 中增加 `5432:5432` 或 `6379:6379`。确需从办公电脑直连时，应单独评审访问来源、防火墙、账号权限、临时 SSH 隧道和操作审计，不应把数据库或 Redis 长期暴露到公司整个网段。
+
 服务器上还有其他项目。所有生产命令必须带项目名 `ruoyi-shot-grid-prod` 和本项目 Compose 文件，禁止执行全局 `docker system prune`，禁止对本项目执行 `down -v`，也不要停止或重建其他项目容器。
 
 ## 2. 从浏览器到数据的完整链路
