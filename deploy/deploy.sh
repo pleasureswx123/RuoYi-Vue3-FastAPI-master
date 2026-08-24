@@ -17,7 +17,7 @@ fail() {
     exit 1
 }
 
-for command_name in docker git flock ss curl grep stat; do
+for command_name in docker git flock ss curl grep stat install; do
     command -v "$command_name" >/dev/null 2>&1 || fail "缺少命令 $command_name"
 done
 
@@ -42,6 +42,12 @@ export COMPOSE_PROJECT_NAME="$PROJECT_NAME"
 export RUOYI_ENV_FILE="$ENV_FILE"
 
 mkdir -p "$STATE_DIR/backups"
+POSTGRES_INIT_DIR="$STATE_DIR/postgres-init"
+POSTGRES_INIT_SQL="$POSTGRES_INIT_DIR/10-ruoyi-fastapi-pg.sql"
+install -d -m 0755 "$POSTGRES_INIT_DIR"
+install -m 0644 "$ROOT_DIR/ruoyi-fastapi-backend/sql/ruoyi-fastapi-pg.sql" "$POSTGRES_INIT_SQL"
+export RUOYI_POSTGRES_INIT_SQL="$POSTGRES_INIT_SQL"
+
 exec 9>"$STATE_DIR/deploy.lock"
 flock -n 9 || fail '已有部署正在执行'
 
