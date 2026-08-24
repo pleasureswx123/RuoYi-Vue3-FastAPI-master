@@ -194,6 +194,35 @@ install -m 0600 deploy/.env.production /etc/ruoyi-shot-grid/production.env
 
 然后人工检查端口、CORS、HTTP 传输策略、Worker 开关和数据库名，再执行首次发布。初始化文件包含随机密码和密钥，不得提交 Git。
 
+### 8.1 首次管理员登录
+
+生产部署不会继续使用示例密码 `admin123`。首次部署脚本会为内置管理员生成随机强密码，并只保存在服务器的下列文件中：
+
+```text
+/etc/ruoyi-shot-grid/bootstrap-admin-password
+```
+
+在 Windows 开发机或运维机上执行以下命令查看当前首次登录密码：
+
+```powershell
+ssh root@192.168.10.122 "cat /etc/ruoyi-shot-grid/bootstrap-admin-password"
+```
+
+登录信息：
+
+```text
+用户名：admin
+密码：上述命令显示的随机密码
+```
+
+注意事项：
+
+- 用户名必须是 `admin`，不要误写为 `amdin`。
+- 不要继续尝试 `admin123`；生产环境已经废弃该默认密码。
+- 10 分钟内密码连续输错超过 5 次时，账号会锁定 10 分钟。应停止重试并等待自动解锁，避免反复延长排查时间。
+- 查看密码的命令会在当前终端显示敏感信息，不要截图、粘贴到聊天、提交到 Git 或写入部署日志。
+- 首次登录后应在管理端修改为仅维护人员掌握的强密码。确认新密码已经妥善交接后，可以人工安全移除 `bootstrap-admin-password`；移除后不能再通过该文件找回密码。
+
 ## 9. 常用运维命令
 
 先定义公共参数，避免误操作其他项目：
@@ -271,6 +300,7 @@ grep -n 'CHANGE_ME_' /etc/ruoyi-shot-grid/production.env
 | 现象 | 优先检查 |
 | --- | --- |
 | 页面能打开但提示业务服务不可用 | 后端健康、`/prod-api` 代理、浏览器缓存的传输策略 |
+| `admin` 提示密码错误或账号锁定 | 确认没有误写成 `amdin`，从 `bootstrap-admin-password` 读取首次随机密码；停止尝试 `admin123`，锁定后等待 10 分钟自动解锁 |
 | 修改 `.env` 后没有变化 | 容器是否重新创建，而不是只 restart |
 | SQL 日志过多或服务像“卡住” | 确认 `DB_ECHO=false`、`LOG_FILE_ENABLED=false` 和 Docker 日志轮转 |
 | 发布中断 | 查看 `deploy/status.sh`、发布输出和 `current-release`，不要直接 `down -v` |
