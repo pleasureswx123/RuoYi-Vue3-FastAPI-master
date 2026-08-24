@@ -99,17 +99,32 @@ class PluginRuntimeEnvironmentService:
         parent = backend_root.parent
         if not parent.is_dir():
             return None
-        candidates = [
-            path
-            for path in parent.iterdir()
-            if path.is_dir()
-            and path != backend_root
-            and (path / 'package.json').is_file()
-            and (path / 'plugins').is_dir()
-        ]
+        candidates = []
+        try:
+            candidates = [
+                path
+                for path in parent.iterdir()
+                if PluginRuntimeEnvironmentService._is_frontend_root_candidate(path, backend_root)
+            ]
+        except OSError:
+            return None
         if not candidates:
             return None
         return sorted(candidates)[0]
+
+    @staticmethod
+    def _is_frontend_root_candidate(path: Path, backend_root: Path) -> bool:
+        """判断目录是否为可访问的前端工程候选。"""
+        try:
+            return (
+                path.is_dir()
+                and path != backend_root
+                and (path / 'package.json').is_file()
+                and (path / 'plugins').is_dir()
+            )
+        except OSError:
+            # 生产容器的项目父目录可能包含仅 root 可访问的目录，不应阻断插件启动。
+            return False
 
     @staticmethod
     def _infer_frontend_dir_name(backend_dir_name: str) -> str:

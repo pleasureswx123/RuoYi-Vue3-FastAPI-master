@@ -266,6 +266,32 @@ def test_plugin_runtime_environment_exposes_configured_project_roots(tmp_path: P
     assert environment.get_frontend_plugins_dir() == str(frontend_root.resolve() / 'plugins')
 
 
+def test_plugin_runtime_environment_skips_inaccessible_sibling(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """校验同级目录无权访问时仍能发现有效前端工程。"""
+    backend_root = tmp_path / 'backend'
+    denied_root = tmp_path / 'denied'
+    frontend_root = tmp_path / 'frontend'
+    backend_root.mkdir()
+    denied_root.mkdir()
+    (frontend_root / 'plugins').mkdir(parents=True)
+    (frontend_root / 'package.json').write_text('{}\n', encoding='utf-8')
+    original_is_file = Path.is_file
+
+    def is_file_with_denied_sibling(path: Path) -> bool:
+        if path == denied_root / 'package.json':
+            raise PermissionError(path)
+        return original_is_file(path)
+
+    monkeypatch.setattr(Path, 'is_file', is_file_with_denied_sibling)
+
+    environment = PluginRuntimeEnvironmentService(backend_root=backend_root)
+
+    assert environment.get_frontend_dir() == str(frontend_root.resolve())
+
+
 def test_plugin_runtime_lists_discovered_plugins(tmp_path: Path) -> None:
     """校验插件运行时可以列出已发现插件。"""
     backend_root = tmp_path / 'backend'
