@@ -234,6 +234,7 @@ ruoyi-fastapi-backend/docs/file_management_usage_guide.md
 
 - 不得在仓库提交真实 JWT Secret、RSA 私钥、数据库密码或 Provider Key。
 - `optional` 与 `required` 模式含义不同，不能为了兼容问题直接降低为明文。
+- 例外：公司内网 `192.168.10.122:12580/12581` 经用户明确决定固定使用 HTTP，生产配置必须显式使用 `TRANSPORT_CRYPTO_ENABLED=false`、`TRANSPORT_CRYPTO_MODE=off`，并在部署文档中保留风险边界。该例外只适用于当前可信内网，不得扩展到公网、跨互联网链路或其他环境；未来切换 HTTPS 时必须恢复 `required` 并重新验收真实加密登录。
 - `required` 模式下 Redis 防重放不可用时应保持失败关闭。
 - 上传、下载等 multipart/binary 路径应按现有排除策略处理。
 - 密钥轮换要保留 `kid` 和兼容窗口，并覆盖前端公钥缓存 TTL。
@@ -332,6 +333,7 @@ python -m pytest -v
 
 - 本地开发优先使用 `docker-compose.dev.yml` 启动后端、PostgreSQL 和 Redis；前端继续在宿主机运行。后端开发镜像固定 Python 3.11.15 并内置 FFmpeg。Linux 容器不承担 Windows UNC/NAS 目录和版本发布 Worker，相关真实验收仍必须在正式 Windows Worker 环境完成。
 - 公司内网 `192.168.10.122` 的正式部署使用 `docker-compose.prod.yml` 和固定项目名 `ruoyi-shot-grid-prod`；只映射平台管理端 `12580` 与 Shot Grid `12581`，PostgreSQL、Redis、后端和业务文件必须留在本项目独立网络/命名卷内，不得复用或重启服务器既有项目。
+- 当前两个入口固定使用 HTTP；由于浏览器不会为普通内网 HTTP IP 开放 Web Crypto，服务器生产环境必须按已评审例外关闭传输加密，并把 `APP_CORS_ALLOWED_ORIGINS` 限制为两个明确的 HTTP 来源。不得通过前端伪随机降级或隐藏错误来冒充加密仍然生效。
 - 生产发布统一走 `deploy/deploy.sh`：先构建版本镜像，再等待独立依赖健康、创建 PostgreSQL 备份、执行 Alembic 迁移和应用/加密预检，最后健康门禁切换；禁止把 `docker-compose.pg.yml` 当作该服务器的生产文件。
 - 生产默认关闭 `DB_ECHO` 和文件日志，由 Docker `local` 日志驱动限额轮转；真实密钥只允许保存在服务器 `/etc/ruoyi-shot-grid/production.env`（0600），不得写入仓库、GitHub Secrets 输出或镜像层。
 - MySQL/PostgreSQL 完整拓扑分别使用 `docker-compose.my.yml`、`docker-compose.pg.yml`。
@@ -360,7 +362,7 @@ git status --short
 
 后续改动不得忽略以下现状：
 
-1. 当前主分支和 GitHub Actions 已统一为 `main`；内网生产 CD 只能由带 `ruoyi-prod` 标签的专用 self-hosted Runner 手动触发，并受 `intranet-production` Environment 审批约束。
+1. 当前主分支和 GitHub Actions 已统一为 `main`；内网生产 CD 只能由带 `ruoyi-prod` 标签的专用 self-hosted Runner 手动触发，并受 `intranet-production` Environment 审批约束。服务器外网依赖不稳定时，Windows 开发机使用 `deploy/remote-deploy.ps1` 从已提交的 `main` 构建并离线传输版本镜像，服务器仍必须执行同一套备份、迁移和健康门禁。
 2. 后端 `.env.*` 被 Git 跟踪，其中包含示例密码和私钥材料。
 3. Alembic 当前已有 Shot Grid `20260810_01 → 20260821_17` 增量迁移链；`05` 增加目录操作执行状态一致性约束及项目维度查询索引，`06` 增加“我的任务”查询索引、版本提交唯一性/执行状态约束与审核动作持久幂等字段，`07` 增加媒体派生任务表及每版本唯一缩略图/代理索引，`08` 增加平台管理端 NAS 根目录管理菜单和权限入口，`09` 释放已删除镜头号，`10` 切换到跨版本修改问题闭环，`11` 修复媒体派生文件的版本引用类型，`12` 以 PostgreSQL-only 迁移增加 `sg_managed_user_role` 来源标记，`13` 把 `sg_shot.sort_order` 的 PostgreSQL 数据字典注释调整为“场内镜头顺序”且不修改业务数据，`14` 将镜头号唯一边界改为 `(scene_id, shot_no)` 并增加受控重编号 Outbox，`15` 将镜头目录冻结延迟到任务开始并增加 `preparing`，`16` 在升级前失败关闭地校验每场活动镜头已连续编号，再规范化兼容排序键，`17` 增加审核问题私有草稿并把“退回修改”冻结为草稿发布边界；固定 `shotgrid_admin`、`shotgrid_creator` 角色包仍由平台管理端显式配置，迁移不会自动创建或猜测角色。媒体 Worker 默认关闭，视频派生必须配置 FFmpeg；不得用原始大文件冒充代理媒体。全平台仍缺少能够从真正空库独立建立全部 RuoYi 平台表的完整 baseline。新库使用同步后的 PostgreSQL 初始化 SQL并写入 head，已有平台库执行增量迁移。无版本标记的历史库必须先备份并在克隆库核验结构，不能未经确认直接 `stamp`。
 4. Shot Grid 当前 PostgreSQL head 为 `20260821_17`：`shot_id` 是与 NAS 无关的稳定内部主键，`S001..Snnn` 只是场内连续镜序。新建/导入镜头不创建镜头目录；制作人开始镜头任务后先进入 `preparing`，目录 Outbox 成功后再进入 `in_progress`。拖拽必须加载完整场次，只允许未开始制作的影响范围，并自动同步 `Sxxx`；删除后同事务连续化剩余镜头，若受影响区间已有冻结目录则失败关闭，禁止隐式改名。已有旧库若不满足场内连续编号，必须先通过受控重排和 NAS 迁移治理，不能绕过 16 的升级门禁。审核人记录的新问题先进入仅审核方可见的 `sg_review_issue_draft`；只有 `reject` 审核事务才把当前审核单全部草稿转换为不可变 `sg_note` 并向制作人发布，`approve` 在存在草稿时失败，`defer` 保留草稿。

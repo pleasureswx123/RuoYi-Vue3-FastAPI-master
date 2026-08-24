@@ -11,7 +11,8 @@ const EXCLUDED_URL_PATTERNS = [
   '/common/files/',
   '/system/file/download/'
 ]
-const TRANSPORT_FRONTEND_CONFIG_CACHE_KEY = 'transportCryptoFrontendConfig'
+// v2 用于使已打开过 required 模式的生产页面立即丢弃旧会话策略。
+const TRANSPORT_FRONTEND_CONFIG_CACHE_KEY = 'transportCryptoFrontendConfigV2'
 const TRANSPORT_FRONTEND_CONFIG_URL = '/transport/crypto/frontend-config'
 const TRANSPORT_FRONTEND_CONFIG_FALLBACK_TTL_SECONDS = 60
 const DEFAULT_TRANSPORT_ENVELOPE_VERSION = '1'

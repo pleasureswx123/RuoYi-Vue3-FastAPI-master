@@ -252,6 +252,8 @@ python -m pytest -v
 - 平台管理端：<http://192.168.10.122:12580>
 - Shot Grid：<http://192.168.10.122:12581/shot-grid-app/>
 
+当前根据公司内网使用要求固定采用 HTTP，因此生产服务器显式设置 `TRANSPORT_CRYPTO_ENABLED=false`、`TRANSPORT_CRYPTO_MODE=off`。浏览器不会为普通内网 HTTP IP 提供 Web Crypto API；如果未来改为公网或跨互联网访问，必须先部署 HTTPS，再恢复 `required` 模式。服务器目录、持久化卷、环境变量和排障说明统一见 [公司内网生产部署说明](deploy/README.md)。
+
 ### 首次部署
 
 1. 在服务器准备专用目录，不要放入已有项目目录：
@@ -307,15 +309,23 @@ ruoyi-shot-grid-business-frontend:<12位提交号>
 
 ### 后续一键快速部署
 
-代码必须先通过 CI、提交并推送到远程；本地 commit 不等于服务器可部署。
-
-从 Windows 开发机执行：
+代码完成必要检查并提交到本地 `main` 后，从 Windows 开发机执行：
 
 ```powershell
 .\deploy\remote-deploy.ps1
 ```
 
-或登录服务器执行：
+该脚本从当前已提交版本创建干净 worktree，在开发机构建三个生产镜像，通过 SSH 离线传输 Git 增量和镜像，再由服务器执行数据库备份、Alembic 迁移、配置预检及健康切换。它不会夹带本地未提交文件，也不依赖服务器访问 Docker Hub、npm 或 PyPI。
+
+如果本地已经存在当前提交号对应的三个镜像，可以使用：
+
+```powershell
+.\deploy\remote-deploy.ps1 -SkipBuild
+```
+
+脚本不会自动执行 `git push`。团队需要远程仓库同步时，仍应在发布前独立完成代码评审和 `git push origin main`。
+
+服务器外网和依赖镜像源均正常时，也可以登录服务器执行：
 
 ```bash
 cd /opt/ruoyi-shot-grid
@@ -327,7 +337,7 @@ SERVER_IP=192.168.10.122 \
 bash deploy/deploy.sh
 ```
 
-服务器部署目录存在未提交改动时，远程脚本会拒绝覆盖。
+服务器部署目录存在未提交改动、不能从当前版本快进或生产配置权限不为 `0600` 时，一键脚本会失败关闭。
 
 ### GitHub Actions CD
 
@@ -389,6 +399,7 @@ bash deploy/rollback.sh
 
 ## 进一步阅读
 
+- [公司内网生产部署说明](deploy/README.md)
 - [Shot Grid 业务前端说明](shot-grid-frontend/README.md)
 - [后端 Docker 本地开发指南](ruoyi-fastapi-backend/docs/docker_dev_guide.md)
 - [后端 CLI 使用说明](ruoyi-fastapi-backend/docs/cli_usage.md)
