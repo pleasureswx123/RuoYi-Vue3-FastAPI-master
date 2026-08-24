@@ -216,6 +216,13 @@ class ShotGridStorageWorkerService:
                     soft_timeout_exceeded=soft_timeout_exceeded,
                 )
             await db.commit()
+            try:
+                finalizer = getattr(path_adapter, 'finalize_operation', None)
+                if finalizer is not None:
+                    await finalizer(context)
+            except StoragePathAdapterError:
+                # 业务事务已经成功，残留的空事务目录只作为可诊断痕迹保留，不能反向改写成功状态。
+                pass
         except Exception:
             await db.rollback()
             raise

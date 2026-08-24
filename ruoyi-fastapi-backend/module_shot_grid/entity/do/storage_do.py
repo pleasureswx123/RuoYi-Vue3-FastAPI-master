@@ -14,7 +14,7 @@ from sqlalchemy import (
 )
 
 from config.database import Base
-from module_shot_grid.entity.do.base_do import SHOT_GRID_DATETIME, ShotGridMutableAuditMixin
+from module_shot_grid.entity.do.base_do import SHOT_GRID_DATETIME, SHOT_GRID_JSON, ShotGridMutableAuditMixin
 
 
 class ShotGridStorageRoot(ShotGridMutableAuditMixin, Base):
@@ -148,6 +148,7 @@ class ShotGridStorageOperation(Base):
     aggregate_type = Column(String(20), nullable=False, comment='目标聚合类型')
     aggregate_id = Column(BigInteger, nullable=False, comment='目标业务对象ID')
     target_relative_path = Column(String(1200), nullable=False, comment='按操作类型相对存储根或项目根的目标路径')
+    operation_payload = Column(SHOT_GRID_JSON, nullable=True, comment='受控复合目录操作载荷')
     operation_status = Column(String(30), nullable=False, server_default='pending', comment='执行状态')
     idempotency_key = Column(String(100), nullable=False, comment='服务端稳定幂等键')
     attempt_count = Column(Integer, nullable=False, server_default='0', comment='已执行次数')
@@ -172,11 +173,12 @@ class ShotGridStorageOperation(Base):
         UniqueConstraint('idempotency_key', name='uk_sg_storage_operation_idempotency'),
         CheckConstraint(
             "operation_type in ('initialize_project', 'ensure_episode_directory', "
-            "'ensure_shot_directory', 'ensure_asset_directory', 'reconcile_directory')",
+            "'ensure_shot_directory', 'ensure_asset_directory', 'reconcile_directory', "
+            "'renumber_shot_directories')",
             name='ck_sg_storage_operation_type',
         ),
         CheckConstraint(
-            "aggregate_type in ('project', 'episode', 'shot', 'asset')",
+            "aggregate_type in ('project', 'episode', 'scene', 'shot', 'asset')",
             name='ck_sg_storage_operation_aggregate_type',
         ),
         CheckConstraint(
@@ -184,8 +186,14 @@ class ShotGridStorageOperation(Base):
             "(operation_type = 'initialize_project' and aggregate_type = 'project') or "
             "(operation_type = 'ensure_episode_directory' and aggregate_type = 'episode') or "
             "(operation_type = 'ensure_shot_directory' and aggregate_type = 'shot') or "
-            "(operation_type = 'ensure_asset_directory' and aggregate_type = 'asset')",
+            "(operation_type = 'ensure_asset_directory' and aggregate_type = 'asset') or "
+            "(operation_type = 'renumber_shot_directories' and aggregate_type = 'scene')",
             name='ck_sg_storage_operation_target_type',
+        ),
+        CheckConstraint(
+            "(operation_type = 'renumber_shot_directories' and operation_payload is not null) or "
+            "(operation_type <> 'renumber_shot_directories' and operation_payload is null)",
+            name='ck_sg_storage_operation_payload',
         ),
         CheckConstraint('aggregate_id > 0', name='ck_sg_storage_operation_aggregate_id'),
         CheckConstraint("btrim(target_relative_path) <> ''", name='ck_sg_storage_operation_target_path'),

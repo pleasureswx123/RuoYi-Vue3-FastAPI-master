@@ -56,6 +56,7 @@ describe('独立业务端会话状态', () => {
     })
     expect(session.user.password).toBeUndefined()
     expect(session.user.phonenumber).toBeUndefined()
+    expect(session.displayName).toBe('creator')
     expect(getCurrentUser).toHaveBeenCalledTimes(1)
     expect(getShotGridNavigation).toHaveBeenCalledTimes(1)
   })

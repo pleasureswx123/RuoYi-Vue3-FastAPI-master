@@ -241,7 +241,7 @@ class ShotGridVersionPublishPathAdapter(ShotGridStoragePathAdapter):
             valid = (
                 folded[0] == 'video'
                 and re.fullmatch(r'ep\d{2,}', folded[1]) is not None
-                and re.fullmatch(r's\d{3,}', folded[2]) is not None
+                and re.fullmatch(r'\d{3,}_s\d{3,}', folded[2]) is not None
             )
         elif context.task_kind == 'asset_image':
             valid = folded[0] == 'asset' and folded[1] in {'character', 'environment', 'prop'}

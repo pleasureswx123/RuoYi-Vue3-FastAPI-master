@@ -1,4 +1,23 @@
-import { ElAlert, ElButton, ElDatePicker, ElForm, ElFormItem, ElIcon, ElInput, ElTag } from 'element-plus'
+import {
+  ElAlert,
+  ElButton,
+  ElCard,
+  ElDatePicker,
+  ElDescriptions,
+  ElDescriptionsItem,
+  ElDialog,
+  ElEmpty,
+  ElForm,
+  ElFormItem,
+  ElIcon,
+  ElInput,
+  ElMessage,
+  ElOption,
+  ElPagination,
+  ElSelect,
+  ElSkeleton,
+  ElTag
+} from 'element-plus'
 import { createPinia, setActivePinia } from 'pinia'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
@@ -24,6 +43,26 @@ vi.mock('@/api/shot-grid/reviews', () => ({
   getRecentMineVersions: vi.fn()
 }))
 
+const pageComponents = {
+  ElAlert,
+  ElButton,
+  ElCard,
+  ElDatePicker,
+  ElDescriptions,
+  ElDescriptionsItem,
+  ElDialog,
+  ElEmpty,
+  ElForm,
+  ElFormItem,
+  ElIcon,
+  ElInput,
+  ElOption,
+  ElPagination,
+  ElSelect,
+  ElSkeleton,
+  ElTag
+}
+
 function taskFixture(taskId = 31, overrides = {}) {
   return {
     taskId,
@@ -34,7 +73,7 @@ function taskFixture(taskId = 31, overrides = {}) {
     dueDate: '2026-08-20',
     requirements: '保持冷蓝色调和稳定镜头',
     project: { projectId: 8, projectCode: 'LCFR', projectName: '罗刹夫人', projectStatus: 'active' },
-    assignee: { userId: 7, nickName: '杨景锋', producerCode: 'YJF', memberStatus: 'active' },
+    assignee: { userId: 7, userName: '杨景锋', nickName: 'YJF', producerCode: 'YJF', memberStatus: 'active' },
     target: {
       targetType: 'shot',
       targetId: 100 + taskId,
@@ -43,6 +82,18 @@ function taskFixture(taskId = 31, overrides = {}) {
       lifecycleStatus: 'active',
       shotId: 100 + taskId,
       shotCode: `S${String(taskId).padStart(3, '0')}`
+    },
+    shotProduction: {
+      durationMs: 3500,
+      description: '休眠舱启动',
+      shotSize: '近景',
+      cameraPosition: '平视机位',
+      cameraMovement: '缓慢推进',
+      focalLength: '35',
+      dialogue: '动力系统恢复了吗？',
+      soundEffect: '设备低频轰鸣声',
+      colorReference: '冷蓝色调',
+      remark: '保持画面压迫感'
     },
     versionCount: 0,
     latestVersion: null,
@@ -86,7 +137,7 @@ async function mountWorkbench(permissions = ['shotgrid:task:list', 'shotgrid:ver
   await router.push('/workbench')
   await router.isReady()
   const wrapper = mount(WorkbenchView, {
-    global: { plugins: [pinia, router], components: { ElAlert, ElButton, ElDatePicker, ElForm, ElFormItem, ElIcon, ElInput, ElTag } }
+    global: { plugins: [pinia, router], components: pageComponents }
   })
   await flushPromises()
   return { wrapper, router }
@@ -119,11 +170,11 @@ async function mountDetail(path = '/tasks/31', permissions = ['shotgrid:task:que
   const wrapper = mount(TaskDetailView, {
     global: {
       plugins: [pinia, router],
-      components: { ElButton, ElDatePicker, ElForm, ElFormItem, ElIcon, ElInput, ElTag },
+      components: pageComponents,
       stubs: {
         VersionWorkspace: {
-          props: ['taskId', 'taskKind', 'allowedActions', 'hasUncommittedSubmission', 'operationGeneration'],
-          template: '<div data-testid="version-workspace" />'
+          props: ['taskId', 'taskKind', 'taskStatus', 'versionCount', 'productionDescription', 'allowedActions', 'hasUncommittedSubmission', 'operationGeneration'],
+          template: '<div data-testid="version-workspace" :data-version-count="versionCount" :data-production-description="productionDescription" />'
         }
       }
     }
@@ -151,6 +202,7 @@ describe('真实任务工作台', () => {
     expect(getMineReviewListPage).not.toHaveBeenCalled()
     expect(wrapper.text()).toContain('罗刹夫人')
     expect(wrapper.find('.task-row').text()).toContain('杨景锋')
+    expect(wrapper.find('.task-row').text()).not.toContain('YJF')
 
     const filterForm = wrapper.findComponent(ElForm)
     expect(filterForm.props('model')).toMatchObject({
@@ -320,7 +372,8 @@ describe('真实任务工作台', () => {
 
     getMineTaskPage.mockRejectedValueOnce({ httpStatus: 503, message: '任务服务维护中' })
     const unavailable = await mountWorkbench()
-    expect(unavailable.wrapper.text()).toContain('任务服务暂不可用')
+    expect(unavailable.wrapper.text()).toContain('任务暂时无法打开')
+    expect(unavailable.wrapper.text()).toContain('任务服务维护中')
     expect(unavailable.wrapper.text()).not.toContain('当前筛选暂无任务')
     unavailable.wrapper.unmount()
   })
@@ -382,8 +435,34 @@ describe('任务详情、状态动作与异步上下文', () => {
     startTask.mockResolvedValue({ data: taskFixture(31, {
       taskStatus: 'in_progress',
       lockVersion: 3,
-      allowedActions: ['task.edit', 'task.assign', 'version.add']
+      allowedActions: ['task.assign', 'version.add']
     }) })
+  })
+
+  it('制作人任务详情完整展示镜头制作信息，并区分任务补充要求', async () => {
+    const { wrapper } = await mountDetail()
+    const brief = wrapper.find('.task-card--wide')
+
+    expect(brief.text()).toContain('制作内容')
+    expect(brief.text()).toContain('休眠舱启动')
+    expect(brief.text()).toContain('近景')
+    expect(brief.text()).toContain('平视机位')
+    expect(brief.text()).toContain('缓慢推进')
+    expect(brief.text()).toContain('35')
+    expect(brief.text()).toContain('动力系统恢复了吗？')
+    expect(brief.text()).toContain('设备低频轰鸣声')
+    expect(brief.text()).toContain('冷蓝色调')
+    expect(brief.text()).toContain('保持画面压迫感')
+    expect(brief.text()).toContain('任务补充要求')
+    expect(brief.text()).toContain('保持冷蓝色调和稳定镜头')
+    expect(brief.text()).toContain('杨景锋')
+    expect(brief.text()).not.toContain('YJF')
+    expect(wrapper.findAll('.task-card')[1].text()).not.toContain('休眠舱启动')
+    expect(wrapper.get('[data-testid="version-workspace"]').attributes()).toMatchObject({
+      'data-version-count': '0',
+      'data-production-description': '休眠舱启动'
+    })
+    wrapper.unmount()
   })
 
   it('开始与编辑动作同时受 allowedActions 和平台权限双门禁', async () => {
@@ -396,6 +475,7 @@ describe('任务详情、状态动作与异步上下文', () => {
     await flushPromises()
     expect(startTask).toHaveBeenCalledWith(31, { lockVersion: 2 })
     expect(wrapper.text()).toContain('制作中')
+    expect(wrapper.findAll('button').map(button => button.text())).not.toContain('编辑任务')
     wrapper.unmount()
 
     getTaskDetail.mockResolvedValueOnce({ data: taskFixture(31, { allowedActions: ['task.start', 'task.edit'] }) })
@@ -409,6 +489,38 @@ describe('任务详情、状态动作与异步上下文', () => {
     expect(missingBackendAction.wrapper.findAll('button').map(button => button.text())).not.toContain('开始任务')
     expect(missingBackendAction.wrapper.findAll('button').map(button => button.text())).not.toContain('编辑任务')
     missingBackendAction.wrapper.unmount()
+  })
+
+  it('任务开始制作后即使响应误带 task.edit 也不显示编辑入口', async () => {
+    getTaskDetail.mockResolvedValueOnce({ data: taskFixture(31, {
+      taskStatus: 'in_progress',
+      allowedActions: ['task.edit', 'task.assign', 'version.add']
+    }) })
+
+    const { wrapper } = await mountDetail()
+
+    expect(wrapper.text()).toContain('制作中')
+    expect(wrapper.findAll('button').map(button => button.text())).not.toContain('编辑任务')
+    wrapper.unmount()
+  })
+
+  it('镜头任务开始后处于目录准备中，并给出与 preparing 一致的提示', async () => {
+    startTask.mockResolvedValueOnce({ data: taskFixture(31, {
+      taskStatus: 'preparing',
+      lockVersion: 3,
+      allowedActions: ['task.assign']
+    }) })
+    const messageSpy = vi.spyOn(ElMessage, 'success').mockImplementation(() => undefined)
+    const { wrapper } = await mountDetail()
+
+    await wrapper.findAll('button').find(button => button.text().includes('开始任务')).trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('目录准备中')
+    expect(wrapper.findAll('button').map(button => button.text())).not.toContain('编辑任务')
+    expect(messageSpy).toHaveBeenCalledWith('任务已开始，正在创建镜头目录')
+    messageSpy.mockRestore()
+    wrapper.unmount()
   })
 
   it('任务详情的状态、优先级、类型、生命周期和版本标记使用 ElTag', async () => {

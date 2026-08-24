@@ -45,6 +45,7 @@ MAX_TASK_NAME_LENGTH = 240
 MAX_ASSET_NAME_LENGTH = 200
 MAX_PRODUCTION_ITEM_LENGTH = 240
 MAX_STORAGE_DIR_LENGTH = 240
+EDITABLE_ASSET_ITEM_TASK_STATUSES = frozenset({None, 'not_started'})
 
 
 class ShotGridAssetCrudService:
@@ -491,6 +492,13 @@ class ShotGridAssetCrudService:
             if item.lifecycle_status != 'active':
                 raise shot_grid_error(409, 'SG_INVALID_STATE_TRANSITION', '归档制作分项只允许读取')
             cls._require_lock_version(item.lock_version, command.lock_version)
+            existing_task = await cls._get_item_task_for_update(db, project_id, asset_item_id)
+            if existing_task is not None and existing_task.task_status not in EDITABLE_ASSET_ITEM_TASK_STATUSES:
+                raise shot_grid_error(
+                    409,
+                    'SG_ASSET_ITEM_PRODUCTION_STARTED',
+                    '制作任务已经开始，不能再编辑制作分项',
+                )
             production_item, production_item_key, description, sort_order, remark = await cls._resolve_item_update(
                 db,
                 project_id=project_id,
@@ -499,7 +507,6 @@ class ShotGridAssetCrudService:
                 command=command,
             )
 
-            existing_task = await cls._validate_item_task_update(db, project_id, asset_item_id, command)
             if existing_task is not None:
                 require_asset_production_item(production_item, action='保存已分配任务')
 
@@ -519,21 +526,6 @@ class ShotGridAssetCrudService:
                 existing_task.update_by = actor_name
                 existing_task.update_time = now
                 existing_task.lock_version += 1
-            if (
-                existing_task is None
-                and 'assignee_user_id' in command.model_fields_set
-                and command.assignee_user_id is not None
-            ):
-                await cls._create_task(
-                    db,
-                    project_id=project_id,
-                    asset=asset,
-                    item=item,
-                    assignee_user_id=command.assignee_user_id,
-                    requirements=command.task_description,
-                    actor_name=actor_name,
-                    now=now,
-                )
             await db.flush()
             await cls._audit(
                 db,
@@ -674,8 +666,7 @@ class ShotGridAssetCrudService:
         )
         active_statuses = [item.asset_status for item in items if item.lifecycle_status == 'active']
         has_archive_blockers = bool(usage_count) or any(
-            item.latest_version is not None
-            or (item.task is not None and item.task.task_status != 'not_started')
+            item.latest_version is not None or (item.task is not None and item.task.task_status != 'not_started')
             for item in items
             if item.lifecycle_status == 'active'
         )
@@ -700,11 +691,8 @@ class ShotGridAssetCrudService:
                 storage_status=storage_status,
                 lifecycle_status=asset.lifecycle_status,
                 has_archive_blockers=has_archive_blockers,
-                can_assign_items=bool(active_statuses) and all(
-                    'task.assign' in item.allowed_actions
-                    for item in items
-                    if item.lifecycle_status == 'active'
-                ),
+                can_assign_items=bool(active_statuses)
+                and all('task.assign' in item.allowed_actions for item in items if item.lifecycle_status == 'active'),
             ),
             directoryStatus=cls._directory_status(operation.get(asset.asset_id)),
             storageDirName=asset.storage_dir_name,
@@ -923,10 +911,7 @@ class ShotGridAssetCrudService:
         actions: list[str] = []
         if cls._has_permission(current_user, 'shotgrid:asset:edit'):
             actions.append('asset.edit')
-        if (
-            not has_archive_blockers
-            and cls._has_permission(current_user, 'shotgrid:asset:archive')
-        ):
+        if not has_archive_blockers and cls._has_permission(current_user, 'shotgrid:asset:archive'):
             actions.append('asset.archive')
         if cls._has_permission(current_user, 'shotgrid:asset:add'):
             actions.append('assetItem.add')
@@ -935,7 +920,7 @@ class ShotGridAssetCrudService:
         return actions
 
     @classmethod
-    def _item_allowed_actions(
+    def _item_allowed_actions(  # noqa: PLR0913
         cls,
         current_user: CurrentUserModel,
         access: ShotGridProjectAccessModel,
@@ -964,7 +949,11 @@ class ShotGridAssetCrudService:
             return []
 
         actions: list[str] = []
-        if not has_versions and cls._has_permission(current_user, 'shotgrid:asset:edit'):
+        if (
+            not has_versions
+            and task_status in EDITABLE_ASSET_ITEM_TASK_STATUSES
+            and cls._has_permission(current_user, 'shotgrid:asset:edit')
+        ):
             actions.append('assetItem.edit')
         if task_status not in ACTIVE_TASK_STATUSES and cls._has_permission(
             current_user,
@@ -1127,8 +1116,6 @@ class ShotGridAssetCrudService:
                 raise shot_grid_error(409, 'SG_ASSET_PRODUCTION_ITEM_CONFLICT', '同一资产内制作分项名称重复')
             if production_item_key:
                 named_keys.add(production_item_key)
-            if item.task_description and item.assignee_user_id is None:
-                raise shot_grid_error(422, 'SG_TASK_ASSIGNEE_INVALID', '创建任务要求时必须提供唯一主制作人')
             result.append((item, production_item, production_item_key))
         return result
 
@@ -1164,92 +1151,21 @@ class ShotGridAssetCrudService:
                 del_flag='0',
             ),
         )
-        if command.assignee_user_id is not None:
-            await cls._create_task(
-                db,
-                project_id=project_id,
-                asset=asset,
-                item=item,
-                assignee_user_id=command.assignee_user_id,
-                requirements=command.task_description,
-                actor_name=actor_name,
-                now=now,
-            )
         return item
 
     @classmethod
-    async def _create_task(
-        cls,
-        db: AsyncSession,
-        *,
-        project_id: int,
-        asset: ShotGridAsset,
-        item: ShotGridAssetItem,
-        assignee_user_id: int,
-        requirements: str | None,
-        actor_name: str,
-        now: datetime,
-    ) -> None:
-        member = await ShotGridAssetCrudDao.get_assignable_member(db, project_id, assignee_user_id)
-        if member is None:
-            raise shot_grid_error(422, 'SG_TASK_ASSIGNEE_INVALID', '制作人不是有效的项目成员')
-        if not member['producer_code']:
-            raise shot_grid_error(422, 'SG_PRODUCER_CODE_REQUIRED', '制作人尚未设置用户昵称')
-        require_asset_production_item(item.production_item, action='创建并分配任务')
-        task_suffix = item.production_item
-        await ShotGridAssetCrudDao.add_task(
-            db,
-            ShotGridTask(
-                project_id=project_id,
-                asset_item_id=item.asset_item_id,
-                task_name=f'{asset.asset_name} - {task_suffix}'[:MAX_TASK_NAME_LENGTH],
-                task_kind='asset_image',
-                assignee_user_id=assignee_user_id,
-                task_status='not_started',
-                priority='normal',
-                requirements=requirements,
-                create_by=actor_name,
-                create_time=now,
-                update_by=actor_name,
-                update_time=now,
-                lock_version=0,
-                del_flag='0',
-            ),
-        )
-
-    @classmethod
-    async def _validate_item_task_update(
+    async def _get_item_task_for_update(
         cls,
         db: AsyncSession,
         project_id: int,
         asset_item_id: int,
-        command: ShotGridAssetItemUpdateModel,
     ) -> ShotGridTask | None:
-        existing_task = await ShotGridAssetCrudDao.get_task_for_item(
+        return await ShotGridAssetCrudDao.get_task_for_item(
             db,
             project_id,
             asset_item_id,
             for_update=True,
         )
-        if existing_task is not None:
-            if (
-                'assignee_user_id' in command.model_fields_set
-                and command.assignee_user_id != existing_task.assignee_user_id
-            ):
-                raise shot_grid_error(409, 'SG_TASK_ALREADY_EXISTS', '已有任务不能通过制作分项编辑接口改派')
-            if (
-                'task_description' in command.model_fields_set
-                and command.task_description != existing_task.requirements
-            ):
-                raise shot_grid_error(409, 'SG_INVALID_STATE_TRANSITION', '任务要求请通过任务编辑接口修改')
-        if (
-            existing_task is None
-            and 'task_description' in command.model_fields_set
-            and command.task_description
-            and command.assignee_user_id is None
-        ):
-            raise shot_grid_error(422, 'SG_TASK_ASSIGNEE_INVALID', '创建任务要求时必须提供唯一主制作人')
-        return existing_task
 
     @staticmethod
     def _item_status(task: ShotGridTaskSummaryModel | None, has_final_version: bool) -> str:

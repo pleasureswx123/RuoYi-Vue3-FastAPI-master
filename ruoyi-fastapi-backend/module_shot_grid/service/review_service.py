@@ -18,6 +18,7 @@ from module_shot_grid.entity.do.review_do import (
     ShotGridIssueVerification,
     ShotGridNote,
     ShotGridReviewAction,
+    ShotGridReviewIssueDraft,
     ShotGridReviewList,
     ShotGridReviewListVersion,
 )
@@ -27,6 +28,8 @@ from module_shot_grid.entity.vo.review_vo import (
     ShotGridAutoReviewListSummaryModel,
     ShotGridCarriedIssueModel,
     ShotGridIssueDetailModel,
+    ShotGridIssueDraftModel,
+    ShotGridIssueDraftUpdateModel,
     ShotGridIssueResponseModel,
     ShotGridIssueVerificationModel,
     ShotGridManualReviewListCreateModel,
@@ -43,11 +46,14 @@ from module_shot_grid.entity.vo.review_vo import (
     ShotGridReviewListItemModel,
     ShotGridReviewListQueryModel,
     ShotGridReviewVersionSummaryModel,
+    ShotGridVersionAssetProductionModel,
     ShotGridVersionDetailModel,
     ShotGridVersionFileModel,
     ShotGridVersionListItemModel,
     ShotGridVersionListQueryModel,
+    ShotGridVersionProductionTargetModel,
 )
+from module_shot_grid.entity.vo.task_vo import ShotGridTaskShotProductionModel
 from module_shot_grid.exceptions import ShotGridDomainException, shot_grid_error
 from module_shot_grid.service.project_access_service import ShotGridProjectAccessService
 from module_shot_grid.service.project_service import ShotGridProjectService
@@ -131,6 +137,7 @@ class ShotGridReviewService:
         values['ai_params'] = (
             row.get('ai_params') if access.has_all_scope or access.project_role == 'director' else None
         )
+        values['production_target'] = cls._version_production_target(row)
         values['files'] = [
             ShotGridVersionFileModel.model_validate(
                 {
@@ -145,6 +152,41 @@ class ShotGridReviewService:
             ShotGridAutoReviewListSummaryModel.model_validate(summary) if summary is not None else None
         )
         return ShotGridVersionDetailModel.model_validate(values)
+
+    @staticmethod
+    def _version_production_target(row: dict[str, Any]) -> ShotGridVersionProductionTargetModel:
+        if row['task_kind'] == 'shot_video':
+            return ShotGridVersionProductionTargetModel(
+                targetType='shot',
+                requirements=row.get('task_requirements'),
+                shot=ShotGridTaskShotProductionModel(
+                    durationMs=int(row.get('shot_duration_ms') or 0),
+                    description=row.get('shot_description'),
+                    shotSize=row.get('shot_size'),
+                    cameraPosition=row.get('camera_position'),
+                    cameraMovement=row.get('camera_movement'),
+                    focalLength=row.get('focal_length'),
+                    dialogue=row.get('dialogue'),
+                    soundEffect=row.get('sound_effect'),
+                    colorReference=row.get('color_reference'),
+                    remark=row.get('shot_remark'),
+                ),
+            )
+        return ShotGridVersionProductionTargetModel(
+            targetType='asset_item',
+            requirements=row.get('task_requirements'),
+            asset=ShotGridVersionAssetProductionModel(
+                assetId=row['asset_id'],
+                assetItemId=row['asset_item_id'],
+                assetType=row['asset_type'],
+                assetName=row['asset_name'],
+                assetDescription=row.get('asset_description'),
+                assetRemark=row.get('asset_remark'),
+                productionItem=row.get('production_item'),
+                itemDescription=row.get('asset_item_description'),
+                itemRemark=row.get('asset_item_remark'),
+            ),
+        )
 
     @classmethod
     async def get_auto_review_lists(
@@ -560,23 +602,35 @@ class ShotGridReviewService:
             ),
             carriedIssues=carried,
             currentVersionIssues=current,
+            currentVersionDrafts=[
+                ShotGridIssueDraftModel.model_validate(row)
+                for row in await ShotGridReviewDao.get_issue_drafts(
+                    db,
+                    project_id=int(context['project_id']),
+                    version_id=version_id,
+                )
+            ],
         )
 
     @classmethod
-    async def add_issue(
+    async def add_issue_draft(
         cls,
         db: AsyncSession,
         version_id: int,
         command: ShotGridNoteCreateModel,
         current_user: CurrentUserModel,
-    ) -> ShotGridIssueDetailModel:
-        user_id, actor_name, actor_display_name, dept_name = cls._actor(current_user)
+    ) -> ShotGridIssueDraftModel:
+        user_id, actor_name, _, dept_name = cls._actor(current_user)
         context, access = await cls._resolve_version_access(db, version_id, current_user)
         try:
             project_id, task, version, access = await cls._lock_version_graph(db, context, current_user, access)
             cls._require_director(access)
             if version.version_status != 'pending_review' or task.task_status != 'pending_review':
-                raise cls._invalid_transition('只有当前待审核版本可以新增审核意见')
+                raise cls._invalid_transition('只有当前待审核版本可以记录问题草稿')
+            review_list = await ShotGridReviewDao.get_auto_review_list_for_update(db, project_id, version_id)
+            if review_list is None or review_list.review_status != 'active':
+                raise cls._auto_review_integrity_error()
+            await cls._ensure_auto_review_relation(db, int(review_list.review_list_id), version_id)
             locked_context = await ShotGridReviewDao.get_version_context(db, version_id)
             if (
                 locked_context is None
@@ -585,10 +639,11 @@ class ShotGridReviewService:
             ):
                 raise shot_grid_error(404, 'SG_VERSION_NOT_FOUND', '版本不存在或不可见')
             cls._validate_note_media(locked_context, command)
-            note = await ShotGridReviewDao.add_note(
+            draft = await ShotGridReviewDao.add_issue_draft(
                 db,
-                ShotGridNote(
+                ShotGridReviewIssueDraft(
                     project_id=project_id,
+                    review_list_id=review_list.review_list_id,
                     version_id=version_id,
                     reviewer_user_id=user_id,
                     content=command.content,
@@ -598,42 +653,158 @@ class ShotGridReviewService:
                         if command.annotations is not None
                         else None
                     ),
-                    note_status='open',
-                    resolved_in_version_id=None,
+                    lock_version=0,
                 ),
             )
-            result = ShotGridIssueDetailModel(
-                issueId=note.note_id,
+            result = ShotGridIssueDraftModel(
+                draftId=draft.draft_id,
                 projectId=project_id,
-                originVersionId=version_id,
-                originVersionNumber=f'V{int(version.version_no):03d}',
+                reviewListId=review_list.review_list_id,
+                versionId=version_id,
                 reviewerUserId=user_id,
-                reviewerName=actor_display_name,
-                content=note.content,
-                mediaTimeMs=note.media_time_ms,
-                annotations=note.annotations,
-                status=note.note_status,
-                resolvedInVersionId=None,
-                resolvedInVersionNumber=None,
-                pendingVersionId=version_id,
-                pendingVersionNumber=f'V{int(version.version_no):03d}',
-                createTime=note.create_time,
-                updateTime=note.update_time,
-                responses=[],
-                verifications=[],
+                reviewerName=actor_name,
+                content=draft.content,
+                mediaTimeMs=draft.media_time_ms,
+                annotations=draft.annotations,
+                lockVersion=draft.lock_version,
+                createTime=draft.create_time,
+                updateTime=draft.update_time,
             )
             await cls._audit(
                 db,
                 actor_name=actor_name,
                 dept_name=dept_name,
                 business_type=BusinessType.INSERT.value,
-                method='add_issue',
+                method='add_issue_draft',
                 oper_url=f'/shot-grid/versions/{version_id}/issues',
                 payload={'versionId': version_id, 'hasAnnotations': command.annotations is not None},
-                result={'issueId': note.note_id},
+                result={'draftId': draft.draft_id},
             )
             await db.commit()
             return result
+        except ShotGridDomainException:
+            await db.rollback()
+            raise
+        except Exception:
+            await db.rollback()
+            raise
+
+    @classmethod
+    async def update_issue_draft(
+        cls,
+        db: AsyncSession,
+        version_id: int,
+        draft_id: int,
+        command: ShotGridIssueDraftUpdateModel,
+        current_user: CurrentUserModel,
+    ) -> ShotGridIssueDraftModel:
+        user_id, actor_name, _, dept_name = cls._actor(current_user)
+        context, access = await cls._resolve_version_access(db, version_id, current_user)
+        try:
+            project_id, task, version, access = await cls._lock_version_graph(db, context, current_user, access)
+            cls._require_director(access)
+            if version.version_status != 'pending_review' or task.task_status != 'pending_review':
+                raise cls._invalid_transition('审核已结束，不能修改问题草稿')
+            review_list = await ShotGridReviewDao.get_auto_review_list_for_update(db, project_id, version_id)
+            if review_list is None or review_list.review_status != 'active':
+                raise cls._auto_review_integrity_error()
+            draft = await ShotGridReviewDao.get_issue_draft_for_update(
+                db,
+                project_id=project_id,
+                review_list_id=int(review_list.review_list_id),
+                version_id=version_id,
+                draft_id=draft_id,
+            )
+            if draft is None:
+                raise shot_grid_error(404, 'SG_REVIEW_ISSUE_DRAFT_NOT_FOUND', '问题草稿不存在或已发布')
+            cls._ensure_lock_version(draft.lock_version, command.lock_version)
+            locked_context = await ShotGridReviewDao.get_version_context(db, version_id)
+            if locked_context is None:
+                raise shot_grid_error(404, 'SG_VERSION_NOT_FOUND', '版本不存在或不可见')
+            cls._validate_note_media(locked_context, command)
+            draft.content = command.content
+            draft.media_time_ms = command.media_time_ms
+            draft.annotations = (
+                command.annotations.model_dump(mode='json', by_alias=True)
+                if command.annotations is not None
+                else None
+            )
+            draft.lock_version += 1
+            draft.update_time = datetime.now()
+            await db.flush()
+            await cls._audit(
+                db,
+                actor_name=actor_name,
+                dept_name=dept_name,
+                business_type=BusinessType.UPDATE.value,
+                method='update_issue_draft',
+                oper_url=f'/shot-grid/versions/{version_id}/issue-drafts/{draft_id}',
+                payload={'versionId': version_id, 'draftId': draft_id, 'lockVersion': command.lock_version},
+                result={'draftId': draft_id, 'lockVersion': draft.lock_version},
+            )
+            await db.commit()
+            return ShotGridIssueDraftModel(
+                draftId=draft.draft_id,
+                projectId=draft.project_id,
+                reviewListId=draft.review_list_id,
+                versionId=draft.version_id,
+                reviewerUserId=draft.reviewer_user_id,
+                reviewerName=(actor_name if int(draft.reviewer_user_id) == user_id else None),
+                content=draft.content,
+                mediaTimeMs=draft.media_time_ms,
+                annotations=draft.annotations,
+                lockVersion=draft.lock_version,
+                createTime=draft.create_time,
+                updateTime=draft.update_time,
+            )
+        except ShotGridDomainException:
+            await db.rollback()
+            raise
+        except Exception:
+            await db.rollback()
+            raise
+
+    @classmethod
+    async def delete_issue_draft(
+        cls,
+        db: AsyncSession,
+        version_id: int,
+        draft_id: int,
+        command: ShotGridLockVersionModel,
+        current_user: CurrentUserModel,
+    ) -> None:
+        _, actor_name, _, dept_name = cls._actor(current_user)
+        context, access = await cls._resolve_version_access(db, version_id, current_user)
+        try:
+            project_id, task, version, access = await cls._lock_version_graph(db, context, current_user, access)
+            cls._require_director(access)
+            if version.version_status != 'pending_review' or task.task_status != 'pending_review':
+                raise cls._invalid_transition('审核已结束，不能删除问题草稿')
+            review_list = await ShotGridReviewDao.get_auto_review_list_for_update(db, project_id, version_id)
+            if review_list is None or review_list.review_status != 'active':
+                raise cls._auto_review_integrity_error()
+            draft = await ShotGridReviewDao.get_issue_draft_for_update(
+                db,
+                project_id=project_id,
+                review_list_id=int(review_list.review_list_id),
+                version_id=version_id,
+                draft_id=draft_id,
+            )
+            if draft is None:
+                raise shot_grid_error(404, 'SG_REVIEW_ISSUE_DRAFT_NOT_FOUND', '问题草稿不存在或已发布')
+            cls._ensure_lock_version(draft.lock_version, command.lock_version)
+            await ShotGridReviewDao.delete_issue_draft(db, draft)
+            await cls._audit(
+                db,
+                actor_name=actor_name,
+                dept_name=dept_name,
+                business_type=BusinessType.DELETE.value,
+                method='delete_issue_draft',
+                oper_url=f'/shot-grid/versions/{version_id}/issue-drafts/{draft_id}',
+                payload={'versionId': version_id, 'draftId': draft_id, 'lockVersion': command.lock_version},
+                result={'draftId': draft_id, 'deleted': True},
+            )
+            await db.commit()
         except ShotGridDomainException:
             await db.rollback()
             raise
@@ -673,7 +844,7 @@ class ShotGridReviewService:
         idempotency_key: str | None,
         current_user: CurrentUserModel,
     ) -> ShotGridReviewActionResultModel:
-        user_id, actor_name, actor_display_name, dept_name = cls._actor(current_user)
+        user_id, actor_name, _, dept_name = cls._actor(current_user)
         stable_key = cls._normalize_idempotency_key(idempotency_key)
         request_hash = cls._review_action_request_hash(command)
         context, access = await cls._resolve_version_access(db, version_id, current_user)
@@ -688,7 +859,7 @@ class ShotGridReviewService:
             )
             if existing is not None:
                 return await cls._replay_review_action(db, existing, request_hash)
-            review_list, to_status, carried_issues = await cls._validate_review_action_state(
+            review_list, to_status, carried_issues, issue_drafts = await cls._validate_review_action_state(
                 db,
                 task=task,
                 version=version,
@@ -722,6 +893,11 @@ class ShotGridReviewService:
                     db, int(task.task_id)
                 ):
                     raise shot_grid_error(409, 'SG_REVIEW_ISSUES_OPEN', '任务仍有未关闭问题，不能确认通过')
+            published_draft_count = await cls._publish_review_drafts_if_rejected(
+                db,
+                command.action_type,
+                issue_drafts,
+            )
             from_status = str(version.version_status)
             cls._apply_review_action_transition(task, version, review_list, command, to_status, actor_name)
             action = await ShotGridReviewDao.add_review_action(
@@ -746,7 +922,7 @@ class ShotGridReviewService:
                 review_list=review_list,
                 project_id=project_id,
                 reviewer_user_id=user_id,
-                reviewer_name=actor_display_name,
+                reviewer_name=actor_name,
             )
             action.result_snapshot = result.model_dump(mode='json')
             await cls._audit(
@@ -761,6 +937,7 @@ class ShotGridReviewService:
                     'actionId': action.action_id,
                     'versionStatus': to_status,
                     'taskStatus': task.task_status,
+                    'publishedDraftCount': published_draft_count,
                 },
             )
             await db.commit()
@@ -792,6 +969,16 @@ class ShotGridReviewService:
             raise
 
     @staticmethod
+    async def _publish_review_drafts_if_rejected(
+        db: AsyncSession,
+        action_type: str,
+        issue_drafts: list[ShotGridReviewIssueDraft],
+    ) -> int:
+        if action_type != 'reject':
+            return 0
+        return len(await ShotGridReviewDao.publish_issue_drafts(db, issue_drafts))
+
+    @staticmethod
     async def _replay_review_action(
         db: AsyncSession,
         existing: ShotGridReviewAction,
@@ -817,7 +1004,7 @@ class ShotGridReviewService:
         version_id: int,
         project_id: int,
         command: ShotGridReviewActionCreateModel,
-    ) -> tuple[Any, str, list[ShotGridNote]]:
+    ) -> tuple[Any, str, list[ShotGridNote], list[ShotGridReviewIssueDraft]]:
         cls._ensure_lock_version(version.lock_version, command.lock_version)
         if version.version_status != 'pending_review' or task.task_status != 'pending_review':
             raise cls._invalid_transition('版本或任务已不处于待审核状态')
@@ -838,6 +1025,12 @@ class ShotGridReviewService:
         current_version_issues = await ShotGridReviewDao.get_current_version_open_issues_for_update(
             db,
             project_id=project_id,
+            version_id=version_id,
+        )
+        issue_drafts = await ShotGridReviewDao.get_issue_drafts_for_update(
+            db,
+            project_id=project_id,
+            review_list_id=int(review_list.review_list_id),
             version_id=version_id,
         )
         expected_issue_ids = {int(issue.note_id) for issue in carried_issues}
@@ -869,21 +1062,27 @@ class ShotGridReviewService:
                     'SG_REVIEW_ISSUES_NOT_RESOLVED',
                     '确认通过前必须将全部带入问题标记为已修复',
                 )
+            if issue_drafts:
+                raise shot_grid_error(
+                    409,
+                    'SG_REVIEW_DRAFTS_EXIST',
+                    '当前仍有未发布的问题草稿，请删除草稿或退回修改',
+                )
             if current_version_issues:
                 raise shot_grid_error(409, 'SG_REVIEW_ISSUES_OPEN', '当前版本仍有新问题，不能确认通过')
             if await ShotGridReviewDao.has_other_final_version(db, task.task_id, version_id):
                 raise shot_grid_error(409, 'SG_FINAL_VERSION_CONFLICT', '任务已经存在最终版本')
-            return review_list, 'final', carried_issues
+            return review_list, 'final', carried_issues, issue_drafts
         if command.action_type == 'reject':
             has_still_present = any(item.result == 'still_present' for item in command.issue_verifications)
-            if not has_still_present and not current_version_issues:
+            if not has_still_present and not current_version_issues and not issue_drafts:
                 raise shot_grid_error(
                     422,
                     'SG_REVIEW_REJECT_ISSUE_REQUIRED',
                     '退回修改必须至少存在一条仍未修复问题或当前版本新问题',
                 )
-            return review_list, 'rejected', carried_issues
-        return review_list, 'pending_review', carried_issues
+            return review_list, 'rejected', carried_issues, issue_drafts
+        return review_list, 'pending_review', carried_issues, issue_drafts
 
     @staticmethod
     def _apply_review_action_transition(
@@ -1045,15 +1244,11 @@ class ShotGridReviewService:
 
     @staticmethod
     def _validate_note_media(context: dict[str, Any], command: ShotGridNoteCreateModel) -> None:
-        if context['task_kind'] == 'asset_image':
-            if command.media_time_ms is not None:
-                raise shot_grid_error(422, 'SG_NOTE_MEDIA_TIME_INVALID', '资产图片审核意见不能包含媒体时间点')
-            return
-        if command.media_time_ms is None:
-            return
-        duration_ms = int(context.get('shot_duration_ms') or 0)
-        if command.media_time_ms > duration_ms:
-            raise shot_grid_error(422, 'SG_NOTE_MEDIA_TIME_INVALID', '媒体时间点超过镜头时长')
+        if context['task_kind'] == 'asset_image' and command.media_time_ms is not None:
+            raise shot_grid_error(422, 'SG_NOTE_MEDIA_TIME_INVALID', '资产图片审核意见不能包含媒体时间点')
+
+        # 视频审核时间点属于当前提交的媒体文件；shot_duration_ms 是前期计划时长，
+        # 不能用来限制实际成片。非负值与字段上限由 ShotGridNoteCreateModel 统一校验。
 
     @staticmethod
     def _version_list_values(row: dict[str, Any]) -> dict[str, Any]:

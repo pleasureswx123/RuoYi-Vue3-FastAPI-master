@@ -108,6 +108,7 @@ async def test_preflight_route_returns_stable_ready_contract(monkeypatch: pytest
         taskKind='shot_video',
         taskStatus='in_progress',
         fileExtension='mov',
+        openIssueSnapshotHash='0' * 64,
     )
     preflight = AsyncMock(return_value=result)
     monkeypatch.setattr(ShotGridVersionSubmissionService, 'preflight_submission', preflight)
@@ -136,6 +137,7 @@ async def test_preflight_route_returns_stable_ready_contract(monkeypatch: pytest
         'taskKind': 'shot_video',
         'taskStatus': 'in_progress',
         'fileExtension': 'mov',
+        'openIssueSnapshotHash': '0' * 64,
         'allowedActions': ['version.add'],
     }
     preflight.assert_awaited_once()

@@ -1,3 +1,4 @@
+from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -8,6 +9,7 @@ from sqlalchemy.schema import CreateTable
 from module_shot_grid.dao.review_dao import ShotGridReviewDao
 from module_shot_grid.entity.do.review_do import (
     ShotGridReviewAction,
+    ShotGridReviewIssueDraft,
     ShotGridReviewList,
     ShotGridReviewListVersion,
 )
@@ -53,3 +55,30 @@ async def test_add_auto_review_list_only_flushes_and_never_commits() -> None:
     assert db.add.call_args_list[1].args == (relation,)
     assert db.flush.await_count == EXPECTED_FLUSH_COUNT
     db.commit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_issue_draft_reviewer_uses_user_name_instead_of_nick_name() -> None:
+    draft = ShotGridReviewIssueDraft(
+        draft_id=9001,
+        project_id=1001,
+        review_list_id=REVIEW_LIST_ID,
+        version_id=8001,
+        reviewer_user_id=1,
+        content='画面需要调整',
+        lock_version=0,
+        create_time=datetime(2026, 8, 21, 17, 44),
+        update_time=datetime(2026, 8, 21, 17, 44),
+    )
+    result = SimpleNamespace(all=Mock(return_value=[(draft, '场景锋')]))
+    db = SimpleNamespace(execute=AsyncMock(return_value=result))
+
+    rows = await ShotGridReviewDao.get_issue_drafts(
+        db,
+        project_id=1001,
+        version_id=8001,
+    )
+
+    statement = str(db.execute.await_args.args[0])
+    assert 'sys_user.user_name AS reviewer_name' in statement
+    assert rows[0]['reviewer_name'] == '场景锋'

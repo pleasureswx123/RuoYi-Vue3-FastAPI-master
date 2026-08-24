@@ -98,10 +98,35 @@ export function getVersionReviewContext(versionId, options = {}) {
   })
 }
 
-export function addVersionIssue(versionId, data, options = {}) {
+export function addVersionIssueDraft(versionId, data, options = {}) {
   return request({
     url: `/shot-grid/versions/${assertPositiveId(versionId, '版本')}/issues`,
     method: 'post',
+    data,
+    headers: { repeatSubmit: false },
+    signal: options.signal,
+    silentError: true
+  })
+}
+
+// 兼容既有调用名称；新代码应使用能表达“退回前草稿”语义的函数名。
+export const addVersionIssue = addVersionIssueDraft
+
+export function updateVersionIssueDraft(versionId, draftId, data, options = {}) {
+  return request({
+    url: `/shot-grid/versions/${assertPositiveId(versionId, '版本')}/issue-drafts/${assertPositiveId(draftId, '问题草稿')}`,
+    method: 'put',
+    data,
+    headers: { repeatSubmit: false },
+    signal: options.signal,
+    silentError: true
+  })
+}
+
+export function deleteVersionIssueDraft(versionId, draftId, data, options = {}) {
+  return request({
+    url: `/shot-grid/versions/${assertPositiveId(versionId, '版本')}/issue-drafts/${assertPositiveId(draftId, '问题草稿')}`,
+    method: 'delete',
     data,
     headers: { repeatSubmit: false },
     signal: options.signal,

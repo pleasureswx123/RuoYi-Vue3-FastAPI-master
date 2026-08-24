@@ -4,6 +4,7 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
+from pydantic import ValidationError
 
 from module_shot_grid.dao.import_batch_dao import ShotGridImportBatchDao
 from module_shot_grid.dao.project_audit_dao import ShotGridProjectAuditDao
@@ -12,7 +13,6 @@ from module_shot_grid.entity.vo.import_common_vo import ImportPreviewTokenPayloa
 from module_shot_grid.entity.vo.shot_import_vo import (
     ShotImportCommitRequestModel,
     ShotImportCommitResultModel,
-    ShotImportNormalizedRowModel,
     ShotImportPreviewRowModel,
     ShotImportSelectedRowModel,
 )
@@ -23,7 +23,6 @@ from module_shot_grid.service.shot_import_service import ShotGridShotImportServi
 CONFLICT_STATUS = 409
 UNPROCESSABLE_STATUS = 422
 IMPORT_BUSINESS_TYPE = 6
-ASSIGNEE_USER_ID = 7
 
 
 def _preview_row(sheet_name: str, row_number: int, *, can_import: bool = True) -> ShotImportPreviewRowModel:
@@ -44,7 +43,7 @@ def _payload(rows: list[ShotImportPreviewRowModel]) -> ImportPreviewTokenPayload
         importType='shot',
         previewedBy=3,
         fileSha256='a' * 64,
-        templateVersion='shot-v1',
+        templateVersion='shot-v2',
         expiresAt='2999-01-01T00:00:00',
         rows=[row.model_dump(mode='json', by_alias=True) for row in rows],
     )
@@ -59,7 +58,6 @@ def _commit_snapshot() -> dict[str, Any]:
         createdScenes=1,
         reusedScenes=0,
         createdShots=1,
-        createdTasks=0,
         createdAssetLinks=0,
         createdAssetRequirements=1,
         createdStorageOperations=2,
@@ -113,42 +111,16 @@ def test_idempotency_lock_id_is_stable_and_scoped() -> None:
     assert -(2**63) <= first < 2**63
 
 
-def test_assignee_override_repairs_only_assignee_errors_and_changes_selection_hash() -> None:
-    row = _preview_row('EP001', 2, can_import=False)
-    row.normalized = ShotImportNormalizedRowModel(
-        episodeNo=1,
-        episodeCode='EP001',
-        sceneNo=1,
-        sceneCode='001',
-        sortOrder=10,
-        shotNo=1,
-        shotCode='S001',
-        durationMs=1000,
-        assigneeUserName='旧制作人',
-        description='建立镜头',
-        assetRequirements=[],
-    )
-    row.errors = [{'errorKey': 'SG_TASK_ASSIGNEE_INVALID', 'fieldName': 'assigneeUserName', 'message': '制作人无效'}]
-    without_override = ShotImportSelectedRowModel(sheetName='EP001', rowNumber=2)
-    with_override = ShotImportSelectedRowModel(sheetName='EP001', rowNumber=2, assigneeUserId=ASSIGNEE_USER_ID)
-    with_unassigned = ShotImportSelectedRowModel(sheetName='EP001', rowNumber=2, assigneeUserId=None)
+def test_selection_rejects_assignment_override_and_hashes_only_row_identity() -> None:
+    first = ShotImportSelectedRowModel(sheetName='EP001', rowNumber=2)
+    second = ShotImportSelectedRowModel(sheetName='EP002', rowNumber=2)
 
-    selected = ShotGridShotImportService._select_rows(_payload([row]), [with_override])
+    with pytest.raises(ValidationError):
+        ShotImportSelectedRowModel(sheetName='EP001', rowNumber=2, assigneeUserId=7)
 
-    assert selected[0].can_import is True
-    assert selected[0].normalized is not None
-    assert selected[0].normalized.assignee_user_id == ASSIGNEE_USER_ID
     assert ShotGridShotImportService._selection_hash_from_request(
-        'a' * 64, [without_override]
-    ) != ShotGridShotImportService._selection_hash_from_request('a' * 64, [with_override])
-    unassigned = ShotGridShotImportService._select_rows(_payload([row]), [with_unassigned])
-    assert unassigned[0].can_import is True
-    assert unassigned[0].normalized is not None
-    assert unassigned[0].normalized.assignee_user_id is None
-    assert unassigned[0].normalized.assignee_user_name is None
-    assert ShotGridShotImportService._selection_hash_from_request(
-        'a' * 64, [without_override]
-    ) != ShotGridShotImportService._selection_hash_from_request('a' * 64, [with_unassigned])
+        'a' * 64, [first, second]
+    ) == ShotGridShotImportService._selection_hash_from_request('a' * 64, [second, first])
 
 
 @pytest.mark.parametrize('file_name', ['bad\x00.xlsx', 'bad\x1f.xlsx'])
@@ -255,10 +227,11 @@ async def test_successful_commit_audits_before_commit_then_deletes_preview_token
     batch = SimpleNamespace(
         batch_id=1,
         batch_status='previewed',
+        valid_rows=1,
         import_type='shot',
         preview_token_hash=ImportPreviewStore.token_hash(token),
         file_sha256='a' * 64,
-        template_version='shot-v1',
+        template_version='shot-v2',
         preview_expires_time=payload.expires_at,
         previewed_by=3,
     )

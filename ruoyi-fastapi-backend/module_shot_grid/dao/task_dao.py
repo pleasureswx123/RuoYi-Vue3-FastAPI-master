@@ -15,7 +15,7 @@ from module_shot_grid.entity.do.project_do import (
     ShotGridScene,
     ShotGridShot,
 )
-from module_shot_grid.entity.do.storage_do import ShotGridProjectStorage
+from module_shot_grid.entity.do.storage_do import ShotGridProjectStorage, ShotGridStorageOperation
 from module_shot_grid.entity.do.task_do import ShotGridTask
 from module_shot_grid.entity.do.version_do import ShotGridVersion, ShotGridVersionSubmission
 from module_shot_grid.entity.vo.task_vo import (
@@ -112,6 +112,7 @@ class ShotGridTaskDao:
                 ShotGridProject.project_code,
                 ShotGridProject.project_name,
                 ShotGridProject.project_status,
+                assignee.user_name.label('assignee_user_name'),
                 assignee.nick_name.label('assignee_nick_name'),
                 func.upper(assignee.nick_name).label('assignee_producer_code'),
                 assignee_member.member_status.label('assignee_member_status'),
@@ -122,7 +123,16 @@ class ShotGridTaskDao:
                 ShotGridScene.scene_name,
                 ShotGridShot.shot_no,
                 ShotGridShot.storage_dir_name.label('shot_storage_dir_name'),
+                ShotGridShot.duration_ms.label('shot_duration_ms'),
                 ShotGridShot.description.label('shot_description'),
+                ShotGridShot.shot_size.label('shot_size'),
+                ShotGridShot.camera_position.label('shot_camera_position'),
+                ShotGridShot.camera_movement.label('shot_camera_movement'),
+                ShotGridShot.focal_length.label('shot_focal_length'),
+                ShotGridShot.dialogue.label('shot_dialogue'),
+                ShotGridShot.sound_effect.label('shot_sound_effect'),
+                ShotGridShot.color_reference.label('shot_color_reference'),
+                ShotGridShot.remark.label('shot_remark'),
                 ShotGridShot.lifecycle_status.label('shot_lifecycle_status'),
                 ShotGridAssetItem.asset_id,
                 ShotGridAssetItem.production_item,
@@ -417,6 +427,43 @@ class ShotGridTaskDao:
             )
         ).one_or_none()
         return None if row is None else (row[0], row[1], row[2])
+
+    @staticmethod
+    async def get_latest_shot_directory_operation_status(
+        db: AsyncSession,
+        project_id: int,
+        shot_id: int,
+    ) -> str | None:
+        return await db.scalar(
+            select(ShotGridStorageOperation.operation_status)
+            .where(
+                ShotGridStorageOperation.project_id == project_id,
+                ShotGridStorageOperation.aggregate_type == 'shot',
+                ShotGridStorageOperation.aggregate_id == shot_id,
+            )
+            .order_by(ShotGridStorageOperation.operation_id.desc())
+            .limit(1)
+        )
+
+    @staticmethod
+    async def get_latest_succeeded_shot_directory_operation_actor(
+        db: AsyncSession,
+        project_id: int,
+        shot_id: int,
+    ) -> str | None:
+        """回溯成功目录操作的业务发起人，用于治理历史 Worker 审计脏值。"""
+        return await db.scalar(
+            select(ShotGridStorageOperation.create_by)
+            .where(
+                ShotGridStorageOperation.project_id == project_id,
+                ShotGridStorageOperation.operation_type == 'ensure_shot_directory',
+                ShotGridStorageOperation.aggregate_type == 'shot',
+                ShotGridStorageOperation.aggregate_id == shot_id,
+                ShotGridStorageOperation.operation_status == 'succeeded',
+            )
+            .order_by(ShotGridStorageOperation.operation_id.desc())
+            .limit(1)
+        )
 
     @staticmethod
     async def get_asset_item_project_context(

@@ -24,6 +24,13 @@
   --sg-accent-soft: rgba(200, 105, 15, 0.11);
   --sg-danger: #c63f45;
   --sg-success: #247a54;
+  --sg-shot-status-unassigned: #a95305;
+  --sg-shot-status-not-started: #687385;
+  --sg-shot-status-preparing: #087a8c;
+  --sg-shot-status-in-progress: #246cc0;
+  --sg-shot-status-reviewing: #6f4db0;
+  --sg-shot-status-revision: var(--sg-danger);
+  --sg-shot-status-completed: var(--sg-success);
   --sg-shadow: 0 18px 48px rgba(35, 45, 57, 0.12);
   --sg-header-bg: rgba(255, 255, 255, 0.86);
   --sg-sidebar-bg: rgba(250, 251, 252, 0.94);
@@ -78,6 +85,13 @@ html.dark {
   --sg-accent-soft: rgba(255, 182, 87, 0.12);
   --sg-danger: #ff6b6b;
   --sg-success: #62d49b;
+  --sg-shot-status-unassigned: #ffb657;
+  --sg-shot-status-not-started: #a6adb8;
+  --sg-shot-status-preparing: #3ec9d6;
+  --sg-shot-status-in-progress: #68b5ff;
+  --sg-shot-status-reviewing: #b19aff;
+  --sg-shot-status-revision: var(--sg-danger);
+  --sg-shot-status-completed: var(--sg-success);
   --sg-shadow: 0 18px 50px rgba(0, 0, 0, 0.28);
   --sg-header-bg: rgba(9, 11, 15, 0.82);
   --sg-sidebar-bg: rgba(13, 16, 21, 0.94);
@@ -169,6 +183,30 @@ html.sg-theme-transitioning *::after {
 .el-table .el-table__fixed-right-patch {
   background: var(--el-table-header-bg-color);
 }
+
+.shot-status-tag.el-tag,
+.asset-status-tag.el-tag {
+  --sg-shot-status-color: var(--sg-text-muted);
+  --el-tag-bg-color: color-mix(in srgb, var(--sg-shot-status-color) 12%, transparent);
+  --el-tag-border-color: color-mix(in srgb, var(--sg-shot-status-color) 38%, transparent);
+  --el-tag-text-color: var(--sg-shot-status-color);
+  font-weight: 650;
+}
+
+.shot-status-tag--unassigned.el-tag,
+.asset-status-tag--unassigned.el-tag { --sg-shot-status-color: var(--sg-shot-status-unassigned); }
+.shot-status-tag--not_started.el-tag,
+.asset-status-tag--not_started.el-tag { --sg-shot-status-color: var(--sg-shot-status-not-started); }
+.shot-status-tag--preparing.el-tag,
+.asset-status-tag--preparing.el-tag { --sg-shot-status-color: var(--sg-shot-status-preparing); }
+.shot-status-tag--in_progress.el-tag,
+.asset-status-tag--in_progress.el-tag { --sg-shot-status-color: var(--sg-shot-status-in-progress); }
+.shot-status-tag--reviewing.el-tag,
+.asset-status-tag--reviewing.el-tag { --sg-shot-status-color: var(--sg-shot-status-reviewing); }
+.shot-status-tag--revision.el-tag,
+.asset-status-tag--revision.el-tag { --sg-shot-status-color: var(--sg-shot-status-revision); }
+.shot-status-tag--completed.el-tag,
+.asset-status-tag--completed.el-tag { --sg-shot-status-color: var(--sg-shot-status-completed); }
 
 .sg-detail-drawer-mask {
   --el-overlay-color-lighter: var(--sg-detail-drawer-mask);

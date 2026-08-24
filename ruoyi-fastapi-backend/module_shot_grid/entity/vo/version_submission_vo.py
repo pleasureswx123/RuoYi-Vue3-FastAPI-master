@@ -130,7 +130,7 @@ class ShotGridVersionSubmissionAcceptedModel(ShotGridApiModel):
     reserved_version_number: str
     business_file_name: str
     status_url: str
-    task_status: Literal['not_started', 'in_progress', 'revision', 'pending_review', 'completed']
+    task_status: Literal['not_started', 'preparing', 'in_progress', 'revision', 'pending_review', 'completed']
     replayed: bool = False
 
 
@@ -159,7 +159,7 @@ class ShotGridVersionSubmissionStatusModel(ShotGridApiModel):
     version_id: int | None = None
     review_list_id: int | None = None
     version_status: Literal['pending_review', 'rejected', 'final'] | None = None
-    task_status: Literal['not_started', 'in_progress', 'pending_review', 'revision', 'completed']
+    task_status: Literal['not_started', 'preparing', 'in_progress', 'pending_review', 'revision', 'completed']
     create_time: datetime
     update_time: datetime
 

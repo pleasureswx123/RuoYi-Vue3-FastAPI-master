@@ -6,6 +6,7 @@ import unicodedata
 import uuid
 from dataclasses import dataclass
 from pathlib import Path, PureWindowsPath
+from typing import Any
 
 from module_shot_grid.service.project_path_service import ShotGridProjectPathService
 
@@ -29,6 +30,7 @@ class StorageOperationPathContext:
     configured_root_path: str
     root_status: str
     root_del_flag: str
+    operation_payload: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -46,6 +48,21 @@ class _StorageDirectoryPlan:
     writable_directory: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class _ShotDirectoryRename:
+    shot_id: int
+    source_dir_name: str
+    target_dir_name: str
+
+
+@dataclass(frozen=True)
+class _ShotRenumberPlan:
+    containment_root: Path
+    episode_directory: tuple[str, ...]
+    staging_dir_name: str
+    items: tuple[_ShotDirectoryRename, ...]
+
+
 class StoragePathAdapterError(Exception):
     """可安全持久化的目录适配器错误。"""
 
@@ -59,6 +76,9 @@ class StoragePathAdapterError(Exception):
 class ShotGridStoragePathAdapter:
     """在受控根目录内幂等创建 Shot Grid 目录。"""
 
+    RENUMBER_COMMIT_MARKER = '.shot-grid-renumber-staged'
+    MAX_RENUMBER_SHOTS = 2000
+    LAZY_DIRECTORY_RENUMBER_SCHEMA = 2
     INITIAL_DIRECTORIES = (
         (),
         ('ASSET',),
@@ -72,6 +92,7 @@ class ShotGridStoragePathAdapter:
         'ensure_episode_directory': 'episode',
         'ensure_shot_directory': 'shot',
         'ensure_asset_directory': 'asset',
+        'renumber_shot_directories': 'scene',
     }
     EPISODE_TARGET_PARTS = 2
     SHOT_TARGET_PARTS = 3
@@ -82,8 +103,83 @@ class ShotGridStoragePathAdapter:
         self.allow_local_root = allow_local_root
 
     async def ensure_directories(self, context: StorageOperationPathContext) -> StorageDirectoryResult:
+        if context.operation_type == 'renumber_shot_directories':
+            renumber_plan = self._build_renumber_plan(context)
+            return await asyncio.to_thread(self._renumber_shot_directories_sync, renumber_plan)
         plan = self._build_plan(context)
         return await asyncio.to_thread(self._ensure_directories_sync, plan)
+
+    async def finalize_operation(self, context: StorageOperationPathContext) -> None:
+        """数据库成功提交后尽力清理重编号事务目录；失败不改变业务成功结果。"""
+
+        if context.operation_type != 'renumber_shot_directories':
+            return
+        plan = self._build_renumber_plan(context)
+        await asyncio.to_thread(self._cleanup_renumber_journal_sync, plan)
+
+    def _build_renumber_plan(self, context: StorageOperationPathContext) -> _ShotRenumberPlan:
+        directory_plan = self._build_plan(context)
+        payload = context.operation_payload
+        if not isinstance(payload, dict) or payload.get('schemaVersion') not in {1, 2}:
+            raise self._invalid_path_error()
+        if payload.get('sceneId') != context.aggregate_id:
+            raise self._invalid_path_error()
+        target_parts = self._relative_parts(context.target_relative_path)
+        if payload.get('episodeDirName') != target_parts[-1]:
+            raise self._invalid_path_error()
+        staging_dir_name = payload.get('stagingDirName')
+        if not isinstance(staging_dir_name, str) or self._relative_parts(staging_dir_name) != (staging_dir_name,):
+            raise self._invalid_path_error()
+        items = payload.get('items')
+        if not isinstance(items, list) or not 1 <= len(items) <= self.MAX_RENUMBER_SHOTS:
+            raise self._invalid_path_error()
+        renames: list[_ShotDirectoryRename] = []
+        source_names: set[str] = set()
+        target_names: set[str] = set()
+        shot_ids: set[int] = set()
+        for item in items:
+            if not isinstance(item, dict):
+                raise self._invalid_path_error()
+            shot_id = item.get('shotId')
+            source_name = item.get('sourceDirName')
+            target_name = item.get('targetDirName')
+            if not isinstance(shot_id, int) or shot_id <= 0 or shot_id in shot_ids:
+                raise self._invalid_path_error()
+            shot_ids.add(shot_id)
+            if (
+                source_name is None
+                and target_name is None
+                and payload.get('schemaVersion') == self.LAZY_DIRECTORY_RENUMBER_SCHEMA
+            ):
+                continue
+            if (
+                not isinstance(source_name, str)
+                or not isinstance(target_name, str)
+                or self._relative_parts(source_name) != (source_name,)
+                or self._relative_parts(target_name) != (target_name,)
+                or source_name == target_name
+                or source_name.casefold() in source_names
+                or target_name.casefold() in target_names
+                or staging_dir_name.casefold() in {source_name.casefold(), target_name.casefold()}
+            ):
+                raise self._invalid_path_error()
+            source_names.add(source_name.casefold())
+            target_names.add(target_name.casefold())
+            renames.append(
+                _ShotDirectoryRename(
+                    shot_id=shot_id,
+                    source_dir_name=source_name,
+                    target_dir_name=target_name,
+                )
+            )
+        if not renames:
+            raise self._invalid_path_error()
+        return _ShotRenumberPlan(
+            containment_root=directory_plan.containment_root,
+            episode_directory=directory_plan.writable_directory,
+            staging_dir_name=staging_dir_name,
+            items=tuple(renames),
+        )
 
     def _build_plan(self, context: StorageOperationPathContext) -> _StorageDirectoryPlan:
         self._validate_context(context)
@@ -229,6 +325,8 @@ class ShotGridStoragePathAdapter:
             )
         else:
             valid = False
+        if context.operation_type == 'renumber_shot_directories':
+            valid = len(target_parts) == self.EPISODE_TARGET_PARTS and folded_target[0] == 'video'
         if not valid:
             raise self._invalid_path_error()
 
@@ -305,6 +403,165 @@ class ShotGridStoragePathAdapter:
         writable_path = root.joinpath(*plan.writable_directory)
         cls._probe_writable_directory(root, writable_path)
         return StorageDirectoryResult(created_directories=created, existing_directories=existing)
+
+    @classmethod
+    def _renumber_shot_directories_sync(  # noqa: PLR0912, PLR0915 - NAS 两阶段恢复分支需集中处理
+        cls,
+        plan: _ShotRenumberPlan,
+    ) -> StorageDirectoryResult:
+        """通过同集临时目录分两阶段迁移，允许失败后按同一载荷幂等续跑。"""
+
+        root = plan.containment_root
+        if not root.exists() or not root.is_dir():
+            raise StoragePathAdapterError(
+                error_key='SG_STORAGE_ROOT_UNAVAILABLE',
+                safe_message='NAS 根目录暂时不可访问或不可写',
+                retryable=True,
+            )
+        cls._reject_link_or_reparse_point(root)
+        episode_path = root.joinpath(*plan.episode_directory)
+        cls._assert_resolved_containment(root, episode_path)
+        if not episode_path.exists() or not episode_path.is_dir():
+            raise StoragePathAdapterError(
+                error_key='SG_STORAGE_SOURCE_MISSING',
+                safe_message='待重编号的集目录不存在',
+                retryable=False,
+            )
+        cls._reject_link_or_reparse_point(episode_path)
+        cls._probe_writable_directory(root, episode_path)
+
+        staging_path = episode_path / plan.staging_dir_name
+        if staging_path.exists():
+            if not staging_path.is_dir():
+                raise cls._path_conflict_error()
+            cls._reject_link_or_reparse_point(staging_path)
+        else:
+            try:
+                staging_path.mkdir()
+            except FileExistsError:
+                if not staging_path.is_dir():
+                    raise cls._path_conflict_error() from None
+            except OSError as exc:
+                raise cls._root_unavailable_error() from exc
+        cls._assert_resolved_containment(root, staging_path)
+        cls._reject_link_or_reparse_point(staging_path)
+
+        commit_marker = staging_path / cls.RENUMBER_COMMIT_MARKER
+        cls._assert_resolved_containment(root, commit_marker)
+        commit_started = commit_marker.exists()
+        if commit_started:
+            if not commit_marker.is_file():
+                raise cls._path_conflict_error()
+            cls._reject_link_or_reparse_point(commit_marker)
+        else:
+            for item in plan.items:
+                source = episode_path / item.source_dir_name
+                target = episode_path / item.target_dir_name
+                staged = staging_path / f'SHOT_{item.shot_id}'
+                for path in (source, target, staged):
+                    cls._assert_resolved_containment(root, path)
+                    if path.exists():
+                        if not path.is_dir():
+                            raise cls._path_conflict_error()
+                        cls._reject_link_or_reparse_point(path)
+                if staged.exists():
+                    if source.exists():
+                        raise cls._path_conflict_error()
+                    continue
+                if source.exists():
+                    cls._rename_directory(source, staged)
+                    continue
+                if not target.exists():
+                    raise StoragePathAdapterError(
+                        error_key='SG_STORAGE_SOURCE_MISSING',
+                        safe_message='待重编号的镜头目录不存在',
+                        retryable=False,
+                    )
+            cls._create_renumber_commit_marker(commit_marker)
+
+        for item in plan.items:
+            target = episode_path / item.target_dir_name
+            staged = staging_path / f'SHOT_{item.shot_id}'
+            if staged.exists():
+                if target.exists():
+                    raise cls._path_conflict_error()
+                cls._rename_directory(staged, target)
+            elif not target.exists() or not target.is_dir():
+                raise StoragePathAdapterError(
+                    error_key='SG_STORAGE_SOURCE_MISSING',
+                    safe_message='镜头目录迁移状态不完整',
+                    retryable=False,
+                )
+            cls._assert_resolved_containment(root, target)
+            cls._reject_link_or_reparse_point(target)
+
+        cls._probe_writable_directory(root, episode_path)
+        return StorageDirectoryResult(created_directories=0, existing_directories=len(plan.items))
+
+    @classmethod
+    def _cleanup_renumber_journal_sync(cls, plan: _ShotRenumberPlan) -> None:
+        root = plan.containment_root
+        episode_path = root.joinpath(*plan.episode_directory)
+        staging_path = episode_path / plan.staging_dir_name
+        cls._assert_resolved_containment(root, staging_path)
+        if not staging_path.exists():
+            return
+        if not staging_path.is_dir():
+            raise cls._path_conflict_error()
+        cls._reject_link_or_reparse_point(staging_path)
+        marker = staging_path / cls.RENUMBER_COMMIT_MARKER
+        if not marker.exists() or not marker.is_file():
+            raise cls._path_conflict_error()
+        cls._reject_link_or_reparse_point(marker)
+        for item in plan.items:
+            staged = staging_path / f'SHOT_{item.shot_id}'
+            target = episode_path / item.target_dir_name
+            if staged.exists() or not target.exists() or not target.is_dir():
+                raise cls._path_conflict_error()
+            cls._assert_resolved_containment(root, target)
+            cls._reject_link_or_reparse_point(target)
+        try:
+            marker.unlink()
+            staging_path.rmdir()
+        except OSError as exc:
+            raise cls._root_unavailable_error() from exc
+
+    @staticmethod
+    def _create_renumber_commit_marker(marker: Path) -> None:
+        try:
+            with marker.open('x', encoding='utf-8') as marker_file:
+                marker_file.write('staged\n')
+        except FileExistsError:
+            if not marker.is_file():
+                raise ShotGridStoragePathAdapter._path_conflict_error() from None
+        except OSError as exc:
+            raise ShotGridStoragePathAdapter._root_unavailable_error() from exc
+        ShotGridStoragePathAdapter._reject_link_or_reparse_point(marker)
+
+    @staticmethod
+    def _rename_directory(source: Path, target: Path) -> None:
+        try:
+            os.rename(source, target)
+        except FileExistsError as exc:
+            raise ShotGridStoragePathAdapter._path_conflict_error() from exc
+        except OSError as exc:
+            raise ShotGridStoragePathAdapter._root_unavailable_error() from exc
+
+    @staticmethod
+    def _path_conflict_error() -> StoragePathAdapterError:
+        return StoragePathAdapterError(
+            error_key='SG_STORAGE_PATH_CONFLICT',
+            safe_message='镜头目录迁移目标存在冲突',
+            retryable=False,
+        )
+
+    @staticmethod
+    def _root_unavailable_error() -> StoragePathAdapterError:
+        return StoragePathAdapterError(
+            error_key='SG_STORAGE_ROOT_UNAVAILABLE',
+            safe_message='NAS 根目录暂时不可访问或不可写',
+            retryable=True,
+        )
 
     @staticmethod
     def _assert_resolved_containment(root: Path, candidate: Path) -> None:

@@ -1,3 +1,4 @@
+import re
 from datetime import datetime
 from typing import Any, Literal
 
@@ -10,7 +11,7 @@ from module_admin.entity.vo.user_vo import CurrentUserModel
 from module_shot_grid.dao.project_audit_dao import ShotGridProjectAuditDao
 from module_shot_grid.dao.task_dao import ShotGridTaskDao
 from module_shot_grid.entity.do.project_do import ShotGridProject
-from module_shot_grid.entity.do.storage_do import ShotGridProjectStorage
+from module_shot_grid.entity.do.storage_do import ShotGridProjectStorage, ShotGridStorageOperation
 from module_shot_grid.entity.do.task_do import ShotGridTask
 from module_shot_grid.entity.vo.access_vo import ShotGridProjectAccessModel
 from module_shot_grid.entity.vo.task_vo import (
@@ -25,6 +26,7 @@ from module_shot_grid.entity.vo.task_vo import (
     ShotGridTaskListItemModel,
     ShotGridTaskListQueryModel,
     ShotGridTaskProjectSummaryModel,
+    ShotGridTaskShotProductionModel,
     ShotGridTaskStartModel,
     ShotGridTaskTargetModel,
     ShotGridTaskUpdateModel,
@@ -39,6 +41,10 @@ from module_shot_grid.service.project_access_service import ShotGridProjectAcces
 from module_shot_grid.service.project_service import ShotGridProjectService
 
 MAX_TASK_NAME_LENGTH = 240
+INTERNAL_WORKER_ACTOR_PATTERN = re.compile(
+    r'^[^:\s]{1,60}:\d+:[0-9a-f]{32}(?::[0-9a-f]{1,32})?$',
+    re.IGNORECASE,
+)
 
 
 class ShotGridTaskService:
@@ -106,6 +112,7 @@ class ShotGridTaskService:
             cls._require_director_access(access, project_id, actor_user_id)
             task = await cls._lock_task(db, project_id, task_id)
             cls._require_task_active(task)
+            cls._require_task_not_started_for_edit(task)
             cls._require_lock_version(task.lock_version, command.lock_version)
 
             now = cls._now()
@@ -169,8 +176,13 @@ class ShotGridTaskService:
                 raise shot_grid_error(404, 'SG_SHOT_NOT_FOUND', '镜头不存在、不属于目标项目或不可见')
             shot, episode, scene = context
             task = await ShotGridTaskDao.get_task_for_shot_update(db, project_id, shot_id)
+            command = cls._freeze_shot_assignment_command(
+                command,
+                shot_description=shot.description,
+                is_reassign=task is not None,
+            )
             task_name = f'{cls._episode_code(episode.episode_no)}-{cls._scene_code(scene.scene_no)}-'
-            task_name += f'{shot.storage_dir_name} 镜头视频制作'
+            task_name += f'{cls._shot_code(shot.shot_no)} 镜头视频制作'
             task, old_assignee = await cls._assign_task(
                 db,
                 project_id=project_id,
@@ -238,8 +250,13 @@ class ShotGridTaskService:
                     assigneeUserId=command.assignee_user_id,
                     taskLockVersion=item.task_lock_version,
                 )
+                assign_command = cls._freeze_shot_assignment_command(
+                    assign_command,
+                    shot_description=shot.description,
+                    is_reassign=task is not None,
+                )
                 task_name = f'{cls._episode_code(episode.episode_no)}-{cls._scene_code(scene.scene_no)}-'
-                task_name += f'{shot.storage_dir_name} 镜头视频制作'
+                task_name += f'{cls._shot_code(shot.shot_no)} 镜头视频制作'
                 _task, old_assignee = await cls._assign_task(
                     db,
                     project_id=project_id,
@@ -459,7 +476,7 @@ class ShotGridTaskService:
             raise
 
     @classmethod
-    async def start_task(
+    async def start_task(  # noqa: PLR0912, PLR0915 - 权限复核、目录准备和任务状态必须同事务完成
         cls,
         db: AsyncSession,
         task_id: int,
@@ -470,14 +487,16 @@ class ShotGridTaskService:
         try:
             project_id, access = await cls._resolve_task_access(db, task_id, current_user)
             cls._require_matching_access(access, project_id, actor_user_id)
-            await cls._lock_mutable_project(db, project_id, require_storage_ready=False)
+            _project, storage = await cls._lock_mutable_project(db, project_id, require_storage_ready=False)
             access = await ShotGridProjectAccessService.resolve_access(db, current_user, project_id)
             cls._require_matching_access(access, project_id, actor_user_id)
             task = await cls._lock_task(db, project_id, task_id)
-            if not (
-                access.has_all_scope or access.project_role == 'director' or task.assignee_user_id == actor_user_id
-            ):
-                raise shot_grid_error(403, 'SG_TASK_ACTION_DENIED', '只能开始本人任务')
+            if access.project_role != 'creator' or task.assignee_user_id != actor_user_id:
+                raise shot_grid_error(
+                    403,
+                    'SG_TASK_ACTION_DENIED',
+                    '只有当前任务负责制作人员可以开始任务',
+                )
             if task.task_status != 'not_started':
                 raise shot_grid_error(409, 'SG_INVALID_STATE_TRANSITION', '只有未开始任务可以执行开始动作')
             cls._require_lock_version(task.lock_version, command.lock_version)
@@ -488,7 +507,48 @@ class ShotGridTaskService:
                 require_asset_production_item(item.production_item, action='开始任务')
 
             now = cls._now()
-            task.task_status = 'in_progress'
+            directory_operation_id: int | None = None
+            if task.task_kind == 'shot_video':
+                if storage is None or storage.storage_status != 'ready':
+                    raise shot_grid_error(409, 'SG_PROJECT_NOT_READY', '项目 NAS 存储尚未就绪，不能开始镜头制作')
+                target = await ShotGridTaskDao.lock_shot_target(db, project_id, task.shot_id)
+                if target is None:
+                    raise shot_grid_error(404, 'SG_SHOT_NOT_FOUND', '镜头不存在或不可见')
+                shot, episode, scene = target
+                latest_directory_status = await ShotGridTaskDao.get_latest_shot_directory_operation_status(
+                    db,
+                    project_id,
+                    shot.shot_id,
+                )
+                if shot.storage_dir_name is None:
+                    shot.storage_dir_name = f'{scene.scene_no:03d}_S{shot.shot_no:03d}'
+                    latest_directory_status = None
+                if latest_directory_status == 'succeeded':
+                    task.task_status = 'in_progress'
+                else:
+                    task.task_status = 'preparing'
+                    if latest_directory_status is None:
+                        operation = ShotGridStorageOperation(
+                            project_id=project_id,
+                            operation_type='ensure_shot_directory',
+                            aggregate_type='shot',
+                            aggregate_id=shot.shot_id,
+                            target_relative_path=(f'VIDEO\\{episode.storage_dir_name}\\{shot.storage_dir_name}'),
+                            operation_status='pending',
+                            idempotency_key=f'shotgrid:dir:shot-start:{project_id}:{shot.shot_id}',
+                            attempt_count=0,
+                            create_by=actor_name,
+                            create_time=now,
+                            update_time=now,
+                        )
+                        db.add(operation)
+                        await db.flush()
+                        directory_operation_id = operation.operation_id
+                shot.update_by = actor_name
+                shot.update_time = now
+                shot.lock_version += 1
+            else:
+                task.task_status = 'in_progress'
             task.update_by = actor_name
             task.update_time = now
             task.lock_version += 1
@@ -508,6 +568,7 @@ class ShotGridTaskService:
                     'assigneeUserId': task.assignee_user_id,
                     'operatedBy': actor_user_id,
                     'lockVersion': task.lock_version,
+                    'directoryOperationId': directory_operation_id,
                 },
             )
             frozen = cls._build_detail(await cls._require_task_detail(db, task_id), current_user, access)
@@ -600,6 +661,21 @@ class ShotGridTaskService:
         await ShotGridTaskDao.flush(db)
         return current_task, old_assignee
 
+    @staticmethod
+    def _freeze_shot_assignment_command(
+        command: ShotGridTaskAssignModel,
+        *,
+        shot_description: str,
+        is_reassign: bool,
+    ) -> ShotGridTaskAssignModel:
+        """镜头委派只读取镜头制作内容；改派只保留负责人和锁版本。"""
+        if is_reassign:
+            return ShotGridTaskAssignModel(
+                assigneeUserId=command.assignee_user_id,
+                taskLockVersion=command.task_lock_version,
+            )
+        return command.model_copy(update={'task_description': shot_description})
+
     @classmethod
     async def _resolve_task_access(
         cls,
@@ -643,6 +719,11 @@ class ShotGridTaskService:
             raise shot_grid_error(409, 'SG_INVALID_STATE_TRANSITION', '已完成任务不可普通编辑或改派')
 
     @staticmethod
+    def _require_task_not_started_for_edit(task: ShotGridTask) -> None:
+        if task.task_status != 'not_started':
+            raise shot_grid_error(409, 'SG_INVALID_STATE_TRANSITION', '任务开始制作后不可编辑')
+
+    @staticmethod
     def _require_lock_version(actual: int, expected: int) -> None:
         if actual != expected:
             raise shot_grid_error(409, 'SG_OPTIMISTIC_LOCK_CONFLICT', '任务已被其他用户修改，请刷新后重试')
@@ -671,6 +752,14 @@ class ShotGridTaskService:
         row = await ShotGridTaskDao.get_task_detail(db, task_id)
         if row is None:
             raise shot_grid_error(404, 'SG_TASK_NOT_FOUND', '任务不存在或不可见')
+        if cls._is_internal_worker_actor(row.get('update_by')) and row.get('shot_id') is not None:
+            operation_actor = await ShotGridTaskDao.get_latest_succeeded_shot_directory_operation_actor(
+                db,
+                int(row['project_id']),
+                int(row['shot_id']),
+            )
+            if operation_actor:
+                row['update_by'] = operation_actor
         return row
 
     @classmethod
@@ -696,7 +785,7 @@ class ShotGridTaskService:
             episode_no = int(row['episode_no'])
             scene_no = int(row['scene_no'])
             shot_no = int(row['shot_no'])
-            shot_code = row['shot_storage_dir_name'] or f'S{shot_no:03d}'
+            shot_code = cls._shot_code(shot_no)
             target = ShotGridTaskTargetModel(
                 targetType='shot',
                 targetId=row['shot_id'],
@@ -744,6 +833,7 @@ class ShotGridTaskService:
             ),
             assignee=ShotGridTaskAssigneeModel(
                 userId=row['assignee_user_id'],
+                userName=row['assignee_user_name'],
                 nickName=row['assignee_nick_name'],
                 producerCode=row['assignee_producer_code'],
                 memberStatus=row['assignee_member_status'],
@@ -765,14 +855,41 @@ class ShotGridTaskService:
         access: ShotGridProjectAccessModel,
     ) -> ShotGridTaskDetailModel:
         base = cls._build_list_item(row)
+        shot_production = None
+        if base.task_kind == 'shot_video':
+            shot_production = ShotGridTaskShotProductionModel(
+                durationMs=row['shot_duration_ms'],
+                description=row['shot_description'],
+                shotSize=row.get('shot_size'),
+                cameraPosition=row.get('shot_camera_position'),
+                cameraMovement=row.get('shot_camera_movement'),
+                focalLength=row.get('shot_focal_length'),
+                dialogue=row.get('shot_dialogue'),
+                soundEffect=row.get('shot_sound_effect'),
+                colorReference=row.get('shot_color_reference'),
+                remark=row.get('shot_remark'),
+            )
         return ShotGridTaskDetailModel(
             **base.model_dump(),
+            shotProduction=shot_production,
             remark=row['remark'],
             createBy=row['create_by'],
-            updateBy=row['update_by'],
+            updateBy=cls._display_actor(row['update_by']),
             hasUncommittedSubmission=bool(row['has_uncommitted_submission']),
             allowedActions=cls._allowed_actions(row, current_user, access),
         )
+
+    @staticmethod
+    def _display_actor(actor_name: str | None) -> str:
+        """兼容治理历史误写的 Worker owner，避免内部租约标识进入业务界面。"""
+        normalized = str(actor_name or '').strip()
+        if ShotGridTaskService._is_internal_worker_actor(normalized):
+            return '系统目录服务'
+        return normalized
+
+    @staticmethod
+    def _is_internal_worker_actor(actor_name: str | None) -> bool:
+        return bool(INTERNAL_WORKER_ACTOR_PATTERN.fullmatch(str(actor_name or '').strip()))
 
     @staticmethod
     def _version_summary(
@@ -808,12 +925,14 @@ class ShotGridTaskService:
             return []
         director = access.has_all_scope or access.project_role == 'director'
         owner = row['assignee_user_id'] == access.user_id
-        target_ready = (
-            row['task_kind'] != 'asset_image'
-            or is_asset_production_item_ready(row.get('production_item'))
-        )
+        owner_creator = access.project_role == 'creator' and owner
+        target_ready = row['task_kind'] != 'asset_image' or is_asset_production_item_ready(row.get('production_item'))
         actions: list[str] = []
-        if director and cls._has_permission(current_user, 'shotgrid:task:edit'):
+        if (
+            director
+            and row['task_status'] == 'not_started'
+            and cls._has_permission(current_user, 'shotgrid:task:edit')
+        ):
             actions.append('task.edit')
         if (
             director
@@ -825,14 +944,14 @@ class ShotGridTaskService:
         if (
             row['task_status'] == 'not_started'
             and target_ready
-            and (director or owner)
+            and owner_creator
             and cls._has_permission(current_user, 'shotgrid:task:start')
         ):
             actions.append('task.start')
         if (
             row['task_status'] in {'in_progress', 'revision'}
             and target_ready
-            and (director or owner)
+            and owner_creator
             and not row['has_uncommitted_submission']
             and cls._has_permission(current_user, 'shotgrid:version:add')
         ):
@@ -921,6 +1040,10 @@ class ShotGridTaskService:
     @staticmethod
     def _scene_code(scene_no: int) -> str:
         return f'{scene_no:03d}'
+
+    @staticmethod
+    def _shot_code(shot_no: int) -> str:
+        return f'S{shot_no:03d}'
 
     @staticmethod
     def _now() -> datetime:

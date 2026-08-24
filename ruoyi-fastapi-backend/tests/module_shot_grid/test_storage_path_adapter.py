@@ -17,7 +17,9 @@ def _context(
     *,
     operation_type: str = 'initialize_project',
     aggregate_type: str = 'project',
+    aggregate_id: int = 10,
     target_relative_path: str = 'AI影视短片\\罗刹夫人',
+    operation_payload: dict[str, object] | None = None,
 ) -> StorageOperationPathContext:
     project_path = root / 'AI影视短片' / '罗刹夫人'
     return StorageOperationPathContext(
@@ -25,7 +27,7 @@ def _context(
         project_id=10,
         operation_type=operation_type,
         aggregate_type=aggregate_type,
-        aggregate_id=10,
+        aggregate_id=aggregate_id,
         target_relative_path=target_relative_path,
         storage_root_id=2,
         root_path_snapshot=str(root),
@@ -36,6 +38,7 @@ def _context(
         configured_root_path=str(root),
         root_status='enabled',
         root_del_flag='0',
+        operation_payload=operation_payload,
     )
 
 
@@ -71,6 +74,84 @@ async def test_dynamic_episode_directory_is_built_under_frozen_project_root(tmp_
     await adapter.ensure_directories(context)
 
     assert (tmp_path / 'AI影视短片' / '罗刹夫人' / 'VIDEO' / 'EP001').is_dir()
+
+
+@pytest.mark.asyncio
+async def test_scene_renumber_swaps_directories_idempotently_until_database_commit(tmp_path: Path) -> None:
+    episode_path = tmp_path / 'AI影视短片' / '罗刹夫人' / 'VIDEO' / 'EP001'
+    first_directory = episode_path / '001_S001'
+    second_directory = episode_path / '001_S002'
+    first_directory.mkdir(parents=True)
+    second_directory.mkdir()
+    (first_directory / 'identity.txt').write_text('shot-101', encoding='utf-8')
+    (second_directory / 'identity.txt').write_text('shot-102', encoding='utf-8')
+    payload = {
+        'schemaVersion': 1,
+        'sceneId': 20,
+        'episodeId': 10,
+        'sceneNo': 1,
+        'episodeDirName': 'EP001',
+        'stagingDirName': '_SG_RENUMBER_test',
+        'items': [
+            {'shotId': 101, 'sourceDirName': '001_S001', 'targetDirName': '001_S002'},
+            {'shotId': 102, 'sourceDirName': '001_S002', 'targetDirName': '001_S001'},
+        ],
+    }
+    context = _context(
+        tmp_path,
+        operation_type='renumber_shot_directories',
+        aggregate_type='scene',
+        aggregate_id=20,
+        target_relative_path=r'VIDEO\EP001',
+        operation_payload=payload,
+    )
+    adapter = ShotGridStoragePathAdapter(allow_local_root=True)
+
+    await adapter.ensure_directories(context)
+    await adapter.ensure_directories(context)
+
+    assert (first_directory / 'identity.txt').read_text(encoding='utf-8') == 'shot-102'
+    assert (second_directory / 'identity.txt').read_text(encoding='utf-8') == 'shot-101'
+    assert (episode_path / '_SG_RENUMBER_test' / adapter.RENUMBER_COMMIT_MARKER).is_file()
+
+    await adapter.finalize_operation(context)
+
+    assert not (episode_path / '_SG_RENUMBER_test').exists()
+
+
+@pytest.mark.asyncio
+async def test_scene_renumber_schema_v2_ignores_shots_without_frozen_directory(tmp_path: Path) -> None:
+    episode_path = tmp_path / 'AI影视短片' / '罗刹夫人' / 'VIDEO' / 'EP001'
+    source_directory = episode_path / '001_S002'
+    source_directory.mkdir(parents=True)
+    (source_directory / 'identity.txt').write_text('shot-102', encoding='utf-8')
+    payload = {
+        'schemaVersion': 2,
+        'sceneId': 20,
+        'episodeId': 10,
+        'sceneNo': 1,
+        'episodeDirName': 'EP001',
+        'stagingDirName': '_SG_RENUMBER_lazy',
+        'items': [
+            {'shotId': 101, 'sourceDirName': None, 'targetDirName': None},
+            {'shotId': 102, 'sourceDirName': '001_S002', 'targetDirName': '001_S001'},
+        ],
+    }
+    context = _context(
+        tmp_path,
+        operation_type='renumber_shot_directories',
+        aggregate_type='scene',
+        aggregate_id=20,
+        target_relative_path=r'VIDEO\EP001',
+        operation_payload=payload,
+    )
+    adapter = ShotGridStoragePathAdapter(allow_local_root=True)
+
+    await adapter.ensure_directories(context)
+
+    target_directory = episode_path / '001_S001'
+    assert (target_directory / 'identity.txt').read_text(encoding='utf-8') == 'shot-102'
+    assert not source_directory.exists()
 
 
 @pytest.mark.asyncio

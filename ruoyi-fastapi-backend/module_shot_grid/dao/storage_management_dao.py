@@ -4,7 +4,7 @@ from sqlalchemy import asc, desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from module_shot_grid.entity.do.asset_do import ShotGridAsset
-from module_shot_grid.entity.do.project_do import ShotGridEpisode, ShotGridShot
+from module_shot_grid.entity.do.project_do import ShotGridEpisode, ShotGridScene, ShotGridShot
 from module_shot_grid.entity.do.storage_do import ShotGridProjectStorage, ShotGridStorageOperation
 from module_shot_grid.entity.vo.storage_operation_vo import ShotGridStorageOperationQueryModel
 
@@ -159,6 +159,21 @@ class ShotGridStorageManagementDao:
             directory_name = await db.scalar(
                 select(ShotGridEpisode.storage_dir_name).where(
                     ShotGridEpisode.episode_id == aggregate_id,
+                    ShotGridEpisode.project_id == project_id,
+                    ShotGridEpisode.lifecycle_status == 'active',
+                    ShotGridEpisode.del_flag == '0',
+                )
+            )
+            return rf'VIDEO\{directory_name}' if directory_name is not None else None
+        if aggregate_type == 'scene':
+            directory_name = await db.scalar(
+                select(ShotGridEpisode.storage_dir_name)
+                .join(ShotGridScene, ShotGridScene.episode_id == ShotGridEpisode.episode_id)
+                .where(
+                    ShotGridScene.scene_id == aggregate_id,
+                    ShotGridScene.project_id == project_id,
+                    ShotGridScene.lifecycle_status == 'active',
+                    ShotGridScene.del_flag == '0',
                     ShotGridEpisode.project_id == project_id,
                     ShotGridEpisode.lifecycle_status == 'active',
                     ShotGridEpisode.del_flag == '0',

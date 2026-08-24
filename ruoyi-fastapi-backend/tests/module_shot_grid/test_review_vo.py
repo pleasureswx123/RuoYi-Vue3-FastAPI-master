@@ -155,11 +155,10 @@ def test_annotations_reject_json_payload_over_64_kib() -> None:
 
 
 def test_note_and_review_action_normalize_text_and_forbid_unknown_fields() -> None:
-    note = ShotGridNoteCreateModel(content='  调整人物起身动作  ', isMandatory=True)
+    note = ShotGridNoteCreateModel(content='  调整人物起身动作  ')
     action = ShotGridReviewActionCreateModel(actionType='reject', reason='  节奏仍然偏慢  ', lockVersion=2)
 
     assert note.content == '调整人物起身动作'
-    assert note.is_mandatory is True
     assert action.reason == '节奏仍然偏慢'
     with pytest.raises(ValidationError):
         ShotGridReviewActionCreateModel.model_validate({'actionType': 'approve', 'lockVersion': 0, 'reviewListId': 1})

@@ -4,13 +4,12 @@ import { Plus } from '@element-plus/icons-vue'
 
 import { createAsset, updateAsset } from '@/api/shot-grid/assets'
 import ProjectModal from '@/views/project/components/ProjectModal.vue'
-import { assetErrorState, memberLabel } from '@/views/asset/assetPresentation'
+import { assetErrorState } from '@/views/asset/assetPresentation'
 
 const props = defineProps({
   projectId: { type: Number, required: true },
   operationGeneration: { type: Number, required: true },
-  asset: { type: Object, default: null },
-  members: { type: Array, default: () => [] }
+  asset: { type: Object, default: null }
 })
 const emit = defineEmits(['close', 'saved', 'refresh'])
 const isEdit = computed(() => Boolean(props.asset?.assetId))
@@ -61,18 +60,12 @@ function newItem() {
     productionItem: '',
     description: '',
     sortOrder: 0,
-    assigneeUserId: '',
-    taskDescription: '',
     remark: ''
   }
   item.formRules = {
     productionItem: [{
       validator: (_rule, value, callback) => {
         const normalized = String(value || '').trim()
-        if (item.assigneeUserId && !normalized) {
-          callback(new Error('分配主制作人前必须填写对应制作分项'))
-          return
-        }
         if (normalized) {
           const normalizedName = normalized.toLocaleLowerCase()
           const duplicated = form.items.some(candidate => (
@@ -128,8 +121,6 @@ function buildCreatePayload() {
       productionItem: optionalText(item.productionItem),
       description: optionalText(item.description),
       sortOrder: Number(item.sortOrder),
-      assigneeUserId: item.assigneeUserId ? Number(item.assigneeUserId) : null,
-      taskDescription: optionalText(item.taskDescription),
       remark: optionalText(item.remark)
     }))
   }
@@ -168,7 +159,7 @@ function closeDialog() {
 </script>
 
 <template>
-  <ProjectModal :title="isEdit ? `编辑资产 · ${asset.assetName}` : '新建资产'" :description="isEdit ? '资产类型和名称创建后不可直接修改；可在此更新排序、说明和备注。' : '创建资产时至少创建一个制作分项；制作人可稍后通过任务分配补充。'" :busy="saving" wide @close="closeDialog">
+  <ProjectModal :title="isEdit ? `编辑资产 · ${asset.assetName}` : '新建资产'" :description="isEdit ? '资产类型和名称创建后不可直接修改；可在此更新排序、说明和备注。' : '先创建未分配资产及制作分项；保存后再通过“分配任务”完成委派。'" :busy="saving" wide @close="closeDialog">
     <el-form ref="assetForm" :model="form" :rules="assetFormRules" class="asset-form" size="large" label-position="top" aria-label="资产信息表单">
       <el-alert v-if="requestError" :title="requestError.title" type="error" show-icon :closable="false"><span>{{ requestError.message }}</span><el-button v-if="requestError.status === 409" link type="danger" @click="emit('refresh')">刷新后重试</el-button></el-alert>
 
@@ -181,19 +172,18 @@ function closeDialog() {
       </section>
 
       <el-card v-if="!isEdit" class="asset-items-editor" shadow="never">
-        <template #header><header><div><strong>首批制作分项</strong><p>未分配的分项名称允许暂缺；选择制作人前必须填写完整。</p></div><el-button :icon="Plus" :disabled="saving || form.items.length >= 200" @click="addItem">添加分项</el-button></header></template>
+        <template #header><header><div><strong>首批制作分项</strong><p>新建分项统一保持未分配；分项名称可稍后补齐，但委派任务前必须填写完整。</p></div><el-button :icon="Plus" :disabled="saving || form.items.length >= 200" @click="addItem">添加分项</el-button></header></template>
         <el-card v-for="(item,index) in form.items" :key="item.localKey" class="asset-item-editor" shadow="never">
           <template #header><div class="asset-items-editor__heading"><strong>分项 {{ index + 1 }}</strong><el-button link type="danger" :disabled="saving || form.items.length <= 1" @click="removeItem(index)">移除</el-button></div></template>
           <div class="asset-items-editor__grid">
             <el-form-item label="制作分项" :prop="`items.${index}.productionItem`" :rules="item.formRules.productionItem"><el-input v-model="item.productionItem" maxlength="240" :disabled="saving" placeholder="允许稍后补齐" /></el-form-item>
             <el-form-item label="排序" :prop="`items.${index}.sortOrder`" :rules="item.formRules.sortOrder"><el-input-number v-model="item.sortOrder" :min="0" :step="1" step-strictly controls-position="right" :disabled="saving" /></el-form-item>
-            <el-form-item label="主制作人" :prop="`items.${index}.assigneeUserId`"><el-select v-model="item.assigneeUserId" class="sg-select" :placeholder="item.productionItem.trim() ? '暂不分配' : '请先填写制作分项'" :disabled="saving || !item.productionItem.trim()"><el-option label="暂不分配" value="" /><el-option v-for="member in members" :key="member.userId" :label="memberLabel(member)" :value="String(member.userId)" /></el-select></el-form-item>
             <el-form-item class="asset-items-editor__wide" label="分项说明" :prop="`items.${index}.description`"><el-input v-model="item.description" type="textarea" :rows="2" :disabled="saving" /></el-form-item>
-            <el-form-item class="asset-items-editor__wide" label="首次任务要求" :prop="`items.${index}.taskDescription`"><el-input v-model="item.taskDescription" type="textarea" :rows="2" :disabled="saving || !item.assigneeUserId" /></el-form-item>
             <el-form-item class="asset-items-editor__wide" label="备注" :prop="`items.${index}.remark`"><el-input v-model="item.remark" maxlength="500" :disabled="saving" /></el-form-item>
           </div>
         </el-card>
       </el-card>
+      <el-alert v-if="!isEdit" title="创建后状态：未分配" description="创建资产和制作分项不会同时创建任务；请在资产列表批量分配，或进入资产详情逐项分配。" type="info" show-icon :closable="false" />
 
       <footer><el-button :disabled="saving" @click="closeDialog">取消</el-button><el-button type="primary" :loading="saving" @click="submit">{{ isEdit ? '保存资产' : '创建资产' }}</el-button></footer>
     </el-form>

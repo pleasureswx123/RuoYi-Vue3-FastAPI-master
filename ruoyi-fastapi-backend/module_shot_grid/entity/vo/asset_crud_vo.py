@@ -10,10 +10,10 @@ from module_shot_grid.entity.vo.common_vo import (
 )
 
 AssetType = Literal['Character', 'Environment', 'Prop']
-AssetWorkStatus = Literal['unassigned', 'not_started', 'in_progress', 'reviewing', 'revision', 'completed']
+AssetWorkStatus = Literal['unassigned', 'not_started', 'preparing', 'in_progress', 'reviewing', 'revision', 'completed']
 DirectoryStatus = Literal['pending', 'ready', 'failed']
 LifecycleStatus = Literal['active', 'archived']
-TaskStatus = Literal['not_started', 'in_progress', 'pending_review', 'revision', 'completed']
+TaskStatus = Literal['not_started', 'preparing', 'in_progress', 'pending_review', 'revision', 'completed']
 SQL_INTEGER_MAX = 2_147_483_647
 SQL_BIGINT_MAX = 9_223_372_036_854_775_807
 
@@ -43,16 +43,9 @@ class ShotGridAssetItemWriteModel(ShotGridApiModel):
     production_item: str | None = Field(default=None, max_length=240, description='制作分项名称，可后补')
     description: str | None = Field(default=None, description='制作分项描述')
     sort_order: int = Field(default=0, ge=0, le=SQL_INTEGER_MAX, description='资产内排序')
-    assignee_user_id: int | None = Field(
-        default=None,
-        gt=0,
-        le=SQL_BIGINT_MAX,
-        description='唯一主制作人用户ID',
-    )
-    task_description: str | None = Field(default=None, description='首次创建任务时的制作要求')
     remark: str | None = Field(default=None, max_length=500, description='备注')
 
-    @field_validator('production_item', 'description', 'task_description', 'remark', mode='before')
+    @field_validator('production_item', 'description', 'remark', mode='before')
     @classmethod
     def normalize_optional_text(cls, value: object) -> object:
         if value is None:
@@ -177,23 +170,16 @@ class ShotGridAssetItemCreateModel(ShotGridAssetItemWriteModel):
 
 
 class ShotGridAssetItemUpdateModel(ShotGridLockVersionModel):
-    """部分修改制作分项；省略字段保持原值，已有任务不能通过本接口改派。"""
+    """部分修改制作分项；任务委派和要求只能通过任务接口维护。"""
 
     model_config = ConfigDict(extra='forbid')
 
     production_item: str | None = Field(default=None, max_length=240, description='制作分项名称，可显式清空')
     description: str | None = Field(default=None, description='制作分项描述，可显式清空')
     sort_order: int | None = Field(default=None, ge=0, le=SQL_INTEGER_MAX, description='资产内排序')
-    assignee_user_id: int | None = Field(
-        default=None,
-        gt=0,
-        le=SQL_BIGINT_MAX,
-        description='唯一主制作人用户ID',
-    )
-    task_description: str | None = Field(default=None, description='首次创建任务时的制作要求')
     remark: str | None = Field(default=None, max_length=500, description='备注，可显式清空')
 
-    @field_validator('production_item', 'description', 'task_description', 'remark', mode='before')
+    @field_validator('production_item', 'description', 'remark', mode='before')
     @classmethod
     def normalize_optional_text(cls, value: object) -> object:
         return ShotGridAssetItemWriteModel.normalize_optional_text(value)

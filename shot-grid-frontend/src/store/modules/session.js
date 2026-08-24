@@ -50,7 +50,7 @@ export const useSessionStore = defineStore('session', {
     captcha: { enabled: true, image: '', uuid: '', loading: false }
   }),
   getters: {
-    displayName: state => state.user?.nickName || state.user?.userName || '当前用户',
+    displayName: state => state.user?.userName || state.user?.nickName || '当前用户',
     allowedRouteKeys: state => new Set(state.navigation.map(item => item.routeKey))
   },
   actions: {

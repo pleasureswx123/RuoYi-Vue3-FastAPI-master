@@ -22,14 +22,13 @@ from module_shot_grid.exceptions import shot_grid_error
 
 
 class ShotExcelParser:
-    """当前 shot-v1 镜头工作簿的纯解析器。"""
+    """当前镜头导入模板的纯解析器；任务委派不属于导入字段。"""
 
     ASSET_NAME_MAX_LENGTH = 200
     EXPECTED_HEADERS = (
         '场次',
         '镜头号',
         '时长(s)',
-        '制作人',
         '镜头缩略图',
         '制作内容描述',
         '景别',
@@ -46,7 +45,7 @@ class ShotExcelParser:
     SHEET_PATTERN = re.compile(r'^EP(\d{3,})$')
     SHOT_PATTERN = re.compile(r'^S(\d{3,})$')
     SCENE_PATTERN = re.compile(r'^(\d+)场?$')
-    READONLY_COLUMNS = frozenset({5, 16})
+    READONLY_COLUMNS = frozenset({4, 15})
 
     def __init__(self, config: ShotGridImportConfig = SHOT_GRID_IMPORT_CONFIG) -> None:
         self.config = config
@@ -108,11 +107,11 @@ class ShotExcelParser:
     def _parse_sheet_rows(self, sheet: Any, episode_no: int, sheet_index: int) -> list[ShotImportPreviewRowModel]:
         del sheet_index  # 保留参数，便于后续模板版本定义 Sheet 顺序策略。
         result: list[ShotImportPreviewRowModel] = []
-        seen_shot_numbers: dict[int, int] = {}
+        seen_shot_numbers: dict[tuple[int, int], int] = {}
         sort_ordinal = 0
 
         for row_number in range(2, sheet.max_row + 1):
-            cells = [sheet.cell(row=row_number, column=column) for column in range(1, 17)]
+            cells = [sheet.cell(row=row_number, column=column) for column in range(1, 16)]
             if not any(
                 self._cell_has_value(cell)
                 for column, cell in enumerate(cells, start=1)
@@ -122,12 +121,13 @@ class ShotExcelParser:
             sort_ordinal += 1
             row = self._parse_row(sheet.title, row_number, episode_no, sort_ordinal, cells)
             if row.normalized is not None:
-                previous_row = seen_shot_numbers.get(row.normalized.shot_no)
+                shot_key = (row.normalized.scene_no, row.normalized.shot_no)
+                previous_row = seen_shot_numbers.get(shot_key)
                 if previous_row is not None:
                     row.errors.append(
                         self._issue(
                             'SG_SHOT_NO_CONFLICT',
-                            f'镜头号与第 {previous_row} 行重复；镜头号在整集内唯一',
+                            f'镜头号与第 {previous_row} 行在同一场次内重复；镜头号在场内唯一',
                             'shotNo',
                             sheet.title,
                             row_number,
@@ -135,7 +135,7 @@ class ShotExcelParser:
                     )
                     row.can_import = False
                 else:
-                    seen_shot_numbers[row.normalized.shot_no] = row_number
+                    seen_shot_numbers[shot_key] = row_number
             result.append(row)
 
         return result
@@ -167,16 +167,8 @@ class ShotExcelParser:
         scene = self._parse_scene(cells[0].value, sheet_name, row_number, errors)
         shot_no = self._parse_shot_no(cells[1].value, sheet_name, row_number, errors)
         duration_ms = self._parse_duration(cells[2].value, sheet_name, row_number, errors)
-        assignee = self._bounded_optional(
-            cells[3].value,
-            30,
-            'assigneeUserName',
-            sheet_name,
-            row_number,
-            errors,
-        )
-        description = self._required_text(cells[5].value, 'description', sheet_name, row_number, errors)
-        environment_name = self._optional_text(cells[10].value)
+        description = self._required_text(cells[4].value, 'description', sheet_name, row_number, errors)
+        environment_name = self._optional_text(cells[9].value)
 
         normalized: ShotImportNormalizedRowModel | None = None
         if scene is not None and shot_no is not None and duration_ms is not None and description is not None:
@@ -215,23 +207,22 @@ class ShotExcelParser:
                 shotNo=shot_no,
                 shotCode=f'S{shot_no:03d}',
                 durationMs=duration_ms,
-                assigneeUserName=assignee,
                 description=description,
-                shotSize=self._bounded_optional(cells[6].value, 40, 'shotSize', sheet_name, row_number, errors),
+                shotSize=self._bounded_optional(cells[5].value, 40, 'shotSize', sheet_name, row_number, errors),
                 cameraPosition=self._bounded_optional(
-                    cells[7].value, 100, 'cameraPosition', sheet_name, row_number, errors
+                    cells[6].value, 100, 'cameraPosition', sheet_name, row_number, errors
                 ),
                 cameraMovement=self._bounded_optional(
-                    cells[8].value, 100, 'cameraMovement', sheet_name, row_number, errors
+                    cells[7].value, 100, 'cameraMovement', sheet_name, row_number, errors
                 ),
                 focalLength=self._bounded_optional(
-                    self._canonical_number_text(cells[9].value), 50, 'focalLength', sheet_name, row_number, errors
+                    self._canonical_number_text(cells[8].value), 50, 'focalLength', sheet_name, row_number, errors
                 ),
                 assetRequirements=requirements,
-                dialogue=self._optional_text(cells[11].value),
-                soundEffect=self._optional_text(cells[12].value),
-                colorReference=self._optional_text(cells[13].value),
-                remark=self._bounded_optional(cells[14].value, 500, 'remark', sheet_name, row_number, errors),
+                dialogue=self._optional_text(cells[10].value),
+                soundEffect=self._optional_text(cells[11].value),
+                colorReference=self._optional_text(cells[12].value),
+                remark=self._bounded_optional(cells[13].value, 500, 'remark', sheet_name, row_number, errors),
             )
 
         return ShotImportPreviewRowModel(
@@ -253,7 +244,7 @@ class ShotExcelParser:
         if tuple(headers) != self.EXPECTED_HEADERS:
             self._raise(
                 'SG_IMPORT_HEADER_MISMATCH',
-                f'Sheet {sheet.title} 的 A:P 表头与 shot-v1 模板不一致',
+                f'Sheet {sheet.title} 的 A:O 表头与当前镜头模板不一致',
             )
 
     def _parse_sheet_name(self, sheet_name: str) -> int:
@@ -428,7 +419,6 @@ class ShotExcelParser:
             'sceneNo',
             'shotNo',
             'durationMs',
-            'assigneeUserName',
             'thumbnail',
             'description',
             'shotSize',
@@ -471,7 +461,7 @@ class ShotExcelParser:
             errorRows=sum(bool(row.errors) for row in rows),
             distinctEpisodes=len({row.episode_no for row in structural_rows}),
             distinctScenes=len({(row.episode_no, row.scene_no) for row in structural_rows}),
-            distinctShots=len({(row.episode_no, row.shot_no) for row in structural_rows}),
+            distinctShots=len({(row.episode_no, row.scene_no, row.shot_no) for row in structural_rows}),
         )
 
     @staticmethod

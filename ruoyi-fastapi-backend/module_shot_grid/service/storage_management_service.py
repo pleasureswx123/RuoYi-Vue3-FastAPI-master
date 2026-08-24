@@ -214,7 +214,9 @@ class ShotGridStorageManagementService:
             if project.project_status == 'archived':
                 raise shot_grid_error(409, 'SG_INVALID_STATE_TRANSITION', '归档项目只允许读取')
             storage = await ShotGridStorageManagementDao.lock_project_storage(db, source.project_id)
-            if storage is None or storage.storage_status != 'ready':
+            is_shot_renumber = source.operation_type == 'renumber_shot_directories'
+            expected_storage_status = 'migrating' if is_shot_renumber else 'ready'
+            if storage is None or storage.storage_status != expected_storage_status:
                 raise shot_grid_error(409, 'SG_STORAGE_OPERATION_NOT_RETRYABLE', '项目根目录尚未就绪')
             current_target = await ShotGridStorageManagementDao.get_current_aggregate_target(
                 db,
@@ -235,10 +237,11 @@ class ShotGridStorageManagementService:
             now = cls._now()
             operation = ShotGridStorageOperation(
                 project_id=source.project_id,
-                operation_type='reconcile_directory',
+                operation_type=source.operation_type if is_shot_renumber else 'reconcile_directory',
                 aggregate_type=source.aggregate_type,
                 aggregate_id=source.aggregate_id,
                 target_relative_path=source.target_relative_path,
+                operation_payload=source.operation_payload if is_shot_renumber else None,
                 operation_status='pending',
                 idempotency_key=stable_key,
                 attempt_count=0,
@@ -247,6 +250,12 @@ class ShotGridStorageManagementService:
                 update_time=now,
             )
             await ShotGridStorageManagementDao.add_operation(db, operation)
+            if is_shot_renumber:
+                storage.last_error_key = None
+                storage.last_error_message = None
+                storage.update_by = actor_name
+                storage.update_time = now
+                storage.lock_version = (storage.lock_version or 0) + 1
             result = cls._accepted(operation, replayed=False)
             await cls._audit_retry(
                 db,
@@ -307,7 +316,7 @@ class ShotGridStorageManagementService:
             operation.idempotency_key != stable_key
             or operation.project_id != project_id
             or operation.aggregate_type != aggregate_type
-            or operation.operation_type != 'reconcile_directory'
+            or operation.operation_type not in {'reconcile_directory', 'renumber_shot_directories'}
         ):
             raise shot_grid_error(409, 'SG_IDEMPOTENCY_CONFLICT', '同一 X-Idempotency-Key 已用于不同请求')
         return cls._accepted(operation, replayed=True)

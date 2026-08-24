@@ -1,4 +1,4 @@
-import { ElButton, ElDialog, ElIcon, ElTable, ElTableColumn, ElTag } from 'element-plus'
+import { ElAlert, ElButton, ElCard, ElDescriptions, ElDescriptionsItem, ElDialog, ElIcon, ElResult, ElTable, ElTableColumn, ElTag, ElTooltip, ElUpload } from 'element-plus'
 import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -10,6 +10,9 @@ vi.mock('@/api/shot-grid/assets', () => ({
   downloadAssetImportTemplate: vi.fn(),
   previewAssetImport: vi.fn()
 }))
+
+const components = { ElAlert, ElButton, ElCard, ElDescriptions, ElDescriptionsItem, ElDialog, ElIcon, ElResult, ElTable, ElTableColumn, ElTag, ElTooltip, ElUpload }
+const dialogStub = { template: '<section><slot name="header" /><slot /></section>' }
 
 const preview = {
   batchId: 9,
@@ -30,8 +33,8 @@ const preview = {
   },
   workbookWarnings: [{ errorKey: 'SG_IMPORT_READONLY_COLUMNS_IGNORED', message: '状态列已忽略' }],
   rows: [
-    { sheetName: 'Sheet1', rowNumber: 2, canImport: true, warnings: [], errors: [], normalized: { assetType: 'Character', assetName: '春霞', productionItem: '标准立绘', assigneeUserName: 'producer', assigneeUserId: 7, itemDescription: '正视图' } },
-    { sheetName: 'Sheet1', rowNumber: 3, canImport: false, warnings: [], errors: [{ errorKey: 'SG_TASK_ASSIGNEE_AMBIGUOUS', fieldName: 'assigneeUserName', message: '制作人必须唯一' }], normalized: { assetType: 'Character', assetName: '春霞', productionItem: '侧视图', assigneeUserName: '重复昵称' } },
+    { sheetName: 'Sheet1', rowNumber: 2, canImport: true, warnings: [], errors: [], normalized: { assetType: 'Character', assetName: '春霞', productionItem: '标准立绘', itemDescription: '正视图' } },
+    { sheetName: 'Sheet1', rowNumber: 3, canImport: false, warnings: [], errors: [{ errorKey: 'SG_ASSET_NAME_REQUIRED', fieldName: 'assetName', message: '资产名称不能为空' }], normalized: { assetType: 'Character', assetName: null, productionItem: '侧视图' } },
     { sheetName: '场景', rowNumber: 2, canImport: true, warnings: [{ errorKey: 'SG_ASSET_PRODUCTION_ITEM_MISSING', fieldName: 'productionItem', message: '制作分项可后补' }], errors: [], normalized: { assetType: 'Environment', assetName: '动力舱', productionItem: null, itemDescription: '冷蓝色调' } }
   ]
 }
@@ -45,7 +48,6 @@ describe('资产 Excel 导入对话框', () => {
       createdAssetsByType: { Character: 1, Environment: 1, Prop: 0 },
       reusedAssets: 0,
       createdAssetItems: 2,
-      createdTasks: 1,
       missingProductionItemWarnings: 1,
       autoMatchedRequirements: 1,
       pendingRequirements: 0,
@@ -56,39 +58,41 @@ describe('资产 Excel 导入对话框', () => {
 
   it('展示类型统计和行级问题，并按 Sheet 与源数据行提交可导入选择', async () => {
     const wrapper = mount(AssetImportDialog, {
-      props: { projectId: 8, operationGeneration: 1, projectName: '罗刹夫人', members: [{ userId: 7, userName: '庞晓亮', nickName: 'PXL', projectRole: 'creator' }] },
-      global: { components: { ElButton, ElDialog, ElIcon, ElTable, ElTableColumn, ElTag }, stubs: { teleport: true } }
+      props: { projectId: 8, operationGeneration: 1, projectName: '罗刹夫人' },
+      global: { components, stubs: { teleport: true, ElDialog: dialogStub } }
     })
     const input = wrapper.find('input[type="file"]')
     const file = new File(['xlsx'], '资产样表.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
     Object.defineProperty(input.element, 'files', { configurable: true, value: [file] })
     await input.trigger('change')
-    await wrapper.findAll('button').find(button => button.text().includes('检查文件')).trigger('click')
+    await wrapper.findAll('button').find(button => button.text().includes('预览导入内容')).trigger('click')
     await flushPromises()
 
     expect(wrapper.text()).toContain('角色 1 资产 / 2 分项')
-    expect(wrapper.text()).toContain('制作人必须唯一')
+    expect(wrapper.text()).toContain('资产名称不能为空')
     expect(wrapper.text()).toContain('制作分项可后补')
-    expect(wrapper.text()).toContain('已选 2 行 · 2 条可导入')
+    expect(wrapper.text()).toContain('已选择 2 条')
     const previewTags = wrapper.findAllComponents(ElTag)
     expect(previewTags.find(tag => tag.text().includes('角色 1 资产'))?.props('type')).toBe('warning')
     expect(previewTags.find(tag => tag.text().includes('场景 1 资产'))?.props('type')).toBe('primary')
     expect(previewTags.find(tag => tag.text() === '1' && tag.props('type') === 'warning')).toBeTruthy()
 
-    await wrapper.get('select[aria-label="选择 Sheet1 第 3 行制作人"]').setValue('')
-    expect(wrapper.text()).toContain('将以未分配状态导入')
-    expect(wrapper.text()).toContain('已选 3 行 · 3 条可导入')
+    expect(wrapper.text()).toContain('导入后可在资产列表统一分配制作任务')
+    expect(wrapper.text()).toContain('导入有效期')
+    expect(wrapper.text()).toContain('前完成导入')
+    expect(wrapper.text()).toContain('正常')
+    expect(wrapper.findAllComponents(ElTableColumn).some(column => column.props('label') === '制作人')).toBe(false)
+    expect(wrapper.find('select').exists()).toBe(false)
 
-    await wrapper.findAll('button').find(button => button.text().includes('正式导入 3 行')).trigger('click')
+    await wrapper.findAll('button').find(button => button.text().includes('确认导入 2 条')).trigger('click')
     await flushPromises()
     expect(commitAssetImport).toHaveBeenCalledWith(
       8,
       {
         importToken: 'asset-token-9',
         selectedRows: [
-          { sheetName: 'Sheet1', rowNumber: 2, assigneeUserId: 7 },
-          { sheetName: 'Sheet1', rowNumber: 3, assigneeUserId: null },
-          { sheetName: '场景', rowNumber: 2, assigneeUserId: null }
+          { sheetName: 'Sheet1', rowNumber: 2 },
+          { sheetName: '场景', rowNumber: 2 }
         ]
       },
       expect.stringContaining('asset-import-8:')
@@ -103,23 +107,16 @@ describe('资产 Excel 导入对话框', () => {
     wrapper.unmount()
   })
 
-  it('使用 Element Plus 选择列，并通过批量分配弹窗只覆盖勾选行', async () => {
+  it('使用 Element Plus 选择列调整本次未分配导入范围', async () => {
     const wrapper = mount(AssetImportDialog, {
-      props: {
-        projectId: 8,
-        operationGeneration: 1,
-        members: [
-          { userId: 7, userName: '庞晓亮', nickName: 'PXL', projectRole: 'creator' },
-          { userId: 9, userName: '钱志锋', nickName: 'QZF', projectRole: 'creator' }
-        ]
-      },
-      global: { components: { ElButton, ElDialog, ElIcon, ElTable, ElTableColumn, ElTag }, stubs: { teleport: true } }
+      props: { projectId: 8, operationGeneration: 1 },
+      global: { components, stubs: { teleport: true, ElDialog: dialogStub } }
     })
     const input = wrapper.find('input[type="file"]')
     const file = new File(['xlsx'], '资产样表.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
     Object.defineProperty(input.element, 'files', { configurable: true, value: [file] })
     await input.trigger('change')
-    await wrapper.findAll('button').find(button => button.text().includes('检查文件')).trigger('click')
+    await wrapper.findAll('button').find(button => button.text().includes('预览导入内容')).trigger('click')
     await flushPromises()
 
     expect(wrapper.text()).not.toContain('选择全部可处理行')
@@ -128,20 +125,13 @@ describe('资产 Excel 导入对话框', () => {
     const tables = wrapper.findAllComponents(ElTable)
     tables[1].vm.$emit('selection-change', [])
     await flushPromises()
-    expect(wrapper.text()).toContain('已选 1 行 · 1 条可导入')
-    expect(wrapper.findAll('button').some(button => button.text().includes('批量分配'))).toBe(true)
-
-    await wrapper.findAll('button').find(button => button.text().includes('批量分配')).trigger('click')
-    await wrapper.get('select[aria-label="批量分配资产制作人"]').setValue('9')
-    await wrapper.findAll('button').find(button => button.text().includes('确认分配')).trigger('click')
-    expect(wrapper.text()).toContain('已选 1 行 · 1 条可导入')
-    expect(wrapper.get('select[aria-label="选择 Sheet1 第 2 行制作人"]').element.value).toBe('9')
-    expect(wrapper.get('select[aria-label="选择 Sheet1 第 3 行制作人"]').element.value).toBe('__unresolved__')
-    expect(wrapper.get('select[aria-label="选择 场景 第 2 行制作人"]').element.value).toBe('')
+    expect(wrapper.text()).toContain('已选择 1 条')
+    expect(wrapper.findAll('button').some(button => button.text().includes('批量分配'))).toBe(false)
 
     wrapper.findAllComponents(ElTable)[0].vm.$emit('selection-change', [])
     await flushPromises()
-    expect(wrapper.findAll('button').some(button => button.text().includes('批量分配'))).toBe(false)
+    expect(wrapper.text()).toContain('已选择 0 条')
+    expect(wrapper.findAll('button').find(button => button.text().includes('确认导入')).attributes('disabled')).toBeDefined()
     wrapper.unmount()
   })
 
@@ -151,20 +141,20 @@ describe('资产 Excel 导入对话框', () => {
       .mockResolvedValueOnce({ data: { ...preview, rows: [{ ...preview.rows[0], normalized: { ...preview.rows[0].normalized, assetName: '新资产' } }] } })
     const wrapper = mount(AssetImportDialog, {
       props: { projectId: 8, operationGeneration: 1 },
-      global: { components: { ElButton, ElDialog, ElIcon, ElTable, ElTableColumn, ElTag }, stubs: { teleport: true } }
+      global: { components, stubs: { teleport: true, ElDialog: dialogStub } }
     })
     const input = wrapper.find('input[type="file"]')
     const oldFile = new File(['old'], '旧资产.xlsx')
     Object.defineProperty(input.element, 'files', { configurable: true, value: [oldFile] })
     await input.trigger('change')
-    await wrapper.findAll('button').find(button => button.text().includes('检查文件')).trigger('click')
+    await wrapper.findAll('button').find(button => button.text().includes('预览导入内容')).trigger('click')
     const oldSignal = previewAssetImport.mock.calls[0][2].signal
 
     const newFile = new File(['new'], '新资产.xlsx')
-    Object.defineProperty(input.element, 'files', { configurable: true, value: [newFile] })
-    await input.trigger('change')
+    await wrapper.findComponent(ElUpload).props('onChange')({ raw: newFile })
+    await flushPromises()
     expect(oldSignal.aborted).toBe(true)
-    await wrapper.findAll('button').find(button => button.text().includes('检查文件')).trigger('click')
+    await wrapper.findAll('button').find(button => button.text().includes('预览导入内容')).trigger('click')
     await flushPromises()
     expect(wrapper.text()).toContain('新资产')
 
@@ -178,22 +168,22 @@ describe('资产 Excel 导入对话框', () => {
   it('重新预检开始即清除旧 Token 和选择，失败后不能提交旧预检', async () => {
     const wrapper = mount(AssetImportDialog, {
       props: { projectId: 8, operationGeneration: 1 },
-      global: { components: { ElButton, ElDialog, ElIcon, ElTable, ElTableColumn, ElTag }, stubs: { teleport: true } }
+      global: { components, stubs: { teleport: true, ElDialog: dialogStub } }
     })
     const input = wrapper.find('input[type="file"]')
     const file = new File(['xlsx'], '资产样表.xlsx')
     Object.defineProperty(input.element, 'files', { configurable: true, value: [file] })
     await input.trigger('change')
-    await wrapper.findAll('button').find(button => button.text().includes('检查文件')).trigger('click')
+    await wrapper.findAll('button').find(button => button.text().includes('预览导入内容')).trigger('click')
     await flushPromises()
-    expect(wrapper.text()).toContain('正式导入 2 行')
+    expect(wrapper.text()).toContain('确认导入 2 条')
 
     previewAssetImport.mockRejectedValueOnce({ httpStatus: 503, message: '预检缓存不可用' })
-    await wrapper.findAll('button').find(button => button.text().includes('重新检查')).trigger('click')
-    expect(wrapper.text()).not.toContain('正式导入 2 行')
+    await wrapper.findAll('button').find(button => button.text().includes('重新预览')).trigger('click')
+    expect(wrapper.text()).not.toContain('确认导入 2 条')
     await flushPromises()
     expect(wrapper.text()).toContain('预检缓存不可用')
-    expect(wrapper.text()).not.toContain('正式导入')
+    expect(wrapper.text()).not.toContain('确认导入')
     expect(commitAssetImport).not.toHaveBeenCalled()
     wrapper.unmount()
   })
@@ -206,7 +196,7 @@ describe('资产 Excel 导入对话框', () => {
     const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
     const wrapper = mount(AssetImportDialog, {
       props: { projectId: 8, operationGeneration: 1 },
-      global: { components: { ElButton, ElDialog, ElIcon, ElTable, ElTableColumn, ElTag }, stubs: { teleport: true } }
+      global: { components, stubs: { teleport: true, ElDialog: dialogStub } }
     })
     const button = wrapper.findAll('button').find(item => item.text().includes('下载官方模板'))
     await button.trigger('click')

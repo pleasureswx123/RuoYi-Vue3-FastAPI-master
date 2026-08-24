@@ -1,12 +1,12 @@
 import hashlib
 import re
-import xml.etree.ElementTree as ET
 from pathlib import Path
 from urllib.parse import unquote
 from zipfile import ZipFile
 
 import pytest
 from fastapi import FastAPI
+from openpyxl import load_workbook
 
 from common.aspect.interface_auth import CheckUserInterfaceAuth
 from module_shot_grid.config import SHOT_GRID_IMPORT_CONFIG
@@ -19,14 +19,12 @@ from module_shot_grid.exceptions import ShotGridDomainException
 from module_shot_grid.service.shot_excel_parser import ShotExcelParser
 from module_shot_grid.service.shot_import_template_service import ShotGridShotImportTemplateService
 
-EXPECTED_SHA256 = 'f6370bbb14548b645782abf0734e930ec10470565821ba6c8fd1b6a2d9d96ee0'
+EXPECTED_SHA256 = 'b6f24078ca56295e9e6cce50bb3455af198dfffe5c08f8d85605a68c09439ece'
 SERVICE_UNAVAILABLE_STATUS = 503
-EXPECTED_SHARED_STRING_COUNT = 88
-EXPECTED_HEADERS = {
+EXPECTED_HEADERS = (
     '场次',
     '镜头号',
     '时长(s)',
-    '制作人',
     '镜头缩略图',
     '制作内容描述',
     '景别',
@@ -39,10 +37,6 @@ EXPECTED_HEADERS = {
     '色调参考',
     '备注',
     '镜头状态',
-}
-ANONYMOUS_DEMO_TEXT_PATTERN = re.compile(
-    r'^(?:序|[0-9]+场?|S[0-9]{3,}|制作人[A-Z]|'
-    r'示例(?:镜头描述|景别|机位|运动|场景|对白|音效|色调|备注|状态|选项)[0-9]{2})$'
 )
 
 
@@ -80,30 +74,25 @@ def test_packaged_template_does_not_expose_local_or_network_paths() -> None:
     assert re.search(r'file:(?:/{1,3}|\\)', xml_text, flags=re.IGNORECASE) is None
     assert re.search(r'(?<![A-Za-z])[A-Za-z]:[\\/]', xml_text) is None
     assert '\\\\' not in xml_text
+    assert '制作人' not in xml_text
 
 
-def test_packaged_template_contains_only_anonymous_demo_text_and_metadata() -> None:
-    spreadsheet_namespace = '{http://schemas.openxmlformats.org/spreadsheetml/2006/main}'
-    core_namespaces = {
-        'cp': 'http://schemas.openxmlformats.org/package/2006/metadata/core-properties',
-        'dc': 'http://purl.org/dc/elements/1.1/',
-    }
-    with ZipFile(ShotGridShotImportTemplateService.TEMPLATE_PATH) as workbook:
-        shared_root = ET.fromstring(workbook.read('xl/sharedStrings.xml'))
-        shared_strings = [''.join(node.itertext()) for node in shared_root.findall(f'{spreadsheet_namespace}si')]
-        core_root = ET.fromstring(workbook.read('docProps/core.xml'))
-        custom_root = ET.fromstring(workbook.read('docProps/custom.xml'))
-
-    assert len(shared_strings) == EXPECTED_SHARED_STRING_COUNT
-    assert EXPECTED_HEADERS.issubset(shared_strings)
-    assert [
-        value
-        for value in shared_strings
-        if value not in EXPECTED_HEADERS and ANONYMOUS_DEMO_TEXT_PATTERN.fullmatch(value) is None
-    ] == []
-    assert core_root.findtext('dc:creator', namespaces=core_namespaces) in {None, 'Shot Grid'}
-    assert core_root.findtext('cp:lastModifiedBy', namespaces=core_namespaces) == 'Shot Grid'
-    assert list(custom_root) == []
+def test_packaged_template_uses_exact_business_headers_without_assignee_column() -> None:
+    workbook = load_workbook(ShotGridShotImportTemplateService.TEMPLATE_PATH, read_only=True, data_only=False)
+    try:
+        visible_sheets = [sheet for sheet in workbook.worksheets if sheet.sheet_state == 'visible']
+        assert visible_sheets
+        assert ShotExcelParser.EXPECTED_HEADERS == EXPECTED_HEADERS
+        for sheet in visible_sheets:
+            assert tuple(sheet.cell(row=1, column=index).value for index in range(1, 16)) == EXPECTED_HEADERS
+            assert not any(
+                '制作人' in str(cell.value)
+                for row in sheet.iter_rows(min_row=1, max_row=sheet.max_row)
+                for cell in row
+                if cell.value is not None
+            )
+    finally:
+        workbook.close()
 
 
 @pytest.mark.asyncio
@@ -120,7 +109,7 @@ async def test_template_service_uses_stable_unavailable_error(
     tmp_path: Path,
     mode: str,
 ) -> None:
-    template_path = tmp_path / 'shot-v1.xlsx'
+    template_path = tmp_path / 'shot-v2.xlsx'
     if mode == 'digest_mismatch':
         template_path.write_bytes(b'not-the-frozen-template')
     monkeypatch.setattr(ShotGridShotImportTemplateService, 'TEMPLATE_PATH', template_path)
@@ -155,6 +144,6 @@ async def test_template_route_returns_versioned_download_headers() -> None:
 
     disposition = unquote(response.headers['Content-Disposition'])
     assert response.media_type == XLSX_MEDIA_TYPE
-    assert response.headers['X-Shot-Grid-Template-Version'] == 'shot-v1'
-    assert '镜头导入模板-shot-v1.xlsx' in disposition
+    assert response.headers['X-Shot-Grid-Template-Version'] == 'shot-v2'
+    assert '镜头导入模板-shot-v2.xlsx' in disposition
     assert response.body == _template_bytes()

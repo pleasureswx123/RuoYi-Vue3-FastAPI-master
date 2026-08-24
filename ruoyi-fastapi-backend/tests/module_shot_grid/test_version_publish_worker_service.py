@@ -24,7 +24,7 @@ def _claimed(*, attempt_count: int = ATTEMPT_COUNT) -> _ClaimedSubmission:
         attempt_count=attempt_count,
         lease_owner='leader:claim',
         execution_status='committing',
-        temporary_relative_path=f'VIDEO\\EP01\\S001\\.sgtmp-11-a{attempt_count}-old.part',
+        temporary_relative_path=f'VIDEO\\EP01\\001_S001\\.sgtmp-11-a{attempt_count}-old.part',
     )
 
 

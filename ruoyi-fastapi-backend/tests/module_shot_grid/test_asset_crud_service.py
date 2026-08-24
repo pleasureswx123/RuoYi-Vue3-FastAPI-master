@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from module_admin.entity.vo.user_vo import CurrentUserModel, UserInfoModel
+from module_shot_grid.dao.asset_crud_dao import ShotGridAssetCrudDao
 from module_shot_grid.entity.vo.access_vo import ShotGridProjectAccessModel
 from module_shot_grid.entity.vo.asset_crud_vo import (
     ShotGridAssetArchiveModel,
@@ -45,15 +46,12 @@ def _access(*, role: str = 'director', project_id: int = PROJECT_ID) -> ShotGrid
     )
 
 
-def _command(*, assignee_user_id: int | None = ASSIGNEE_USER_ID) -> ShotGridAssetCreateModel:
+def _command() -> ShotGridAssetCreateModel:
     item: dict[str, object] = {
         'productionItem': '主视角',
         'description': '制作分项描述',
         'sortOrder': 10,
     }
-    if assignee_user_id is not None:
-        item['assigneeUserId'] = assignee_user_id
-        item['taskDescription'] = '完成参考图'
     return ShotGridAssetCreateModel(
         assetType='Environment',
         assetName='动力舱室内',
@@ -79,9 +77,7 @@ def _patch_create_dependencies(monkeypatch: pytest.MonkeyPatch) -> dict[str, Asy
         'conflict': AsyncMock(return_value=False),
         'add_asset': AsyncMock(side_effect=add_asset),
         'add_item': AsyncMock(side_effect=add_item),
-        'add_task': AsyncMock(),
         'add_operation': AsyncMock(),
-        'member': AsyncMock(return_value={'user_id': ASSIGNEE_USER_ID, 'producer_code': 'YJF', 'nick_name': '制作人'}),
         'audit': AsyncMock(),
         'detail': AsyncMock(return_value=object()),
     }
@@ -92,9 +88,7 @@ def _patch_create_dependencies(monkeypatch: pytest.MonkeyPatch) -> dict[str, Asy
         'conflict': 'ShotGridAssetCrudDao.asset_name_or_path_exists',
         'add_asset': 'ShotGridAssetCrudDao.add_asset',
         'add_item': 'ShotGridAssetCrudDao.add_item',
-        'add_task': 'ShotGridAssetCrudDao.add_task',
         'add_operation': 'ShotGridAssetCrudDao.add_storage_operation',
-        'member': 'ShotGridAssetCrudDao.get_assignable_member',
         'audit': 'ShotGridProjectAuditDao.add_success_log',
         'detail': 'ShotGridAssetCrudService._build_asset_detail',
     }
@@ -104,7 +98,7 @@ def _patch_create_dependencies(monkeypatch: pytest.MonkeyPatch) -> dict[str, Asy
 
 
 @pytest.mark.asyncio
-async def test_create_asset_persists_asset_items_outbox_task_and_audit_in_one_transaction(
+async def test_create_asset_persists_items_outbox_and_audit_without_task_in_one_transaction(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     mocks = _patch_create_dependencies(monkeypatch)
@@ -126,52 +120,27 @@ async def test_create_asset_persists_asset_items_outbox_task_and_audit_in_one_tr
     operation = mocks['add_operation'].await_args.args[1]
     assert operation.operation_type == 'ensure_asset_directory'
     assert operation.target_relative_path == 'ASSET\\Environment\\动力舱室内'
-    task = mocks['add_task'].await_args.args[1]
-    assert task.asset_item_id == ASSET_ITEM_ID
-    assert task.assignee_user_id == ASSIGNEE_USER_ID
-    assert task.task_kind == 'asset_image'
     mocks['audit'].assert_awaited_once()
     db.commit.assert_awaited_once()
     db.rollback.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_create_unassigned_item_does_not_create_empty_task(monkeypatch: pytest.MonkeyPatch) -> None:
-    mocks = _patch_create_dependencies(monkeypatch)
+async def test_create_item_has_no_task_creation_or_assignment_bypass(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_create_dependencies(monkeypatch)
     db = AsyncMock()
 
     await ShotGridAssetCrudService.create_asset(
         db,
         PROJECT_ID,
-        _command(assignee_user_id=None),
+        _command(),
         _current_user(),
         _access(),
     )
 
-    mocks['add_task'].assert_not_awaited()
-    mocks['member'].assert_not_awaited()
+    assert not hasattr(ShotGridAssetCrudDao, 'add_task')
+    assert not hasattr(ShotGridAssetCrudDao, 'get_assignable_member')
     db.commit.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_create_asset_rolls_back_when_assignee_is_not_active_member(monkeypatch: pytest.MonkeyPatch) -> None:
-    mocks = _patch_create_dependencies(monkeypatch)
-    mocks['member'].return_value = None
-    db = AsyncMock()
-
-    with pytest.raises(ShotGridDomainException) as exc_info:
-        await ShotGridAssetCrudService.create_asset(
-            db,
-            PROJECT_ID,
-            _command(),
-            _current_user(),
-            _access(),
-        )
-
-    assert exc_info.value.error_key == 'SG_TASK_ASSIGNEE_INVALID'
-    mocks['audit'].assert_not_awaited()
-    db.commit.assert_not_awaited()
-    db.rollback.assert_awaited_once()
 
 
 def test_asset_write_service_revalidates_project_role_and_scope() -> None:
@@ -296,54 +265,6 @@ async def test_item_update_preserves_omitted_fields_and_freezes_all_metadata_aft
 
 
 @pytest.mark.asyncio
-async def test_item_edit_cannot_reassign_existing_task(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        'module_shot_grid.service.asset_crud_service.ShotGridAssetCrudDao.get_task_for_item',
-        AsyncMock(return_value=SimpleNamespace(assignee_user_id=2, requirements='原要求')),
-    )
-    command = ShotGridAssetItemUpdateModel(
-        productionItem='主视角',
-        assigneeUserId=3,
-        lockVersion=0,
-    )
-
-    with pytest.raises(ShotGridDomainException) as exc_info:
-        await ShotGridAssetCrudService._validate_item_task_update(
-            AsyncMock(),
-            PROJECT_ID,
-            ASSET_ITEM_ID,
-            command,
-        )
-
-    assert exc_info.value.error_key == 'SG_TASK_ALREADY_EXISTS'
-
-
-@pytest.mark.asyncio
-async def test_item_edit_cannot_silently_change_existing_task_requirements(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        'module_shot_grid.service.asset_crud_service.ShotGridAssetCrudDao.get_task_for_item',
-        AsyncMock(return_value=SimpleNamespace(assignee_user_id=ASSIGNEE_USER_ID, requirements='原要求')),
-    )
-    command = ShotGridAssetItemUpdateModel(
-        productionItem='主视角',
-        taskDescription='新要求',
-        lockVersion=0,
-    )
-
-    with pytest.raises(ShotGridDomainException) as exc_info:
-        await ShotGridAssetCrudService._validate_item_task_update(
-            AsyncMock(),
-            PROJECT_ID,
-            ASSET_ITEM_ID,
-            command,
-        )
-
-    assert exc_info.value.error_key == 'SG_INVALID_STATE_TRANSITION'
-
-
-@pytest.mark.asyncio
 async def test_item_rename_without_versions_syncs_existing_task_name_and_lock(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -365,6 +286,7 @@ async def test_item_rename_without_versions_syncs_existing_task_name_and_lock(
         assignee_user_id=ASSIGNEE_USER_ID,
         requirements='原要求',
         task_name='动力舱室内 - 主视角',
+        task_status='not_started',
         lock_version=2,
         update_by='old',
         update_time=None,
@@ -386,7 +308,7 @@ async def test_item_rename_without_versions_syncs_existing_task_name_and_lock(
         AsyncMock(return_value=('恐怖气氛主视角', '恐怖气氛主视角', '旧描述', 10, None)),
     )
     monkeypatch.setattr(
-        'module_shot_grid.service.asset_crud_service.ShotGridAssetCrudService._validate_item_task_update',
+        'module_shot_grid.service.asset_crud_service.ShotGridAssetCrudService._get_item_task_for_update',
         AsyncMock(return_value=task),
     )
     audit = AsyncMock()
@@ -424,6 +346,51 @@ async def test_item_rename_without_versions_syncs_existing_task_name_and_lock(
     db.flush.assert_awaited_once()
     db.commit.assert_awaited_once()
     db.rollback.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_started_asset_item_cannot_be_edited_even_before_first_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    asset = SimpleNamespace(asset_id=ASSET_ID, asset_name='动力舱室内')
+    item = SimpleNamespace(asset_item_id=ASSET_ITEM_ID, asset_id=ASSET_ID, lifecycle_status='active', lock_version=0)
+    resolve_update = AsyncMock()
+    monkeypatch.setattr(
+        'module_shot_grid.service.asset_crud_service.ShotGridAssetCrudService._lock_writable_project',
+        AsyncMock(),
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.asset_crud_service.ShotGridAssetCrudService._lock_active_asset',
+        AsyncMock(return_value=asset),
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.asset_crud_service.ShotGridAssetCrudDao.get_asset_item',
+        AsyncMock(return_value=item),
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.asset_crud_service.ShotGridAssetCrudService._get_item_task_for_update',
+        AsyncMock(return_value=SimpleNamespace(task_status='in_progress')),
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.asset_crud_service.ShotGridAssetCrudService._resolve_item_update',
+        resolve_update,
+    )
+    db = AsyncMock()
+
+    with pytest.raises(ShotGridDomainException) as exc_info:
+        await ShotGridAssetCrudService.update_asset_item(
+            db,
+            PROJECT_ID,
+            ASSET_ITEM_ID,
+            ShotGridAssetItemUpdateModel(description='不应保存', lockVersion=0),
+            _current_user(),
+            _access(),
+        )
+
+    assert exc_info.value.error_key == 'SG_ASSET_ITEM_PRODUCTION_STARTED'
+    resolve_update.assert_not_awaited()
+    db.commit.assert_not_awaited()
+    db.rollback.assert_awaited_once()
 
 
 @pytest.mark.parametrize(
@@ -608,6 +575,7 @@ def test_asset_and_item_allowed_actions_are_server_side_state_mirrors() -> None:
         storage_status='ready',
         asset_lifecycle_status='active',
         item_lifecycle_status='active',
+        production_item='主视角',
         has_versions=False,
         task_status=None,
         has_uncommitted_submission=False,
@@ -615,6 +583,19 @@ def test_asset_and_item_allowed_actions_are_server_side_state_mirrors() -> None:
 
     assert asset_actions == ['asset.edit', 'asset.archive', 'assetItem.add', 'task.assign']
     assert item_actions == ['assetItem.edit', 'assetItem.archive', 'task.assign']
+    assert ShotGridAssetCrudService._item_allowed_actions(
+        _current_user(),
+        _access(),
+        project_id=PROJECT_ID,
+        project_status='active',
+        storage_status='ready',
+        asset_lifecycle_status='active',
+        item_lifecycle_status='active',
+        production_item='主视角',
+        has_versions=False,
+        task_status='in_progress',
+        has_uncommitted_submission=False,
+    ) == ['task.assign']
 
     assert (
         ShotGridAssetCrudService._asset_allowed_actions(
@@ -638,6 +619,7 @@ def test_asset_and_item_allowed_actions_are_server_side_state_mirrors() -> None:
             storage_status='ready',
             asset_lifecycle_status='active',
             item_lifecycle_status='active',
+            production_item='主视角',
             has_versions=True,
             task_status='in_progress',
             has_uncommitted_submission=True,

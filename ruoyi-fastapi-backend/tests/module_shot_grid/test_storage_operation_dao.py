@@ -6,9 +6,11 @@ import pytest
 from sqlalchemy.dialects import postgresql
 
 from module_shot_grid.dao.storage_operation_dao import ShotGridStorageOperationDao
+from module_shot_grid.entity.do.project_do import ShotGridShot
 from module_shot_grid.entity.do.storage_do import ShotGridProjectStorage, ShotGridStorageOperation
 
 MAX_ATTEMPT_COUNT = 5
+RENUMBER_STATEMENT_COUNT = 3
 
 
 class _ScalarResult:
@@ -30,6 +32,17 @@ class _EmptyMappingResult:
 
 class _RowCountResult:
     rowcount = 1
+
+
+class _ScalarListResult:
+    def __init__(self, values: list[object]) -> None:
+        self.values = values
+
+    def scalars(self) -> '_ScalarListResult':
+        return self
+
+    def all(self) -> list[object]:
+        return self.values
 
 
 def test_claim_statement_uses_postgresql_skip_locked_and_recovers_expired_processing() -> None:
@@ -144,6 +157,7 @@ async def test_initialize_success_updates_operation_and_project_storage_atomical
         attempt_count=1,
         lease_owner='worker-1',
         lease_until=now + timedelta(minutes=5),
+        create_by='管理员',
     )
     storage = ShotGridProjectStorage(
         project_id=10,
@@ -175,7 +189,119 @@ async def test_initialize_success_updates_operation_and_project_storage_atomical
     assert storage.storage_status == 'ready'
     assert storage.initialized_time == now
     assert storage.lock_version == 1
+    assert storage.update_by == '管理员'
     db.flush.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_shot_directory_success_advances_only_preparing_shot_task() -> None:
+    now = datetime(2026, 8, 21, 10, 0, 0)
+    operation = ShotGridStorageOperation(
+        operation_id=15,
+        project_id=10,
+        operation_type='ensure_shot_directory',
+        aggregate_type='shot',
+        aggregate_id=101,
+        target_relative_path=r'VIDEO\EP01\001_S001',
+        operation_status='processing',
+        idempotency_key='shotgrid:dir:shot-start:10:101',
+        attempt_count=1,
+        lease_owner='worker-1',
+        lease_until=now + timedelta(minutes=5),
+        create_by='杨景锋',
+    )
+    db = AsyncMock()
+    db.execute.side_effect = [_ScalarResult(operation), _RowCountResult(), _ScalarResult(None)]
+
+    updated = await ShotGridStorageOperationDao.mark_succeeded(
+        db,
+        operation_id=15,
+        worker_id='worker-1',
+        expected_attempt_count=1,
+        now=now,
+    )
+
+    task_update = db.execute.await_args_list[1].args[0]
+    sql = str(task_update.compile(dialect=postgresql.dialect(), compile_kwargs={'literal_binds': True}))
+    assert updated
+    assert "sg_task.task_status = 'preparing'" in sql
+    assert "task_status='in_progress'" in sql.replace(' ', '')
+    assert "update_by='杨景锋'" in sql.replace(' ', '')
+    assert 'sg_task.shot_id = 101' in sql
+    assert operation.operation_status == 'succeeded'
+    db.flush.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_scene_renumber_database_switch_is_scoped_to_scene_and_uses_two_phases() -> None:
+    now = datetime(2026, 8, 20, 12, 0, 0)
+    operation = ShotGridStorageOperation(
+        operation_id=9,
+        project_id=10,
+        operation_type='renumber_shot_directories',
+        aggregate_type='scene',
+        aggregate_id=20,
+        target_relative_path=r'VIDEO\EP001',
+        operation_payload={
+            'schemaVersion': 1,
+            'sceneId': 20,
+            'items': [
+                {
+                    'shotId': 101,
+                    'sourceShotNo': 2,
+                    'targetShotNo': 1,
+                    'temporaryShotNo': 2_147_483_647,
+                    'sourceDirName': '001_S002',
+                    'targetDirName': '001_S001',
+                    'expectedLockVersion': 4,
+                }
+            ],
+        },
+        operation_status='processing',
+        idempotency_key='renumber:20',
+        attempt_count=1,
+        lease_owner='worker-1',
+        lease_until=now + timedelta(minutes=5),
+        create_by='director',
+    )
+    shot = ShotGridShot(
+        shot_id=101,
+        project_id=10,
+        episode_id=11,
+        scene_id=20,
+        shot_no=2,
+        storage_dir_name='001_S002',
+        duration_ms=0,
+        description='待重编号镜头',
+        sort_order=10,
+        lifecycle_status='active',
+        lock_version=4,
+        del_flag='0',
+    )
+
+    class FakeDb:
+        def __init__(self) -> None:
+            self.statements: list[object] = []
+
+        async def execute(self, statement: object) -> object:
+            self.statements.append(statement)
+            if len(self.statements) == 1:
+                return _ScalarListResult([shot])
+            return _RowCountResult()
+
+    db = FakeDb()
+
+    await ShotGridStorageOperationDao._apply_shot_renumber(db, operation=operation, now=now)  # type: ignore[arg-type]
+
+    assert len(db.statements) == RENUMBER_STATEMENT_COUNT
+    update_sql = [
+        str(statement.compile(dialect=postgresql.dialect(), compile_kwargs={'literal_binds': True}))
+        for statement in db.statements[1:]
+    ]
+    assert all('sg_shot.scene_id = 20' in sql for sql in update_sql)
+    assert 'shot_no=2147483647' in update_sql[0].replace(' ', '')
+    assert 'shot_no=1' in update_sql[1].replace(' ', '')
+    assert "storage_dir_name='001_S001'" in update_sql[1].replace(' ', '')
 
 
 @pytest.mark.asyncio

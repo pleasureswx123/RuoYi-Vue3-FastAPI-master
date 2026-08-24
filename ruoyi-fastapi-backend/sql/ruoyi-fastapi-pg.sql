@@ -2,6 +2,7 @@
 -- 0、Shot Grid 业务表逆序清理（必须先于 sys_user、sys_file_info 等平台表）
 -- ----------------------------
 drop table if exists sg_review_list_version;
+drop table if exists sg_review_issue_draft;
 drop table if exists sg_issue_verification;
 drop table if exists sg_version_issue_response;
 drop table if exists sg_media_derivation;
@@ -1730,7 +1731,7 @@ CREATE TABLE sg_episode (
 	episode_id BIGSERIAL NOT NULL,
 	project_id BIGINT NOT NULL,
 	episode_no INTEGER NOT NULL,
-	storage_dir_name VARCHAR(32) NOT NULL,
+	storage_dir_name VARCHAR(32),
 	episode_name VARCHAR(200),
 	description TEXT,
 	sort_order INTEGER DEFAULT '0' NOT NULL,
@@ -1935,6 +1936,7 @@ CREATE TABLE sg_storage_operation (
 	aggregate_type VARCHAR(20) NOT NULL,
 	aggregate_id BIGINT NOT NULL,
 	target_relative_path VARCHAR(1200) NOT NULL,
+	operation_payload JSONB,
 	operation_status VARCHAR(30) DEFAULT 'pending' NOT NULL,
 	idempotency_key VARCHAR(100) NOT NULL,
 	attempt_count INTEGER DEFAULT '0' NOT NULL,
@@ -1950,9 +1952,10 @@ CREATE TABLE sg_storage_operation (
 	update_time TIMESTAMP(0) WITHOUT TIME ZONE NOT NULL,
 	PRIMARY KEY (operation_id),
 	CONSTRAINT uk_sg_storage_operation_idempotency UNIQUE (idempotency_key),
-	CONSTRAINT ck_sg_storage_operation_type CHECK (operation_type in ('initialize_project', 'ensure_episode_directory', 'ensure_shot_directory', 'ensure_asset_directory', 'reconcile_directory')),
-	CONSTRAINT ck_sg_storage_operation_aggregate_type CHECK (aggregate_type in ('project', 'episode', 'shot', 'asset')),
-	CONSTRAINT ck_sg_storage_operation_target_type CHECK (operation_type = 'reconcile_directory' or (operation_type = 'initialize_project' and aggregate_type = 'project') or (operation_type = 'ensure_episode_directory' and aggregate_type = 'episode') or (operation_type = 'ensure_shot_directory' and aggregate_type = 'shot') or (operation_type = 'ensure_asset_directory' and aggregate_type = 'asset')),
+	CONSTRAINT ck_sg_storage_operation_type CHECK (operation_type in ('initialize_project', 'ensure_episode_directory', 'ensure_shot_directory', 'ensure_asset_directory', 'reconcile_directory', 'renumber_shot_directories')),
+	CONSTRAINT ck_sg_storage_operation_aggregate_type CHECK (aggregate_type in ('project', 'episode', 'scene', 'shot', 'asset')),
+	CONSTRAINT ck_sg_storage_operation_target_type CHECK (operation_type = 'reconcile_directory' or (operation_type = 'initialize_project' and aggregate_type = 'project') or (operation_type = 'ensure_episode_directory' and aggregate_type = 'episode') or (operation_type = 'ensure_shot_directory' and aggregate_type = 'shot') or (operation_type = 'ensure_asset_directory' and aggregate_type = 'asset') or (operation_type = 'renumber_shot_directories' and aggregate_type = 'scene')),
+	CONSTRAINT ck_sg_storage_operation_payload CHECK ((operation_type = 'renumber_shot_directories' and operation_payload is not null) or (operation_type <> 'renumber_shot_directories' and operation_payload is null)),
 	CONSTRAINT ck_sg_storage_operation_aggregate_id CHECK (aggregate_id > 0),
 	CONSTRAINT ck_sg_storage_operation_target_path CHECK (btrim(target_relative_path) <> ''),
 	CONSTRAINT ck_sg_storage_operation_status CHECK (operation_status in ('pending', 'processing', 'succeeded', 'retry_wait', 'failed', 'compensation_pending', 'compensated', 'compensation_failed')),
@@ -1972,6 +1975,7 @@ COMMENT ON COLUMN sg_storage_operation.operation_type IS '操作类型';
 COMMENT ON COLUMN sg_storage_operation.aggregate_type IS '目标聚合类型';
 COMMENT ON COLUMN sg_storage_operation.aggregate_id IS '目标业务对象ID';
 COMMENT ON COLUMN sg_storage_operation.target_relative_path IS '按操作类型相对存储根或项目根的目标路径';
+COMMENT ON COLUMN sg_storage_operation.operation_payload IS '受控复合目录操作载荷';
 COMMENT ON COLUMN sg_storage_operation.operation_status IS '执行状态';
 COMMENT ON COLUMN sg_storage_operation.idempotency_key IS '服务端稳定幂等键';
 COMMENT ON COLUMN sg_storage_operation.attempt_count IS '已执行次数';
@@ -2094,7 +2098,7 @@ CREATE TABLE sg_shot (
 	episode_id BIGINT NOT NULL,
 	scene_id BIGINT NOT NULL,
 	shot_no INTEGER NOT NULL,
-	storage_dir_name VARCHAR(32) NOT NULL,
+	storage_dir_name VARCHAR(32),
 	duration_ms BIGINT DEFAULT '0' NOT NULL,
 	shot_size VARCHAR(40),
 	camera_position VARCHAR(100),
@@ -2124,14 +2128,14 @@ CREATE TABLE sg_shot (
 	CONSTRAINT ck_sg_shot_del_flag CHECK (del_flag in ('0', '2'))
 );
 CREATE INDEX idx_sg_shot_project_episode_scene_lifecycle_sort ON sg_shot (project_id, episode_id, scene_id, lifecycle_status, sort_order);
-CREATE UNIQUE INDEX uk_sg_shot_no_active ON sg_shot (episode_id, shot_no) WHERE del_flag = '0';
+CREATE UNIQUE INDEX uk_sg_shot_scene_no_active ON sg_shot (scene_id, shot_no) WHERE del_flag = '0';
 COMMENT ON TABLE sg_shot IS 'Shot Grid镜头主表';
 COMMENT ON COLUMN sg_shot.shot_id IS '镜头ID';
 COMMENT ON COLUMN sg_shot.project_id IS '项目ID';
 COMMENT ON COLUMN sg_shot.episode_id IS '集ID';
 COMMENT ON COLUMN sg_shot.scene_id IS '场次ID';
-COMMENT ON COLUMN sg_shot.shot_no IS '集内镜头号';
-COMMENT ON COLUMN sg_shot.storage_dir_name IS 'NAS镜头目录快照';
+COMMENT ON COLUMN sg_shot.shot_no IS '场内位置编号；1即S001，2即S002';
+COMMENT ON COLUMN sg_shot.storage_dir_name IS '开始制作时冻结的含场次代码NAS镜头目录快照；未开始时为空';
 COMMENT ON COLUMN sg_shot.duration_ms IS '镜头时长（毫秒）';
 COMMENT ON COLUMN sg_shot.shot_size IS '景别';
 COMMENT ON COLUMN sg_shot.camera_position IS '机位';
@@ -2141,7 +2145,7 @@ COMMENT ON COLUMN sg_shot.description IS '镜头描述';
 COMMENT ON COLUMN sg_shot.dialogue IS '台词或对白';
 COMMENT ON COLUMN sg_shot.sound_effect IS '音效说明';
 COMMENT ON COLUMN sg_shot.color_reference IS '色调参考说明';
-COMMENT ON COLUMN sg_shot.sort_order IS '集内成片顺序';
+COMMENT ON COLUMN sg_shot.sort_order IS '兼容排序键；新写入与场内镜头号同步为10的倍数';
 COMMENT ON COLUMN sg_shot.lifecycle_status IS '生命周期状态';
 COMMENT ON COLUMN sg_shot.create_by IS '创建者';
 COMMENT ON COLUMN sg_shot.create_time IS '创建时间';
@@ -2248,7 +2252,8 @@ CREATE TABLE sg_task (
 	CONSTRAINT uk_sg_task_id_project UNIQUE (task_id, project_id),
 	CONSTRAINT ck_sg_task_name CHECK (btrim(task_name) <> ''),
 	CONSTRAINT ck_sg_task_owner_kind CHECK (((shot_id is not null and asset_item_id is null and task_kind = 'shot_video') or (shot_id is null and asset_item_id is not null and task_kind = 'asset_image'))),
-	CONSTRAINT ck_sg_task_status CHECK (task_status in ('not_started', 'in_progress', 'pending_review', 'revision', 'completed')),
+	CONSTRAINT ck_sg_task_status CHECK (task_status in ('not_started', 'preparing', 'in_progress', 'pending_review', 'revision', 'completed')),
+	CONSTRAINT ck_sg_task_preparing_kind CHECK (task_status <> 'preparing' or task_kind = 'shot_video'),
 	CONSTRAINT ck_sg_task_priority CHECK (priority in ('low', 'normal', 'high', 'urgent')),
 	CONSTRAINT ck_sg_task_lock_version CHECK (lock_version >= 0),
 	CONSTRAINT ck_sg_task_del_flag CHECK (del_flag in ('0', '2'))
@@ -2531,6 +2536,7 @@ CREATE TABLE sg_review_list (
 	del_flag CHAR(1) DEFAULT '0' NOT NULL,
 	PRIMARY KEY (review_list_id),
 	CONSTRAINT fk_sg_review_list_auto_version_project FOREIGN KEY(auto_version_id, project_id) REFERENCES sg_version (version_id, project_id) ON DELETE RESTRICT,
+	CONSTRAINT uk_sg_review_list_id_project UNIQUE (review_list_id, project_id),
 	CONSTRAINT ck_sg_review_list_name CHECK (btrim(review_list_name) <> ''),
 	CONSTRAINT ck_sg_review_list_mode CHECK (review_mode in ('auto_single', 'manual_batch')),
 	CONSTRAINT ck_sg_review_list_status CHECK (review_status in ('draft', 'active', 'completed', 'archived')),
@@ -2558,6 +2564,42 @@ COMMENT ON COLUMN sg_review_list.update_time IS '更新时间';
 COMMENT ON COLUMN sg_review_list.remark IS '备注';
 COMMENT ON COLUMN sg_review_list.lock_version IS '乐观锁版本';
 COMMENT ON COLUMN sg_review_list.del_flag IS '删除标志（0正常 2删除）';
+
+-- sg_review_issue_draft
+CREATE TABLE sg_review_issue_draft (
+	draft_id BIGSERIAL NOT NULL,
+	project_id BIGINT NOT NULL,
+	review_list_id BIGINT NOT NULL,
+	version_id BIGINT NOT NULL,
+	reviewer_user_id BIGINT NOT NULL,
+	content TEXT,
+	media_time_ms BIGINT,
+	annotations JSONB,
+	lock_version INTEGER DEFAULT '0' NOT NULL,
+	create_time TIMESTAMP(0) WITHOUT TIME ZONE NOT NULL,
+	update_time TIMESTAMP(0) WITHOUT TIME ZONE NOT NULL,
+	PRIMARY KEY (draft_id),
+	CONSTRAINT fk_sg_review_issue_draft_review_list_project FOREIGN KEY(review_list_id, project_id) REFERENCES sg_review_list (review_list_id, project_id) ON DELETE RESTRICT,
+	CONSTRAINT fk_sg_review_issue_draft_version_project FOREIGN KEY(version_id, project_id) REFERENCES sg_version (version_id, project_id) ON DELETE RESTRICT,
+	CONSTRAINT uk_sg_review_issue_draft_id_project UNIQUE (draft_id, project_id),
+	CONSTRAINT ck_sg_review_issue_draft_content_or_annotations CHECK (btrim(coalesce(content, '')) <> '' or (annotations is not null and jsonb_typeof(annotations -> 'items') = 'array' and jsonb_array_length(annotations -> 'items') > 0)),
+	CONSTRAINT ck_sg_review_issue_draft_media_time CHECK (media_time_ms is null or media_time_ms >= 0),
+	CONSTRAINT ck_sg_review_issue_draft_lock_version CHECK (lock_version >= 0),
+	FOREIGN KEY(reviewer_user_id) REFERENCES sys_user (user_id) ON DELETE RESTRICT
+);
+CREATE INDEX idx_sg_review_issue_draft_list_version_time ON sg_review_issue_draft (review_list_id, version_id, create_time, draft_id);
+COMMENT ON TABLE sg_review_issue_draft IS 'Shot Grid审核问题私有草稿表';
+COMMENT ON COLUMN sg_review_issue_draft.draft_id IS '问题草稿ID';
+COMMENT ON COLUMN sg_review_issue_draft.project_id IS '项目ID';
+COMMENT ON COLUMN sg_review_issue_draft.review_list_id IS '所属自动审核单ID';
+COMMENT ON COLUMN sg_review_issue_draft.version_id IS '当前审核版本ID';
+COMMENT ON COLUMN sg_review_issue_draft.reviewer_user_id IS '最初记录问题的审核用户ID';
+COMMENT ON COLUMN sg_review_issue_draft.content IS '问题草稿正文；与画面标注至少存在一项';
+COMMENT ON COLUMN sg_review_issue_draft.media_time_ms IS '视频时间点（毫秒）';
+COMMENT ON COLUMN sg_review_issue_draft.annotations IS '结构化批注数组';
+COMMENT ON COLUMN sg_review_issue_draft.lock_version IS '乐观锁版本';
+COMMENT ON COLUMN sg_review_issue_draft.create_time IS '创建时间';
+COMMENT ON COLUMN sg_review_issue_draft.update_time IS '更新时间';
 
 -- sg_version_file
 CREATE TABLE sg_version_file (
@@ -2912,7 +2954,7 @@ create table if not exists alembic_version (
     constraint alembic_version_pkc primary key (version_num)
 );
 delete from alembic_version;
-insert into alembic_version(version_num) values ('20260818_12');
+insert into alembic_version(version_num) values ('20260821_17');
 
 
 CREATE OR REPLACE FUNCTION "find_in_set"(int8, varchar)

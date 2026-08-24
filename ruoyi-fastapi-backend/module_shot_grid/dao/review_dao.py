@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy import asc, delete, desc, exists, func, select, update
@@ -6,11 +7,13 @@ from sqlalchemy.orm import aliased
 
 from module_admin.entity.do.file_do import SysFileInfo
 from module_admin.entity.do.user_do import SysUser
+from module_shot_grid.entity.do.asset_do import ShotGridAsset, ShotGridAssetItem
 from module_shot_grid.entity.do.project_do import ShotGridProject, ShotGridProjectMember, ShotGridShot
 from module_shot_grid.entity.do.review_do import (
     ShotGridIssueVerification,
     ShotGridNote,
     ShotGridReviewAction,
+    ShotGridReviewIssueDraft,
     ShotGridReviewList,
     ShotGridReviewListVersion,
     ShotGridVersionIssueResponse,
@@ -150,7 +153,7 @@ class ShotGridReviewDao:
                 ShotGridVersion.version_status,
                 ShotGridVersion.changelog,
                 ShotGridVersion.submitted_by,
-                SysUser.nick_name.label('submitter_name'),
+                SysUser.user_name.label('submitter_name'),
                 ShotGridVersion.submitted_time,
                 ShotGridVersion.generated_at_ms,
                 ShotGridVersion.lock_version,
@@ -278,7 +281,7 @@ class ShotGridReviewDao:
                 ShotGridVersion.version_status,
                 ShotGridVersion.changelog,
                 ShotGridVersion.submitted_by,
-                SysUser.nick_name.label('submitter_name'),
+                SysUser.user_name.label('submitter_name'),
                 ShotGridVersion.submitted_time,
                 ShotGridVersion.generated_at_ms,
                 ShotGridVersion.lock_version,
@@ -323,12 +326,37 @@ class ShotGridReviewDao:
                         ShotGridVersion.changelog,
                         ShotGridVersion.ai_params,
                         ShotGridVersion.submitted_by,
-                        SysUser.nick_name.label('submitter_name'),
+                        SysUser.user_name.label('submitter_name'),
                         ShotGridVersion.submitted_time,
                         ShotGridVersion.generated_at_ms,
                         ShotGridVersion.lock_version,
+                        ShotGridTask.task_kind,
+                        ShotGridTask.requirements.label('task_requirements'),
+                        ShotGridShot.duration_ms.label('shot_duration_ms'),
+                        ShotGridShot.description.label('shot_description'),
+                        ShotGridShot.shot_size,
+                        ShotGridShot.camera_position,
+                        ShotGridShot.camera_movement,
+                        ShotGridShot.focal_length,
+                        ShotGridShot.dialogue,
+                        ShotGridShot.sound_effect,
+                        ShotGridShot.color_reference,
+                        ShotGridShot.remark.label('shot_remark'),
+                        ShotGridAsset.asset_id,
+                        ShotGridAsset.asset_type,
+                        ShotGridAsset.asset_name,
+                        ShotGridAsset.description.label('asset_description'),
+                        ShotGridAsset.remark.label('asset_remark'),
+                        ShotGridAssetItem.asset_item_id,
+                        ShotGridAssetItem.production_item,
+                        ShotGridAssetItem.description.label('asset_item_description'),
+                        ShotGridAssetItem.remark.label('asset_item_remark'),
                         media_derivation_status.label('media_derivation_status'),
                     )
+                    .join(ShotGridTask, ShotGridTask.task_id == ShotGridVersion.task_id)
+                    .outerjoin(ShotGridShot, ShotGridShot.shot_id == ShotGridTask.shot_id)
+                    .outerjoin(ShotGridAssetItem, ShotGridAssetItem.asset_item_id == ShotGridTask.asset_item_id)
+                    .outerjoin(ShotGridAsset, ShotGridAsset.asset_id == ShotGridAssetItem.asset_id)
                     .outerjoin(SysUser, SysUser.user_id == ShotGridVersion.submitted_by)
                     .where(ShotGridVersion.project_id == project_id, ShotGridVersion.version_id == version_id)
                 )
@@ -564,7 +592,7 @@ class ShotGridReviewDao:
                     ShotGridVersion.version_status,
                     ShotGridVersion.changelog,
                     ShotGridVersion.submitted_by,
-                    SysUser.nick_name.label('submitter_name'),
+                    SysUser.user_name.label('submitter_name'),
                     ShotGridVersion.submitted_time,
                     ShotGridVersion.generated_at_ms,
                     ShotGridVersion.lock_version,
@@ -721,7 +749,7 @@ class ShotGridReviewDao:
                 ShotGridNote.version_id.label('origin_version_id'),
                 origin_version.version_no.label('origin_version_no'),
                 ShotGridNote.reviewer_user_id,
-                SysUser.nick_name.label('reviewer_name'),
+                SysUser.user_name.label('reviewer_name'),
                 ShotGridNote.content,
                 ShotGridNote.media_time_ms,
                 ShotGridNote.annotations,
@@ -805,7 +833,7 @@ class ShotGridReviewDao:
                     ShotGridIssueVerification.result,
                     ShotGridIssueVerification.comment,
                     ShotGridIssueVerification.reviewer_user_id,
-                    reviewer.nick_name.label('reviewer_name'),
+                    reviewer.user_name.label('reviewer_name'),
                     ShotGridIssueVerification.create_time,
                 )
                 .join(ShotGridVersion, ShotGridVersion.version_id == ShotGridIssueVerification.checked_version_id)
@@ -834,7 +862,7 @@ class ShotGridReviewDao:
                 ShotGridReviewAction.project_id,
                 ShotGridReviewAction.version_id,
                 ShotGridReviewAction.reviewer_user_id,
-                SysUser.nick_name.label('reviewer_name'),
+                SysUser.user_name.label('reviewer_name'),
                 ShotGridReviewAction.action_type,
                 ShotGridReviewAction.from_status,
                 ShotGridReviewAction.to_status,
@@ -943,6 +971,85 @@ class ShotGridReviewDao:
                 .with_for_update()
             )
         ).scalar_one_or_none()
+
+    @classmethod
+    async def get_issue_drafts(
+        cls,
+        db: AsyncSession,
+        *,
+        project_id: int,
+        version_id: int,
+    ) -> list[dict[str, Any]]:
+        rows = (
+            await db.execute(
+                select(
+                    ShotGridReviewIssueDraft,
+                    SysUser.user_name.label('reviewer_name'),
+                )
+                .join(SysUser, SysUser.user_id == ShotGridReviewIssueDraft.reviewer_user_id)
+                .where(
+                    ShotGridReviewIssueDraft.project_id == project_id,
+                    ShotGridReviewIssueDraft.version_id == version_id,
+                )
+                .order_by(ShotGridReviewIssueDraft.create_time, ShotGridReviewIssueDraft.draft_id)
+            )
+        ).all()
+        return [
+            {
+                **{
+                    column.name: getattr(draft, column.name)
+                    for column in ShotGridReviewIssueDraft.__table__.columns
+                },
+                'reviewer_name': reviewer_name,
+            }
+            for draft, reviewer_name in rows
+        ]
+
+    @classmethod
+    async def get_issue_draft_for_update(
+        cls,
+        db: AsyncSession,
+        *,
+        project_id: int,
+        review_list_id: int,
+        version_id: int,
+        draft_id: int,
+    ) -> ShotGridReviewIssueDraft | None:
+        return (
+            await db.execute(
+                select(ShotGridReviewIssueDraft)
+                .where(
+                    ShotGridReviewIssueDraft.draft_id == draft_id,
+                    ShotGridReviewIssueDraft.project_id == project_id,
+                    ShotGridReviewIssueDraft.review_list_id == review_list_id,
+                    ShotGridReviewIssueDraft.version_id == version_id,
+                )
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
+
+    @classmethod
+    async def get_issue_drafts_for_update(
+        cls,
+        db: AsyncSession,
+        *,
+        project_id: int,
+        review_list_id: int,
+        version_id: int,
+    ) -> list[ShotGridReviewIssueDraft]:
+        drafts = (
+            await db.execute(
+                select(ShotGridReviewIssueDraft)
+                .where(
+                    ShotGridReviewIssueDraft.project_id == project_id,
+                    ShotGridReviewIssueDraft.review_list_id == review_list_id,
+                    ShotGridReviewIssueDraft.version_id == version_id,
+                )
+                .order_by(ShotGridReviewIssueDraft.create_time, ShotGridReviewIssueDraft.draft_id)
+                .with_for_update()
+            )
+        ).scalars()
+        return list(drafts)
 
     @classmethod
     async def get_carried_issues_for_update(
@@ -1075,6 +1182,52 @@ class ShotGridReviewDao:
         db.add(note)
         await db.flush()
         return note
+
+    @classmethod
+    async def add_issue_draft(
+        cls,
+        db: AsyncSession,
+        draft: ShotGridReviewIssueDraft,
+    ) -> ShotGridReviewIssueDraft:
+        db.add(draft)
+        await db.flush()
+        return draft
+
+    @classmethod
+    async def delete_issue_draft(cls, db: AsyncSession, draft: ShotGridReviewIssueDraft) -> None:
+        await db.delete(draft)
+        await db.flush()
+
+    @classmethod
+    async def publish_issue_drafts(
+        cls,
+        db: AsyncSession,
+        drafts: list[ShotGridReviewIssueDraft],
+    ) -> list[ShotGridNote]:
+        if not drafts:
+            return []
+        now = datetime.now()
+        notes = [
+            ShotGridNote(
+                project_id=draft.project_id,
+                version_id=draft.version_id,
+                reviewer_user_id=draft.reviewer_user_id,
+                content=draft.content,
+                media_time_ms=draft.media_time_ms,
+                annotations=draft.annotations,
+                note_status='open',
+                resolved_in_version_id=None,
+                create_time=draft.create_time,
+                update_time=now,
+            )
+            for draft in drafts
+        ]
+        db.add_all(notes)
+        await db.flush()
+        for draft in drafts:
+            await db.delete(draft)
+        await db.flush()
+        return notes
 
     @classmethod
     async def add_issue_verifications(

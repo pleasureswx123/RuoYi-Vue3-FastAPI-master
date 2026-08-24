@@ -1,4 +1,4 @@
-import { ElButton, ElIcon, ElImage, ElTag } from 'element-plus'
+import { ElAffix, ElButton, ElIcon, ElImage, ElTag } from 'element-plus'
 import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -29,7 +29,7 @@ function listItem(versionId, taskId = 31, overrides = {}) {
     versionStatus: 'pending_review',
     changelog: `版本 ${versionId} 修改说明`,
     submittedBy: 7,
-    submitterName: '制作人甲',
+    submitterName: '曲占锋',
     submittedTime: '2026-08-11T12:00:00',
     generatedAtMs: 1,
     lockVersion: 0,
@@ -51,10 +51,97 @@ function detail(versionId, taskId = 31, overrides = {}) {
 
 describe('版本历史面板', () => {
   beforeEach(() => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1280 })
     getTaskVersions.mockResolvedValue({ rows: [listItem(2), listItem(1)], total: 2 })
     getVersionDetail.mockImplementation(versionId => Promise.resolve(detail(versionId)))
     getReviewActions.mockResolvedValue({ rows: [], total: 0 })
     getTaskIssues.mockResolvedValue({ data: [] })
+  })
+
+  it('桌面端使用 Element Plus Affix 固定版本轨道与反馈列表', async () => {
+    getTaskIssues.mockResolvedValueOnce({
+      data: [{
+        issueId: 51,
+        originVersionId: 2,
+        originVersionNumber: 'V002',
+        pendingVersionId: 2,
+        pendingVersionNumber: 'V002',
+        status: 'open',
+        content: '主体亮度偏低',
+        mediaTimeMs: 1200,
+        annotations: null,
+        responses: [],
+        verifications: [],
+        createTime: '2026-08-11T12:30:00'
+      }]
+    })
+    const wrapper = mount(VersionHistoryPanel, {
+      ...mountOptions,
+      attachTo: document.body,
+      props: { taskId: 31, canList: true, canQuery: true, canListNotes: true }
+    })
+    await flushPromises()
+
+    const affixes = wrapper.findAllComponents(ElAffix)
+    expect(affixes).toHaveLength(2)
+    expect(affixes[0].props()).toMatchObject({ appendTo: 'body', offset: 92, target: '#version-history-panel-31', teleported: true })
+    expect(affixes[1].props()).toMatchObject({ appendTo: 'body', offset: 92, target: '#version-feedback-panel-31', teleported: true })
+    expect(wrapper.find('.version-rail-affix .version-rail').exists()).toBe(true)
+    expect(wrapper.find('.feedback-list-affix .feedback-list').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('页面滚动越过轨道后进入 Element Plus fixed 状态', async () => {
+    const wrapper = mount(VersionHistoryPanel, {
+      ...mountOptions,
+      attachTo: document.body,
+      props: { taskId: 31, canList: true, canQuery: true }
+    })
+    await flushPromises()
+
+    const affix = wrapper.findComponent(ElAffix)
+    const target = wrapper.find('#version-history-panel-31').element
+    affix.element.getBoundingClientRect = () => ({
+      top: 40,
+      bottom: 440,
+      left: 120,
+      right: 360,
+      width: 240,
+      height: 400,
+      x: 120,
+      y: 40,
+      toJSON: () => ({})
+    })
+    target.getBoundingClientRect = () => ({
+      top: -600,
+      bottom: 1600,
+      left: 100,
+      right: 1180,
+      width: 1080,
+      height: 2200,
+      x: 100,
+      y: -600,
+      toJSON: () => ({})
+    })
+    window.dispatchEvent(new Event('scroll'))
+    await flushPromises()
+
+    expect(document.querySelector('.el-affix--fixed .version-rail')).not.toBeNull()
+    wrapper.unmount()
+  })
+
+  it('窄屏回到普通文档流，避免吸附内容遮挡详情', async () => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 800 })
+    const wrapper = mount(VersionHistoryPanel, {
+      ...mountOptions,
+      attachTo: document.body,
+      props: { taskId: 31, canList: true, canQuery: true }
+    })
+    await flushPromises()
+
+    expect(wrapper.findAllComponents(ElAffix)).toHaveLength(0)
+    expect(wrapper.find('.version-rail').exists()).toBe(true)
+    wrapper.unmount()
   })
 
   it('使用服务端分页版本历史并加载所选版本真实详情', async () => {
@@ -72,6 +159,8 @@ describe('版本历史面板', () => {
     }, expect.objectContaining({ signal: expect.any(AbortSignal) }))
     expect(getVersionDetail).toHaveBeenCalledWith(2, expect.objectContaining({ signal: expect.any(AbortSignal) }))
     expect(wrapper.text()).toContain('V002')
+    expect(wrapper.find('.version-rail').text()).toContain('曲占锋')
+    expect(wrapper.find('.version-rail').text()).not.toContain('QZF')
     expect(wrapper.text()).toContain('自动审核 V2')
     const statusTags = wrapper.findAllComponents(ElTag).filter(tag => tag.text() === '待审核')
     expect(statusTags.length).toBeGreaterThanOrEqual(2)

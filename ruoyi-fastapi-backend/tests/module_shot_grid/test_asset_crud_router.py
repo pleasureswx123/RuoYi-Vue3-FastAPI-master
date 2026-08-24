@@ -83,7 +83,12 @@ def test_asset_import_static_router_is_registered_before_dynamic_asset_id_router
     )
     # FastAPI 新版本不再为已展开的 APIRoute 保留 original_router；
     # 直接检查最终匹配顺序，也更接近生产路由语义。
-    paths = [route.path for route in app.routes]
+    paths = []
+    for route in app.routes:
+        if isinstance(route, APIRoute):
+            paths.append(route.path)
+        elif hasattr(route, 'effective_candidates'):
+            paths.extend(candidate.path for candidate in route.effective_candidates())
 
     assert paths.index('/shot-grid/projects/{projectId}/assets/import/preview') < paths.index(
         '/shot-grid/projects/{projectId}/assets/{assetId}'

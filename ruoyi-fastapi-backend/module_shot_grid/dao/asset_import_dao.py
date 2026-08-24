@@ -1,19 +1,16 @@
-from collections.abc import Iterable, Sequence
-from typing import Any
+from collections.abc import Sequence
 
-from sqlalchemy import Select, func, or_, select, tuple_
+from sqlalchemy import Select, func, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from module_admin.entity.do.user_do import SysUser
 from module_shot_grid.entity.do.asset_do import (
     ShotGridAsset,
     ShotGridAssetItem,
     ShotGridShotAsset,
     ShotGridShotAssetRequirement,
 )
-from module_shot_grid.entity.do.project_do import ShotGridProject, ShotGridProjectMember
+from module_shot_grid.entity.do.project_do import ShotGridProject
 from module_shot_grid.entity.do.storage_do import ShotGridProjectStorage, ShotGridStorageOperation
-from module_shot_grid.entity.do.task_do import ShotGridTask
 
 AssetKey = tuple[str, str]
 
@@ -43,70 +40,6 @@ class AssetImportDao:
         if row is None:
             return None, None
         return row[0], row[1]
-
-    @classmethod
-    async def get_member_candidates(
-        cls,
-        db: AsyncSession,
-        project_id: int,
-        names: Iterable[str],
-    ) -> list[dict[str, Any]]:
-        unique_names = sorted(set(names))
-        if not unique_names:
-            return []
-        result = await db.execute(
-            select(
-                SysUser.user_id,
-                SysUser.user_name,
-                SysUser.nick_name,
-                func.upper(SysUser.nick_name).label('producer_code'),
-            )
-            .join(
-                ShotGridProjectMember,
-                (ShotGridProjectMember.user_id == SysUser.user_id) & (ShotGridProjectMember.project_id == project_id),
-            )
-            .where(
-                SysUser.status == '0',
-                SysUser.del_flag == '0',
-                ShotGridProjectMember.member_status == 'active',
-                ShotGridProjectMember.project_role == 'creator',
-                or_(SysUser.user_name.in_(unique_names), SysUser.nick_name.in_(unique_names)),
-            )
-        )
-        return [dict(row) for row in result.mappings().all()]
-
-    @classmethod
-    async def get_member_candidates_by_ids(
-        cls,
-        db: AsyncSession,
-        project_id: int,
-        user_ids: Iterable[int],
-    ) -> list[dict[str, Any]]:
-        """按用户 ID 重新核验预检页面显式选择的制作人。"""
-
-        unique_ids = sorted(set(user_ids))
-        if not unique_ids:
-            return []
-        result = await db.execute(
-            select(
-                SysUser.user_id,
-                SysUser.user_name,
-                SysUser.nick_name,
-                func.upper(SysUser.nick_name).label('producer_code'),
-            )
-            .join(
-                ShotGridProjectMember,
-                (ShotGridProjectMember.user_id == SysUser.user_id) & (ShotGridProjectMember.project_id == project_id),
-            )
-            .where(
-                SysUser.user_id.in_(unique_ids),
-                SysUser.status == '0',
-                SysUser.del_flag == '0',
-                ShotGridProjectMember.member_status == 'active',
-                ShotGridProjectMember.project_role == 'creator',
-            )
-        )
-        return [dict(row) for row in result.mappings().all()]
 
     @classmethod
     async def get_active_assets_by_keys(
@@ -179,12 +112,6 @@ class AssetImportDao:
         db.add(asset_item)
         await db.flush()
         return asset_item
-
-    @classmethod
-    async def add_task(cls, db: AsyncSession, task: ShotGridTask) -> ShotGridTask:
-        db.add(task)
-        await db.flush()
-        return task
 
     @classmethod
     async def add_storage_operation(

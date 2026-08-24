@@ -1,4 +1,4 @@
-import { ElAlert, ElButton, ElIcon, ElMessageBox, ElOption, ElSelect, ElSkeleton, ElTag } from 'element-plus'
+import { ElAlert, ElButton, ElIcon, ElMessage, ElMessageBox, ElOption, ElSelect, ElSkeleton, ElTag } from 'element-plus'
 import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -50,7 +50,8 @@ describe('审核媒体工作区', () => {
     await flushPromises()
 
     expect(downloadProtectedVersionFile).toHaveBeenCalledWith(33, file.fileId, { signal: expect.any(AbortSignal) })
-    await wrapper.findAll('button').find(button => button.text().includes('点标注')).trigger('click')
+    await wrapper.findAll('button').find(button => button.text().includes('标注此画面')).trigger('click')
+    await wrapper.findAll('button').find(button => button.text().trim() === '点').trigger('click')
     const layer = wrapper.find('.annotation-layer')
     layer.element.getBoundingClientRect = () => ({ left: 0, top: 0, width: 200, height: 100 })
     await layer.trigger('pointerdown', { clientX: 50, clientY: 25, pointerId: 1 })
@@ -61,6 +62,12 @@ describe('审核媒体工作区', () => {
       schemaVersion: 1,
       items: [{ type: 'point', points: [{ x: 0.3, y: 0.4 }] }]
     })
+
+    expect(wrapper.text()).toContain('退出标注')
+    wrapper.vm.clearDraft()
+    await wrapper.vm.$nextTick()
+    expect(wrapper.text()).toContain('标注此画面')
+    expect(layer.attributes('data-active')).toBe('false')
     wrapper.unmount()
     expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:review-media')
   })
@@ -72,13 +79,15 @@ describe('审核媒体工作区', () => {
     })
     await flushPromises()
 
-    const versionSelect = wrapper.findComponent(ElSelect)
-    versionSelect.vm.$emit('update:modelValue', '32')
+    await wrapper.findAll('button').find(button => button.text().includes('与上一版对比')).trigger('click')
     await flushPromises()
 
     expect(getVersionDetail).toHaveBeenCalledWith(32, { signal: expect.any(AbortSignal) })
     expect(downloadProtectedVersionFile).toHaveBeenCalledWith(32, file.fileId, { signal: expect.any(AbortSignal) })
-    expect(wrapper.text()).toContain('B · V002')
+    expect(wrapper.text()).toContain('历史版 · V002')
+    const recordAction = wrapper.find('.media-columns > .record-action')
+    expect(recordAction.classes()).toContain('is-compare-only')
+    expect(recordAction.find('.record-action__summary').text()).toContain('当前仅支持查看历史版本')
     wrapper.unmount()
   })
 
@@ -97,6 +106,56 @@ describe('审核媒体工作区', () => {
     expect(resolvePlaybackUrl).toHaveBeenCalledWith('/shot-grid/playback/ticket/video')
     expect(downloadProtectedVersionFile).not.toHaveBeenCalled()
     expect(wrapper.find('video').attributes('src')).toBe('/dev-api/shot-grid/playback/ticket/video')
+
+    const videoElement = wrapper.find('video').element
+    videoElement.pause = vi.fn()
+    videoElement.currentTime = 4
+    wrapper.element.scrollIntoView = vi.fn()
+    wrapper.vm.seekToDraft(2000)
+    await new Promise(resolve => setTimeout(resolve, 0))
+
+    expect(videoElement.currentTime).toBe(2)
+    expect(videoElement.pause).toHaveBeenCalled()
+    expect(wrapper.element.scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth', block: 'center' })
+    expect(wrapper.find('.media-stage').classes()).toContain('is-note-focus')
+
+    const warning = vi.spyOn(ElMessage, 'warning').mockImplementation(() => {})
+    await wrapper.setProps({ draftAnnotationCount: 1 })
+    videoElement.pause.mockClear()
+    await wrapper.find('video').trigger('play')
+
+    expect(videoElement.pause).toHaveBeenCalled()
+    expect(warning).toHaveBeenCalledWith('当前画面标注尚未保存，请先保存问题或清空草稿后再继续播放')
+    expect(wrapper.text()).toContain('标注未保存，保存或清空后才能继续播放')
+    wrapper.unmount()
+  })
+
+  it('查看已保存意见时播放会先退出定位并继续播放', async () => {
+    const videoFile = { ...file, originalName: 'review.mp4', contentType: 'video/mp4' }
+    const selectedNote = {
+      noteId: 101,
+      content: '这里有点模糊',
+      mediaTimeMs: 5000,
+      originVersionId: version.versionId,
+      annotations: {
+        schemaVersion: 1,
+        sourceWidth: 1920,
+        sourceHeight: 1080,
+        items: [{ id: 'saved-note', type: 'point', color: '#ffb657', strokeWidth: 0.004, points: [{ x: 0.3, y: 0.4 }] }]
+      }
+    }
+    const wrapper = mount(ReviewMediaWorkspace, {
+      props: { version: { ...version, files: [videoFile] }, selectedNote, canDownload: true },
+      global: { components }
+    })
+    await flushPromises()
+
+    const videoElement = wrapper.find('video').element
+    videoElement.pause = vi.fn()
+    await wrapper.find('video').trigger('play')
+
+    expect(wrapper.emitted('clear-note-focus')).toHaveLength(1)
+    expect(videoElement.pause).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 
@@ -119,8 +178,8 @@ describe('审核媒体工作区', () => {
     expect(createVersionPlaybackTicket).toHaveBeenCalledWith(33, proxy.fileId, {
       signal: expect.any(AbortSignal)
     })
-    expect(wrapper.text()).toContain('优化预览')
-    const proxyTag = wrapper.findAllComponents(ElTag).find(tag => tag.text() === '优化预览')
+    expect(wrapper.text()).toContain('流畅预览')
+    const proxyTag = wrapper.findAllComponents(ElTag).find(tag => tag.text() === '流畅预览')
     expect(proxyTag.props()).toMatchObject({ type: 'success', effect: 'plain', size: 'small', round: true })
     wrapper.unmount()
   })
@@ -132,6 +191,7 @@ describe('审核媒体工作区', () => {
     })
     await flushPromises()
 
+    await wrapper.findAll('button').find(button => button.text().includes('标注此画面')).trigger('click')
     await wrapper.findAll('button').find(button => button.text().includes('箭头')).trigger('click')
     const layer = wrapper.find('.annotation-layer')
     layer.element.getBoundingClientRect = () => ({ left: 0, top: 0, width: 200, height: 100 })
@@ -155,6 +215,7 @@ describe('审核媒体工作区', () => {
     })
     await flushPromises()
 
+    await wrapper.findAll('button').find(button => button.text().includes('标注此画面')).trigger('click')
     await wrapper.findAll('button').find(button => button.text().includes('文字')).trigger('click')
     const layer = wrapper.find('.annotation-layer')
     layer.element.getBoundingClientRect = () => ({ left: 0, top: 0, width: 200, height: 100 })

@@ -30,6 +30,7 @@ const reviewsLoading = ref(false)
 const projectsError = ref(null)
 const reviewsError = ref(null)
 const manualDialogVisible = ref(false)
+const reviewFilterFormRef = ref(null)
 const query = reactive({ reviewStatus: '', pageNum: 1, pageSize: 20 })
 let projectsController = null
 let reviewsController = null
@@ -134,7 +135,7 @@ onBeforeUnmount(() => {
 
     <ProjectStatePanel v-if="projectsError" :title="projectsError.title" :message="projectsError.message" :retryable="projectsError.retryable" @retry="loadProjects" />
     <template v-else>
-      <el-form :model="reviewFilterModel" class="review-toolbar" size="large" label-position="top" aria-label="审核单筛选">
+      <el-form ref="reviewFilterFormRef" :model="reviewFilterModel" class="review-toolbar" size="large" label-position="top" aria-label="审核单筛选">
         <el-form-item label="当前项目" prop="projectId"><el-select v-model="selectedProjectId" class="sg-select" :placeholder="projectsLoading ? '正在加载项目…' : '请选择项目'" :loading="projectsLoading" :disabled="projectsLoading"><el-option v-for="project in projects" :key="project.projectId" :label="`${project.projectCode} · ${project.projectName}`" :value="String(project.projectId)" /></el-select></el-form-item>
         <el-form-item label="审核状态" prop="reviewStatus"><el-select v-model="query.reviewStatus" class="sg-select" placeholder="全部状态"><el-option label="全部状态" value="" /><el-option label="草稿" value="draft" /><el-option label="待审核" value="active" /><el-option label="已完成" value="completed" /><el-option label="已归档" value="archived" /></el-select></el-form-item>
         <div class="review-toolbar__summary"><el-icon><Search /></el-icon><span>当前筛选 {{ total }} 条审核单</span></div>

@@ -1,6 +1,7 @@
 import { createApp } from 'vue'
 
 import {
+  ElAffix,
   ElAlert,
   ElAside,
   ElAvatar,
@@ -42,15 +43,18 @@ import {
   ElStep,
   ElSteps,
   ElSwitch,
+  ElTabPane,
   ElTable,
   ElTableColumn,
   ElTag,
+  ElTabs,
   ElTimeline,
   ElTimelineItem,
   ElTooltip,
   ElUpload
 } from 'element-plus'
 import 'element-plus/es/components/base/style/css'
+import 'element-plus/es/components/affix/style/css'
 import 'element-plus/es/components/alert/style/css'
 import 'element-plus/es/components/avatar/style/css'
 import 'element-plus/es/components/button/style/css'
@@ -82,12 +86,16 @@ import 'element-plus/es/components/scrollbar/style/css'
 import 'element-plus/es/components/select/style/css'
 import 'element-plus/es/components/skeleton/style/css'
 import 'element-plus/es/components/statistic/style/css'
+import 'element-plus/es/components/step/style/css'
 import 'element-plus/es/components/steps/style/css'
 import 'element-plus/es/components/switch/style/css'
+import 'element-plus/es/components/tab-pane/style/css'
 import 'element-plus/es/components/table/style/css'
 import 'element-plus/es/components/table-column/style/css'
 import 'element-plus/es/components/tag/style/css'
+import 'element-plus/es/components/tabs/style/css'
 import 'element-plus/es/components/timeline/style/css'
+import 'element-plus/es/components/timeline-item/style/css'
 import 'element-plus/es/components/tooltip/style/css'
 import 'element-plus/es/components/upload/style/css'
 import 'element-plus/es/components/message/style/css'
@@ -103,6 +111,7 @@ import { useThemeStore } from '@/store/modules/theme'
 
 const app = createApp(App)
 const globalComponents = [
+  ElAffix,
   ElAlert,
   ElAside,
   ElAvatar,
@@ -143,9 +152,11 @@ const globalComponents = [
   ElStep,
   ElSteps,
   ElSwitch,
+  ElTabPane,
   ElTable,
   ElTableColumn,
   ElTag,
+  ElTabs,
   ElTimeline,
   ElTimelineItem,
   ElTooltip,

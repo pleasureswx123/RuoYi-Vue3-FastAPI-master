@@ -14,7 +14,7 @@ import AssetImportDialog from '@/views/asset/components/AssetImportDialog.vue'
 import AssetRequirementDialog from '@/views/asset/components/AssetRequirementDialog.vue'
 import AssetDetailView from '@/views/asset/AssetDetailView.vue'
 import ProtectedAssetThumbnail from '@/views/asset/components/ProtectedAssetThumbnail.vue'
-import { assetAssigneeSummary, assetDirectoryStatusMeta, assetErrorState, assetStatusMeta, assetTypeMeta, memberLabel, memberUserName, resolveAssetThumbnail } from '@/views/asset/assetPresentation'
+import { assetAssigneeSummary, assetDirectoryStatusMeta, assetErrorState, assetStatusMeta, assetStatusTagClass, assetTypeMeta, memberLabel, memberUserName, resolveAssetThumbnail } from '@/views/asset/assetPresentation'
 import { projectRoleMeta, storageMeta } from '@/views/project/projectPresentation'
 
 const route = useRoute()
@@ -604,8 +604,15 @@ onBeforeUnmount(() => {
 <template>
   <section class="sg-page asset-page">
     <header class="sg-page-heading asset-heading">
-      <div><p class="sg-eyebrow">ASSETS</p><h2 class="sg-page-title">资产库管理</h2><p class="sg-page-description">在项目范围内统一管理角色、场景、道具及其制作分项，查看制作状态、负责人和缩略图。</p></div>
-      <div class="asset-heading__actions"><el-button v-if="canListRequirements" :icon="Link" @click="openRequirementDialog">待匹配需求</el-button><el-button v-if="canImport" :icon="Upload" @click="openImportDialog">导入 Excel</el-button><el-button v-if="canCreate" type="primary" :icon="Plus" @click="openCreateDialog">新建资产</el-button></div>
+      <div><p class="sg-eyebrow">ASSETS</p>
+        <h2 class="sg-page-title">资产库管理</h2>
+        <p class="sg-page-description">在项目范围内统一管理角色、场景、道具及其制作分项，查看制作状态、负责人和缩略图。</p>
+      </div>
+      <div class="asset-heading__actions">
+        <el-button v-if="canListRequirements" :icon="Link" @click="openRequirementDialog">待匹配需求</el-button>
+        <el-button v-if="canImport" :icon="Upload" @click="openImportDialog">导入 Excel</el-button>
+        <el-button v-if="canCreate" type="primary" :icon="Plus" @click="openCreateDialog">新建资产</el-button>
+      </div>
     </header>
 
     <ProjectStatePanel v-if="projectsError" :title="projectsError.title" :message="projectsError.message" :retryable="projectsError.retryable" @retry="loadProjects" />
@@ -628,7 +635,7 @@ onBeforeUnmount(() => {
             <el-select v-model="query.assetType" class="sg-select" placeholder="全部类型" aria-label="按资产类型筛选" @change="submitFilters"><el-option label="全部类型" value="" /><el-option label="角色" value="Character" /><el-option label="场景" value="Environment" /><el-option label="道具" value="Prop" /></el-select>
           </el-form-item>
           <el-form-item class="asset-filter-item" prop="assetStatus">
-            <el-select v-model="query.assetStatus" class="sg-select" placeholder="全部状态" aria-label="按资产状态筛选" @change="submitFilters"><el-option label="全部状态" value="" /><el-option label="未分配" value="unassigned" /><el-option label="未开始" value="not_started" /><el-option label="制作中" value="in_progress" /><el-option label="待审核" value="reviewing" /><el-option label="修改中" value="revision" /><el-option label="已完成" value="completed" /></el-select>
+            <el-select v-model="query.assetStatus" class="sg-select" placeholder="全部状态" aria-label="按资产状态筛选" @change="submitFilters"><el-option label="全部状态" value="" /><el-option v-for="status in ['unassigned','not_started','preparing','in_progress','reviewing','revision','completed']" :key="status" :label="assetStatusMeta(status).label" :value="status" /></el-select>
           </el-form-item>
           <el-form-item class="asset-filter-item" prop="assigneeUserId">
             <el-select v-model="query.assigneeUserId" class="sg-select" placeholder="全部制作人" aria-label="按制作人筛选" @change="submitFilters"><el-option label="全部制作人" value="" /><el-option v-for="member in members" :key="member.userId" :label="memberLabel(member)" :value="String(member.userId)" /></el-select>
@@ -645,19 +652,92 @@ onBeforeUnmount(() => {
         <ProjectStatePanel v-if="assetsError" :title="assetsError.title" :message="assetsError.message" :retryable="assetsError.retryable" @retry="loadProjectContext" />
         <el-empty v-else-if="!assetsLoading && !assets.length" class="asset-empty" description="当前筛选没有资产"><template #image><el-icon><Box /></el-icon></template><p>调整筛选条件，或在存储就绪的活动项目中新建/导入资产。</p></el-empty>
 
-        <div v-else-if="viewMode === 'table'" class="asset-table-wrap"><el-table class="asset-data-table" :data="assets" row-key="assetId" max-height="620" v-loading="assetsLoading" empty-text="当前筛选没有资产"><el-table-column width="52" fixed="left" align="center"><template #header><el-checkbox :model-value="allSelectableSelected" :indeterminate="selectedAssets.length > 0 && !allSelectableSelected" :disabled="!selectableAssets.length" aria-label="选择当前页全部可操作资产" @change="toggleAllSelectable" /></template><template #default="scope"><el-checkbox v-if="scope?.row" :model-value="selectedAssetIds.has(Number(scope.row.assetId))" :disabled="!canSelectAsset(scope.row)" :aria-label="`选择资产 ${scope.row.assetName}`" @change="toggleAssetSelection(scope.row)" /></template></el-table-column><el-table-column label="缩略图" width="112"><template #default="scope"><ProtectedAssetThumbnail v-if="scope?.row" class="asset-thumb asset-thumb--small" :thumbnail="resolveAssetThumbnail(scope.row)" :alt="`${scope.row.assetName} 缩略图`" /></template></el-table-column><el-table-column label="类型 / 名称" width="170"><template #default="scope"><div v-if="scope?.row" class="asset-identity"><el-tag size="small" effect="plain" round :type="tagTypeFromTone(assetTypeMeta(scope.row.assetType).tone)">{{ assetTypeMeta(scope.row.assetType).label }}</el-tag><strong>{{ scope.row.assetName }}</strong><small>排序 {{ scope.row.sortOrder }}</small></div></template></el-table-column><el-table-column label="说明" min-width="220"><template #default="scope"><div v-if="scope?.row" class="asset-description">{{ scope.row.description || '—' }}</div></template></el-table-column><el-table-column label="制作分项" width="90" align="center" prop="itemCount" /><el-table-column label="制作人" width="130"><template #default="scope">{{ scope?.row ? assetAssigneeSummary(scope.row.assigneeUserIds, members) : '—' }}</template></el-table-column><el-table-column label="镜头使用" width="90" align="center" prop="usageShotCount" /><el-table-column label="状态 / 目录" width="132"><template #default="scope"><div v-if="scope?.row" class="asset-status"><el-tag size="small" effect="plain" round :type="tagTypeFromTone(assetStatusMeta(scope.row.assetStatus).tone)">{{ assetStatusMeta(scope.row.assetStatus).label }}</el-tag><el-tag size="small" effect="plain" round :type="tagTypeFromTone(assetDirectoryStatusMeta(scope.row.directoryStatus).tone)">{{ assetDirectoryStatusMeta(scope.row.directoryStatus).label }}</el-tag></div></template></el-table-column><el-table-column label="操作" fixed="right" width="250"><template #default="scope"><div v-if="scope?.row" class="asset-row-actions"><el-button text type="primary" @click="openAsset(scope.row)">详情</el-button><el-button v-if="canEditAsset(scope.row)" text type="warning" :icon="Edit" :loading="editingAssetId === Number(scope.row.assetId)" @click="openEditDialog(scope.row)">编辑</el-button><el-button v-if="canDeleteAsset(scope.row)" text type="danger" :icon="Delete" :loading="deleting" @click="deleteAsset(scope.row)">删除</el-button></div></template></el-table-column></el-table></div>
+        <div v-else-if="viewMode === 'table'" class="asset-table-wrap">
+          <el-table class="asset-data-table" :data="assets" row-key="assetId" max-height="620" v-loading="assetsLoading"
+                    empty-text="当前筛选没有资产">
+            <el-table-column width="52" fixed="left" align="center">
+              <template #header>
+                <el-checkbox :model-value="allSelectableSelected"
+                             :indeterminate="selectedAssets.length > 0 && !allSelectableSelected"
+                             :disabled="!selectableAssets.length" aria-label="选择当前页全部可操作资产"
+                             @change="toggleAllSelectable"/>
+              </template>
+              <template #default="scope">
+                <el-checkbox v-if="scope?.row" :model-value="selectedAssetIds.has(Number(scope.row.assetId))"
+                             :disabled="!canSelectAsset(scope.row)" :aria-label="`选择资产 ${scope.row.assetName}`"
+                             @change="toggleAssetSelection(scope.row)"/>
+              </template>
+            </el-table-column>
+            <el-table-column label="缩略图" width="112">
+              <template #default="scope">
+                <ProtectedAssetThumbnail v-if="scope?.row" class="asset-thumb asset-thumb--small"
+                                         :thumbnail="resolveAssetThumbnail(scope.row)"
+                                         :alt="`${scope.row.assetName} 缩略图`"/>
+              </template>
+            </el-table-column>
+            <el-table-column label="类型 / 名称" width="170">
+              <template #default="scope">
+                <div v-if="scope?.row" class="asset-identity">
+                  <el-tag size="small" effect="plain" round
+                          :type="tagTypeFromTone(assetTypeMeta(scope.row.assetType).tone)">
+                    {{ assetTypeMeta(scope.row.assetType).label }}
+                  </el-tag>
+                  <strong>{{ scope.row.assetName }}</strong><small>排序 {{ scope.row.sortOrder }}</small></div>
+              </template>
+            </el-table-column>
+            <el-table-column label="说明" min-width="220">
+              <template #default="scope">
+                <div v-if="scope?.row" class="asset-description">{{ scope.row.description || '—' }}</div>
+              </template>
+            </el-table-column>
+            <el-table-column label="制作分项" width="90" align="center" prop="itemCount"/>
+<!--            <el-table-column label="镜头使用" width="90" align="center" prop="usageShotCount"/>-->
+            <el-table-column label="制作人" fixed="right" width="130">
+              <template #default="scope"><span
+                  v-if="scope?.row">{{ assetAssigneeSummary(scope.row.assigneeUserIds, members) }}</span></template>
+            </el-table-column>
+            <el-table-column label="状态" fixed="right" width="125">
+              <template #default="scope">
+                <div v-if="scope?.row" class="asset-status">
+                  <el-tag class="asset-status-tag" :class="assetStatusTagClass(scope.row.assetStatus)"
+                          :type="tagTypeFromTone(assetStatusMeta(scope.row.assetStatus).tone)" size="small"
+                          effect="light" round>{{ assetStatusMeta(scope.row.assetStatus).label }}
+                  </el-tag>
+                  <el-tag v-if="scope.row.directoryStatus === 'failed'" class="asset-directory-status"
+                          :type="tagTypeFromTone(assetDirectoryStatusMeta(scope.row.directoryStatus).tone)" size="small"
+                          effect="plain" round>{{ assetDirectoryStatusMeta(scope.row.directoryStatus).label }}
+                  </el-tag>
+                </div>
+              </template>
+            </el-table-column>
+            <el-table-column label="操作" fixed="right" width="250">
+              <template #default="scope">
+                <div v-if="scope?.row" class="asset-row-actions">
+                  <el-button text type="primary" @click="openAsset(scope.row)">详情</el-button>
+                  <el-button v-if="canEditAsset(scope.row)" text type="warning" :icon="Edit"
+                             :loading="editingAssetId === Number(scope.row.assetId)" @click="openEditDialog(scope.row)">
+                    编辑
+                  </el-button>
+                  <el-button v-if="canDeleteAsset(scope.row)" text type="danger" :icon="Delete" :loading="deleting"
+                             @click="deleteAsset(scope.row)">删除
+                  </el-button>
+                </div>
+              </template>
+            </el-table-column>
+          </el-table>
+        </div>
 
-        <div v-else-if="viewMode === 'card'" class="asset-grid" v-loading="assetsLoading"><el-card v-for="asset in assets" :key="asset.assetId" class="asset-card" shadow="hover" tabindex="0" @click="openAsset(asset)" @keydown.enter="openAsset(asset)"><ProtectedAssetThumbnail class="asset-thumb" :thumbnail="resolveAssetThumbnail(asset)" :alt="`${asset.assetName} 缩略图`" /><header><el-tag size="small" effect="plain" round :type="tagTypeFromTone(assetTypeMeta(asset.assetType).tone)">{{ assetTypeMeta(asset.assetType).label }}</el-tag><el-tag size="small" effect="plain" round :type="tagTypeFromTone(assetStatusMeta(asset.assetStatus).tone)">{{ assetStatusMeta(asset.assetStatus).label }}</el-tag></header><h3>{{ asset.assetName }}</h3><p>{{ asset.description || '暂无资产说明' }}</p><footer><span>{{ asset.itemCount }} 个制作分项</span><span>{{ asset.usageShotCount }} 个使用镜头</span></footer></el-card></div>
+        <div v-else-if="viewMode === 'card'" class="asset-grid" v-loading="assetsLoading"><el-card v-for="asset in assets" :key="asset.assetId" class="asset-card" shadow="hover" tabindex="0" @click="openAsset(asset)" @keydown.enter="openAsset(asset)"><ProtectedAssetThumbnail class="asset-thumb" :thumbnail="resolveAssetThumbnail(asset)" :alt="`${asset.assetName} 缩略图`" /><header><el-tag size="small" effect="plain" round :type="tagTypeFromTone(assetTypeMeta(asset.assetType).tone)">{{ assetTypeMeta(asset.assetType).label }}</el-tag><el-tag class="asset-status-tag" :class="assetStatusTagClass(asset.assetStatus)" size="small" effect="light" round :type="tagTypeFromTone(assetStatusMeta(asset.assetStatus).tone)">{{ assetStatusMeta(asset.assetStatus).label }}</el-tag></header><h3>{{ asset.assetName }}</h3><p>{{ asset.description || '暂无资产说明' }}</p><footer><span>{{ asset.itemCount }} 个制作分项</span><span>{{ asset.usageShotCount }} 个使用镜头</span></footer></el-card></div>
 
-        <div v-else class="type-board" v-loading="assetsLoading"><el-card v-for="group in groupedAssets" :key="group.type" class="type-board__column" shadow="never"><header><div><el-tag size="small" effect="plain" round :type="tagTypeFromTone(assetTypeMeta(group.type).tone)">{{ assetTypeMeta(group.type).label }}</el-tag><strong>{{ group.assets.length }}</strong></div><small>当前分页结果</small></header><div v-if="group.assets.length" class="type-board__items"><el-button v-for="asset in group.assets" :key="asset.assetId" text class="type-board__asset" @click="openAsset(asset)"><ProtectedAssetThumbnail class="asset-thumb asset-thumb--board" :thumbnail="resolveAssetThumbnail(asset)" :alt="`${asset.assetName} 缩略图`" /><span><strong>{{ asset.assetName }}</strong><small>{{ asset.itemCount }} 分项</small><el-tag size="small" effect="plain" round :type="tagTypeFromTone(assetStatusMeta(asset.assetStatus).tone)">{{ assetStatusMeta(asset.assetStatus).label }}</el-tag></span></el-button></div><el-empty v-else :image-size="48" :description="`本页暂无${assetTypeMeta(group.type).label}资产`" /></el-card></div>
+        <div v-else class="type-board" v-loading="assetsLoading"><el-card v-for="group in groupedAssets" :key="group.type" class="type-board__column" shadow="never"><header><div><el-tag size="small" effect="plain" round :type="tagTypeFromTone(assetTypeMeta(group.type).tone)">{{ assetTypeMeta(group.type).label }}</el-tag><strong>{{ group.assets.length }}</strong></div><small>当前分页结果</small></header><div v-if="group.assets.length" class="type-board__items"><el-button v-for="asset in group.assets" :key="asset.assetId" text class="type-board__asset" @click="openAsset(asset)"><ProtectedAssetThumbnail class="asset-thumb asset-thumb--board" :thumbnail="resolveAssetThumbnail(asset)" :alt="`${asset.assetName} 缩略图`" /><span><strong>{{ asset.assetName }}</strong><small>{{ asset.itemCount }} 分项</small><el-tag class="asset-status-tag" :class="assetStatusTagClass(asset.assetStatus)" size="small" effect="light" round :type="tagTypeFromTone(assetStatusMeta(asset.assetStatus).tone)">{{ assetStatusMeta(asset.assetStatus).label }}</el-tag></span></el-button></div><el-empty v-else :image-size="48" :description="`本页暂无${assetTypeMeta(group.type).label}资产`" /></el-card></div>
 
         <el-pagination v-if="total" class="asset-pagination" background layout="prev, pager, next, total" :current-page="query.pageNum" :page-size="query.pageSize" :total="total" :disabled="assetsLoading" aria-label="资产分页" @current-change="changePage" />
       </template>
     </template>
 
-    <AssetFormDialog v-if="showCreate && createContext" :project-id="createContext.projectId" :operation-generation="createContext.operationGeneration" :members="members" @close="closeCreateDialog" @saved="handleSaved" @refresh="loadProjectContext" />
-    <AssetFormDialog v-if="showEdit && editContext && editingAsset" :project-id="editContext.projectId" :operation-generation="editContext.operationGeneration" :asset="editingAsset" :members="members" @close="closeEditDialog" @saved="handleEdited" @refresh="loadProjectContext" />
-    <AssetImportDialog v-if="showImport && importContext" :project-id="importContext.projectId" :operation-generation="importContext.operationGeneration" :project-name="project?.projectName" :members="members" @close="closeImportDialog" @imported="handleImported" />
+    <AssetFormDialog v-if="showCreate && createContext" :project-id="createContext.projectId" :operation-generation="createContext.operationGeneration" @close="closeCreateDialog" @saved="handleSaved" @refresh="loadProjectContext" />
+    <AssetFormDialog v-if="showEdit && editContext && editingAsset" :project-id="editContext.projectId" :operation-generation="editContext.operationGeneration" :asset="editingAsset" @close="closeEditDialog" @saved="handleEdited" @refresh="loadProjectContext" />
+    <AssetImportDialog v-if="showImport && importContext" :project-id="importContext.projectId" :operation-generation="importContext.operationGeneration" :project-name="project?.projectName" @close="closeImportDialog" @imported="handleImported" />
     <AssetRequirementDialog v-if="showRequirements && currentProjectId" :project-id="currentProjectId" :can-resolve="canResolveRequirements" :can-ignore="canIgnoreRequirements" :can-rematch="canRematchRequirements" @close="closeRequirementDialog" @updated="loadProjectContext" />
 
     <el-dialog v-model="showBatchAssign" :title="`${batchAssignLabel}资产制作人`" width="480px" :close-on-click-modal="!assigning" :close-on-press-escape="!assigning" :show-close="!assigning" @closed="resetBatchAssignForm">
@@ -684,7 +764,8 @@ onBeforeUnmount(() => {
 .asset-table-wrap { overflow: hidden; background: var(--sg-surface); border: 1px solid var(--sg-border); border-radius: var(--sg-radius-md); }
 .asset-description { max-width: 290px; line-height: 1.55; }
 .asset-thumb--small { width: 82px; height: 54px; border-radius: 7px; }
-.asset-status { display: flex; gap: 5px; align-items: flex-start; flex-direction: column; }
+.asset-status { display: grid; gap: 5px; justify-items: start; }
+.asset-directory-status { height: 16px; padding: 0 5px; font-size: 10px; line-height: 1; }
 .asset-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 13px; min-height: 120px; }
 .asset-card { overflow: hidden; cursor: pointer; background: var(--sg-surface); border-color: var(--sg-border); border-radius: var(--sg-radius-md); transition: .18s ease; }
 .asset-card:hover, .asset-card:focus { border-color: var(--sg-border-strong); transform: translateY(-2px); outline: 0; }

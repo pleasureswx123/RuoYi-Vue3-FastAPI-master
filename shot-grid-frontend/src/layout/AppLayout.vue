@@ -62,9 +62,7 @@ const navigationItems = computed(() => {
     .sort((left, right) => left.orderNum - right.orderNum)
 })
 
-const userDisplayName = computed(
-  () => sessionStore.user?.nickName || sessionStore.user?.userName || '当前用户'
-)
+const userDisplayName = computed(() => sessionStore.displayName)
 
 const pageTitle = computed(() => route.meta?.title || 'Shot Grid')
 const activeNavigationPath = computed(() => {

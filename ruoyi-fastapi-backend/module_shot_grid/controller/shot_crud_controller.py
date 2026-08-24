@@ -20,6 +20,10 @@ from module_shot_grid.entity.vo.shot_crud_vo import (
     ShotGridShotDetailModel,
     ShotGridShotListItemModel,
     ShotGridShotListQueryModel,
+    ShotGridShotRenumberModel,
+    ShotGridShotRenumberResultModel,
+    ShotGridShotReorderModel,
+    ShotGridShotReorderResultModel,
     ShotGridShotUpdateModel,
 )
 from module_shot_grid.service.shot_crud_service import ShotGridShotCrudService
@@ -101,6 +105,30 @@ async def batch_delete_shot_grid_shots(
     return ResponseUtil.success(data=result)
 
 
+@shot_crud_controller.post(
+    '/renumber',
+    summary='按当前场内顺序受理单场镜头连续编号与目录迁移',
+    response_model=DataResponseModel[ShotGridShotRenumberResultModel],
+    dependencies=[UserInterfaceAuthDependency('shotgrid:shot:edit')],
+)
+async def renumber_shot_grid_scene_shots(
+    request: Request,
+    project_id: Annotated[int, Path(alias='projectId', gt=0, le=SQL_BIGINT_MAX)],
+    command: ShotGridShotRenumberModel,
+    query_db: Annotated[AsyncSession, DBSessionDependency()],
+    current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
+    access: Annotated[ShotGridProjectAccessModel, ProjectRoleDependency('director')],
+) -> Response:
+    result = await ShotGridShotCrudService.renumber_scene_shots(
+        query_db,
+        project_id,
+        command,
+        current_user,
+        access,
+    )
+    return ResponseUtil.success(data=result)
+
+
 @shot_crud_controller.get(
     '/{shotId}',
     summary='获取镜头详情',
@@ -127,7 +155,7 @@ async def get_shot_grid_shot_detail(
 
 @shot_crud_controller.put(
     '/{shotId}',
-    summary='修改镜头和完整资产关系',
+    summary='修改未开始制作的镜头和完整资产关系',
     response_model=DataResponseModel[ShotGridShotDetailModel],
     dependencies=[UserInterfaceAuthDependency('shotgrid:shot:edit')],
 )
@@ -141,6 +169,32 @@ async def update_shot_grid_shot(
     access: Annotated[ShotGridProjectAccessModel, ProjectRoleDependency('director')],
 ) -> Response:
     result = await ShotGridShotCrudService.update_shot(
+        query_db,
+        project_id,
+        shot_id,
+        command,
+        current_user,
+        access,
+    )
+    return ResponseUtil.success(data=result)
+
+
+@shot_crud_controller.put(
+    '/{shotId}/sequence',
+    summary='调整镜头在所属场次中的位置',
+    response_model=DataResponseModel[ShotGridShotReorderResultModel],
+    dependencies=[UserInterfaceAuthDependency('shotgrid:shot:edit')],
+)
+async def reorder_shot_grid_shot(
+    request: Request,
+    project_id: Annotated[int, Path(alias='projectId', gt=0, le=SQL_BIGINT_MAX)],
+    shot_id: Annotated[int, Path(alias='shotId', gt=0, le=SQL_BIGINT_MAX)],
+    command: ShotGridShotReorderModel,
+    query_db: Annotated[AsyncSession, DBSessionDependency()],
+    current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
+    access: Annotated[ShotGridProjectAccessModel, ProjectRoleDependency('director')],
+) -> Response:
+    result = await ShotGridShotCrudService.reorder_shot(
         query_db,
         project_id,
         shot_id,

@@ -91,7 +91,7 @@ describe('版本详情与受保护下载', () => {
     await wrapper.findAll('button').find(item => item.text().includes('下载')).trigger('click')
     await flushPromises()
     expect(wrapper.text()).toContain('无权访问版本')
-    expect(wrapper.text()).toContain('SG_VERSION_FILE_FORBIDDEN')
+    expect(wrapper.text()).toContain('无权下载文件')
     expect(URL.createObjectURL).not.toHaveBeenCalled()
     wrapper.unmount()
   })

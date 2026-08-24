@@ -5,8 +5,8 @@ from pydantic import ConfigDict, Field, field_validator, model_validator
 
 from module_shot_grid.entity.vo.common_vo import ShotGridApiModel, ShotGridLockVersionModel, ShotGridPageQueryModel
 
-ShotStatus = Literal['unassigned', 'not_started', 'in_progress', 'reviewing', 'revision', 'completed']
-DirectoryStatus = Literal['pending', 'ready', 'failed']
+ShotStatus = Literal['unassigned', 'not_started', 'preparing', 'in_progress', 'reviewing', 'revision', 'completed']
+DirectoryStatus = Literal['not_created', 'pending', 'ready', 'failed']
 AssetType = Literal['Character', 'Environment', 'Prop']
 SQL_BIGINT_MAX = 9_223_372_036_854_775_807
 SQL_INTEGER_MAX = 2_147_483_647
@@ -60,7 +60,12 @@ class ShotGridShotWriteFieldsModel(ShotGridApiModel):
     model_config = ConfigDict(extra='forbid')
 
     scene_id: int = Field(gt=0, le=SQL_BIGINT_MAX, description='所属场次ID')
-    shot_no: int = Field(gt=0, le=SQL_INTEGER_MAX, description='集内镜头号')
+    shot_no: int | None = Field(
+        default=None,
+        gt=0,
+        le=SQL_INTEGER_MAX,
+        description='兼容字段；Sxxx 由服务端按场内位置生成，业务前端不再提交',
+    )
     duration_ms: int = Field(default=0, ge=0, le=SQL_BIGINT_MAX, description='镜头时长（毫秒）')
     shot_size: str | None = Field(default=None, max_length=40, description='景别')
     camera_position: str | None = Field(default=None, max_length=100, description='机位')
@@ -71,14 +76,27 @@ class ShotGridShotWriteFieldsModel(ShotGridApiModel):
     sound_effect: str | None = Field(default=None, description='音效说明')
     color_reference: str | None = Field(default=None, description='色调参考说明')
     remark: str | None = Field(default=None, max_length=500, description='备注')
-    sort_order: int = Field(default=0, ge=0, le=SQL_INTEGER_MAX, description='集内成片顺序')
-    assignee_user_id: int | None = Field(
+    sort_order: int | None = Field(
         default=None,
-        gt=0,
-        le=SQL_BIGINT_MAX,
-        description='可选主制作人用户ID',
+        ge=0,
+        le=SQL_INTEGER_MAX,
+        description='兼容内部排序键；业务前端不直接维护',
+    )
+    sequence_position: int | None = Field(
+        default=None,
+        ge=1,
+        le=SQL_INTEGER_MAX,
+        description='场内镜头位置，从 1 开始；该位置同时决定 Sxxx',
     )
     asset_ids: list[int] = Field(default_factory=list, description='完整关联资产ID集合')
+
+    @model_validator(mode='after')
+    def validate_sequence_input(self) -> 'ShotGridShotWriteFieldsModel':
+        if self.sort_order is not None and self.sequence_position is not None:
+            raise ValueError('sortOrder 与 sequencePosition 不能同时提交')
+        if self.shot_no is not None and self.sequence_position is not None and self.shot_no != self.sequence_position:
+            raise ValueError('shotNo 已与 sequencePosition 合并，两者同时提交时必须相同')
+        return self
 
     @field_validator('description', mode='before')
     @classmethod
@@ -119,6 +137,48 @@ class ShotGridShotUpdateModel(ShotGridShotWriteFieldsModel):
 
     lock_version: int = Field(ge=0, description='镜头乐观锁版本')
     asset_ids: list[int] = Field(description='完整关联资产ID集合')
+
+
+class ShotGridShotReorderModel(ShotGridLockVersionModel):
+    """调整镜头在所属场次中的业务位置。"""
+
+    model_config = ConfigDict(extra='forbid')
+
+    sequence_position: int = Field(ge=1, le=SQL_INTEGER_MAX, description='场内镜头位置，从 1 开始')
+
+
+class ShotGridShotReorderResultModel(ShotGridApiModel):
+    """镜头场内重排结果。"""
+
+    shot_id: int
+    shot_no: int | None = Field(default=None, ge=1, description='立即完成时的新场内镜头号')
+    shot_code: str | None = Field(default=None, description='立即完成时的新 Sxxx')
+    sequence_position: int = Field(ge=1)
+    lock_version: int = Field(ge=0)
+    operation_id: int | None = None
+    operation_status: Literal['succeeded', 'pending'] = 'succeeded'
+    storage_status: Literal['ready', 'migrating'] = 'ready'
+    status_url: str | None = None
+
+
+class ShotGridShotRenumberModel(ShotGridApiModel):
+    """按当前顺序受理单场镜头连续编号。"""
+
+    model_config = ConfigDict(extra='forbid')
+
+    scene_id: int = Field(gt=0, le=SQL_BIGINT_MAX, description='待连续编号的场次ID')
+
+
+class ShotGridShotRenumberResultModel(ShotGridApiModel):
+    """单场连续编号受理结果；目录迁移成功后才切换数据库编号。"""
+
+    scene_id: int
+    shot_count: int = Field(ge=1)
+    changed_count: int = Field(ge=0)
+    operation_id: int | None = None
+    operation_status: Literal['pending', 'succeeded']
+    storage_status: Literal['migrating', 'ready']
+    status_url: str | None = None
 
 
 class ShotGridShotArchiveModel(ShotGridLockVersionModel):
@@ -188,7 +248,7 @@ class ShotGridShotTaskSummaryModel(ShotGridApiModel):
 
     task_id: int
     task_kind: Literal['shot_video']
-    task_status: Literal['not_started', 'in_progress', 'pending_review', 'revision', 'completed']
+    task_status: Literal['not_started', 'preparing', 'in_progress', 'pending_review', 'revision', 'completed']
     assignee: ShotGridShotAssigneeModel
     priority: Literal['low', 'normal', 'high', 'urgent']
     due_date: date | None = None
@@ -243,7 +303,7 @@ class ShotGridShotListItemModel(ShotGridApiModel):
     scene_name: str | None = None
     shot_no: int
     shot_code: str
-    storage_dir_name: str
+    storage_dir_name: str | None = None
     directory_status: DirectoryStatus
     duration_ms: int
     shot_size: str | None = None
@@ -258,6 +318,7 @@ class ShotGridShotListItemModel(ShotGridApiModel):
     color_reference: str | None = None
     remark: str | None = None
     sort_order: int
+    sequence_position: int = Field(ge=1)
     status: ShotStatus
     task_lock_version: int | None = Field(default=None, ge=0)
     assignee: ShotGridShotAssigneeModel | None = None

@@ -20,10 +20,8 @@ from module_shot_grid.entity.vo.import_common_vo import ImportIssueModel
 from module_shot_grid.exceptions import shot_grid_error
 
 _WHITESPACE_RE = re.compile(r'\s+', flags=re.UNICODE)
-_MULTI_ASSIGNEE_RE = re.compile(r'[/／、,，;；|｜&＆+＋]')
 MAX_ASSET_NAME_LENGTH = 200
 MAX_PRODUCTION_ITEM_LENGTH = 240
-MAX_ASSIGNEE_NAME_LENGTH = 30
 MAX_REMARK_LENGTH = 500
 MIN_CONFLICTING_VALUES = 2
 DATA_START_ROW = 2
@@ -50,16 +48,12 @@ class AssetExcelParser:
         '制作分项描述': 'item_description',
         '资产描述': 'asset_description',
         '制作分项': 'production_item',
-        '任务描述': 'task_description',
-        '制作要求': 'task_description',
         '备注': 'remark',
         '状态': 'ignored_status',
         '缩略图': 'ignored_thumbnail',
         '资产缩略图': 'ignored_thumbnail',
         '最新版本': 'ignored_latest_version',
         '完成度': 'ignored_progress',
-        '制作人': 'assignee_user_name',
-        '制作人账号': 'assignee_user_name',
     }
     TYPE_ALIASES = {
         'character': 'Character',
@@ -286,7 +280,7 @@ class AssetExcelParser:
         return False
 
     @classmethod
-    def _parse_row(  # noqa: PLR0912
+    def _parse_row(
         cls,
         worksheet: Worksheet,
         row_number: int,
@@ -395,28 +389,6 @@ class AssetExcelParser:
                 )
             )
 
-        assignee_user_name = cls.normalize_display_text(raw.get('assignee_user_name'))
-        if assignee_user_name and _MULTI_ASSIGNEE_RE.search(assignee_user_name):
-            errors.append(
-                cls._issue(
-                    'SG_TASK_ASSIGNEE_AMBIGUOUS',
-                    '制作人字段只能填写一名主制作人',
-                    field_name='assigneeUserName',
-                    sheet_name=worksheet.title,
-                    row_number=row_number,
-                )
-            )
-        elif assignee_user_name and len(assignee_user_name) > MAX_ASSIGNEE_NAME_LENGTH:
-            errors.append(
-                cls._issue(
-                    'SG_IMPORT_FIELD_TOO_LONG',
-                    '制作人账号或昵称不能超过30个字符',
-                    field_name='assigneeUserName',
-                    sheet_name=worksheet.title,
-                    row_number=row_number,
-                )
-            )
-
         remark = cls.normalize_display_text(raw.get('remark'))
         if remark and len(remark) > MAX_REMARK_LENGTH:
             errors.append(
@@ -442,9 +414,7 @@ class AssetExcelParser:
             productionItem=production_item,
             productionItemKey=production_item_key,
             itemDescription=cls.normalize_display_text(raw.get('item_description')),
-            taskDescription=cls.normalize_display_text(raw.get('task_description')),
             remark=remark,
-            assigneeUserName=assignee_user_name,
             importRowKey=import_row_key,
         )
         return AssetImportPreviewRowModel(

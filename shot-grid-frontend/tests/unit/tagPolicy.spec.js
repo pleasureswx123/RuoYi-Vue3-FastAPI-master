@@ -90,16 +90,20 @@ function customTagStyleSelectors(source, extension = '.vue') {
   for (const style of styleSources(source, extension)) {
     for (const rule of style.matchAll(rulePattern)) {
       const declarations = rule[2]
-      const classes = [...rule[1].matchAll(classPattern)].map(match => match[1])
+      for (const selector of rule[1].split(',')) {
+        const classes = [...selector.matchAll(classPattern)].map(match => match[1])
+        const targetsElementPlusTag = classes.includes('el-tag')
 
-      for (const className of classes) {
-        const isLegacy = legacyTagClasses.has(className)
-        const isCustomChip = forbiddenCustomStyleToken.test(className)
-        const isCustomTagAppearance = /(?:^|[-_])tag$/iu.test(className)
-          && !className.startsWith('el-')
-          && tagAppearanceDeclaration.test(declarations)
+        for (const className of classes) {
+          const isLegacy = legacyTagClasses.has(className)
+          const isCustomChip = forbiddenCustomStyleToken.test(className)
+          const isCustomTagAppearance = /(?:^|[-_])tag$/iu.test(className)
+            && !className.startsWith('el-')
+            && !targetsElementPlusTag
+            && tagAppearanceDeclaration.test(declarations)
 
-        if (isLegacy || isCustomChip || isCustomTagAppearance) violations.push(`.${className}`)
+          if (isLegacy || isCustomChip || isCustomTagAppearance) violations.push(`.${className}`)
+        }
       }
     }
   }
@@ -126,7 +130,8 @@ describe('Element Plus Tag 约束', () => {
       .status-tag { padding: 4px 8px; }`
     const validStyle = `.tag-list { display: flex; }
       .task-kind-tag { justify-self: start; }
-      :deep(.el-tag) { justify-self: start; }`
+      :deep(.el-tag) { justify-self: start; }
+      .status-tag.el-tag { --el-tag-text-color: red; color: var(--el-tag-text-color); }`
 
     expect(customTagStyleSelectors(invalidStyle, '.scss')).toEqual([
       '.status-chip',

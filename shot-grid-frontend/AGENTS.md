@@ -8,7 +8,7 @@
 - 基础后端：`../ruoyi-fastapi-backend/`。
 - 后台管理端参考实现：`../ruoyi-fastapi-frontend/`。
 - 当前主数据库：PostgreSQL。
-- 当前目录已建立可独立构建的 Vue 3/Vite/Pinia/Vue Router/Axios/Element Plus 应用基座及真实业务页面。`manual_batch`、资产需求人工处理、模板下载、统一搜索和点/矩形/箭头/文字批注均已接入。视频先用 Bearer 鉴权领取 Redis 短期播放票据，再由原生 `<video>` 发起 Range；票据绑定登录会话和单一版本文件，每次请求重查账号权限、项目成员及文件 ACL。项目、镜头、资产及任务/版本四个子集已完成隔离浏览器旅程；真实 MP4/MOV 206/416、审核、文件、搜索、资产需求和新模板尚无隔离浏览器旅程。媒体派生和真实 UNC 仍未完成。任何子集旅程都不是完整系统 E2E。
+- 当前目录已建立可独立构建的 Vue 3/Vite/Pinia/Vue Router/Axios/Element Plus 应用基座及真实业务页面。`manual_batch`、资产需求人工处理、模板下载、统一搜索和点/矩形/箭头/文字批注均已接入。视频先用 Bearer 鉴权领取 Redis 短期播放票据，再由原生 `<video>` 发起 Range；票据绑定登录会话和单一版本文件，每次请求重查账号权限、项目成员及文件 ACL。项目管理和任务/版本子集已有隔离浏览器旅程；2026-08-11 的镜头/资产旅程基于已废止的 v1 导入预分配规则，不能验收当前 v2“导入后未分配且不建任务”的契约。真实 MP4/MOV 206/416、审核、文件、搜索、资产需求、两类 v2 模板/导入和六阶段生产履历尚无隔离浏览器旅程。媒体派生和真实 UNC 仍未完成。任何子集旅程都不是完整系统 E2E。
 
 需求文档定义产品意图，本文件补充工程边界和必须保持的数据不变量。若需求文档与已确认的后端契约不一致，应先记录差异，再修改实现；不得在页面组件中用临时兼容掩盖数据模型冲突。
 
@@ -130,11 +130,11 @@ ruoyi-fastapi-frontend
 
 - 集属于且只属于一个项目，场次属于且只属于一个集，镜头属于且只属于一个场次。
 - 业务界面可按契约展示集、场次、顺序、镜头号、制作信息、镜头描述、资产关系和审核派生数据；不得把界面展示列误当成 Excel 导入模板。
-- 当前镜头 Excel 模板以 `docs/镜头-样表.xlsx` 为准：每个可见 Sheet 表示一集，Sheet 名为 `EP001` 等格式，主数据区为从 A1 开始的 A:P 16 列；Q:R 空白分隔后的辅助区域不得解析。
-- 后端下载使用打包的匿名副本 `module_shot_grid/resources/templates/shot-v1.xlsx`，冻结 SHA-256 为 `F6370BBB14548B645782ABF0734E930EC10470565821BA6C8FD1B6A2D9D96EE0`。匿名化只改动 `xl/workbook.xml`、`xl/sharedStrings.xml` 和 3 个 `docProps` XML：删除 `x15ac:absPath`，把 88 条共享字符串替换为只含表头、合法编号、制作人 A-C 和示例文本的匿名内容，匿名化作者/应用属性并清空自定义属性。其余 13 个条目（含两个 Sheet、styles、theme）字节不变，解析结果仍为 total 24、valid 24、warning 0、error 0、2 集、8 场、24 镜头；不得重新引入驱动器路径、`file:` URI、UNC、个人/组织或应用元数据。
-- 镜头和资产正式提交统一使用 `selectedRows[{sheetName,rowNumber,assigneeUserId?}]`；不能仅传 `rowNumbers`，因为不同 Sheet 的物理行号会重复。`assigneeUserId` 为用户 ID 时覆盖 Excel 匹配，显式 `null` 表示按未分配导入，不提供时沿用 Excel 预检结果。预览 Token 只短期存在，前端应保存首次提交使用的幂等键，并允许后端从 PostgreSQL 结果快照重放成功响应。
-- “序”固定规范化为 `scene_no=0` 和场次代码 `000`；镜头号在整集内唯一，不能按场次重置；焦段按文本保存以兼容 `35/25` 等组合值。
-- “集”和“场次”是父级实体；“场景”和“角色”来自镜头关联的 Environment、Character 资产；成片顺序由样表 Sheet 内有效行顺序派生或在界面维护。
+- 当前镜头 Excel 下载模板为后端打包的匿名 `module_shot_grid/resources/templates/shot-v2.xlsx`：每个可见 Sheet 表示一集，Sheet 名为 `EP001` 等格式，主数据区为从 A1 开始的 A:O 15 列且不含制作人；冻结 SHA-256 为 `B6F24078CA56295E9E6CCE50BB3455AF198DFFFE5C08F8D85605A68C09439ECE`。旧 `shot-v1.xlsx` 只作为历史资源保留，不再由服务下载。模板不得重新引入驱动器路径、`file:` URI、UNC、个人/组织或应用元数据。
+- 镜头和资产正式提交统一使用 `selectedRows[{sheetName,rowNumber}]`；不能仅传 `rowNumbers`，因为不同 Sheet 的物理行号会重复。导入请求、预览行和模板均不得接受 `assigneeUserId` 或制作人覆盖；预览 Token 只短期存在，前端应保存首次提交使用的幂等键，并允许后端从 PostgreSQL 结果快照重放成功响应。
+- “序”固定规范化为 `scene_no=0` 和场次代码 `000`；镜头号在场内唯一，不同场次可分别从 `S001` 开始；焦段按文本保存以兼容 `35/25` 等组合值。
+- “集”和“场次”是父级实体；“场景”和“角色”来自镜头关联的 Environment、Character 资产；场内镜头顺序由样表 Sheet 中同一场次的有效行顺序派生或在界面维护。业务界面统一使用连续的 `sequencePosition` 并显示“本场第 N 镜”，不得直接让用户解释或编辑内部 `sortOrder`；业务写入 `sequencePosition` 后由服务端在项目行锁和场内镜头行锁内统一重排，兼容 `sortOrder` 与 `sequencePosition` 不得同时提交。
+- 2026-08-21 后，`shot_id` 是稳定内部主键且与 NAS 无关；`sequencePosition`、`shotNo` 和 `Sxxx` 是同一场内镜序的不同投影，第 N 镜必须为 `S{N:03d}`。新建/导入镜头不立即建 NAS 目录，任务开始时才冻结 `{sceneNo:03d}_S{shotNo:03d}` 并从 `preparing` 等待 Outbox 成功后进入 `in_progress`。拖拽前必须加载完整场次且仅在被移动区间全部镜头未开始制作时允许；`not_started` 可排，已开始状态或已有版本/文件整体禁止。拖拽成功后自动同步 `Sxxx`，不再暴露独立的常规“重新编号”动作。删除后端从最早删除位置到场尾重新检查同一门禁并连续化剩余镜头；受影响区间已有冻结目录时拒绝删除，前端必须展示后端错误，不能假装只释放编号。
 - 制作人、镜头缩略图、当前最新反馈和镜头状态分别从任务、版本文件、审核意见和状态聚合获得，禁止作为可独立修改的重复事实列写入镜头主表。
 - 资产属于且只属于一个项目；MVP 资产类型只允许 `Character`、`Environment`、`Prop`，不拆成独立业务模块。
 - 未来增加资产类型必须同步数据库约束、后端校验、字典、导入映射、路径规则和测试，不能只新增字典值。
@@ -142,11 +142,13 @@ ruoyi-fastapi-frontend
 - 资产表至少包含类型、名称、制作分项、描述、备注、状态、制作人；任务描述、状态和制作人从当前制作分项唯一任务聚合。
 - 资产或制作分项可执行动作必须读取后端 `allowedActions`，再与当前平台权限取交集；页面不得根据角色名、状态文案或是否显示按钮自行合成写权限。资产动作代码为 `asset.edit`、`assetItem.add`、`asset.archive`，制作分项动作代码为 `assetItem.edit`、`assetItem.archive`、`task.assign`。
 - 资产列表中的批量分配以资产为选择单位、以其全部活动制作分项任务为实际写入单位；父资产 `allowedActions` 仅在全部活动分项均可分配时聚合返回 `task.assign`。弹窗确认前应读取详情取得每个 `assetItemId/taskLockVersion`，后端按制作分项执行单事务批量创建或改派。资产删除仅允许无镜头引用、无版本且任务均未开始的资产，并在同一事务内软删除未开始任务、归档制作分项和父资产。
-- 镜头与资产 Excel 预览不展示“物理行”业务列，但内部提交仍保留 `sheetName + rowNumber` 作为稳定源数据定位键。仅制作人匹配失败的行属于“可处理行”，允许先勾选，再通过行级或批量制作人选择转成真正可导入行。
-- 制作分项缩略图只允许使用该分项当前最新版本的 `thumbnail` 文件；最新版本无缩略图时显示安全占位，不得回退旧版本。父资产代表图固定按活动制作分项 `(sortOrder, assetItemId)` 顺序选择第一张可用的当前最新版本缩略图，禁止前端按加载先后或本地缓存另选代表图。
+- 镜头与资产 Excel 预览不展示“物理行”业务列，但内部提交仍保留 `sheetName + rowNumber` 作为稳定源数据定位键。预览不提供行级或批量制作人选择，导入成功后的镜头和制作分项都必须显示为未分配。
+- 制作分项缩略图只允许使用该分项当前最新版本的 `thumbnail` 文件；最新版本无缩略图时显示安全占位，不得回退旧版本。父资产代表图固定按活动制作分项 `(sortOrder, assetItemId)` 顺序选择第一张可用的当前最新版本缩略图，禁止前端按加载先后或本地缓存另选代表图。资产列表、卡片和类型看板仍只展示父资产代表图；资产详情头部必须按同一稳定顺序展示全部活动制作分项缩略图卡片，并标明分项名称和当前最新版本状态。分项没有缩略图时保留该分项独立占位，不得用父资产或其他分项图片替代。
 - 任务必须且只能属于一个镜头或一个资产制作分项，不能同时属于两者，也不能成为无归属任务。
 - 每个镜头最多一个 `shot_video` 任务，每个资产制作分项最多一个 `asset_image` 任务；首次分配主制作人时创建，改派时更新同一任务。
-- 制作分项允许在资产导入时为空，只返回警告并允许后续补充；资产图片版本提交前必须补齐。每个制作分项只允许一名主制作人，复合制作人文本必须作为导入错误处理。
+- 镜头、资产及制作分项的手工创建和 Excel 导入只能创建生产对象与关系，默认聚合状态为 `unassigned`，不得接收制作人或顺带创建任务。镜头创建/导入不创建目录 Outbox；资产目录仍按资产契约处理。第一次委派创建非空 `assignee_user_id`、状态为 `not_started` 的唯一任务；镜头任务开始后先进入 `preparing`，目录 Outbox 成功后再进入 `in_progress`；资产任务仍直接进入 `in_progress`。不可变版本正式提交后进入 `pending_review`，审核通过后版本为 `final` 且任务为 `completed`，退回后任务为 `revision`。
+- 制作分项允许在资产导入时为空，只返回警告并允许后续补充；但仅未分配或唯一任务仍为 `not_started` 时可编辑，制作人开始任务后主数据立即冻结，不等待首个版本提交。委派任务和提交资产图片版本前必须补齐。资产模板不含制作人，第一次委派时才为制作分项选择一名主制作人并创建唯一任务。
+- 镜头与资产详情的生产履历顶部固定使用“创建/导入、委派、制作、提交版本、审核、完成”六阶段；下方版本时间线呈现返修循环。阶段投影不是审计历史，任务 `createTime` 只能证明任务记录建立，不能伪装成已确认的首次委派、改派或开始事件；无法由正式记录直接证明的历史必须标记 `inferred` 或缺省。
 - 图片和视频在线下制作，平台只负责收任务、上传产出物、生成版本、自动创建审核单和记录审核结果，不实现在线生成或剪辑。
 
 ### 4.3 版本与审核
@@ -155,6 +157,7 @@ ruoyi-fastapi-frontend
 - 版本号由后端在事务中分配，并在任务范围内唯一；前端不得通过列表长度计算下一个版本号。
 - 已提交版本不可覆盖。修订必须创建新版本，历史版本的媒体、生成参数、提交人和提交时间保持可追溯。
 - “修改问题”是正式审核反馈单元；现有协议中的 `Note/sg_note` 只作为兼容名称。问题必须永久绑定首次提出它的来源版本，不能迁移、复制或改绑到后续版本；视频问题可使用确定的时间点，图片或视频标注使用归一化坐标。
+- 审核人点击“保存问题草稿”只写入当前自动审核单的私有 `sg_review_issue_draft`，制作人、任务问题列表和生产履历均不得看到。审核单仍为待审核时，授权审核人可携带 `lockVersion` 编辑或删除草稿；点击“退回并发送问题”时，后端必须在同一审核事务把全部草稿发布为不可变 `sg_note` 并删除草稿。`approve` 有草稿时拒绝，`defer` 保留草稿。
 - 每条修改问题必须至少包含“文字内容”或“一组画面标注”之一，也可以两者都有。MVP 中所有处于 `open` 的修改问题都阻止通过，不再区分“普通评论”和“必须修改项”。
 - 问题被退回后跨版本保持 `open`。制作人提交下一版本时，必须对当前任务的每一条 open 问题提交逐条处理说明；全局 `changelog` 只能作为本轮总述，不能替代逐条说明。
 - 制作人的逐条处理说明绑定“新版本 + 原问题”，不是问题聊天回复，也不能修改原问题。审核人在新版本上必须逐条记录 `resolved` 或 `still_present`：前者关闭问题并记录 `resolvedInVersionId`，后者保持问题 open 并继续带入下一版。
@@ -163,8 +166,8 @@ ruoyi-fastapi-frontend
 - 确认通过并设置最终版本必须由后端在同一事务内完成，并处理并发审核；同一任务同时只能有一个最终版本。
 - 审核单与版本是有序多对多关系，关系记录必须保存顺序，不得依赖前端数组的偶然顺序。
 - 上传平台受保护文件不等于版本成功。必须通过 `sg_version_submission` 完成 NAS 临时写入、摘要校验和原子改名，再在短数据库事务中创建正式版本、文件引用、`auto_single` 审核单并把任务改为待审核。退回后再次上传必须生成新版本和新审核单，不能覆盖旧记录。
-- 版本提交页面固定执行“本地文件校验 → preflight → private upload → create HTTP 202”。preflight 与 create 都携带 `changelog/aiParams/issueResponses`；修订任务的 `issueResponses` 必须完整覆盖当前全部 open 问题且不得重复或跨任务。preflight 是只读无副作用门禁，只验证问题覆盖、目标相对路径可生成和目录快照字段完整，不访问 NAS 或检查实际目标文件；正式 create 必须在后端锁内重新校验平台权限、项目访问、负责人/总监身份、任务/项目状态、文件授权与摘要、业务上下文、open 问题集合、逐条说明、未解决提交、目标相对路径生成和目录快照一致性，前端不得把预检成功当成最终授权。实际目标文件冲突只由 Worker 无覆盖发布阶段处理。
-- 首次分配任务时 `taskLockVersion` 必须为空，受控改派已有任务时必须提交当前 `taskLockVersion`；开始任务必须提交当前 `lockVersion`。任务存在任何非 `committed` 版本提交（包括 `failed`）时禁止改派。
+- 版本提交页面固定执行“本地文件校验 → preflight → private upload → create HTTP 202”。preflight 与 create 都携带 `changelog/aiParams/issueResponses`；修订任务的 `issueResponses` 必须完整覆盖当前全部 open 问题且不得重复或跨任务。preflight 是只读无副作用门禁，只验证问题覆盖、目标相对路径可生成和目录快照字段完整，不访问 NAS 或检查实际目标文件；正式 create 必须在后端锁内重新校验平台权限、当前用户就是任务当前委派的活动 `creator`、任务/项目状态、文件授权与摘要、业务上下文、open 问题集合、逐条说明、未解决提交、目标相对路径生成和目录快照一致性，前端不得把预检成功当成最终授权。实际目标文件冲突只由 Worker 无覆盖发布阶段处理。
+- 首次分配任务时 `taskLockVersion` 必须为空，受控改派已有任务时必须提交当前 `taskLockVersion`；开始任务必须提交当前 `lockVersion`。开始任务、版本 preflight/create 和失败提交重试仅允许 `currentUserId == task.assigneeUserId` 且该用户仍是当前项目 `active + creator` 成员时显示并执行；`director`、管理员、超级管理员和 `shotgrid:project:all` 不得代操作。任务存在任何非 `committed` 版本提交（包括 `failed`）时禁止改派。
 - 版本暂存先为平台私有源文件建立 `businessType=shotgrid_version_submission` 临时引用；正式版本事务再切换为 `shotgrid_version` 主文件引用。`committed` 的 `versionId` 通过正式版本按 `submissionId` 反查，提交记录本身不保存重复的 `versionId`。
 - 页面刷新后通过 task current 接口恢复未解决提交；只有 `committed` 可显示为版本成功。`failed` 必须对原提交行执行 retry，不能新建提交绕过占用约束。自动查询每轮最多 30 次，连续 3 次错误后暂停，使用有上限的指数退避，并在 401/403/404 时停止；到达边界后保留人工刷新或合法重试。
 - 版本创建的幂等键、已上传 `fileId`、全局修改说明、逐条问题处理说明和 AI 参数只允许保存在当前内存上下文。create 响应未知时，同一命令重放必须复用原 `fileId`、问题响应快照和幂等键并跳过重复 preflight/upload；任务、问题集合、操作或文件上下文变化后以 abort + generation 防止 ABA 迟到响应继续创建。版本历史、详情和鉴权 Range 下载使用各自权限并保留 401/403/404/409/413/416/5xx 语义。
@@ -187,7 +190,7 @@ ruoyi-fastapi-frontend
 - 缩略图、转码、代理文件和媒体元数据属于后端或异步处理能力；前端不得用占位地址假装处理成功。
 - 浏览器通常不能可靠直接打开 UNC/NAS 路径。MVP 应提供查看和复制路径；只有存在已确认的桌面协议处理器时才能提供“打开 NAS”。
 - NAS 根目录只能来自管理员白名单。项目创建必须同时写入项目存储绑定和目录 Outbox；项目存储为 `ready` 前不得进入正式业务写入。
-- NAS 目录 Worker 默认关闭，只在 PostgreSQL、显式开启配置且当前进程仍是 Application Leader 时消费 Outbox。领取、NAS I/O 和结果回写必须保持“短事务、事务外 I/O、短事务”，并以数据库租约、心跳和 owner + attempt fencing 防止旧持有者覆盖新终态。租约接管窗口不承诺物理 I/O 完全不重叠，当前执行器仅允许幂等目录创建和随机 `O_EXCL` 写探针。
+- NAS 目录 Worker 默认关闭，只在 PostgreSQL、显式开启配置且当前进程仍是 Application Leader 时消费 Outbox。领取、NAS I/O 和结果回写必须保持“短事务、事务外 I/O、短事务”，并以数据库租约、心跳和 owner + attempt fencing 防止旧持有者覆盖新终态。租约接管窗口不承诺物理 I/O 完全不重叠，当前执行器仅允许幂等目录创建和随机 `O_EXCL` 写探针。Worker owner 只允许保存在租约/执行字段，业务 `createBy/updateBy` 必须使用发起人或可读的“系统目录服务”，不得向前端暴露进程、租约或 UUID 标识。
 - NAS 版本发布 Worker 同样默认关闭，只在 PostgreSQL、显式开启 `SHOT_GRID_VERSION_WORKER_ENABLED` 且当前进程仍是 Application Leader 时消费提交。每次 attempt 必须使用含 attempt 和随机值的同目录唯一临时文件名；目标已存在时只有真实大小和 SHA-256 均一致才视为幂等成功，禁止覆盖。领取、文件 I/O、正式版本事务和结果回写保持短事务边界，正常关机或失锁必须 drain 活动任务。
 - 项目初始化和项目级对账的目标路径相对 NAS 存储根目录；集、镜头、资产目录目标相对项目根目录。人工重试新建 `reconcile_directory` 并保留旧失败操作，不得覆盖原操作或复用第二条 `initialize_project`。
 - 当前 Worker 单轮串行消费；软超时只用于诊断并继续心跳，不能宣称支持批内并发或能硬杀仍在执行的 SMB 线程。生产启用前必须使用正式 Windows Worker 账号、NAS/AD/共享 ACL 和隔离 UNC 根目录完成真实验证。
@@ -209,6 +212,7 @@ ruoyi-fastapi-frontend
 - `sg_task`
 - `sg_version`
 - `sg_version_file`
+- `sg_review_issue_draft`
 - `sg_note`
 - `sg_version_issue_response`
 - `sg_issue_verification`
@@ -235,7 +239,7 @@ ruoyi-fastapi-frontend
 
 数据库实现必须满足：
 
-- 项目内集号、集内场次号、集内镜头号和必要业务编码具有明确唯一约束。
+- 项目内集号、集内场次号、场内镜头号和必要业务编码具有明确唯一约束。
 - 任务通过 PostgreSQL `CHECK` 约束保证镜头归属和资产归属二选一。
 - 数据库部分唯一索引保证每个镜头或资产制作分项最多一个正式任务。
 - 版本在任务范围内具有唯一序号。
@@ -246,7 +250,7 @@ ruoyi-fastapi-frontend
 - 时间字段与后端基座保持一致：SQLAlchemy 使用 `DateTime`，PostgreSQL 使用 `timestamp(0) without time zone`。
 - `del_flag = '2'` 只表示逻辑删除；业务归档使用明确状态字段，归档后保持 `del_flag = '0'`。
 - 结构升级同时提交 SQLAlchemy DO、PostgreSQL Alembic 迁移和 `ruoyi-fastapi-backend/sql/ruoyi-fastapi-pg.sql`，不依赖 `create_all()` 修改已有表。
-- 当前 Shot Grid head 为 `20260811_06`；06 在 DDL 前拒绝重复源文件、每任务多条未解决提交，以及状态/租约/错误组合不一致的历史版本提交，并增加“我的任务”索引、版本提交唯一性/状态约束和审核动作持久化幂等字段。该 revision 不把全平台 Alembic 链变成可从真正空库独立建库的 baseline。
+- 当前 Shot Grid head 为 `20260821_17`；15 将镜头目录冻结延迟到任务开始并增加 `preparing`，16 在升级前失败关闭地校验每场活动镜头已连续编号，再规范化兼容排序键，17 增加审核问题私有草稿和审核退回时的原子发布边界。该增量链不把全平台 Alembic 链变成可从真正空库独立建库的 baseline。
 
 业务 API 统一使用 `/shot-grid` 前缀，权限码统一使用 `shotgrid:<resource>:<action>` 形式。若后端已有不同的正式契约，以已提交接口为准，并同步修订本文件和需求说明。
 
@@ -313,19 +317,20 @@ ruoyi-fastapi-frontend
 - 项目详情页使用真实详情与概览聚合，并按后端 `allowedActions`、平台权限和项目角色控制编辑、归档、成员维护、路径查看与目录重试。普通编辑提交完整可编辑字段和当前 `lockVersion`；项目代号、NAS 绑定与状态不在普通 PUT 中修改，归档走独立动作。
 - 项目成员候选与成员列表是不同资源；`GET /shot-grid/projects/{projectId}/members` 支持可选 `projectRole=director|creator`，不传角色时返回全部活动成员。添加、角色修改和移除分别走项目成员接口；不提供独立制作人缩写输入。前端按钮显隐不能代替后端在项目行锁内重新校验操作者仍为项目管理人。
 - 项目存储面板可以查看授权后的路径快照、复制路径、查询目录操作分页/详情并发起人工重试；浏览器未确认桌面协议处理器前不提供“打开 UNC”。生产 Docker/Nginx 代码固定把页面部署在 `/shot-grid-app/`，并把 `/prod-api/...` 剥离前缀后代理到后端，同时保留 SPA 深链回退；该配置已在隔离项目管理子集的真实浏览器旅程中验证，完整系统与真实 UNC/NAS 验收边界仍见本文件末尾说明。
-- 镜头列表以 `GET /shot-grid/projects/{projectId}/shots` 为唯一数据源，项目、集、场次、状态和制作人筛选与服务端分页在表格、卡片、故事板之间保持一致；表格首列允许选择当前页中可分配或可删除的镜头。批量分配使用 `POST /shot-grid/projects/{projectId}/shots/batch-assign`；列表工具栏只保留批量分配/重新分配按钮，点击后在弹窗内选择新的制作人，再提交统一 `assigneeUserId` 与每行 `shotId/taskLockVersion`。批量分配只修改用户当前明确勾选的镜头，服务端按单镜头分配规则整批事务提交。行尾提供详情、编辑、删除，批量删除使用 `POST /shot-grid/projects/{projectId}/shots/batch-delete` 并提交每行 `shotId/lockVersion`。服务端必须在同一事务内重查任务状态，任务一旦开始则整批拒绝删除；未开始任务与镜头一并写为 `del_flag='2'`，释放集内镜头号，保证删除后可重新创建或导入同编号镜头。项目切换、筛选变化和卸载会取消旧请求，防止跨项目迟到响应覆盖当前状态。项目切换还必须关闭创建/导入/编辑弹窗，并清空旧项目的预检 Token、幂等键、选中行和问题明细，禁止跨项目提交旧会话。创建、导入、编辑和分配弹窗还要携带单调递增的 `operationGeneration`；即使切走后返回同一项目或镜头并重开同类弹窗，旧请求迟到事件也不得关闭新弹窗或刷新当前上下文。
-- 制作人选择使用分页 `GET /shot-grid/projects/{projectId}/shot-assignee-options`，只展示后端返回的 `projectRole=creator` 活动项目成员安全摘要；镜头 Excel 导入下拉和正式提交复核使用同一角色约束。前端选项和按钮显隐不替代创建、编辑或分配接口的服务端授权与成员状态复核。
+- 镜头列表以 `GET /shot-grid/projects/{projectId}/shots` 为唯一数据源，项目、集、场次、状态和制作人筛选与服务端分页在表格、卡片、故事板之间保持一致；`sortOrder` 默认排序必须先按集、再按场次、最后按场内镜头，不得跨集或跨场交错。镜头页提供独立“新建集”和“新建场次”动作，场次允许 `000/序`；新建镜头只选择场内插入位置，服务端派生 `Sxxx`。表格首列允许选择当前页中可分配或可删除的镜头；只有已筛选到具体集和具体场次、没有关键字/状态/制作人附加筛选、使用升序表格视图且前端已加载完整场次时，才允许通过 `SortableJS` 手柄拖拽。完整场次最多自动加载 2000 条，加载期间或超过上限时禁用拖拽并给出原因；完整加载后隐藏分页，提交的位置是整场位置而不是页内下标。拖拽调用 `PUT /shot-grid/projects/{projectId}/shots/{shotId}/sequence` 提交 `sequencePosition/lockVersion`，服务端锁定目标场次并同步 `sequencePosition/shotNo/Sxxx`；普通编辑不得跨场移动或直接改号，且只允许未分配或任务仍为 `not_started` 的镜头，进入 `preparing/in_progress/pending_review/revision/completed` 后列表与详情都不展示编辑入口，后端普通更新接口也必须在锁内拒绝。拖拽成功或失败都重新读取列表，且不再向用户暴露独立常规重编号动作。批量分配使用 `POST /shot-grid/projects/{projectId}/shots/batch-assign`；列表工具栏只保留批量分配/重新分配按钮，弹窗统一提交 `assigneeUserId` 与每行 `shotId/taskLockVersion`。行尾提供详情、编辑、删除；批量删除使用 `POST /shot-grid/projects/{projectId}/shots/batch-delete` 并提交每行 `shotId/lockVersion`。单条和批量删除都必须由服务端锁定整场，从最早删除位置到场尾重查未开始制作/版本/文件门禁；通过后在同一事务内软删除 `not_started` 任务和目标镜头，并把剩余活动镜头连续化为 `S001..Snnn`。受影响区间已有冻结目录时以 `SG_SHOT_DELETE_DIRECTORY_EXISTS` 整体拒绝，禁止隐式改名。项目切换、筛选变化和卸载会取消旧请求，防止跨项目迟到响应覆盖当前状态；同时关闭创建/导入/编辑弹窗并清空旧项目预检 Token、幂等键、选中行和问题明细。创建、导入、编辑和分配弹窗携带单调递增的 `operationGeneration`，旧请求迟到不得关闭新弹窗或刷新当前上下文。
+- 制作人选择使用分页 `GET /shot-grid/projects/{projectId}/shot-assignee-options`，只展示后端返回的 `projectRole=creator` 活动项目成员安全摘要；该选项只用于独立委派/改派，不得出现在镜头创建、编辑或 Excel 导入中。前端选项和按钮显隐不替代分配接口的服务端授权与成员状态复核。
+- 镜头首次分配和已有任务改派弹窗都必须通过共用只读组件完整展示镜头的制作内容、景别、机位、镜头运动、焦段、台词/对白、音效、色调参考和备注，不得只显示 `description`。弹窗不提供制作要求编辑输入，也不提交 `taskDescription`；后端必须从已锁定镜头的 `description` 建立任务要求快照，不能信任客户端覆盖。已有任务的改派只允许改变主制作人并保留原任务内容；任务要求、优先级和截止日期只允许在 `not_started` 状态通过独立任务编辑动作调整，进入 `preparing/in_progress/pending_review/revision/completed` 后前端不展示编辑入口，后端更新接口也必须在行锁内拒绝。
 - 镜头详情使用真实详情响应展示制作字段、关联资产、唯一任务、最新版本/反馈与 `allowedActions`。列表、卡片和故事板的详情入口从右侧打开 Element Plus Drawer，复用独立详情路由的同一组件；关闭时销毁实例并取消请求，编辑、分配或删除成功后刷新当前列表且不丢失筛选与分页。独立详情路由继续用于深链与刷新恢复。详情通过独立弹窗执行创建/编辑、分配/改派和归档。创建/导入按钮同时要求平台权限、项目管理人能力、项目不是 `completed/archived` 且 `storageStatus=ready`；后端仍是最终门禁。
 - 缩略图 URL 只接受后端版本文件的受保护相对下载路径，必须通过统一请求层获取 Blob 并创建临时 Object URL；403/404 显示安全占位，取消、切换或卸载时中止请求并 `URL.revokeObjectURL()`。不得把鉴权下载 URL 直接当公开 `<img src>`，也不得持久化 Blob。
-- 镜头导入弹窗调用鉴权 `GET /shot-grid/imports/shots/template` 下载 `shot-v1`，上传 `.xlsx` 后调用 preview 展示工作簿/行级错误与警告；结构汇总按已生成 `normalized` 的行统计，制作人或资产数据库匹配错误不得缩减集、场次和镜头数。页面“有效行”必须按当前行级改选结果实时计算，解决制作人问题后立即增加，不得一直显示后端首次预检快照；错误行保留原始数量并展示已改选数量。预检表隐藏内部物理行号，但必须展示规范化结果中的制作内容、景别、机位、镜头运动、焦段、台词、音效、色调参考、备注和场景需求。制作人列可留空，预检支持逐行或批量覆盖为项目制作人员，也支持显式清空并以未分配状态导入。提交使用 `selectedRows[{sheetName,rowNumber,assigneeUserId?}]`，并携带组件内稳定 `X-Idempotency-Key`。明文 Token 和幂等键只保存在当前弹窗内存，不写 localStorage、日志或 URL；重新选择文件会开启新预检会话。
+- 镜头导入弹窗调用鉴权 `GET /shot-grid/imports/shots/template` 下载 `shot-v2`，上传 `.xlsx` 后调用 preview 展示工作簿/行级错误与警告；结构汇总按已生成 `normalized` 的行统计，资产数据库匹配错误不得缩减集、场次和镜头数。预检表隐藏内部物理行号，但必须展示规范化结果中的制作内容、景别、机位、镜头运动、焦段、台词、音效、色调参考、备注和场景需求。模板、预检表和提交请求均不提供制作人列、行级改选或批量改选；提交只使用 `selectedRows[{sheetName,rowNumber}]` 并携带组件内稳定 `X-Idempotency-Key`，成功后所有镜头必须为未分配且任务创建数为 0。明文 Token 和幂等键只保存在当前弹窗内存，不写 localStorage、日志或 URL；重新选择文件会开启新预检会话。
 - 资产列表以 `GET /shot-grid/projects/{projectId}/assets` 为唯一数据源，项目、类型、聚合状态、制作人和关键字筛选及服务端分页在表格、卡片和类型看板之间共享；项目切换、筛选变化和卸载必须取消旧请求并清理旧项目的资产、选项、弹窗及导入会话。
 - 资产详情展示资产主数据、使用镜头数、目录状态、制作分项、唯一任务、最新/最终版本及后端 `allowedActions`，并通过独立弹窗执行资产创建/编辑/归档、制作分项新增/编辑/归档和任务首次分配/改派。每次弹窗实例必须携带递增 `operationGeneration`，旧请求迟到结果不得关闭或刷新新上下文。
 - 资产制作人使用分页 `GET /shot-grid/projects/{projectId}/asset-assignee-options`，只展示后端返回的活动项目制作人员安全摘要；候选响应不能替代写事务中的项目状态、角色、成员和平台用户昵称复核。
-- 资产缩略图使用受保护版本文件 URL，经统一请求层获取 Blob；403/404 显示占位，切换/卸载时中止请求并释放 Object URL。前端严格使用后端返回的制作分项缩略图和父资产代表图，不自行回退旧版本或重新选图。
-- 资产导入弹窗使用现有 `asset-v1` preview/commit 接口展示正式原样表结果，并按制作分项逐行或批量确认制作人；制作人可覆盖 Excel、显式清空为未分配，只有非制作人错误仍阻止选择。提交使用 `selectedRows[{sheetName,rowNumber,assigneeUserId?}]`、内存 Token 和稳定幂等键。原样表结构为 12 个父资产、20 个制作分项；警告行仍可按用户选择提交。
-- 资产模板下载已交付：`GET /shot-grid/imports/assets/template` 返回经 `artifact_tool` 生成、渲染和复核的匿名 `asset-v1` 固定资源，并以 SHA-256 摘要失败关闭；模板沿用 `docs/资产-样表.xlsx` 的 `Sheet1!A:G`、黑底白字表头和合并父级结构，禁止重新打包或透传含真实人名/项目内容的原样表。资产页“待匹配需求”使用 Element Plus 表格、筛选和选择组件调用冻结的 list/resolve/ignore/rematch API；解决与忽略必须提交原因，重新匹配不得覆盖 `ignored`。
+- 资产缩略图使用受保护版本文件 URL，经统一请求层获取 Blob；403/404 显示占位，切换/卸载时中止请求并释放 Object URL。前端严格使用后端返回的制作分项缩略图和父资产代表图，不自行回退旧版本或重新选图；详情画廊只遍历活动制作分项并逐项绑定 `item.thumbnail`，列表类视图只绑定父资产 `thumbnail`。
+- 资产导入弹窗使用 `asset-v2` preview/commit 接口展示模板结果；模板、预览和提交均不提供制作人逐行/批量确认或覆盖。提交只使用 `selectedRows[{sheetName,rowNumber}]`、内存 Token 和稳定幂等键。模板结构为 12 个父资产、20 个制作分项；警告行仍可按用户选择提交，成功后所有制作分项必须为未分配且任务创建数为 0。
+- 资产模板下载已交付：`GET /shot-grid/imports/assets/template` 返回匿名 `module_shot_grid/resources/templates/asset-v2.xlsx` 固定资源，冻结 SHA-256 为 `B551AC1D1D5EDC20A025B0ED90157412E1365006108816F08CB2C59AE4301696`，摘要不一致时失败关闭；模板使用 `Sheet1!A:F`、黑底白字表头和合并父级结构且不含制作人。旧 `asset-v1.xlsx` 只作为历史资源保留，不再由服务下载；禁止透传含真实人名/项目内容的原样表。资产页“待匹配需求”使用 Element Plus 表格、筛选和选择组件调用冻结的 list/resolve/ignore/rematch API；解决与忽略必须提交原因，重新匹配不得覆盖 `ignored`。
 - 项目 `completed` 或 `archived` 时，前端隐藏集、场次、镜头、资产、资产制作分项及两类导入的写入口，详情 `allowedActions` 也不得自行合成。当前后端终态门禁明确覆盖项目自身、集、场次、镜头、资产、资产制作分项及两类 Excel 导入；不能推断成员、任务、版本、审核、文件或目录操作已经完成其余全域治理。
-- `/workbench` 使用真实 `GET /shot-grid/tasks/mine`，筛选、排序和分页都以服务端结果为准；任务详情深链为 `/tasks/:taskId`，归属 `workbench` 路由域，读取真实详情并调用开始/编辑接口。开始、编辑和提交版本动作必须满足平台权限与后端 `allowedActions` 的交集，后端仍是最终门禁。
+- `/workbench` 使用真实 `GET /shot-grid/tasks/mine`，筛选、排序和分页都以服务端结果为准；任务详情深链为 `/tasks/:taskId`，归属 `workbench` 路由域，读取真实详情并调用开始/编辑接口。镜头任务详情通过详情专用 `shotProduction` 投影完整展示镜头制作信息；列表目标摘要不得为此膨胀。任务 `requirements` 与镜头内容不同时作为“任务补充要求”独立显示，相同时不重复。开始、编辑和提交版本动作必须满足平台权限与后端 `allowedActions` 的交集，后端仍是最终门禁。
 - 任务版本工作区按本地校验、只读 preflight、平台 private upload、create HTTP 202 顺序执行；create 会锁内复检，刷新通过 current 恢复。每轮自动查询最多 30 次，连续 3 次查询错误后暂停，指数退避有上限，401/403/404 停止；`committed` 才触发成功和历史刷新，`failed` 只重试原提交行。
 - 版本历史和详情使用真实接口；版本深链固定为 `/versions/:versionId` 并归属 `reviews` 路由域。版本查询、失败重试、历史列表和下载分别要求 `shotgrid:version:query`、`shotgrid:version:retry`、`shotgrid:version:list` 和 `shotgrid:file:download`，下载走受保护 Range 接口并释放临时 Object URL。
 - create 的稳定幂等状态、已上传文件和敏感提交字段只保存在组件内存；未知 create 结果重放复用原 `fileId` 和幂等键，跳过 preflight/upload。任务、操作和文件上下文都使用 abort + generation 防止同 ID 往返的 ABA 迟到响应；统一请求层仅对 JSON Content-Type 且不超过 64 KiB 的 Blob/ArrayBuffer 错误做有界解析，保留 `httpStatus/code/errorKey/details`。
@@ -423,14 +428,14 @@ shot-grid-frontend/
 - 时间点统一保存整数毫秒，不保存格式化字符串作为计算依据。
 - 标注坐标按媒体自然尺寸归一化到 `0..1`，同时记录标注类型、颜色、点集和创建时的媒体尺寸。
 - 每条批注绑定 `versionId`；切换版本后不得继续提交到旧版本。
-- 拖动进度、绘制标注和输入文字属于本地草稿，用户明确提交后才创建绑定当前版本的修改问题；问题必须满足“文字或标注至少一项”。
+- 拖动进度、绘制标注和输入文字先属于本地编辑状态；点击“保存问题草稿”后写入服务端私有草稿，但仍不创建制作人可见的正式问题。只有审核人点击“退回并发送问题”才发布为绑定当前版本的不可变修改问题；本地编辑、服务端草稿和正式问题都必须满足“文字或标注至少一项”。
 - 对无权限查看 AI 参数或费用的用户，后端响应即应裁剪字段，不能只用 CSS 隐藏。
 
 ## 10. 交互与视觉原则
 
 - 本应用是制作工作台，不照搬传统后台的“每页一个 CRUD 表格”。
 - 镜头页是第一核心页面，必须支持稳定筛选、分页、表格/卡片/故事板切换和项目上下文。
-- 审核页是第二核心页面，必须把“查看当前作品、逐条核验历史问题、提出当前版本新问题、确认通过/退回修改/稍后决定”组织为一个从上到下的工作流，不能用聊天列表替代结构化核验。
+- 审核页是第二核心页面，必须把“查看当前作品、逐条核验历史问题、提出当前版本新问题、确认通过/退回修改/稍后决定”组织为一个从上到下的工作流，不能用聊天列表替代结构化核验。审核单详情在主媒体工作区前展示当前版本关联任务的只读“审核依据”：镜头视频使用完整镜头制作信息，资产图片使用父资产与制作分项信息，任务要求不同时作为补充要求单独展示；数据由版本详情 `productionTarget` 投影，不复制进审核单表，也不要求审核人额外具备任务详情权限。页面只保留一个承担播放、时间点、批注和 A/B 对比的主媒体工作区；同页版本详情仅展示元数据、文件与下载，不得重复渲染第二个播放器。
 - 制作人任务详情必须聚合制作要求、依赖、相关资产、历史版本、当前全部 open 问题及其来源版本/标注，并在提交新版本时逐条填写处理说明，减少跨页面寻找资料。
 - AI 生成参数默认折叠；普通审核路径优先展示画面、版本差异和修改说明。
 - 所有列表和详情必须具备加载、空数据、失败、无权限和重试状态，不能只实现成功状态。
@@ -548,7 +553,7 @@ MVP 不能只以页面数量验收，至少需要真实走通：
 
 截至 2026-08-11，本批最新代码已实际执行并通过 `npm.cmd run lint`、Vitest 32 个测试文件/148 个测试、`npm.cmd run build:prod`；生产构建处理 1796 个模块，仅保留既有 `@vueuse/core` PURE annotation 两条警告。后端 `python -m ruff check module_shot_grid config middlewares tests/module_shot_grid` 通过，Ruff format `--check` 报告 161 files already formatted；版本预检 3 个定向测试文件为 43 passed，完整 `tests/module_shot_grid` 为 499 passed、2 skipped，两个跳过项均因当前 Windows 环境不允许创建目录符号链接。前端静态门禁已覆盖任务工作台、任务详情/开始/编辑、三步版本提交、current 恢复、有界轮询、幂等重放、历史/详情/下载权限、Blob 错误保真及 stale/ABA 异步上下文隔离；这些静态证据与后述隔离浏览器子集证据必须分别陈述。
 
-资产管理/资产 Excel 导入子集已在隔离 PostgreSQL、Redis DB 15、真实 FastAPI/平台账号、生产 Nginx 和 Chrome 下完成浏览器旅程：preview 20/19/3/1，19 个可导入行一次提交形成 11 个活动资产、19 个分项/任务和 1 个显式隔离夹具自动匹配；三视图、Environment=2、蒋浩筛选=8、详情深链/刷新、临时资产/分项 CRUD 与业务归档、任务改派、7 条成功审计、控制台 0 error/0 warning、浏览器存储敏感信息边界、退出保护及 Redis Token 清理均通过。目录 Worker 关闭且 12 条 Outbox 均为 `pending`；资产模板未交付/未测试，真实版本缩略图只验证空态，逻辑 `storageStatus=ready` 夹具不证明 UNC/NAS。验收后隔离容器、18081/19099、隔离数据库、Redis DB 15 和 TEMP 均为零残留，原 9099 服务及基础 PostgreSQL/Redis 未动。
+2026-08-11 的镜头/资产管理与导入浏览器旅程使用已经废弃的 v1 制作人预分配契约，并在导入时分别创建了 24 个和 19 个任务，只保留为历史实现证据，不能验收当前 v2“导入后全部未分配、任务创建数为 0”的规则。两类 v2 模板、预检、提交、手工创建、首次委派唯一性和六阶段履历必须重新执行定向验证；目录 Worker、真实缩略图和 UNC/NAS 的既有未验证边界不变。
 
 任务工作台/版本上传子集已在 fresh PostgreSQL head `20260811_06`（22 张 `sg_` 表）、Redis DB 15、真实平台登录、生产 Nginx 和 Chrome 下完成浏览器旅程：`/workbench` 展示 21 条任务并验证服务端分页 20+1、关键字筛选 1 条；`taskId=900001` start HTTP 200，`lockVersion` 0→1；5663 B `logo.png` 严格按 preflight 200 → private upload 200 → create 202 提交，pending reload 后 current 200 恢复。显式 `allow_local_root=True` 的本地 TEMP 适配器按两阶段推进 `published → committed`、attempt=1，形成 V001 `pending_review`、任务 `lockVersion=2`、1 个 `auto_single` 和 1 条正式文件引用；受保护详情/下载均为 200，下载 5663 B 且 SHA-256 一致。控制台 0 error/0 warning；localStorage/sessionStorage 不含认证 Token、幂等键、`fileId`、修改说明或 AI 参数，登录期间认证 Token 只存在 `Admin-Token` Cookie；logout 200 后 Cookie 清除且任务/版本深链守卫生效，验收目标已精确清理。该结果仅为隔离任务/版本子集 E2E PASS：TEMP 适配器是算法与编排验证，夹具目录补齐仅为逻辑预览；后续新增的审核前端尚未纳入该旅程，且真实 UNC/SMB/NAS 服务账号、`manual_batch`、codec、媒体轨、可解码性或转码也未验证，不是完整系统 E2E。
 

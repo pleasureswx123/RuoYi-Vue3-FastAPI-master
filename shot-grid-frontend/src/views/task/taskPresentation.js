@@ -2,6 +2,7 @@ const FALLBACK_META = Object.freeze({ label: '未知', tone: 'neutral' })
 
 const TASK_STATUS = Object.freeze({
   not_started: Object.freeze({ label: '未开始', tone: 'neutral' }),
+  preparing: Object.freeze({ label: '目录准备中', tone: 'warning' }),
   in_progress: Object.freeze({ label: '制作中', tone: 'info' }),
   pending_review: Object.freeze({ label: '待审核', tone: 'warning' }),
   revision: Object.freeze({ label: '待修订', tone: 'danger' }),
@@ -66,7 +67,7 @@ export function taskDueState(value, now = new Date()) {
 
 export function taskAssigneeLabel(assignee) {
   if (!assignee) return '未分配'
-  const name = assignee.nickName || `用户 ${assignee.userId || '—'}`
+  const name = assignee.userName || assignee.nickName || `用户 ${assignee.userId || '—'}`
   return name
 }
 

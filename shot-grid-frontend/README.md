@@ -18,7 +18,7 @@
 - 镜头 Excel 模板下载、上传预检、工作簿与行级问题展示、跨 Sheet 行选择、幂等正式提交和结果回显；
 - 资产真实列表与项目/类型/聚合状态/制作人/关键字筛选、服务端分页、表格/卡片/类型看板和详情深链；
 - 资产与制作分项创建/编辑/归档、资产图片任务首次分配/改派、项目内资产制作人安全选项，以及后端 `allowedActions` 动作门禁；
-- 资产 Excel 上传预检、20/19/3/1 汇总、逐行问题、可提交行选择、幂等正式提交和自动匹配/待处理/冲突结果回显；
+- 资产 Excel v2 模板下载、上传预检、逐行问题、可提交行选择、幂等正式提交和自动匹配/待处理/冲突结果回显；
 - 工作台通过真实 `GET /shot-grid/tasks/mine` 展示跨项目“我的任务”，任务详情深链 `/tasks/:taskId` 接入真实详情、开始和编辑；
 - 任务详情中的版本工作区接入本地校验、只读 preflight、平台 private upload、create HTTP 202、current 恢复、原提交 retry 和有界状态查询；
 - 任务版本历史、`/versions/:versionId` 真实详情以及受保护 Range 下载，并按版本查询/重试/列表/下载权限分别门禁；
@@ -26,7 +26,7 @@
 - `package-lock.json`、lint、单元测试和生产构建脚本；
 - 多阶段 Dockerfile 和 Nginx 模板，生产页面路径为 `/shot-grid-app/`，API 入口为 `/prod-api/`。
 
-项目管理页、镜头管理页、资产管理页、工作台、任务详情和版本详情已经调用真实后端，不在失败时回退 Mock。版本审核和文件与 NAS 一级页面仍主要用于声明后续接入边界；资产需求人工处理、`manual_batch`、完整审核前端、媒体派生和文件页尚未完成。项目管理、镜头管理/镜头 Excel 导入、资产管理/资产 Excel 导入、任务工作台/版本上传四个子集均已在隔离真实 PostgreSQL、Redis、平台账号和生产 Nginx 下完成浏览器旅程；任务/版本旅程以显式 `allow_local_root=True` 的 TEMP 适配器验证发布算法和编排，不是真实 UNC/SMB/NAS 服务账号验收。任何子集都不等于完整系统 E2E 或真实 NAS 验收。
+项目管理页、镜头管理页、资产管理页、工作台、任务详情和版本详情已经调用真实后端，不在失败时回退 Mock。版本审核和文件与 NAS 一级页面仍主要用于声明后续接入边界；资产需求人工处理、`manual_batch`、完整审核前端、媒体派生和文件页尚未完成。项目管理与任务/版本子集已有隔离真实 PostgreSQL、Redis、平台账号和生产 Nginx 浏览器旅程；旧镜头/资产导入旅程基于 v1 预分配规则，不能作为当前 v2“导入后未分配且不建任务”的验收证据。任务/版本旅程以显式 `allow_local_root=True` 的 TEMP 适配器验证发布算法和编排，不是真实 UNC/SMB/NAS 服务账号验收。任何子集都不等于完整系统 E2E 或真实 NAS 验收。
 
 ## 环境要求
 
@@ -79,7 +79,7 @@ npm.cmd run test
 npm.cmd run build:prod
 ```
 
-截至 2026-08-11，本批已执行通过 `npm.cmd run lint`、Vitest 3.2.7 的 32 个测试文件/148 个测试和 `npm.cmd run build:prod`，生产构建处理 1796 个模块，仅保留既有 `@vueuse/core` PURE annotation 两条警告。后端 `python -m ruff check module_shot_grid config middlewares tests/module_shot_grid` 通过，Ruff format `--check` 报告 161 files already formatted；版本 preflight 3 个定向测试文件为 43 passed，完整 `tests/module_shot_grid` 为 499 passed、2 skipped，两个跳过项均因当前 Windows 环境不允许创建目录符号链接。项目、镜头、资产和任务/版本四个子集均已完成真实后端、隔离 PostgreSQL/Redis、平台账号、生产 Nginx 和 Chrome 浏览器旅程；静态门禁与浏览器子集证据分别成立。这些证据不能外推为真实资产模板、真实版本缩略图、真实 UNC/SMB/NAS、完整审核前端或完整系统 E2E。
+截至 2026-08-11，历史代码状态曾通过 `npm.cmd run lint`、Vitest 3.2.7 的 32 个测试文件/148 个测试和 `npm.cmd run build:prod`；后端 Ruff check、版本 preflight 定向测试和当时的完整 `tests/module_shot_grid` 也通过。项目与任务/版本子集的浏览器证据仍可按其边界引用；镜头和资产导入旅程依赖旧 v1 预分配规则，已经废止，不能验证当前 v2 未分配导入。当前仍需重新验证两类 v2 模板、任务创建数为 0、首次委派唯一性和六阶段履历；这些证据也不能外推为真实版本缩略图、真实 UNC/SMB/NAS、完整审核前端或完整系统 E2E。
 
 ## 生产部署路径
 
@@ -135,8 +135,9 @@ docker compose -f docker-compose.pg.yml up -d shot-grid-frontend
 - 镜头列表通过同一个 `GET /shot-grid/projects/{projectId}/shots` 响应驱动表格、卡片和故事板；项目切换、集/场次联动、状态、制作人、关键字、排序和服务端分页不为不同视图复制数据源。切换项目会取消旧请求、关闭创建/导入弹窗，并清空旧项目的预检 Token、幂等键、选中行和问题明细。创建、导入、编辑和分配操作还用 `operationGeneration` 区分每次弹窗实例；同一 ID 切走再返回并重开时，旧实例迟到事件不得关闭新弹窗或触发新上下文刷新。
 - `GET /shot-grid/projects/{projectId}/shot-assignee-options` 使用 `pageNum/pageSize/keyword` 分页，只返回后端判定可分配的活动项目成员安全摘要；前端候选列表和按钮显隐不替代写接口权限、项目角色和成员状态复核。
 - 镜头详情聚合基础字段、关联资产、唯一任务、最新版本/反馈和后端 `allowedActions`；创建/编辑、首次分配/改派、归档均调用真实接口并保留乐观锁字段。
+- 镜头手工创建和 Excel 导入不接收制作人，只创建未分配镜头且不创建任务；首次显式委派才创建唯一 `not_started` 任务，后续改派更新同一任务。
 - 缩略图只接受 `/shot-grid/versions/{versionId}/files/{fileId}/download` 形式的受保护相对路径，通过统一请求层获取 Blob；403/404 显示安全占位，取消、切换或组件卸载时中止请求并释放临时 Object URL，不把鉴权 URL 当公开图片地址。
-- 模板由鉴权 `GET /shot-grid/imports/shots/template` 返回 XLSX 二进制和 `X-Shot-Grid-Template-Version: shot-v1`。后端匿名副本 SHA-256 为 `F6370BBB14548B645782ABF0734E930EC10470565821BA6C8FD1B6A2D9D96EE0`：只改动 workbook、sharedStrings 和 3 个 docProps XML，删除 `x15ac:absPath`，把 88 条共享字符串替换为表头、合法编号、制作人 A-C 和示例文本，匿名化作者/应用属性并清空自定义属性；其余 13 个条目（含两个 Sheet、styles、theme）字节不变，解析仍为 total 24、valid 24、warning 0、error 0、2 集、8 场、24 镜头。
+- 模板由鉴权 `GET /shot-grid/imports/shots/template` 返回 XLSX 二进制和 `X-Shot-Grid-Template-Version: shot-v2`。服务端资源为 `module_shot_grid/resources/templates/shot-v2.xlsx`，冻结 SHA-256 为 `B6F24078CA56295E9E6CCE50BB3455AF198DFFFE5C08F8D85605A68C09439ECE`；主数据区固定 A:O 15 列且不含制作人。旧 `shot-v1.xlsx` 只保留为历史资源，不再由服务下载。
 - 上传 `.xlsx` 后先调用 preview。弹窗按 Sheet 展示工作簿级与行级错误/警告，只允许勾选 `canImport=true` 行；commit 使用 `selectedRows[{sheetName,rowNumber}]` 和当前弹窗内稳定的 `X-Idempotency-Key`，展示后端耐久提交结果。明文预检 Token 与幂等键只留在组件内存，不写 localStorage、日志或 URL。
 - 项目为 `completed` 或 `archived` 时，前端隐藏集、场次、镜头、资产、资产制作分项及两类导入写入口；后端对应路径返回 HTTP 409 / `SG_INVALID_STATE_TRANSITION`。当前终态治理覆盖项目自身、集、场次、镜头、资产、资产制作分项及两类 Excel 导入，不能外推为成员、任务、版本、审核、文件或目录操作等其余写接口均已治理。
 - 镜头创建和导入仍要求项目 `storageStatus=ready`。隔离测试中的逻辑 ready 只解除业务 Service 门禁；当目录 Worker 关闭时，它不证明真实 UNC/NAS 目录存在、可写，也不验证 Windows 服务账号或共享 ACL。
@@ -144,19 +145,20 @@ docker compose -f docker-compose.pg.yml up -d shot-grid-frontend
 ## 资产管理与 Excel 导入边界
 
 - 资产列表通过同一个 `GET /shot-grid/projects/{projectId}/assets` 响应驱动表格、卡片和类型看板；项目、类型、聚合状态、制作人、关键字、排序和服务端分页不为不同视图复制数据源。切换项目或筛选会取消旧请求，并清空旧项目资产、制作人选项、弹窗和导入会话。
-- `GET /shot-grid/projects/{projectId}/asset-assignee-options` 要求 `shotgrid:asset:list` 和项目访问，使用 `pageNum/pageSize/keyword` 分页；只返回活动项目成员的安全身份与 `producerCode` 摘要。创建、编辑、导入和任务分配写事务仍重新校验项目状态、成员和制作人缩写。
+- `GET /shot-grid/projects/{projectId}/asset-assignee-options` 要求 `shotgrid:asset:list` 和项目访问，使用 `pageNum/pageSize/keyword` 分页；只返回活动项目成员的安全身份与 `producerCode` 摘要。该候选接口只用于显式任务委派，首次分配或改派写事务仍重新校验项目状态、成员和制作人缩写。
 - 资产与制作分项按钮同时要求后端 `allowedActions` 和平台权限。资产动作包括 `asset.edit`、`assetItem.add`、`asset.archive`；制作分项动作包括 `assetItem.edit`、`assetItem.archive`、`task.assign`。项目状态、存储状态、资源归档、版本、任务和未提交版本发布记录的约束由后端决定，前端不自行合成。
 - 制作分项缩略图只绑定当前最新版本；当前最新版本无缩略图时显示安全占位，不回退旧版本。父资产代表图按活动制作分项 `(sortOrder, assetItemId)` 顺序选择第一张可用图。缩略图仍经统一鉴权请求获取 Blob，403/404 安全占位，并在取消、切换和卸载时释放 Object URL。
-- 正式原样表 `docs/资产-样表.xlsx` 的结构为 12 个逻辑资产、20 个制作分项；preview 应显示 total 20、valid 19、warningRows 3、errorRows 1。第 6—8 行缺少制作分项，只产生警告；第 16 行复合制作人产生错误。commit 只接收 `selectedRows[{sheetName,rowNumber}]`，Token 和幂等键只保留在当前弹窗内存。
-- 资产模板下载尚未交付。原样表必须先通过规定的 `artifact_tool` 安全匿名化、渲染和复核流程；工具链不可用时不得直接发布原样表，也不得用本地静态文件或失败回退伪装 `GET /shot-grid/imports/assets/template` 已可用。
+- 资产模板由鉴权 `GET /shot-grid/imports/assets/template` 返回 `asset-v2` XLSX。服务端资源为 `module_shot_grid/resources/templates/asset-v2.xlsx`，冻结 SHA-256 为 `B551AC1D1D5EDC20A025B0ED90157412E1365006108816F08CB2C59AE4301696`；主数据区固定 A:F 6 列且不含制作人。旧 `asset-v1.xlsx` 只保留为历史资源，不再由服务下载。
+- preview 只解析资产与制作分项，commit 只接收 `selectedRows[{sheetName,rowNumber}]`，不接受 `assigneeUserId`。成功导入后的全部制作分项保持未分配，任务创建数固定为 0；Token 和幂等键只保留在当前弹窗内存。
 - `completed` 或 `archived` 项目下，资产/制作分项 CRUD 与资产 preview/commit 均由后端返回 HTTP 409 / `SG_INVALID_STATE_TRANSITION`，对应 `allowedActions` 为空。该门禁不能外推到成员、任务、版本、审核、文件和目录操作等尚未统一治理的路径。
 
 ## 任务工作台与版本上传边界
 
-- `/workbench` 以 `GET /shot-grid/tasks/mine` 为唯一跨项目任务数据源，服务端负责当前用户范围、筛选、排序和分页；点击任务进入 `/tasks/:taskId`，读取真实任务详情，并按真实接口执行开始和编辑。动作按钮必须同时满足平台权限与后端 `allowedActions`，后端仍会复核项目访问、负责人/总监身份、目标和任务状态。
-- 版本提交严格按“本地校验 → `POST /shot-grid/tasks/{taskId}/version-submissions/preflight` → `POST /common/files/upload` 私有上传 → `POST /shot-grid/tasks/{taskId}/version-submissions` 创建并返回 HTTP 202”执行。preflight 请求体固定为 `fileName/fileSize/changelog/aiParams`，只读且无数据库、文件或引用副作用，只验证目标相对路径可生成和目录快照字段完整，不访问 NAS 或检查实际目标文件；正式 create 在锁内重新校验权限、项目/任务状态、负责人、业务上下文、源文件授权与摘要、未解决提交、目标相对路径生成和目录快照一致性。实际目标文件冲突由 Worker 无覆盖发布阶段处理。
+- `/workbench` 以 `GET /shot-grid/tasks/mine` 为唯一跨项目任务数据源，服务端负责当前用户范围、筛选、排序和分页；点击任务进入 `/tasks/:taskId`，读取真实任务详情，并按真实接口执行开始和编辑。动作按钮必须同时满足平台权限与后端 `allowedActions`。任务编辑仍按管理权限复核；开始任务只允许任务当前委派且仍为活动项目 `creator` 的本人执行，`director`、管理员、超级管理员和全项目范围不得代开始。
+- 镜头/资产制作履历按“创建/导入 → 委派 → 制作 → 提交版本 → 审核 → 完成”六阶段展示。开始任务后为 `in_progress`；版本提交后为 `pending_review`；通过后版本为 `final` 且任务为 `completed`；退回后进入 `revision` 并继续新版本循环。只有具备独立证据的委派事件标记为已确认；历史数据若只能从任务创建时间推断，必须显示为推断，不能伪装成已确认委派。
+- 版本提交严格按“本地校验 → `POST /shot-grid/tasks/{taskId}/version-submissions/preflight` → `POST /common/files/upload` 私有上传 → `POST /shot-grid/tasks/{taskId}/version-submissions` 创建并返回 HTTP 202”执行。preflight 请求体固定为 `fileName/fileSize/changelog/aiParams`，只读且无数据库、文件或引用副作用，只验证当前用户就是任务当前委派的活动 `creator`、目标相对路径可生成和目录快照字段完整，不访问 NAS 或检查实际目标文件；正式 create 在锁内重新校验当前负责人本人、活动成员/账号、项目/任务状态、业务上下文、源文件授权与摘要、未解决提交、目标相对路径生成和目录快照一致性。`director`、管理员、超级管理员和全项目范围不得代提交；实际目标文件冲突由 Worker 无覆盖发布阶段处理。
 - 页面刷新通过 `GET /shot-grid/tasks/{taskId}/version-submissions/current` 恢复未解决提交。只有 `committed` 表示正式版本成功并触发任务和历史刷新；`failed` 保留并重试原提交行，不新建提交绕过占用约束。每轮自动查询最多 30 次，连续 3 次错误后暂停，指数退避有上限；401/403/404 立即停止，到达边界后提供人工刷新或合法 retry。
-- 创建提交要求平台 `shotgrid:version:add` 与详情 `version.add` 同时满足；current/status、失败 retry、历史、详情和下载分别受 `shotgrid:version:query`、`shotgrid:version:retry`、`shotgrid:version:list`、`shotgrid:version:query` 和 `shotgrid:file:download` 约束。任务历史和版本详情使用真实接口，`/versions/:versionId` 归属 `reviews` 路由域；下载走鉴权 Range 接口并区分 200/206/416，临时 Object URL 用后立即释放。
+- 创建提交要求平台 `shotgrid:version:add`、详情 `version.add` 与当前活动负责人本人三项同时满足；失败 retry 也只能由该任务当前委派的活动 `creator` 本人执行。current/status、历史、详情和下载仍按各自数据范围受 `shotgrid:version:query`、`shotgrid:version:list`、`shotgrid:version:query` 和 `shotgrid:file:download` 约束。任务历史和版本详情使用真实接口，`/versions/:versionId` 归属 `reviews` 路由域；下载走鉴权 Range 接口并区分 200/206/416，临时 Object URL 用后立即释放。
 - 稳定 create 幂等键、已上传 `fileId`、修改说明和 AI 参数只保存在当前页面内存。create 响应未知时，同一命令重放复用原 `fileId` 和幂等键，并跳过重复 preflight/upload；任务、操作和文件上下文使用 AbortController 与 generation 防止同 ID 往返的 ABA 迟到响应继续上传、创建或覆盖当前状态。
 - 统一请求层对 Blob/ArrayBuffer 错误体只在 JSON Content-Type 且不超过 64 KiB 时有界解析，保留 `httpStatus/code/errorKey/details`；401、403、404、409、413、416 和 5xx 不得被抹成同一中文提示，非 JSON 或超限二进制不得误解码。
 - 该交付不改变 Worker 边界：版本发布 Worker 默认关闭，显式 `allow_local_root=True` 的临时本地目录只用于算法和编排验证，不证明真实 UNC/SMB/NAS；JPEG/PNG 与 MP4/MOV 字节门禁仍不覆盖 codec、视频轨、可解码性或转码。`auto_single` 后端闭环存在，但版本审核一级页、完整审核交互和 `manual_batch` 仍未完成。任务工作台与版本上传的隔离浏览器子集证据见下文。
@@ -186,9 +188,9 @@ docker compose -f docker-compose.pg.yml up -d shot-grid-frontend
 
 这是一条真实后端、数据库、Redis、账号和生产代理参与的“项目管理子集浏览器旅程”，不是完整 Shot Grid 系统 E2E。测试存储根是隔离数据库中的逻辑 `healthy` 夹具 `\\127.0.0.1\shot-grid-e2e`，目录 Worker 保持关闭；未连接真实 SMB 共享，也未使用正式 Windows/NAS 服务账号执行目录创建、写探针、ACL 或故障恢复验收。因此不能据此宣称 NAS 已可用或系统已生产就绪。
 
-## 2026-08-11 镜头管理与镜头 Excel 导入子集验证
+## 2026-08-11 历史 v1 镜头管理与导入验证（当前契约已失效）
 
-本批另以隔离 PostgreSQL、Redis DB 15、真实 FastAPI/平台账号、生产 Nginx 和 Chrome 执行最终 `operationGeneration` 版本的浏览器旅程：
+该旅程基于旧 `shot-v1` 模板和已经废弃的导入预分配规则，以下事实只用于说明历史实现，不能作为当前 v2 验收证据：
 
 ```text
 下载模板：11883 bytes，SHA-256 命中冻结值
@@ -205,11 +207,11 @@ docker compose -f docker-compose.pg.yml up -d shot-grid-frontend
 
 数据库核验为 2 集、8 场、24 镜头、24 任务（三名制作人各 8）、24 待匹配需求、0 镜头资产关系、1 个 `committed` 导入批次、镜头时长合计 79000 ms；结果复用集/场均为 0、资产关系为 0。2 条集目录操作和 24 条镜头目录操作均为 `pending`；同事务审计恰 1 条且 `status=0`，`method` 字符串长度 79，未超过字段上限。Redis 预检键提交后为 0。
 
-该旅程只关闭镜头管理与镜头 Excel 导入子集浏览器门禁。项目使用逻辑 `storageStatus=ready` 夹具，目录 Worker 关闭，所以未创建物理目录，也未验证真实 UNC/SMB/NAS 服务账号、共享 ACL、写探针或故障恢复。验收后已关闭浏览器和后端 PID 12996，删除临时 Nginx 容器/镜像、隔离数据库、Redis DB 15 数据及临时文件；18080/19098 端口空闲，原 9099 服务、PostgreSQL 服务及其他数据库和 Redis 其他 DB 未改动。
+该旅程中的“模板含制作人、导入创建 24 个任务、详情直接出现负责人”已被 v2 契约废止。当前必须重新验证 `shot-v2` 下载与摘要、A:O 15 列、24 个镜头未分配、任务创建数为 0，以及随后显式委派创建唯一任务。项目使用逻辑 `storageStatus=ready` 夹具且目录 Worker 关闭，因此仍不能证明真实 UNC/SMB/NAS、共享 ACL、写探针或故障恢复。
 
-## 2026-08-11 资产管理与资产 Excel 导入子集验证
+## 2026-08-11 历史 v1 资产管理与导入验证（当前契约已失效）
 
-本批以隔离 PostgreSQL、Redis DB 15、真实 FastAPI/平台账号、生产 Nginx 和 Chrome 完成以下真实浏览器旅程：
+该旅程基于旧 `asset-v1` 样表和已经废弃的制作人预分配规则，以下事实只用于说明历史实现，不能作为当前 v2 验收证据：
 
 ```text
 上传正式资产样表
@@ -225,7 +227,7 @@ docker compose -f docker-compose.pg.yml up -d shot-grid-frontend
 
 数据库终态为 11 个活动资产、19 个活动分项和 19 个任务，资产类型 Character 5、Environment 2、Prop 4；临时资产/分项均为 `archived/lockVersion=2`，活动数量未受影响。任务最终分布为蒋浩 8、嘉璋 3、占峰 8。自动匹配 1 条来自显式隔离资产需求夹具，不是镜头样表自然匹配。`sys_oper_log` 共 7 条且全部成功；12 条 `ensure_asset_directory` Outbox 全部 `pending`，符合 Worker 关闭预期。
 
-localStorage 为空，sessionStorage 只保留传输配置与 repeat-submit 元数据，不含认证、导入 Token 或幂等密钥；退出后 Redis `access_token:*` 为 0。资产模板下载因 `artifact_tool` 不可用而保持未交付、按钮静态禁用且未测试；本旅程没有构造真实版本缩略图文件，只验证真实空态；项目的 `storageStatus=ready` 是逻辑夹具，未执行 UNC/NAS I/O。因此结论仅为“隔离资产管理/资产导入子集 E2E PASS”。
+localStorage 为空、退出清理和缩略图空态等历史证据仍可参考；“复合制作人错误、导入创建 19 个任务、资产模板未交付”已被 v2 契约废止。当前必须重新验证 `asset-v2` 下载与摘要、A:F 6 列、全部制作分项未分配、任务创建数为 0，以及随后显式委派创建唯一任务。项目的逻辑 `storageStatus=ready` 夹具仍不能证明真实 UNC/NAS I/O。
 
 验收后已关闭 Playwright，停止后端 PID 29056/32996，删除唯一临时 Nginx 容器且未构建新镜像；18081/19099 空闲，隔离 PostgreSQL 库存在数/连接数为 0/0，Redis DB 15 `DBSIZE=0` 且 owner 键为 0，54 项 TEMP 精确删除。原 9099 PID 4820 仍监听，基础 PostgreSQL/Redis 保持 healthy。
 

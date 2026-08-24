@@ -9,8 +9,8 @@ from module_shot_grid.exceptions import ShotGridDomainException, shot_grid_error
 class ShotGridAssetImportTemplateService:
     """读取并校验随 Shot Grid 后端部署的资产导入模板。"""
 
-    TEMPLATE_PATH = Path(__file__).resolve().parents[1] / 'resources' / 'templates' / 'asset-v1.xlsx'
-    EXPECTED_SHA256 = 'bd42856e37ec6b2eaa992cb190390ae09980f81953617e245f0854b955602059'
+    TEMPLATE_PATH = Path(__file__).resolve().parents[1] / 'resources' / 'templates' / 'asset-v2.xlsx'
+    EXPECTED_SHA256 = 'b551ac1d1d5edc20a025b0ed90157412e1365006108816f08cb2c59ae4301696'
     DOWNLOAD_FILE_NAME = f'资产导入模板-{ASSET_TEMPLATE_VERSION}.xlsx'
 
     @classmethod

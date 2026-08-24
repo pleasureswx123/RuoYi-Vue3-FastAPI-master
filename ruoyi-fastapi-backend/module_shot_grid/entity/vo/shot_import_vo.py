@@ -34,8 +34,6 @@ class ShotImportNormalizedRowModel(ShotGridApiModel):
     shot_no: int = Field(gt=0, le=SQL_INTEGER_MAX)
     shot_code: str = Field(pattern=r'^S\d{3,}$')
     duration_ms: int = Field(ge=0, le=SQL_BIGINT_MAX)
-    assignee_user_name: str | None = Field(default=None, max_length=30)
-    assignee_user_id: int | None = Field(default=None, gt=0)
     description: str = Field(min_length=1)
     shot_size: str | None = Field(default=None, max_length=40)
     camera_position: str | None = Field(default=None, max_length=100)
@@ -84,9 +82,7 @@ class ShotImportPreviewResultModel(ShotGridApiModel):
 
 
 class ShotImportSelectedRowModel(ImportSelectedRowModel):
-    """正式提交时允许为单行覆盖预检匹配到的制作人。"""
-
-    assignee_user_id: int | None = Field(default=None, gt=0, le=SQL_BIGINT_MAX)
+    """镜头导入选择行；导入只创建生产项，不承载任务委派。"""
 
 
 class ShotImportCommitRequestModel(ShotGridApiModel):
@@ -109,7 +105,6 @@ class ShotImportCommitResultModel(ShotGridApiModel):
     created_scenes: int = Field(ge=0)
     reused_scenes: int = Field(ge=0)
     created_shots: int = Field(ge=0)
-    created_tasks: int = Field(ge=0)
     created_asset_links: int = Field(ge=0)
     created_asset_requirements: int = Field(ge=0)
     created_storage_operations: int = Field(ge=0)

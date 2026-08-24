@@ -5,6 +5,7 @@ import {
   assetDirectoryStatusMeta,
   assetErrorState,
   assetStatusMeta,
+  assetStatusTagClass,
   assetTypeMeta,
   groupAssetPreviewRows,
   memberLabel,
@@ -18,8 +19,13 @@ describe('资产展示模型', () => {
     expect(assetTypeMeta('Character').label).toBe('角色')
     expect(assetTypeMeta('Environment').label).toBe('场景')
     expect(assetTypeMeta('Prop').label).toBe('道具')
+    expect(assetStatusMeta('unassigned')).toMatchObject({ label: '待分配', tone: 'warning' })
+    expect(assetStatusMeta('in_progress')).toMatchObject({ label: '制作中', tone: 'primary' })
     expect(assetStatusMeta('reviewing').label).toBe('待审核')
-    expect(assetDirectoryStatusMeta('failed').tone).toBe('danger')
+    expect(assetStatusTagClass('in_progress')).toBe('asset-status-tag--in_progress')
+    expect(assetStatusTagClass('unexpected')).toBe('asset-status-tag--unknown')
+    expect(assetDirectoryStatusMeta('ready')).toMatchObject({ label: '目录已就绪', tone: 'info' })
+    expect(assetDirectoryStatusMeta('failed')).toMatchObject({ label: '目录处理异常', tone: 'danger' })
   })
 
   it('按真实 HTTP 状态分流而不把权限失败伪装成空列表', () => {

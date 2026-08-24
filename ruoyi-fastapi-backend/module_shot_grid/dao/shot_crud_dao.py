@@ -19,7 +19,7 @@ from module_shot_grid.entity.do.project_do import (
 from module_shot_grid.entity.do.review_do import ShotGridNote
 from module_shot_grid.entity.do.storage_do import ShotGridProjectStorage, ShotGridStorageOperation
 from module_shot_grid.entity.do.task_do import ShotGridTask
-from module_shot_grid.entity.do.version_do import ShotGridVersion, ShotGridVersionFile
+from module_shot_grid.entity.do.version_do import ShotGridVersion, ShotGridVersionFile, ShotGridVersionSubmission
 from module_shot_grid.entity.vo.shot_crud_vo import ShotGridShotListQueryModel
 
 
@@ -66,6 +66,7 @@ class ShotGridShotCrudDao:
                 ShotGridShot.color_reference,
                 ShotGridShot.remark,
                 ShotGridShot.sort_order,
+                ShotGridShot.shot_no.label('sequence_position'),
                 ShotGridShot.lifecycle_status,
                 status_expression.label('status'),
                 task.task_id,
@@ -174,6 +175,16 @@ class ShotGridShotCrudDao:
         }
         order_column = order_columns[query.order_by_column]
         direction = asc if query.is_asc == 'ascending' else desc
+        if query.order_by_column == 'sortOrder':
+            return statement.order_by(
+                ShotGridEpisode.sort_order,
+                ShotGridEpisode.episode_no,
+                ShotGridScene.sort_order,
+                ShotGridScene.scene_no,
+                direction(ShotGridShot.sort_order),
+                ShotGridShot.shot_no,
+                ShotGridShot.shot_id,
+            )
         return statement.order_by(
             direction(order_column), ShotGridEpisode.episode_no, ShotGridShot.shot_no, ShotGridShot.shot_id
         )
@@ -441,41 +452,15 @@ class ShotGridShotCrudDao:
         )
 
     @staticmethod
-    async def get_assignable_member(db: AsyncSession, project_id: int, user_id: int) -> dict[str, Any] | None:
-        row = (
-            (
-                await db.execute(
-                    select(
-                        ShotGridProjectMember.user_id,
-                        func.upper(SysUser.nick_name).label('producer_code'),
-                        SysUser.nick_name,
-                    )
-                    .join(SysUser, SysUser.user_id == ShotGridProjectMember.user_id)
-                    .where(
-                        ShotGridProjectMember.project_id == project_id,
-                        ShotGridProjectMember.user_id == user_id,
-                        ShotGridProjectMember.member_status == 'active',
-                        ShotGridProjectMember.project_role == 'creator',
-                        SysUser.status == '0',
-                        SysUser.del_flag == '0',
-                    )
-                )
-            )
-            .mappings()
-            .one_or_none()
-        )
-        return dict(row) if row is not None else None
-
-    @staticmethod
     async def shot_no_exists(
         db: AsyncSession,
-        episode_id: int,
+        scene_id: int,
         shot_no: int,
         *,
         exclude_shot_id: int | None = None,
     ) -> bool:
         statement = select(func.count(ShotGridShot.shot_id)).where(
-            ShotGridShot.episode_id == episode_id,
+            ShotGridShot.scene_id == scene_id,
             ShotGridShot.shot_no == shot_no,
             ShotGridShot.del_flag == '0',
         )
@@ -495,12 +480,6 @@ class ShotGridShotCrudDao:
         await db.flush()
 
     @staticmethod
-    async def add_task(db: AsyncSession, task: ShotGridTask) -> ShotGridTask:
-        db.add(task)
-        await db.flush()
-        return task
-
-    @staticmethod
     async def get_shot_for_update(db: AsyncSession, project_id: int, shot_id: int) -> ShotGridShot | None:
         return (
             await db.execute(
@@ -513,6 +492,219 @@ class ShotGridShotCrudDao:
                 .with_for_update()
             )
         ).scalar_one_or_none()
+
+    @staticmethod
+    async def list_scene_shot_order_for_update(
+        db: AsyncSession,
+        project_id: int,
+        scene_id: int,
+    ) -> list[dict[str, Any]]:
+        """锁定一个场次的活动镜头并返回稳定的场内顺序。"""
+
+        rows = (
+            (
+                await db.execute(
+                    select(
+                        ShotGridShot.shot_id,
+                        ShotGridShot.sort_order,
+                        ShotGridShot.shot_no,
+                        ShotGridShot.storage_dir_name,
+                        ShotGridShot.lock_version,
+                    )
+                    .where(
+                        ShotGridShot.project_id == project_id,
+                        ShotGridShot.scene_id == scene_id,
+                        ShotGridShot.lifecycle_status == 'active',
+                        ShotGridShot.del_flag == '0',
+                    )
+                    .order_by(ShotGridShot.sort_order, ShotGridShot.shot_no, ShotGridShot.shot_id)
+                    .with_for_update()
+                )
+            )
+            .mappings()
+            .all()
+        )
+        return [dict(row) for row in rows]
+
+    @staticmethod
+    async def list_scene_shot_entities_for_update(
+        db: AsyncSession,
+        project_id: int,
+        scene_id: int,
+    ) -> list[ShotGridShot]:
+        """按场内序号锁定活动镜头，供两阶段连续编号使用。"""
+
+        return list(
+            (
+                await db.execute(
+                    select(ShotGridShot)
+                    .where(
+                        ShotGridShot.project_id == project_id,
+                        ShotGridShot.scene_id == scene_id,
+                        ShotGridShot.lifecycle_status == 'active',
+                        ShotGridShot.del_flag == '0',
+                    )
+                    .order_by(ShotGridShot.shot_no, ShotGridShot.shot_id)
+                    .with_for_update()
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+    @classmethod
+    async def list_scene_shots_for_renumber(
+        cls,
+        db: AsyncSession,
+        project_id: int,
+        scene_id: int,
+    ) -> list[dict[str, Any]]:
+        """锁定单场活动镜头，并按场内顺序返回重编号快照。"""
+
+        rows = (
+            (
+                await db.execute(
+                    select(
+                        ShotGridShot.shot_id,
+                        ShotGridShot.shot_no,
+                        ShotGridShot.storage_dir_name,
+                        ShotGridShot.lock_version,
+                        ShotGridShot.episode_id,
+                        ShotGridScene.scene_id,
+                        ShotGridScene.scene_no,
+                        ShotGridEpisode.storage_dir_name.label('episode_storage_dir_name'),
+                        cls._latest_operation_status().label('directory_operation_status'),
+                    )
+                    .join(
+                        ShotGridScene,
+                        and_(
+                            ShotGridScene.scene_id == ShotGridShot.scene_id,
+                            ShotGridScene.episode_id == ShotGridShot.episode_id,
+                            ShotGridScene.project_id == ShotGridShot.project_id,
+                        ),
+                    )
+                    .join(
+                        ShotGridEpisode,
+                        and_(
+                            ShotGridEpisode.episode_id == ShotGridShot.episode_id,
+                            ShotGridEpisode.project_id == ShotGridShot.project_id,
+                        ),
+                    )
+                    .where(
+                        ShotGridShot.project_id == project_id,
+                        ShotGridShot.scene_id == scene_id,
+                        ShotGridShot.lifecycle_status == 'active',
+                        ShotGridShot.del_flag == '0',
+                        ShotGridScene.lifecycle_status == 'active',
+                        ShotGridScene.del_flag == '0',
+                        ShotGridEpisode.lifecycle_status == 'active',
+                        ShotGridEpisode.del_flag == '0',
+                    )
+                    .order_by(
+                        ShotGridShot.sort_order,
+                        ShotGridShot.shot_no,
+                        ShotGridShot.shot_id,
+                    )
+                    .with_for_update(of=ShotGridShot)
+                )
+            )
+            .mappings()
+            .all()
+        )
+        return [dict(row) for row in rows]
+
+    @staticmethod
+    async def get_scene_for_update(
+        db: AsyncSession,
+        project_id: int,
+        scene_id: int,
+    ) -> tuple[ShotGridScene, ShotGridEpisode] | None:
+        row = (
+            await db.execute(
+                select(ShotGridScene, ShotGridEpisode)
+                .join(
+                    ShotGridEpisode,
+                    and_(
+                        ShotGridEpisode.episode_id == ShotGridScene.episode_id,
+                        ShotGridEpisode.project_id == ShotGridScene.project_id,
+                    ),
+                )
+                .where(
+                    ShotGridScene.project_id == project_id,
+                    ShotGridScene.scene_id == scene_id,
+                    ShotGridScene.lifecycle_status == 'active',
+                    ShotGridScene.del_flag == '0',
+                    ShotGridEpisode.lifecycle_status == 'active',
+                    ShotGridEpisode.del_flag == '0',
+                )
+                .with_for_update(of=ShotGridScene)
+            )
+        ).one_or_none()
+        return None if row is None else (row[0], row[1])
+
+    @staticmethod
+    async def list_scene_renumber_blockers(
+        db: AsyncSession,
+        project_id: int,
+        shot_ids: Iterable[int],
+    ) -> list[dict[str, Any]]:
+        """检查已经开始的任务、版本和文件；仅未开始任务不阻止场内重排。"""
+
+        ids = list(dict.fromkeys(shot_ids))
+        if not ids:
+            return []
+        task = aliased(ShotGridTask, name='renumber_task')
+        version = aliased(ShotGridVersion, name='renumber_version')
+        version_file = aliased(ShotGridVersionFile, name='renumber_version_file')
+        submission = aliased(ShotGridVersionSubmission, name='renumber_submission')
+        rows = (
+            (
+                await db.execute(
+                    select(
+                        ShotGridShot.shot_id,
+                        exists(
+                            select(1).where(
+                                task.project_id == project_id,
+                                task.shot_id == ShotGridShot.shot_id,
+                                task.del_flag == '0',
+                            )
+                        ).label('has_task'),
+                        exists(
+                            select(1).where(
+                                task.project_id == project_id,
+                                task.shot_id == ShotGridShot.shot_id,
+                                task.del_flag == '0',
+                                task.task_status != 'not_started',
+                            )
+                        ).label('has_started_task'),
+                        exists(
+                            select(1)
+                            .select_from(version)
+                            .join(task, task.task_id == version.task_id)
+                            .where(task.project_id == project_id, task.shot_id == ShotGridShot.shot_id)
+                        ).label('has_version'),
+                        or_(
+                            exists(
+                                select(1)
+                                .select_from(version_file)
+                                .join(version, version.version_id == version_file.version_id)
+                                .join(task, task.task_id == version.task_id)
+                                .where(task.project_id == project_id, task.shot_id == ShotGridShot.shot_id)
+                            ),
+                            exists(
+                                select(1)
+                                .select_from(submission)
+                                .join(task, task.task_id == submission.task_id)
+                                .where(task.project_id == project_id, task.shot_id == ShotGridShot.shot_id)
+                            ),
+                        ).label('has_file'),
+                    ).where(ShotGridShot.project_id == project_id, ShotGridShot.shot_id.in_(ids))
+                )
+            )
+            .mappings()
+            .all()
+        )
+        return [dict(row) for row in rows if row['has_started_task'] or row['has_version'] or row['has_file']]
 
     @staticmethod
     async def get_task_for_update(db: AsyncSession, project_id: int, shot_id: int) -> ShotGridTask | None:
@@ -561,6 +753,100 @@ class ShotGridShotCrudDao:
             .returning(ShotGridShot.lock_version)
         )
         return result.scalar_one_or_none()
+
+    @staticmethod
+    async def update_shot_order(
+        db: AsyncSession,
+        *,
+        project_id: int,
+        shot_id: int,
+        sort_order: int,
+        actor_name: str,
+        now: datetime,
+    ) -> None:
+        """更新已锁定镜头的内部排序键，并推进乐观锁版本。"""
+
+        await db.execute(
+            update(ShotGridShot)
+            .where(
+                ShotGridShot.project_id == project_id,
+                ShotGridShot.shot_id == shot_id,
+                ShotGridShot.lifecycle_status == 'active',
+                ShotGridShot.del_flag == '0',
+            )
+            .values(
+                sort_order=sort_order,
+                update_by=actor_name,
+                update_time=now,
+                lock_version=ShotGridShot.lock_version + 1,
+            )
+        )
+
+    @staticmethod
+    async def move_shot_number_to_temporary(
+        db: AsyncSession,
+        *,
+        project_id: int,
+        scene_id: int,
+        shot_id: int,
+        source_shot_no: int,
+        temporary_shot_no: int,
+        expected_lock_version: int,
+    ) -> bool:
+        """连续编号第一阶段：只改为事务内临时编号，不推进业务锁版本。"""
+
+        result = await db.execute(
+            update(ShotGridShot)
+            .where(
+                ShotGridShot.project_id == project_id,
+                ShotGridShot.scene_id == scene_id,
+                ShotGridShot.shot_id == shot_id,
+                ShotGridShot.shot_no == source_shot_no,
+                ShotGridShot.lock_version == expected_lock_version,
+                ShotGridShot.lifecycle_status == 'active',
+                ShotGridShot.del_flag == '0',
+            )
+            .values(shot_no=temporary_shot_no)
+        )
+        return result.rowcount == 1
+
+    @staticmethod
+    async def finalize_shot_position(
+        db: AsyncSession,
+        *,
+        project_id: int,
+        scene_id: int,
+        shot_id: int,
+        temporary_shot_no: int,
+        target_shot_no: int,
+        storage_dir_name: str | None,
+        expected_lock_version: int,
+        actor_name: str,
+        now: datetime,
+    ) -> int | None:
+        """连续编号第二阶段：写入最终 Sxxx，并让排序键与编号保持一致。"""
+
+        result = await db.execute(
+            update(ShotGridShot)
+            .where(
+                ShotGridShot.project_id == project_id,
+                ShotGridShot.scene_id == scene_id,
+                ShotGridShot.shot_id == shot_id,
+                ShotGridShot.shot_no == temporary_shot_no,
+                ShotGridShot.lock_version == expected_lock_version,
+                ShotGridShot.lifecycle_status == 'active',
+                ShotGridShot.del_flag == '0',
+            )
+            .values(
+                shot_no=target_shot_no,
+                storage_dir_name=storage_dir_name,
+                sort_order=target_shot_no * 10,
+                update_by=actor_name,
+                update_time=now,
+                lock_version=ShotGridShot.lock_version + 1,
+            )
+        )
+        return expected_lock_version + 1 if result.rowcount == 1 else None
 
     @staticmethod
     async def sync_shot_assets(

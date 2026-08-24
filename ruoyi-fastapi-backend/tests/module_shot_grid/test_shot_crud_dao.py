@@ -3,7 +3,7 @@ from sqlalchemy.dialects import postgresql
 from module_shot_grid.dao.shot_crud_dao import ShotGridShotCrudDao
 from module_shot_grid.entity.vo.shot_crud_vo import ShotGridShotListQueryModel
 
-EXPECTED_LATERAL_JOIN_COUNT = 4
+EXPECTED_LATERAL_JOIN_COUNT = 5
 
 
 def test_list_statement_uses_status_asset_filters_and_latest_directory_operation() -> None:
@@ -31,7 +31,11 @@ def test_list_statement_uses_status_asset_filters_and_latest_directory_operation
     assert 'EXISTS (SELECT 1' in sql
     assert 'sg_shot_asset.asset_id = 4001' in sql
     assert "shot_list_task.task_status = 'pending_review'" in sql
-    assert 'ORDER BY sg_shot.sort_order ASC' in sql
+    assert 'sg_shot.shot_no AS sequence_position' in sql
+    assert (
+        'ORDER BY sg_episode.sort_order, sg_episode.episode_no, sg_scene.sort_order, '
+        'sg_scene.scene_no, sg_shot.sort_order ASC'
+    ) in sql
     assert "sg_shot.lifecycle_status = 'active'" in sql
 
 
@@ -63,6 +67,7 @@ def test_read_projection_statement_uses_one_postgresql_lateral_query_for_latest_
     assert "sg_version_file.file_role = 'review_media'" in sql
     assert "sg_version_file.is_primary = '1'" in sql
     assert "sg_version_file.file_role = 'thumbnail'" in sql
+    assert "sg_version_file.file_role = 'proxy_media'" in sql
     assert 'sg_version_file.version_id = shot_latest_version.version_id' in sql
     assert 'ORDER BY sg_version_file.sort_order, sg_version_file.file_id' in sql
     assert 'sg_note.version_id = shot_latest_version.version_id' in sql

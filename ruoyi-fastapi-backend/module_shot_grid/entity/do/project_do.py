@@ -253,8 +253,12 @@ class ShotGridShot(ShotGridMutableAuditMixin, Base):
     project_id = Column(BigInteger, nullable=False, comment='项目ID')
     episode_id = Column(BigInteger, nullable=False, comment='集ID')
     scene_id = Column(BigInteger, nullable=False, comment='场次ID')
-    shot_no = Column(Integer, nullable=False, comment='集内镜头号')
-    storage_dir_name = Column(String(32), nullable=False, comment='NAS镜头目录快照')
+    shot_no = Column(Integer, nullable=False, comment='场内镜头号')
+    storage_dir_name = Column(
+        String(32),
+        nullable=True,
+        comment='开始制作时冻结的含场次代码NAS镜头目录快照；未开始时为空',
+    )
     duration_ms = Column(BigInteger, nullable=False, server_default='0', comment='镜头时长（毫秒）')
     shot_size = Column(String(40), nullable=True, comment='景别')
     camera_position = Column(String(100), nullable=True, comment='机位')
@@ -264,7 +268,7 @@ class ShotGridShot(ShotGridMutableAuditMixin, Base):
     dialogue = Column(Text, nullable=True, comment='台词或对白')
     sound_effect = Column(Text, nullable=True, comment='音效说明')
     color_reference = Column(Text, nullable=True, comment='色调参考说明')
-    sort_order = Column(Integer, nullable=False, server_default='0', comment='集内成片顺序')
+    sort_order = Column(Integer, nullable=False, server_default='0', comment='兼容排序键，固定等于场内镜头号乘10')
     lifecycle_status = Column(String(20), nullable=False, server_default='active', comment='生命周期状态')
 
     __table_args__ = (
@@ -282,8 +286,8 @@ class ShotGridShot(ShotGridMutableAuditMixin, Base):
         CheckConstraint('lock_version >= 0', name='ck_sg_shot_lock_version'),
         CheckConstraint("del_flag in ('0', '2')", name='ck_sg_shot_del_flag'),
         Index(
-            'uk_sg_shot_no_active',
-            'episode_id',
+            'uk_sg_shot_scene_no_active',
+            'scene_id',
             'shot_no',
             unique=True,
             postgresql_where=text("del_flag = '0'"),

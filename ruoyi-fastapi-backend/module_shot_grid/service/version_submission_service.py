@@ -396,7 +396,7 @@ class ShotGridVersionSubmissionService:
         if row is None:
             raise shot_grid_error(404, 'SG_VERSION_SUBMISSION_NOT_FOUND', '版本提交不存在或不可见')
         access = await ShotGridProjectAccessService.resolve_access(db, current_user, row['project_id'])
-        cls._require_submission_access(access, row, actor_id)
+        cls._require_retry_access(access, row, actor_id)
         if row['submission_status'] != 'failed':
             raise shot_grid_error(409, 'SG_VERSION_SUBMISSION_NOT_RETRYABLE', '当前版本提交状态不可重试')
 
@@ -418,14 +418,7 @@ class ShotGridVersionSubmissionService:
             locked_access = await cls._refresh_locked_access(db, current_user, row['project_id'])
             task = await ShotGridVersionSubmissionDao.lock_task(db, row['project_id'], row['task_id'])
             cls._require_mutable_project_task(project, task)
-            cls._require_submission_access(
-                locked_access,
-                {
-                    **row,
-                    'assignee_user_id': task.assignee_user_id,
-                },
-                actor_id,
-            )
+            cls._require_retry_access(locked_access, task, actor_id)
             submission = await ShotGridVersionSubmissionDao.lock_submission(
                 db,
                 row['project_id'],
@@ -855,11 +848,24 @@ class ShotGridVersionSubmissionService:
         task: Any,
         actor_id: int,
     ) -> None:
-        if access.has_all_scope or access.project_role == 'director':
-            return
         assignee_user_id = task.assignee_user_id if hasattr(task, 'assignee_user_id') else task['assignee_user_id']
-        if access.project_role != 'creator' or assignee_user_id != actor_id:
-            raise shot_grid_error(403, 'SG_PROJECT_ACCESS_DENIED', '只有任务负责人或项目管理人可以提交版本')
+        if access.project_role != 'creator' or access.user_id != actor_id or assignee_user_id != actor_id:
+            raise shot_grid_error(
+                403,
+                'SG_PROJECT_ACCESS_DENIED',
+                '只有当前任务负责制作人员可以提交新版本',
+            )
+
+    @classmethod
+    def _require_retry_access(
+        cls,
+        access: ShotGridProjectAccessModel,
+        task: Any,
+        actor_id: int,
+    ) -> None:
+        """重试仍属于制作人提交链，管理人员不能代替负责人重试。"""
+
+        cls._require_submit_access(access, task, actor_id)
 
     @staticmethod
     def _require_submission_access(

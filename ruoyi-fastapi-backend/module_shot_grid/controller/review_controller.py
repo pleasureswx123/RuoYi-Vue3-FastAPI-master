@@ -13,17 +13,19 @@ from module_shot_grid.dependencies.project_access import ProjectAccessDependency
 from module_shot_grid.entity.vo.access_vo import ShotGridProjectAccessModel
 from module_shot_grid.entity.vo.common_vo import ShotGridLockVersionModel
 from module_shot_grid.entity.vo.review_vo import (
+    ShotGridIssueDetailModel,
+    ShotGridIssueDraftModel,
+    ShotGridIssueDraftUpdateModel,
     ShotGridManualReviewListCreateModel,
     ShotGridManualReviewListOrderModel,
     ShotGridManualReviewListUpdateModel,
     ShotGridManualReviewListVersionsModel,
-    ShotGridIssueDetailModel,
     ShotGridNoteCreateModel,
-    ShotGridReviewContextModel,
     ShotGridReviewActionCreateModel,
     ShotGridReviewActionModel,
     ShotGridReviewActionQueryModel,
     ShotGridReviewActionResultModel,
+    ShotGridReviewContextModel,
     ShotGridReviewListDetailModel,
     ShotGridReviewListItemModel,
     ShotGridReviewListQueryModel,
@@ -140,9 +142,7 @@ async def create_shot_grid_manual_review_list(
     current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
     access: Annotated[ShotGridProjectAccessModel, ProjectAccessDependency()],
 ) -> Response:
-    result = await ShotGridReviewService.create_manual_review_list(
-        query_db, project_id, command, current_user, access
-    )
+    result = await ShotGridReviewService.create_manual_review_list(query_db, project_id, command, current_user, access)
     return ResponseUtil.success(data=result)
 
 
@@ -229,15 +229,16 @@ async def reorder_shot_grid_manual_review_versions(
     query_db: Annotated[AsyncSession, DBSessionDependency()],
     current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
 ) -> Response:
-    result = await ShotGridReviewService.reorder_manual_review_versions(
-        query_db, review_list_id, command, current_user
-    )
+    result = await ShotGridReviewService.reorder_manual_review_versions(query_db, review_list_id, command, current_user)
     return ResponseUtil.success(data=result)
 
 
 async def _transition_manual_review_list(
-    review_list_id: int, target_status: str, command: ShotGridLockVersionModel,
-    query_db: AsyncSession, current_user: CurrentUserModel,
+    review_list_id: int,
+    target_status: str,
+    command: ShotGridLockVersionModel,
+    query_db: AsyncSession,
+    current_user: CurrentUserModel,
 ) -> Response:
     result = await ShotGridReviewService.transition_manual_review_list(
         query_db, review_list_id, target_status, command, current_user
@@ -246,7 +247,8 @@ async def _transition_manual_review_list(
 
 
 @review_controller.post(
-    '/review-lists/{reviewListId}/activate', summary='激活人工审核单',
+    '/review-lists/{reviewListId}/activate',
+    summary='激活人工审核单',
     response_model=DataResponseModel[ShotGridReviewListDetailModel],
     dependencies=[UserInterfaceAuthDependency('shotgrid:reviewList:activate')],
 )
@@ -261,7 +263,8 @@ async def activate_shot_grid_manual_review_list(
 
 
 @review_controller.post(
-    '/review-lists/{reviewListId}/complete', summary='完成人工审核单',
+    '/review-lists/{reviewListId}/complete',
+    summary='完成人工审核单',
     response_model=DataResponseModel[ShotGridReviewListDetailModel],
     dependencies=[UserInterfaceAuthDependency('shotgrid:reviewList:complete')],
 )
@@ -276,7 +279,8 @@ async def complete_shot_grid_manual_review_list(
 
 
 @review_controller.post(
-    '/review-lists/{reviewListId}/archive', summary='归档人工审核单',
+    '/review-lists/{reviewListId}/archive',
+    summary='归档人工审核单',
     response_model=DataResponseModel[ShotGridReviewListDetailModel],
     dependencies=[UserInterfaceAuthDependency('shotgrid:reviewList:archive')],
 )
@@ -325,19 +329,60 @@ async def get_shot_grid_version_review_context(
 
 @review_controller.post(
     '/versions/{versionId}/issues',
-    summary='添加绑定当前版本的修改问题',
-    response_model=DataResponseModel[ShotGridIssueDetailModel],
+    summary='保存绑定当前版本的审核问题草稿',
+    response_model=DataResponseModel[ShotGridIssueDraftModel],
     dependencies=[UserInterfaceAuthDependency('shotgrid:note:add')],
 )
-async def add_shot_grid_version_issue(
+async def add_shot_grid_version_issue_draft(
     request: Request,
     version_id: Annotated[int, Path(alias='versionId', gt=0, le=SQL_BIGINT_MAX)],
     command: ShotGridNoteCreateModel,
     query_db: Annotated[AsyncSession, DBSessionDependency()],
     current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
 ) -> Response:
-    result = await ShotGridReviewService.add_issue(query_db, version_id, command, current_user)
+    result = await ShotGridReviewService.add_issue_draft(query_db, version_id, command, current_user)
     return ResponseUtil.success(data=result)
+
+
+@review_controller.put(
+    '/versions/{versionId}/issue-drafts/{draftId}',
+    summary='更新当前审核问题草稿',
+    response_model=DataResponseModel[ShotGridIssueDraftModel],
+    dependencies=[UserInterfaceAuthDependency('shotgrid:note:add')],
+)
+async def update_shot_grid_version_issue_draft(
+    request: Request,
+    version_id: Annotated[int, Path(alias='versionId', gt=0, le=SQL_BIGINT_MAX)],
+    draft_id: Annotated[int, Path(alias='draftId', gt=0, le=SQL_BIGINT_MAX)],
+    command: ShotGridIssueDraftUpdateModel,
+    query_db: Annotated[AsyncSession, DBSessionDependency()],
+    current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
+) -> Response:
+    result = await ShotGridReviewService.update_issue_draft(
+        query_db,
+        version_id,
+        draft_id,
+        command,
+        current_user,
+    )
+    return ResponseUtil.success(data=result)
+
+
+@review_controller.delete(
+    '/versions/{versionId}/issue-drafts/{draftId}',
+    summary='删除当前审核问题草稿',
+    dependencies=[UserInterfaceAuthDependency('shotgrid:note:add')],
+)
+async def delete_shot_grid_version_issue_draft(
+    request: Request,
+    version_id: Annotated[int, Path(alias='versionId', gt=0, le=SQL_BIGINT_MAX)],
+    draft_id: Annotated[int, Path(alias='draftId', gt=0, le=SQL_BIGINT_MAX)],
+    command: ShotGridLockVersionModel,
+    query_db: Annotated[AsyncSession, DBSessionDependency()],
+    current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
+) -> Response:
+    await ShotGridReviewService.delete_issue_draft(query_db, version_id, draft_id, command, current_user)
+    return ResponseUtil.success(msg='问题草稿已删除')
 
 
 @review_controller.get(

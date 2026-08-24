@@ -39,6 +39,7 @@ const storageError = ref(null)
 const operationsError = ref(null)
 const retryTarget = ref(null)
 const retryFormRef = ref(null)
+const operationFilterFormRef = ref(null)
 const retryForm = reactive({ reason: '' })
 const retryBusy = ref(false)
 const retryError = ref(null)
@@ -214,7 +215,7 @@ onBeforeUnmount(() => { storageController?.abort(); operationsController?.abort(
     <el-empty v-else :image-size="64" description="当前项目尚无存储信息" />
 
     <template v-if="canDiagnose">
-      <el-form :model="filters" class="operation-toolbar" size="large" inline aria-label="目录操作筛选">
+      <el-form ref="operationFilterFormRef" :model="filters" class="operation-toolbar" size="large" inline aria-label="目录操作筛选">
         <strong>目录操作记录</strong>
         <el-form-item prop="operationStatus">
           <el-select v-model="filters.operationStatus" class="sg-select" placeholder="全部状态" aria-label="目录操作状态" @change="filters.pageNum = 1; loadOperations()">

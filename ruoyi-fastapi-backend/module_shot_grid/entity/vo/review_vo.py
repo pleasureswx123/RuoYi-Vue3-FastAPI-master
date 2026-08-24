@@ -10,6 +10,7 @@ from module_shot_grid.entity.vo.common_vo import (
     ShotGridLockVersionModel,
     ShotGridPageQueryModel,
 )
+from module_shot_grid.entity.vo.task_vo import ShotGridTaskShotProductionModel
 
 SQL_BIGINT_MAX = 9_223_372_036_854_775_807
 SQL_INTEGER_MAX = 2_147_483_647
@@ -22,7 +23,7 @@ SAFE_ANNOTATION_ID = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_.:-]{0,99}$')
 HTML_TAG = re.compile(r'</?[A-Za-z][^>]*>')
 
 VersionStatus = Literal['pending_review', 'rejected', 'final']
-TaskStatus = Literal['not_started', 'in_progress', 'pending_review', 'revision', 'completed']
+TaskStatus = Literal['not_started', 'preparing', 'in_progress', 'pending_review', 'revision', 'completed']
 ReviewActionType = Literal['approve', 'reject', 'defer']
 ReviewListStatus = Literal['draft', 'active', 'completed', 'archived']
 ReviewListMode = Literal['auto_single', 'manual_batch']
@@ -163,9 +164,41 @@ class ShotGridVersionListItemModel(ShotGridApiModel):
     lock_version: int
 
 
+class ShotGridVersionAssetProductionModel(ShotGridApiModel):
+    """资产图片版本对应的只读制作目标。"""
+
+    asset_id: int
+    asset_item_id: int
+    asset_type: Literal['Character', 'Environment', 'Prop']
+    asset_name: str
+    asset_description: str | None = None
+    asset_remark: str | None = None
+    production_item: str | None = None
+    item_description: str | None = None
+    item_remark: str | None = None
+
+
+class ShotGridVersionProductionTargetModel(ShotGridApiModel):
+    """审核版本关联的只读制作依据，不在审核单表复制业务字段。"""
+
+    target_type: Literal['shot', 'asset_item']
+    requirements: str | None = None
+    shot: ShotGridTaskShotProductionModel | None = None
+    asset: ShotGridVersionAssetProductionModel | None = None
+
+    @model_validator(mode='after')
+    def validate_matching_target(self) -> 'ShotGridVersionProductionTargetModel':
+        if self.target_type == 'shot' and (self.shot is None or self.asset is not None):
+            raise ValueError('镜头版本必须且只能返回 shot 制作依据')
+        if self.target_type == 'asset_item' and (self.asset is None or self.shot is not None):
+            raise ValueError('资产版本必须且只能返回 asset 制作依据')
+        return self
+
+
 class ShotGridVersionDetailModel(ShotGridVersionListItemModel):
     """版本详情；内部存储路径不进入响应。"""
 
+    production_target: ShotGridVersionProductionTargetModel
     ai_params: dict[str, Any] | list[Any] | None = None
     files: list[ShotGridVersionFileModel] = Field(default_factory=list)
     media_derivation_status: Literal['pending', 'processing', 'completed', 'failed'] | None = None
@@ -289,7 +322,7 @@ class ShotGridManualReviewListOrderModel(ShotGridLockVersionModel):
 
 
 class ShotGridNoteCreateModel(ShotGridApiModel):
-    """创建绑定当前版本的修改问题。"""
+    """保存绑定当前版本的审核问题草稿。"""
 
     model_config = ConfigDict(extra='forbid')
 
@@ -311,6 +344,29 @@ class ShotGridNoteCreateModel(ShotGridApiModel):
         if self.content or (self.annotations is not None and self.annotations.items):
             return self
         raise ValueError('修改问题必须填写文字内容或至少添加一项画面标注')
+
+
+class ShotGridIssueDraftUpdateModel(ShotGridNoteCreateModel):
+    """更新尚未随退回动作发布的问题草稿。"""
+
+    lock_version: int = Field(ge=0, le=SQL_INTEGER_MAX)
+
+
+class ShotGridIssueDraftModel(ShotGridApiModel):
+    """审核人可修改、制作人不可见的问题草稿。"""
+
+    draft_id: int
+    project_id: int
+    review_list_id: int
+    version_id: int
+    reviewer_user_id: int
+    reviewer_name: str | None = None
+    content: str | None = None
+    media_time_ms: int | None = None
+    annotations: ShotGridAnnotationsModel | None = None
+    lock_version: int
+    create_time: datetime
+    update_time: datetime
 
 
 class ShotGridNoteModel(ShotGridApiModel):
@@ -399,6 +455,7 @@ class ShotGridReviewContextModel(ShotGridApiModel):
     current_version: ShotGridReviewVersionSummaryModel
     carried_issues: list[ShotGridCarriedIssueModel] = Field(default_factory=list)
     current_version_issues: list[ShotGridIssueDetailModel] = Field(default_factory=list)
+    current_version_drafts: list[ShotGridIssueDraftModel] = Field(default_factory=list)
 
 
 class ShotGridIssueVerificationInputModel(ShotGridApiModel):

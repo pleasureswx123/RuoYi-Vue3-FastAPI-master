@@ -25,6 +25,70 @@ from module_shot_grid.entity.do.base_do import (
 )
 
 
+class ShotGridReviewIssueDraft(Base):
+    """审核人记录、退回发布前可修改的问题草稿。"""
+
+    __tablename__ = 'sg_review_issue_draft'
+
+    draft_id = Column(BigInteger, primary_key=True, nullable=False, autoincrement=True, comment='问题草稿ID')
+    project_id = Column(BigInteger, nullable=False, comment='项目ID')
+    review_list_id = Column(BigInteger, nullable=False, comment='所属自动审核单ID')
+    version_id = Column(BigInteger, nullable=False, comment='当前审核版本ID')
+    reviewer_user_id = Column(
+        BigInteger,
+        ForeignKey('sys_user.user_id', ondelete='RESTRICT'),
+        nullable=False,
+        comment='最初记录问题的审核用户ID',
+    )
+    content = Column(Text, nullable=True, comment='问题草稿正文；与画面标注至少存在一项')
+    media_time_ms = Column(BigInteger, nullable=True, comment='视频时间点（毫秒）')
+    annotations = Column(SHOT_GRID_JSON, nullable=True, comment='结构化批注数组')
+    lock_version = Column(Integer, nullable=False, server_default='0', comment='乐观锁版本')
+    create_time = Column(SHOT_GRID_DATETIME, nullable=False, default=datetime.now, comment='创建时间')
+    update_time = Column(
+        SHOT_GRID_DATETIME,
+        nullable=False,
+        default=datetime.now,
+        onupdate=datetime.now,
+        comment='更新时间',
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ['review_list_id', 'project_id'],
+            ['sg_review_list.review_list_id', 'sg_review_list.project_id'],
+            name='fk_sg_review_issue_draft_review_list_project',
+            ondelete='RESTRICT',
+        ),
+        ForeignKeyConstraint(
+            ['version_id', 'project_id'],
+            ['sg_version.version_id', 'sg_version.project_id'],
+            name='fk_sg_review_issue_draft_version_project',
+            ondelete='RESTRICT',
+        ),
+        UniqueConstraint('draft_id', 'project_id', name='uk_sg_review_issue_draft_id_project'),
+        CheckConstraint(
+            "btrim(coalesce(content, '')) <> '' or "
+            "(annotations is not null and jsonb_typeof(annotations -> 'items') = 'array' "
+            "and jsonb_array_length(annotations -> 'items') > 0)",
+            name='ck_sg_review_issue_draft_content_or_annotations',
+        ),
+        CheckConstraint(
+            'media_time_ms is null or media_time_ms >= 0',
+            name='ck_sg_review_issue_draft_media_time',
+        ),
+        CheckConstraint('lock_version >= 0', name='ck_sg_review_issue_draft_lock_version'),
+        Index(
+            'idx_sg_review_issue_draft_list_version_time',
+            'review_list_id',
+            'version_id',
+            'create_time',
+            'draft_id',
+        ),
+        {'comment': 'Shot Grid审核问题私有草稿表'},
+    )
+
+
 class ShotGridNote(Base):
     """
     Shot Grid 版本级审核意见表。
@@ -257,6 +321,7 @@ class ShotGridReviewList(ShotGridMutableAuditMixin, Base):
             "review_status in ('draft', 'active', 'completed', 'archived')",
             name='ck_sg_review_list_status',
         ),
+        UniqueConstraint('review_list_id', 'project_id', name='uk_sg_review_list_id_project'),
         CheckConstraint(
             "(review_mode = 'auto_single' and auto_version_id is not null) or "
             "(review_mode = 'manual_batch' and auto_version_id is null)",

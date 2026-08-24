@@ -1,8 +1,8 @@
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-SHOT_TEMPLATE_VERSION = 'shot-v1'
-ASSET_TEMPLATE_VERSION = 'asset-v1'
+SHOT_TEMPLATE_VERSION = 'shot-v2'
+ASSET_TEMPLATE_VERSION = 'asset-v2'
 
 
 class ShotGridImportConfig(BaseSettings):

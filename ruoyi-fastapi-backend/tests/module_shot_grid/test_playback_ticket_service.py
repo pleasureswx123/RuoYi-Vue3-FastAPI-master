@@ -16,7 +16,7 @@ SESSION_ID = 'session-1'
 
 
 def playback_config() -> ShotGridPlaybackConfig:
-    return ShotGridPlaybackConfig(ticketTtlSeconds=600, redisKeyPrefix='test:playback')
+    return ShotGridPlaybackConfig(ticket_ttl_seconds=600, redis_key_prefix='test:playback')
 
 
 def current_user() -> CurrentUserModel:

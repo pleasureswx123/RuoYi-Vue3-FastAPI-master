@@ -1,4 +1,4 @@
-import { ElAlert, ElButton, ElDatePicker, ElDialog, ElForm, ElFormItem, ElIcon, ElImage, ElInput, ElRadioButton, ElRadioGroup, ElSkeleton, ElTag } from 'element-plus'
+import { ElAlert, ElButton, ElDatePicker, ElDialog, ElForm, ElFormItem, ElIcon, ElImage, ElInput, ElMessageBox, ElRadioButton, ElRadioGroup, ElSkeleton, ElTag } from 'element-plus'
 import { createPinia, setActivePinia } from 'pinia'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
@@ -6,13 +6,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { getProjectPage } from '@/api/shot-grid/projects'
 import {
-  addVersionIssue,
+  addVersionIssueDraft,
   createManualReviewList,
   createReviewAction,
+  deleteVersionIssueDraft,
   getReviewActions,
   getReviewListDetail,
   getReviewListPage,
-  getVersionReviewContext
+  getVersionReviewContext,
+  updateVersionIssueDraft
 } from '@/api/shot-grid/reviews'
 import { getTaskVersions, getVersionDetail } from '@/api/shot-grid/versions'
 import { downloadProtectedThumbnail } from '@/api/shot-grid/shots'
@@ -30,14 +32,16 @@ vi.mock('@/api/shot-grid/projects', () => ({
   getProjectPage: vi.fn()
 }))
 vi.mock('@/api/shot-grid/reviews', () => ({
-  addVersionIssue: vi.fn(),
+  addVersionIssueDraft: vi.fn(),
   createManualReviewList: vi.fn(),
   createReviewAction: vi.fn(),
   getReviewActions: vi.fn(),
   getReviewListDetail: vi.fn(),
   getReviewListPage: vi.fn(),
   getVersionReviewContext: vi.fn(),
-  transitionManualReviewList: vi.fn()
+  transitionManualReviewList: vi.fn(),
+  updateVersionIssueDraft: vi.fn(),
+  deleteVersionIssueDraft: vi.fn()
 }))
 vi.mock('@/api/shot-grid/versions', () => ({
   downloadProtectedVersionFile: vi.fn(),
@@ -82,6 +86,23 @@ const version = {
   lockVersion: 2,
   files: [],
   aiParams: null,
+  productionTarget: {
+    targetType: 'shot',
+    requirements: '稍带斜角度拍门上贴纸：“禁止入内”“内有恶犬”',
+    shot: {
+      durationMs: 1500,
+      description: '稍带斜角度拍门上贴纸：“禁止入内”“内有恶犬”',
+      shotSize: '特写',
+      cameraPosition: '平视机位',
+      cameraMovement: '手持呼吸感',
+      focalLength: '85',
+      dialogue: null,
+      soundEffect: '轻微电流声',
+      colorReference: '暖色顶光',
+      remark: '保持视觉中心表达'
+    },
+    asset: null
+  },
   autoReviewList: { reviewListId: 101, reviewListName: review.reviewListName }
 }
 function installSession(permissions) {
@@ -137,11 +158,13 @@ describe('版本审核页面', () => {
     getReviewListPage.mockResolvedValue({ rows: [review], total: 1 })
     getReviewListDetail.mockResolvedValue({ data: { ...review, version } })
     getVersionDetail.mockResolvedValue({ data: version })
-    getVersionReviewContext.mockResolvedValue({ data: { currentVersion: version, carriedIssues: [], currentVersionIssues: [] } })
+    getVersionReviewContext.mockResolvedValue({ data: { currentVersion: version, carriedIssues: [], currentVersionIssues: [], currentVersionDrafts: [] } })
     getReviewActions.mockResolvedValue({ rows: [], total: 0 })
     getTaskVersions.mockResolvedValue({ rows: [], total: 0 })
     downloadProtectedThumbnail.mockResolvedValue(new Blob(['thumbnail'], { type: 'image/jpeg' }))
-    addVersionIssue.mockResolvedValue({ data: { issueId: 502 } })
+    addVersionIssueDraft.mockResolvedValue({ data: { draftId: 502 } })
+    updateVersionIssueDraft.mockResolvedValue({ data: { draftId: 502, lockVersion: 4 } })
+    deleteVersionIssueDraft.mockResolvedValue({ code: 200 })
     createManualReviewList.mockResolvedValue({ data: { reviewListId: 202 } })
     createReviewAction.mockResolvedValue({ data: { actionId: 901 } })
   })
@@ -169,6 +192,11 @@ describe('版本审核页面', () => {
     expect(getReviewListDetail).toHaveBeenCalledWith(101, expect.objectContaining({ signal: expect.any(AbortSignal) }))
     expect(getVersionDetail).toHaveBeenCalledWith(33, expect.objectContaining({ signal: expect.any(AbortSignal) }))
     expect(wrapper.text()).toContain('补充舱体冷凝效果')
+    expect(wrapper.text()).toContain('审核依据')
+    expect(wrapper.text()).toContain('稍带斜角度拍门上贴纸')
+    expect(wrapper.text()).toContain('手持呼吸感')
+    expect(wrapper.text()).not.toContain('任务补充要求')
+    expect(wrapper.findComponent({ name: 'VersionDetailCard' }).props('showPreview')).toBe(false)
     const headingTags = wrapper.find('.heading-actions').findAllComponents(ElTag)
     expect(headingTags.map(tag => tag.text())).toEqual(['自动单版', '待审核'])
     expect(headingTags[0].props()).toMatchObject({ type: 'primary', effect: 'plain', size: 'small', round: true })
@@ -187,7 +215,38 @@ describe('版本审核页面', () => {
     wrapper.unmount()
   })
 
-  it('把媒体工作区生成的归一化批注随审核意见提交', async () => {
+  it('资产图片审核展示父资产和制作分项依据', async () => {
+    getVersionDetail.mockResolvedValueOnce({
+      data: {
+        ...version,
+        productionTarget: {
+          targetType: 'asset_item',
+          requirements: '保持正视图和统一轮廓光',
+          shot: null,
+          asset: {
+            assetId: 71,
+            assetItemId: 72,
+            assetType: 'Character',
+            assetName: '罗峰',
+            assetDescription: '青年战士角色',
+            assetRemark: '沿用项目设定比例',
+            productionItem: '正视图',
+            itemDescription: '完成角色正视图设定',
+            itemRemark: '注意服装层次'
+          }
+        }
+      }
+    })
+    const { wrapper } = await mountDetail()
+
+    expect(wrapper.text()).toContain('资产图片')
+    expect(wrapper.text()).toContain('罗峰')
+    expect(wrapper.text()).toContain('正视图')
+    expect(wrapper.text()).toContain('保持正视图和统一轮廓光')
+    wrapper.unmount()
+  })
+
+  it('把媒体工作区生成的时间点与归一化批注带入右侧问题并一并提交', async () => {
     const { wrapper } = await mountDetail([
       'shotgrid:reviewList:query',
       'shotgrid:version:query',
@@ -202,16 +261,84 @@ describe('版本审核页面', () => {
       sourceHeight: 1080,
       items: [{ id: 'annotation-test', type: 'rectangle', color: '#ff6b6b', strokeWidth: 0.004, points: [{ x: 0.1, y: 0.2 }, { x: 0.4, y: 0.5 }] }]
     }
+    workspace.vm.$emit('capture-time', 3250)
     workspace.vm.$emit('annotations-change', annotations)
+    await flushPromises()
+    expect(wrapper.find('.issue-compose-meta').text()).toContain('回到 00:03')
+    expect(wrapper.find('.issue-compose-meta').text()).toContain('查看 1 处标注')
     await wrapper.find('.issue-compose textarea').setValue('这里需要降低高光')
-    await wrapper.findAllComponents(ElButton).find(button => button.text().includes('保存为一条修改问题')).trigger('click')
+    await wrapper.findAllComponents(ElButton).find(button => button.text().includes('保存问题草稿')).trigger('click')
     await flushPromises()
 
-    expect(addVersionIssue).toHaveBeenCalledWith(33, {
+    expect(addVersionIssueDraft).toHaveBeenCalledWith(33, {
       content: '问题：这里需要降低高光',
-      mediaTimeMs: null,
+      mediaTimeMs: 3250,
       annotations
     })
+    wrapper.unmount()
+  })
+
+  it('退回前允许编辑和删除私有问题草稿，并携带乐观锁版本', async () => {
+    const annotations = {
+      schemaVersion: 1,
+      sourceWidth: 1920,
+      sourceHeight: 1080,
+      items: [{ id: 'annotation-draft', type: 'rectangle', color: '#ff6b6b', strokeWidth: 0.004, points: [{ x: 0.1, y: 0.2 }, { x: 0.4, y: 0.5 }] }]
+    }
+    const draft = {
+      draftId: 502,
+      projectId: 8,
+      reviewListId: 101,
+      versionId: 33,
+      reviewerUserId: 1,
+      reviewerName: '场景锋',
+      content: '问题：画面偏暗\n修改目标：提高主体亮度',
+      mediaTimeMs: 3250,
+      annotations,
+      lockVersion: 3,
+      createTime: '2026-08-12T10:10:00',
+      updateTime: '2026-08-12T10:10:00'
+    }
+    getVersionReviewContext.mockResolvedValue({
+      data: { currentVersion: version, carriedIssues: [], currentVersionIssues: [], currentVersionDrafts: [draft] }
+    })
+    const { wrapper } = await mountDetail([
+      'shotgrid:reviewList:query',
+      'shotgrid:version:query',
+      'shotgrid:version:review',
+      'shotgrid:note:list',
+      'shotgrid:note:add'
+    ])
+
+    const draftCard = wrapper.find('.issue-draft-card')
+    expect(draftCard.text()).toContain('场景锋')
+    expect(draftCard.text()).not.toContain('制作人暂不可见')
+    await draftCard.findAllComponents(ElButton).find(button => button.text() === '编辑').trigger('click')
+    await flushPromises()
+    const textareas = wrapper.findAll('.issue-compose textarea')
+    expect(textareas[0].element.value).toBe('画面偏暗')
+    expect(textareas[1].element.value).toBe('提高主体亮度')
+    await textareas[0].setValue('画面主体仍然偏暗')
+    await wrapper.findAllComponents(ElButton).find(button => button.text() === '更新问题草稿').trigger('click')
+    await flushPromises()
+
+    expect(updateVersionIssueDraft).toHaveBeenCalledWith(33, 502, {
+      content: '问题：画面主体仍然偏暗\n修改目标：提高主体亮度',
+      mediaTimeMs: 3250,
+      annotations,
+      lockVersion: 3
+    })
+
+    const confirmSpy = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm')
+    await wrapper.find('.issue-draft-card').findAllComponents(ElButton).find(button => button.text() === '删除').trigger('click')
+    await flushPromises()
+    expect(confirmSpy).toHaveBeenCalledWith(
+      expect.stringContaining('不会发送给制作人'),
+      '删除问题草稿',
+      expect.objectContaining({ confirmButtonText: '确认删除' })
+    )
+    expect(deleteVersionIssueDraft).toHaveBeenCalledWith(33, 502, { lockVersion: 3 })
+    confirmSpy.mockRestore()
     wrapper.unmount()
   })
 

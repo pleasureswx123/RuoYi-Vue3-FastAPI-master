@@ -7,11 +7,13 @@ import { ArrowLeft, Edit, Lock, Refresh, UserFilled } from '@element-plus/icons-
 import { archiveShot, getEpisodePage, getShotDetail, listShotAssignees } from '@/api/shot-grid/shots'
 import { assertPositiveId } from '@/api/shot-grid/projects'
 import { tagTypeFromTone } from '@/utils/tag'
+import ProductionHistoryPanel from '@/components/production-history/ProductionHistoryPanel.vue'
 import ProjectStatePanel from '@/views/project/components/ProjectStatePanel.vue'
 import ProtectedThumbnail from '@/views/shot/components/ProtectedThumbnail.vue'
 import ShotAssignDialog from '@/views/shot/components/ShotAssignDialog.vue'
 import ShotFormDialog from '@/views/shot/components/ShotFormDialog.vue'
-import { directoryStatusMeta, formatShotDateTime, formatShotDuration, shotAssigneeName, shotErrorState, shotStatusMeta } from '@/views/shot/shotPresentation'
+import ShotProductionInfo from '@/views/shot/components/ShotProductionInfo.vue'
+import { directoryStatusMeta, formatShotDateTime, formatShotDuration, shotAssigneeName, shotErrorState, shotStatusMeta, shotStatusTagClass } from '@/views/shot/shotPresentation'
 import { taskPriorityMeta, taskStatusMeta, taskVersionStatusMeta } from '@/views/task/taskPresentation'
 
 const props = defineProps({
@@ -32,6 +34,7 @@ const showEdit = ref(false)
 const showAssign = ref(false)
 const editContext = ref(null)
 const assignContext = ref(null)
+const historyRefreshKey = ref(0)
 let controller = null
 let loadGeneration = 0
 let operationGeneration = 0
@@ -94,6 +97,7 @@ async function loadDetail() {
     shot.value = detailResponse.data
     episodes.value = Array.isArray(episodeResponse.rows) ? episodeResponse.rows : []
     members.value = Array.isArray(memberResponse) ? memberResponse : []
+    historyRefreshKey.value += 1
   } catch (error) {
     if (error?.code !== 'ERR_CANCELED' && isCurrentContext()) {
       errorState.value = shotErrorState(error, '镜头详情加载失败')
@@ -208,15 +212,29 @@ onBeforeUnmount(() => { disposed = true; loadGeneration += 1; controller?.abort(
     <ProjectStatePanel v-if="errorState" :title="errorState.title" :message="errorState.message" :retryable="errorState.retryable" @retry="loadDetail" />
     <el-card v-else-if="loading && !shot" class="detail-loading" shadow="never" aria-busy="true"><el-skeleton animated :rows="8" /></el-card>
     <template v-else-if="shot">
-      <header class="shot-hero">
-        <ProtectedThumbnail class="shot-hero__thumbnail" :thumbnail="shot.thumbnail" :video="shot.proxyMedia" :alt="`${shot.shotCode} 缩略图`" />
-        <div class="shot-hero__main"><p class="sg-eyebrow">{{ shot.episodeCode }} / {{ shot.sceneCode }}</p><div><h2>{{ shot.shotCode }}</h2><el-tag :type="tagTypeFromTone(shotStatusMeta(shot.status).tone)" size="small" effect="light" round>{{ shotStatusMeta(shot.status).label }}</el-tag></div><p>{{ shot.description }}</p><small>成片顺序 {{ shot.sortOrder }} · {{ formatShotDuration(shot.durationMs) }}</small></div>
-        <div class="shot-hero__actions"><el-button :icon="Refresh" :loading="loading" :disabled="archiving" @click="loadDetail">刷新</el-button><el-button v-if="allowedActions.has('task.assign')" :icon="UserFilled" :disabled="loading || archiving" @click="openAssignDialog">{{ shot.task ? '改派任务' : '分配任务' }}</el-button><el-button v-if="allowedActions.has('shot.edit')" :icon="Edit" :disabled="loading || archiving" @click="openEditDialog">编辑镜头</el-button><el-button v-if="allowedActions.has('shot.archive')" type="danger" plain :icon="Lock" :loading="archiving" :disabled="loading" @click="confirmArchive">删除</el-button></div>
-      </header>
+      <el-card class="shot-overview" shadow="never">
+        <header class="shot-hero">
+          <ProtectedThumbnail class="shot-hero__thumbnail" :thumbnail="shot.thumbnail" :video="shot.proxyMedia" :alt="`${shot.shotCode} 缩略图`" />
+          <div class="shot-hero__main"><p class="sg-eyebrow">{{ shot.episodeCode }} / {{ shot.sceneCode }}</p><div><h2>{{ shot.shotCode }}</h2><el-tag class="shot-status-tag" :class="shotStatusTagClass(shot.status)" :type="tagTypeFromTone(shotStatusMeta(shot.status).tone)" size="small" effect="light" round>{{ shotStatusMeta(shot.status).label }}</el-tag></div><small>本场第 {{ shot.sequencePosition }} 镜 · {{ formatShotDuration(shot.durationMs) }}</small></div>
+          <div class="shot-hero__actions"><el-button :icon="Refresh" :loading="loading" :disabled="archiving" @click="loadDetail">刷新</el-button><el-button v-if="allowedActions.has('task.assign')" :icon="UserFilled" :disabled="loading || archiving" @click="openAssignDialog">{{ shot.task ? '改派任务' : '分配任务' }}</el-button><el-button v-if="allowedActions.has('shot.edit')" :icon="Edit" :disabled="loading || archiving" @click="openEditDialog">编辑镜头</el-button><el-button v-if="allowedActions.has('shot.archive')" type="danger" plain :icon="Lock" :loading="archiving" :disabled="loading" @click="confirmArchive">删除</el-button></div>
+        </header>
+        <section class="shot-overview__production" aria-labelledby="shot-production-title">
+          <header>
+            <div><p class="sg-eyebrow">PRODUCTION</p><h3 id="shot-production-title">制作信息</h3></div>
+            <el-tag v-if="shot.directoryStatus === 'failed'" :type="tagTypeFromTone(directoryStatusMeta(shot.directoryStatus).tone)" size="small" effect="plain" round>{{ directoryStatusMeta(shot.directoryStatus).label }}</el-tag>
+          </header>
+          <ShotProductionInfo :shot="shot" />
+        </section>
+      </el-card>
+
+      <ProductionHistoryPanel
+        :project-id="projectId"
+        :subject-id="shotId"
+        subject-type="shot"
+        :refresh-key="historyRefreshKey"
+      />
 
       <section class="detail-grid">
-        <el-card class="detail-card detail-card--wide" shadow="never"><header><div><p class="sg-eyebrow">PRODUCTION</p><h3>制作信息</h3></div><el-tag :type="tagTypeFromTone(directoryStatusMeta(shot.directoryStatus).tone)" size="small" effect="plain" round>{{ directoryStatusMeta(shot.directoryStatus).label }}</el-tag></header><el-descriptions class="detail-fields" :column="4" border><el-descriptions-item label="景别">{{ shot.shotSize || '—' }}</el-descriptions-item><el-descriptions-item label="机位">{{ shot.cameraPosition || '—' }}</el-descriptions-item><el-descriptions-item label="镜头运动">{{ shot.cameraMovement || '—' }}</el-descriptions-item><el-descriptions-item label="焦段">{{ shot.focalLength || '—' }}</el-descriptions-item><el-descriptions-item label="台词 / 对白">{{ shot.dialogue || '—' }}</el-descriptions-item><el-descriptions-item label="音效">{{ shot.soundEffect || '—' }}</el-descriptions-item><el-descriptions-item label="色调参考">{{ shot.colorReference || '—' }}</el-descriptions-item><el-descriptions-item label="备注">{{ shot.remark || '—' }}</el-descriptions-item></el-descriptions></el-card>
-
         <el-card class="detail-card" shadow="never"><p class="sg-eyebrow">TASK</p><h3>镜头视频任务</h3><template v-if="shot.task"><div class="task-person"><strong>{{ shotAssigneeName(shot.task.assignee, members) }}</strong></div><el-descriptions class="compact-fields" :column="2" border><el-descriptions-item label="任务状态"><el-tag :type="tagTypeFromTone(taskStatusMeta(shot.task.taskStatus).tone)" size="small" effect="light" round>{{ taskStatusMeta(shot.task.taskStatus).label }}</el-tag></el-descriptions-item><el-descriptions-item label="优先级"><el-tag :type="tagTypeFromTone(taskPriorityMeta(shot.task.priority).tone)" size="small" effect="plain" round>{{ taskPriorityMeta(shot.task.priority).label }}</el-tag></el-descriptions-item><el-descriptions-item label="截止日期">{{ shot.task.dueDate || '未设置' }}</el-descriptions-item></el-descriptions></template><el-empty v-else class="detail-empty" :image-size="48" description="尚未分配主制作人" /></el-card>
 
         <el-card class="detail-card" shadow="never"><p class="sg-eyebrow">VERSION</p><h3>最新版本与反馈</h3><template v-if="shot.latestVersion"><strong class="version-number">{{ shot.latestVersion.versionNumber }}</strong><p>{{ shot.latestVersion.businessFileName }}</p><el-tag :type="tagTypeFromTone(taskVersionStatusMeta(shot.latestVersion.status).tone)" size="small" effect="light" round>{{ taskVersionStatusMeta(shot.latestVersion.status).label }}</el-tag></template><el-empty v-else class="detail-empty" :image-size="48" description="尚未提交正式版本" /><blockquote v-if="shot.latestFeedback">{{ shot.latestFeedback.content }}<small>{{ formatShotDateTime(shot.latestFeedback.createTime) }}</small></blockquote></el-card>
@@ -226,7 +244,7 @@ onBeforeUnmount(() => { disposed = true; loadGeneration += 1; controller?.abort(
         <el-card class="detail-card detail-card--wide" shadow="never"><p class="sg-eyebrow">AUDIT</p><h3>审计摘要</h3><el-descriptions class="compact-fields" :column="4" border><el-descriptions-item label="创建人">{{ shot.createBy }}</el-descriptions-item><el-descriptions-item label="创建时间">{{ formatShotDateTime(shot.createTime) }}</el-descriptions-item><el-descriptions-item label="更新人">{{ shot.updateBy }}</el-descriptions-item><el-descriptions-item label="更新时间">{{ formatShotDateTime(shot.updateTime) }}</el-descriptions-item></el-descriptions></el-card>
       </section>
 
-      <ShotFormDialog v-if="showEdit && editContext" :project-id="editContext.projectId" :operation-generation="editContext.operationGeneration" :episodes="episodes" :members="members" :shot="shot" @close="closeEditDialog" @saved="handleSaved" @refresh="loadDetail" />
+      <ShotFormDialog v-if="showEdit && editContext" :project-id="editContext.projectId" :operation-generation="editContext.operationGeneration" :episodes="episodes" :shot="shot" @close="closeEditDialog" @saved="handleSaved" @refresh="loadDetail" />
       <ShotAssignDialog v-if="showAssign && assignContext" :project-id="assignContext.projectId" :operation-generation="assignContext.operationGeneration" :shot="shot" :members="members" @close="closeAssignDialog" @assigned="handleAssigned" @refresh="loadDetail" />
     </template>
   </section>
@@ -280,6 +298,17 @@ onBeforeUnmount(() => { disposed = true; loadGeneration += 1; controller?.abort(
   padding: 30px;
 }
 
+.shot-overview.el-card {
+  overflow: hidden;
+  background: var(--sg-surface);
+  border-color: var(--sg-border);
+  border-radius: var(--sg-radius-lg);
+}
+
+.shot-overview:deep(.el-card__body) {
+  padding: 0;
+}
+
 .shot-hero {
   display: grid;
   grid-template-columns: 180px minmax(0, 1fr) auto;
@@ -289,8 +318,6 @@ onBeforeUnmount(() => { disposed = true; loadGeneration += 1; controller?.abort(
   background:
     linear-gradient(135deg, var(--sg-accent-soft), transparent 38%),
     var(--sg-surface);
-  border: 1px solid var(--sg-border);
-  border-radius: var(--sg-radius-lg);
 }
 
 .shot-hero__thumbnail {
@@ -325,13 +352,6 @@ onBeforeUnmount(() => { disposed = true; loadGeneration += 1; controller?.abort(
   font-size: 27px;
 }
 
-.shot-hero__main > p:not(.sg-eyebrow) {
-  margin-top: 8px;
-  color: var(--sg-text-secondary);
-  font-size: 13px;
-  line-height: 1.6;
-}
-
 .shot-hero__main small {
   display: block;
   margin-top: 8px;
@@ -344,6 +364,29 @@ onBeforeUnmount(() => { disposed = true; loadGeneration += 1; controller?.abort(
   gap: 8px;
   justify-content: flex-end;
   flex-wrap: wrap;
+}
+
+.shot-overview__production {
+  padding: 18px 22px 22px;
+  border-top: 1px solid var(--sg-border);
+}
+
+.shot-overview__production > header {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.shot-overview__production h3,
+.shot-overview__production p {
+  margin: 0;
+}
+
+.shot-overview__production h3 {
+  margin-top: 2px;
+  font-size: 16px;
 }
 
 .detail-grid {
@@ -383,7 +426,6 @@ onBeforeUnmount(() => { disposed = true; loadGeneration += 1; controller?.abort(
   font-size: 17px;
 }
 
-.detail-fields.el-descriptions,
 .compact-fields.el-descriptions {
   display: block;
   margin: 0;
@@ -391,40 +433,33 @@ onBeforeUnmount(() => { disposed = true; loadGeneration += 1; controller?.abort(
   background: transparent;
 }
 
-.detail-fields.el-descriptions {
-  border: 1px solid var(--sg-border);
-  border-radius: 10px;
-}
-
 .compact-fields.el-descriptions {
   border-radius: 9px;
 }
 
-.detail-fields:deep(.el-descriptions__body),
-.detail-fields:deep(.el-descriptions__table),
 .compact-fields:deep(.el-descriptions__body),
 .compact-fields:deep(.el-descriptions__table) {
   background: transparent;
 }
 
-.detail-fields:deep(.el-descriptions__cell),
 .compact-fields:deep(.el-descriptions__cell) {
   padding: 13px !important;
   background: var(--sg-surface-raised) !important;
   border-color: var(--sg-border) !important;
 }
 
-.detail-fields:deep(.el-descriptions__label),
 .compact-fields:deep(.el-descriptions__label) {
   color: var(--sg-text-muted) !important;
   font-size: 10px;
 }
 
-.detail-fields:deep(.el-descriptions__content),
 .compact-fields:deep(.el-descriptions__content) {
   color: var(--sg-text-secondary) !important;
   font-size: 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
   white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .task-person {
@@ -505,5 +540,6 @@ blockquote small {
   .detail-card--wide {
     grid-column: auto;
   }
+
 }
 </style>

@@ -1,5 +1,6 @@
 <script setup>
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { ElAffix } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
 
 import { getReviewActions, getTaskIssues } from '@/api/shot-grid/reviews'
@@ -38,6 +39,7 @@ const selectedFeedback = ref(null)
 const feedbackLoading = ref(false)
 const feedbackError = ref(null)
 const feedbackPanel = ref(null)
+const affixEnabled = ref(false)
 
 let disposed = false
 let contextGeneration = 0
@@ -46,9 +48,35 @@ let detailController = null
 
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / props.pageSize)))
 const historyFilters = computed(() => ({ versionStatus: statusFilter.value }))
+const historyFormRef = ref(null)
 const latestDecision = computed(() => feedbackActions.value.find(item => ['approve', 'reject', 'defer'].includes(item.actionType)) || null)
 const hasFeedback = computed(() => Boolean(feedbackNotes.value.length || latestDecision.value))
 const pendingFeedbackCount = computed(() => feedbackNotes.value.filter(item => item.displayScope === 'pending').length)
+const historyPanelId = computed(() => `version-history-panel-${Number(props.taskId)}`)
+const feedbackPanelId = computed(() => `version-feedback-panel-${Number(props.taskId)}`)
+const historyAffixTarget = computed(() => `#${historyPanelId.value}`)
+const feedbackAffixTarget = computed(() => `#${feedbackPanelId.value}`)
+const affixShell = computed(() => affixEnabled.value ? ElAffix : 'div')
+
+function affixProps(target) {
+  return affixEnabled.value
+    ? {
+        appendTo: 'body',
+        offset: 92,
+        target,
+        teleported: true
+      }
+    : {}
+}
+
+async function updateAffixMode() {
+  if (typeof window === 'undefined' || window.innerWidth <= 900) {
+    affixEnabled.value = false
+    return
+  }
+  await nextTick()
+  affixEnabled.value = window.innerWidth > 900 && Boolean(document.querySelector(historyAffixTarget.value))
+}
 
 function latestVerification(issue) {
   const items = issue?.verifications || []
@@ -356,21 +384,28 @@ watch(
 )
 watch(() => props.refreshKey, () => loadVersions({ preserveSelection: true }))
 
+onMounted(() => {
+  updateAffixMode()
+  window.addEventListener('resize', updateAffixMode)
+})
+
 onBeforeUnmount(() => {
   disposed = true
   contextGeneration += 1
   listController?.abort()
   detailController?.abort()
+  window.removeEventListener('resize', updateAffixMode)
 })
 
 defineExpose({ focusIssue })
 </script>
 
 <template>
-  <el-card class="version-history-panel" shadow="never">
+  <div :id="historyPanelId" class="version-history-affix-target">
+    <el-card class="version-history-panel" shadow="never">
     <header class="history-heading">
       <div><p class="sg-eyebrow">IMMUTABLE HISTORY</p><h3>版本历史</h3><p>版本按提交顺序自动编号；每次修订都会新增版本，历史文件始终保留。</p></div>
-      <el-form :model="historyFilters" class="history-tools" size="large" inline aria-label="版本历史筛选">
+      <el-form ref="historyFormRef" :model="historyFilters" class="history-tools" size="large" inline aria-label="版本历史筛选">
         <el-form-item prop="versionStatus">
           <el-select v-model="statusFilter" class="sg-select" placeholder="全部状态" aria-label="筛选版本状态" @change="applyStatusFilter">
             <el-option label="全部状态" value="" />
@@ -387,6 +422,7 @@ defineExpose({ focusIssue })
     <el-alert v-else-if="listError" class="history-error" :title="listError.title" :description="listError.message" type="error" :closable="false" show-icon />
 
     <div class="history-layout">
+      <component :is="affixShell" class="version-rail-affix" v-bind="affixProps(historyAffixTarget)">
       <aside class="version-rail" :aria-busy="loading">
         <el-button
           v-for="version in versions"
@@ -407,44 +443,50 @@ defineExpose({ focusIssue })
         <el-empty v-else-if="!versions.length && !listError" class="history-empty" :image-size="56" description="该任务还没有正式版本" />
         <el-pagination v-if="total > pageSize" class="version-pagination" small background layout="prev, pager, next" :current-page="pageNum" :page-size="pageSize" :total="total" :disabled="loading" aria-label="版本历史分页" @current-change="changePage" />
       </aside>
+      </component>
 
       <main class="history-detail">
         <el-skeleton v-if="detailLoading" class="detail-placeholder" :rows="8" animated />
         <el-alert v-else-if="detailError" class="detail-placeholder is-error" :title="detailError.title" :description="detailError.message" type="error" :closable="false" show-icon />
         <template v-else-if="versionDetail">
           <VersionDetailCard :version="versionDetail" :can-download="canDownload" :show-preview="!feedbackNotes.length" />
-          <el-card v-if="feedbackLoading || feedbackError || hasFeedback" ref="feedbackPanel" class="version-feedback-panel" shadow="never">
-            <header class="version-feedback-panel__heading"><div><p class="sg-eyebrow">REVIEW FEEDBACK</p><h3>本版待处理问题与审核记录</h3><p>待处理工作始终归属最近一次退回的版本；原始问题与标注仍保留在最初提出版本中供追溯。</p></div><span>{{ pendingFeedbackCount }} 条待处理 · {{ feedbackNotes.length - pendingFeedbackCount }} 条历史</span></header>
-            <el-alert v-if="latestDecision" class="feedback-decision" :type="alertTypeFromTone(reviewActionMeta(latestDecision.actionType).tone)" :title="reviewActionMeta(latestDecision.actionType).label" :description="`${latestDecision.reason || '审核人未填写额外说明。'} · ${latestDecision.reviewerName || `用户 #${latestDecision.reviewerUserId}`} · ${formatReviewDateTime(latestDecision.createTime)}`" :closable="false" show-icon />
-            <el-skeleton v-if="feedbackLoading" class="feedback-state" :rows="4" animated />
-            <el-alert v-else-if="feedbackError" class="feedback-state is-error" :title="feedbackError.title" :description="feedbackError.message" type="error" :closable="false" show-icon />
-            <div v-else-if="feedbackNotes.length" class="feedback-layout">
-              <ReviewMediaWorkspace :version="versionDetail" :selected-note="selectedFeedback" :can-download="canDownload" feedback-mode @clear-note-focus="selectedFeedback = null" />
-              <aside class="feedback-list">
-                <el-button v-for="note in feedbackNotes" :key="note.noteId" text class="feedback-item" :class="{ active: selectedFeedback?.noteId === note.noteId }" @click="selectFeedback(note)">
-                  <span class="feedback-item__content">
-                    <span class="feedback-item__heading"><strong>{{ note.displayScope === 'pending' ? '本版待处理问题' : note.displayScope === 'origin_history' ? '来源版本历史问题' : '本版处理确认记录' }}</strong><el-tag size="small" effect="plain" round :type="tagTypeFromTone(feedbackBadgeMeta(note).tone)">{{ feedbackBadgeMeta(note).label }}</el-tag></span>
-                    <p>{{ note.content || '该问题仅包含画面标注' }}</p>
-                    <small class="feedback-context">{{ feedbackContext(note) }}</small>
-                    <p v-if="displayedResponse(note)" class="feedback-response">制作人对 {{ displayedResponse(note).versionNumber || '后续版本' }} 的处理说明：{{ displayedResponse(note).responseText }}</p>
-                    <p v-if="feedbackVerificationComment(note)" class="feedback-verification">审核人未通过原因：{{ feedbackVerificationComment(note) }}</p>
-                    <small><template v-if="note.annotations?.items?.length">{{ note.annotations.items.length }} 个画面标注 · </template><template v-if="note.mediaTimeMs !== null && note.mediaTimeMs !== undefined">{{ formatMediaTime(note.mediaTimeMs) }} · </template>{{ formatReviewDateTime(note.createTime) }}</small>
-                  </span>
-                </el-button>
-              </aside>
-            </div>
-            <el-empty v-else class="feedback-state" :image-size="48" description="审核人没有在该版本提出修改问题" />
-          </el-card>
+          <div v-if="feedbackLoading || feedbackError || hasFeedback" :id="feedbackPanelId" ref="feedbackPanel" class="version-feedback-affix-target">
+            <el-card class="version-feedback-panel" shadow="never">
+              <header class="version-feedback-panel__heading"><div><p class="sg-eyebrow">REVIEW FEEDBACK</p><h3>本版待处理问题与审核记录</h3><p>待处理工作始终归属最近一次退回的版本；原始问题与标注仍保留在最初提出版本中供追溯。</p></div><span>{{ pendingFeedbackCount }} 条待处理 · {{ feedbackNotes.length - pendingFeedbackCount }} 条历史</span></header>
+              <el-alert v-if="latestDecision" class="feedback-decision" :type="alertTypeFromTone(reviewActionMeta(latestDecision.actionType).tone)" :title="reviewActionMeta(latestDecision.actionType).label" :description="`${latestDecision.reason || '审核人未填写额外说明。'} · ${latestDecision.reviewerName || `用户 #${latestDecision.reviewerUserId}`} · ${formatReviewDateTime(latestDecision.createTime)}`" :closable="false" show-icon />
+              <el-skeleton v-if="feedbackLoading" class="feedback-state" :rows="4" animated />
+              <el-alert v-else-if="feedbackError" class="feedback-state is-error" :title="feedbackError.title" :description="feedbackError.message" type="error" :closable="false" show-icon />
+              <div v-else-if="feedbackNotes.length" class="feedback-layout">
+                <ReviewMediaWorkspace :version="versionDetail" :selected-note="selectedFeedback" :can-download="canDownload" feedback-mode @clear-note-focus="selectedFeedback = null" />
+                <component :is="affixShell" class="feedback-list-affix" v-bind="affixProps(feedbackAffixTarget)">
+                <aside class="feedback-list">
+                  <el-button v-for="note in feedbackNotes" :key="note.noteId" text class="feedback-item" :class="{ active: selectedFeedback?.noteId === note.noteId }" @click="selectFeedback(note)">
+                    <span class="feedback-item__content">
+                      <span class="feedback-item__heading"><strong>{{ note.displayScope === 'pending' ? '本版待处理问题' : note.displayScope === 'origin_history' ? '来源版本历史问题' : '本版处理确认记录' }}</strong><el-tag size="small" effect="plain" round :type="tagTypeFromTone(feedbackBadgeMeta(note).tone)">{{ feedbackBadgeMeta(note).label }}</el-tag></span>
+                      <p>{{ note.content || '该问题仅包含画面标注' }}</p>
+                      <small class="feedback-context">{{ feedbackContext(note) }}</small>
+                      <p v-if="displayedResponse(note)" class="feedback-response">制作人对 {{ displayedResponse(note).versionNumber || '后续版本' }} 的处理说明：{{ displayedResponse(note).responseText }}</p>
+                      <p v-if="feedbackVerificationComment(note)" class="feedback-verification">审核人未通过原因：{{ feedbackVerificationComment(note) }}</p>
+                      <small><template v-if="note.annotations?.items?.length">{{ note.annotations.items.length }} 个画面标注 · </template><template v-if="note.mediaTimeMs !== null && note.mediaTimeMs !== undefined">{{ formatMediaTime(note.mediaTimeMs) }} · </template>{{ formatReviewDateTime(note.createTime) }}</small>
+                    </span>
+                  </el-button>
+                </aside>
+                </component>
+              </div>
+              <el-empty v-else class="feedback-state" :image-size="48" description="审核人没有在该版本提出修改问题" />
+            </el-card>
+          </div>
         </template>
         <el-empty v-else-if="!canQuery" class="detail-placeholder" :image-size="56" description="当前账号没有版本详情权限" />
         <el-empty v-else class="detail-placeholder" :image-size="56" description="选择左侧版本查看文件和审核单信息" />
       </main>
     </div>
-  </el-card>
+    </el-card>
+  </div>
 </template>
 
 <style scoped lang="scss">
-.version-history-panel { --el-card-bg-color: var(--sg-surface); --el-card-border-color: var(--sg-border); border-radius: var(--sg-radius-lg); }
+.version-history-panel { --el-card-bg-color: var(--sg-surface); --el-card-border-color: var(--sg-border); overflow: visible; border-radius: var(--sg-radius-lg); }
 .version-history-panel:deep(.el-card__body) { padding: 24px; }
 .history-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
 .history-heading h3 { margin: 3px 0 7px; font-size: 20px; }
@@ -454,10 +496,17 @@ defineExpose({ focusIssue })
 .history-tools .sg-select { width: 160px; }
 .history-error { margin-top: 16px; }
 .history-error code { color: inherit; font-size: 10px; }
-.history-layout { display: grid; margin-top: 20px; grid-template-columns: minmax(230px, 0.34fr) minmax(0, 1fr); gap: 14px; }
-.version-rail { display: grid; align-content: start; gap: 8px; }
-.version-rail > .el-button { display: grid; width: 100%; height: auto; margin: 0; padding: 14px; color: var(--sg-text); text-align: left; background: rgba(255, 255, 255, 0.025); border: 1px solid var(--sg-border); border-radius: 10px; }
-.version-rail__content { display: grid; width: 100%; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+.history-layout { display: grid; margin-top: 20px; grid-template-columns: minmax(250px, 0.32fr) minmax(0, 1fr); align-items: start; gap: 14px; }
+.version-rail-affix,
+.feedback-list-affix { width: 100%; min-width: 0; }
+.version-rail-affix.el-affix,
+.feedback-list-affix.el-affix { width: 100%; }
+.version-rail { display: grid; max-height: calc(100dvh - 116px); align-content: start; overflow-x: hidden; overflow-y: auto; scrollbar-width: thin; gap: 8px; }
+.version-rail > .el-button {  width: 100%; min-width: 0; height: auto; margin: 0; padding: 14px; color: var(--sg-text); text-align: left; white-space: normal; background: rgba(255, 255, 255, 0.025); border: 1px solid var(--sg-border); border-radius: 10px; }
+.version-rail__content { display: grid; width: 100%; min-width: 0; box-sizing: border-box; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+.version-rail :deep(.el-button > span),
+.feedback-list :deep(.feedback-item > span) { width: 100%; min-width: 0; }
+
 .version-rail > .el-button:hover,
 .version-rail > .el-button.active { background: rgba(255, 182, 87, 0.06); border-color: rgba(255, 182, 87, 0.35); }
 .version-rail strong,
@@ -473,7 +522,8 @@ defineExpose({ focusIssue })
 .detail-placeholder.is-error { color: #ffb5ad; }
 .detail-placeholder p { margin: 5px 0 0; font-size: 11px; }
 .detail-placeholder code { font-size: 10px; }
-.version-feedback-panel { --el-card-bg-color: rgba(104, 181, 255, 0.035); --el-card-border-color: rgba(104, 181, 255, 0.18); margin-top: 14px; border-radius: var(--sg-radius-md); }
+.version-feedback-affix-target { margin-top: 14px; }
+.version-feedback-panel { --el-card-bg-color: rgba(104, 181, 255, 0.035); --el-card-border-color: rgba(104, 181, 255, 0.18); overflow: visible; border-radius: var(--sg-radius-md); }
 .version-feedback-panel:deep(.el-card__body) { display: grid; padding: 18px; gap: 14px; }
 .version-feedback-panel__heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
 .version-feedback-panel__heading h3 { margin: 3px 0 5px; font-size: 17px; }
@@ -481,16 +531,17 @@ defineExpose({ focusIssue })
 .version-feedback-panel__heading > span { color: var(--sg-text-muted); font-size: 10px; white-space: nowrap; }
 .feedback-decision { padding: 12px 14px; }
 .feedback-decision small { color: var(--sg-text-muted); font-size: 9px; }
-.feedback-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(240px, 0.42fr); gap: 12px; align-items: start; }
-.feedback-list { display: grid; max-height: 620px; overflow-y: auto; gap: 8px; }
-.feedback-list .feedback-item { display: grid; width: 100%; height: auto; margin: 0; padding: 12px; color: var(--sg-text); text-align: left; background: rgba(255, 255, 255, 0.025); border: 1px solid var(--sg-border); border-radius: 9px; }
-.feedback-item__content { display: grid; width: 100%; gap: 8px; }
+.feedback-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 0.44fr); gap: 14px; align-items: start; }
+.feedback-list { display: grid; max-height: min(620px, calc(100dvh - 116px)); align-content: start; overflow-x: hidden; overflow-y: auto; scrollbar-width: thin; gap: 10px; }
+.feedback-list .feedback-item { width: 100%; min-width: 0; height: auto; margin: 0; padding: 13px; color: var(--sg-text); text-align: left; white-space: normal; background: rgba(255, 255, 255, 0.025); border: 1px solid var(--sg-border); border-radius: 9px; }
+.feedback-item__content { display: grid; width: 100%; min-width: 0; box-sizing: border-box; gap: 8px; }
 .feedback-list .feedback-item:hover,
 .feedback-list .feedback-item.active { background: rgba(104, 181, 255, 0.07); border-color: rgba(104, 181, 255, 0.42); }
-.feedback-item__heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.feedback-item__heading { display: flex; min-width: 0; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.feedback-item__heading :deep(.el-tag) { max-width: 100%; height: auto; flex: 0 1 auto; padding-top: 3px; padding-bottom: 3px; line-height: 1.35; text-align: left; white-space: normal; }
 .feedback-list strong { font-size: 10px; }
-.feedback-list p { margin: 0; color: var(--sg-text-secondary); font-size: 11px; line-height: 1.6; white-space: pre-wrap; }
-.feedback-list small { color: var(--sg-text-muted); font-size: 9px; }
+.feedback-list p { margin: 0; color: var(--sg-text-secondary); overflow-wrap: anywhere; font-size: 11px; line-height: 1.6; white-space: pre-wrap; }
+.feedback-list small { color: var(--sg-text-muted); overflow-wrap: anywhere; font-size: 9px; }
 .feedback-list .feedback-context { color: #68b5ff; line-height: 1.5; }
 .feedback-list .feedback-response { padding: 8px; color: var(--sg-text-secondary); font-size: 10px; background: rgba(104, 181, 255, 0.07); border-radius: 7px; }
 .feedback-list .feedback-verification { padding: 8px; color: #ffbd82; font-size: 10px; background: rgba(255, 182, 87, 0.07); border-radius: 7px; }
@@ -501,12 +552,15 @@ defineExpose({ focusIssue })
 @media (max-width: 900px) {
   .history-heading { align-items: stretch; flex-direction: column; }
   .history-layout { grid-template-columns: 1fr; }
+  .version-rail-affix,
+  .feedback-list-affix { width: auto; }
   .version-rail { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .version-rail footer,
   .version-pagination,
   .history-empty { grid-column: 1 / -1; }
   .feedback-layout { grid-template-columns: 1fr; }
-  .feedback-list { max-height: none; }
+  .version-rail,
+  .feedback-list { max-height: none; overflow-y: visible; }
 }
 
 @media (max-width: 600px) {

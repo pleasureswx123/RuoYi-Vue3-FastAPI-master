@@ -1,4 +1,4 @@
-import { ElButton, ElForm, ElFormItem, ElIcon, ElInput, ElTag, ElUpload } from 'element-plus'
+import { ElButton, ElForm, ElFormItem, ElIcon, ElInput, ElRadioButton, ElRadioGroup, ElTag, ElUpload } from 'element-plus'
 import { flushPromises, mount } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -23,7 +23,19 @@ vi.mock('@/api/shot-grid/versions', () => ({
 
 const fileId = '550e8400-e29b-41d4-a716-446655440000'
 const mountOptions = {
-  global: { components: { ElButton, ElForm, ElFormItem, ElIcon, ElInput, ElTag, ElUpload } }
+  global: { components: { ElButton, ElForm, ElFormItem, ElIcon, ElInput, ElRadioButton, ElRadioGroup, ElTag, ElUpload } }
+}
+const revisionIssue = {
+  issueId: 51,
+  originVersionId: 1,
+  originVersionNumber: 'V001',
+  pendingVersionId: 1,
+  pendingVersionNumber: 'V001',
+  status: 'open',
+  content: '这里有点模糊',
+  annotations: { items: [{ type: 'rectangle' }] },
+  responses: [],
+  verifications: []
 }
 
 function accepted(overrides = {}) {
@@ -60,7 +72,7 @@ async function chooseValidFileAndSubmit(wrapper) {
   const file = new File(['mov-data'], '结果.mov', { type: 'video/quicktime' })
   Object.defineProperty(input.element, 'files', { configurable: true, value: [file] })
   await input.trigger('change')
-  await wrapper.find('.field-label textarea').setValue('调整镜头节奏')
+  await wrapper.find('.changelog-field textarea').setValue('调整镜头节奏')
   await wrapper.findAllComponents(ElButton).find(button => button.text().includes('上传并提交版本')).trigger('click')
   await flushPromises()
   return file
@@ -107,13 +119,13 @@ describe('版本上传与发布面板', () => {
 
     expect(preflightVersionSubmission).toHaveBeenCalledWith(
       31,
-      { fileName: '结果.mov', fileSize: file.size, changelog: '调整镜头节奏', aiParams: null, issueResponses: [] },
+      { fileName: '结果.mov', fileSize: file.size, changelog: '调整镜头节奏', issueResponses: [] },
       expect.objectContaining({ signal: expect.any(AbortSignal) })
     )
     expect(uploadProtectedVersionFile).toHaveBeenCalledWith(file, expect.objectContaining({ signal: expect.any(AbortSignal), onUploadProgress: expect.any(Function) }))
     expect(createVersionSubmission).toHaveBeenCalledWith(
       31,
-      { fileId, changelog: '调整镜头节奏', aiParams: null, openIssueSnapshotHash: undefined, issueResponses: [] },
+      { fileId, changelog: '调整镜头节奏', openIssueSnapshotHash: undefined, issueResponses: [] },
       expect.stringContaining('version-31:'),
       expect.objectContaining({ signal: expect.any(AbortSignal) })
     )
@@ -122,10 +134,109 @@ describe('版本上传与发布面板', () => {
     expect(wrapper.text()).toContain('等待发布')
     expect(wrapper.find('.submission-status').findComponent(ElTag).text()).toBe('等待发布')
     expect(wrapper.find('.submission-status').findComponent(ElTag).text()).not.toBe('pending')
-    expect(wrapper.text()).toContain('不能视为版本成功')
+    expect(wrapper.text()).toContain('正式版本生成前请勿重复提交')
+    expect(wrapper.text()).not.toContain('AI 生成参数')
+    expect(wrapper.find('.ai-params').exists()).toBe(false)
     expect(wrapper.emitted('committed')).toBeUndefined()
     expect(localStorage.length).toBe(0)
     expect(sessionStorage.length).toBe(0)
+    wrapper.unmount()
+  })
+
+  it('返修问题默认使用已处理，并通过现有 ElForm 提交标准处理说明', async () => {
+    const wrapper = mount(VersionSubmissionPanel, {
+      ...mountOptions,
+      props: {
+        taskId: 31,
+        taskKind: 'shot_video',
+        taskStatus: 'revision',
+        openIssues: [revisionIssue],
+        allowedActions: ['version.add'],
+        hasAddPermission: true,
+        canQuery: true
+      }
+    })
+    await flushPromises()
+
+    expect(wrapper.findAllComponents(ElForm)).toHaveLength(1)
+    const handlingGroup = wrapper.findComponent(ElRadioGroup)
+    expect(handlingGroup.props()).toMatchObject({ modelValue: 'handled', size: 'small' })
+    expect(wrapper.findAllComponents(ElRadioButton).map(button => button.props('value'))).toEqual(['handled', 'unhandled'])
+    expect(wrapper.find('.issue-unhandled-reason').exists()).toBe(false)
+
+    const file = await chooseValidFileAndSubmit(wrapper)
+    expect(preflightVersionSubmission).toHaveBeenCalledWith(
+      31,
+      {
+        fileName: '结果.mov',
+        fileSize: file.size,
+        changelog: '调整镜头节奏',
+        issueResponses: [{ issueId: 51, responseText: '已处理' }]
+      },
+      expect.objectContaining({ signal: expect.any(AbortSignal) })
+    )
+    wrapper.unmount()
+  })
+
+  it('选择未处理后显示原因输入框，未填写时阻止提交，填写后保存未处理说明', async () => {
+    const wrapper = mount(VersionSubmissionPanel, {
+      ...mountOptions,
+      props: {
+        taskId: 31,
+        taskKind: 'shot_video',
+        taskStatus: 'revision',
+        openIssues: [revisionIssue],
+        allowedActions: ['version.add'],
+        hasAddPermission: true,
+        canQuery: true
+      }
+    })
+    await flushPromises()
+
+    wrapper.findComponent(ElRadioGroup).vm.$emit('update:modelValue', 'unhandled')
+    await flushPromises()
+    expect(wrapper.find('.issue-unhandled-reason').exists()).toBe(true)
+
+    const file = await chooseValidFileAndSubmit(wrapper)
+    expect(preflightVersionSubmission).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('请说明该问题本轮未处理的原因')
+
+    await wrapper.find('.issue-unhandled-reason textarea').setValue('等待外部素材确认后再修改')
+    await wrapper.findAllComponents(ElButton).find(button => button.text().includes('上传并提交版本')).trigger('click')
+    await flushPromises()
+    expect(preflightVersionSubmission).toHaveBeenCalledWith(
+      31,
+      expect.objectContaining({
+        fileSize: file.size,
+        issueResponses: [{ issueId: 51, responseText: '未处理：等待外部素材确认后再修改' }]
+      }),
+      expect.objectContaining({ signal: expect.any(AbortSignal) })
+    )
+    wrapper.unmount()
+  })
+
+  it('首次提交使用制作内容作为占位提示，后续版本恢复为修改说明提示', async () => {
+    const wrapper = mount(VersionSubmissionPanel, {
+      ...mountOptions,
+      props: {
+        taskId: 31,
+        taskKind: 'shot_video',
+        taskStatus: 'in_progress',
+        versionCount: 0,
+        productionDescription: '稍带斜角度拍门上贴纸：“禁止入内”“内有恶犬”',
+        allowedActions: ['version.add'],
+        hasAddPermission: true,
+        canQuery: true
+      }
+    })
+    await flushPromises()
+
+    const changelogInput = wrapper.find('.field-label textarea')
+    expect(changelogInput.attributes('placeholder')).toContain('稍带斜角度拍门上贴纸')
+    expect(changelogInput.element.value).toBe('')
+
+    await wrapper.setProps({ versionCount: 1 })
+    expect(changelogInput.attributes('placeholder')).toBe('说明本版本完成内容、修改点或需要审核人关注的部分。')
     wrapper.unmount()
   })
 
@@ -138,11 +249,10 @@ describe('版本上传与发布面板', () => {
     })
     await flushPromises()
     await chooseValidFileAndSubmit(wrapper)
-    expect(wrapper.text()).toContain('平台私有文件已上传，但正式版本尚未形成')
+    expect(wrapper.text()).toContain('文件已上传，正式版本尚未生成')
     expect(wrapper.text()).toContain('提交服务暂不可用')
     expect(wrapper.find('input[type="file"]').attributes('disabled')).toBeDefined()
     expect(wrapper.find('.field-label textarea').attributes('disabled')).toBeDefined()
-    expect(wrapper.find('.ai-params textarea').attributes('disabled')).toBeDefined()
 
     await wrapper.findAllComponents(ElButton).find(button => button.text().includes('重试创建版本提交')).trigger('click')
     await flushPromises()
@@ -158,7 +268,7 @@ describe('版本上传与发布面板', () => {
   it.each([
     [403, 'SG_PROJECT_ACCESS_DENIED', '无权访问版本'],
     [409, 'SG_PROJECT_NOT_READY', '版本状态发生冲突'],
-    [422, 'SG_ASSET_PRODUCTION_ITEM_REQUIRED', '版本提交预检失败']
+    [422, 'SG_ASSET_PRODUCTION_ITEM_REQUIRED', '提交前检查未通过']
   ])('预检 HTTP %s 失败时绝不上传或创建提交', async (httpStatus, errorKey, expectedTitle) => {
     preflightVersionSubmission.mockRejectedValueOnce({
       httpStatus,
@@ -173,7 +283,7 @@ describe('版本上传与发布面板', () => {
     await chooseValidFileAndSubmit(wrapper)
 
     expect(wrapper.text()).toContain(expectedTitle)
-    expect(wrapper.text()).toContain(errorKey)
+    expect(wrapper.text()).toContain(`预检失败 ${httpStatus}`)
     expect(uploadProtectedVersionFile).not.toHaveBeenCalled()
     expect(createVersionSubmission).not.toHaveBeenCalled()
     wrapper.unmount()
@@ -209,7 +319,7 @@ describe('版本上传与发布面板', () => {
     })
     await flushPromises()
 
-    expect(wrapper.text()).toContain('提交权限或任务动作已发生变化')
+    expect(wrapper.text()).toContain('提交权限或任务状态已发生变化')
     expect(uploadProtectedVersionFile).not.toHaveBeenCalled()
     expect(createVersionSubmission).not.toHaveBeenCalled()
     wrapper.unmount()
@@ -290,7 +400,7 @@ describe('版本上传与发布面板', () => {
     await flushPromises()
     await chooseValidFileAndSubmit(wrapper)
 
-    for (const label of ['正在发布', '文件已发布', '正在落库']) {
+    for (const label of ['正在发布', '文件已保存', '正在生成版本']) {
       await vi.advanceTimersByTimeAsync(250)
       await flushPromises()
       expect(wrapper.text()).toContain(label)
@@ -298,7 +408,7 @@ describe('版本上传与发布面板', () => {
     }
     await vi.advanceTimersByTimeAsync(250)
     await flushPromises()
-    expect(wrapper.text()).toContain('版本已形成')
+    expect(wrapper.text()).toContain('版本已生成')
     expect(wrapper.emitted('committed')).toHaveLength(1)
     expect(wrapper.emitted('committed')[0][0]).toMatchObject({ submissionStatus: 'committed', versionId: 71 })
     expect(wrapper.emitted('committed')[0][1]).toEqual({ taskId: 31, operationGeneration: 8 })
@@ -322,7 +432,7 @@ describe('版本上传与发布面板', () => {
       type: 'danger', effect: 'dark', size: 'small', round: true
     })
 
-    await wrapper.findAll('button').find(item => item.text().includes('人工重试')).trigger('click')
+    await wrapper.findAll('button').find(item => item.text().includes('重试当前提交')).trigger('click')
     await flushPromises()
     expect(retryVersionSubmission).toHaveBeenCalledWith(91, expect.objectContaining({ signal: expect.any(AbortSignal) }))
     expect(uploadProtectedVersionFile).not.toHaveBeenCalled()
@@ -348,7 +458,7 @@ describe('版本上传与发布面板', () => {
 
     expect(getVersionSubmissionStatus).toHaveBeenCalledWith(91, expect.objectContaining({ signal: expect.any(AbortSignal) }))
     expect(wrapper.text()).toContain('目标版本文件与现有文件摘要不一致')
-    expect(wrapper.text()).toContain('SG_VERSION_TARGET_PATH_CONFLICT')
+    expect(wrapper.text()).toContain('版本发布失败')
     wrapper.unmount()
   })
 
@@ -358,7 +468,7 @@ describe('版本上传与发布面板', () => {
     [404, '版本资源不存在'],
     [409, '版本状态发生冲突'],
     [413, '文件超过上传上限'],
-    [503, '版本服务异常']
+    [503, '版本处理异常']
   ])('区分 HTTP %s 上传错误', async (httpStatus, title) => {
     uploadProtectedVersionFile.mockRejectedValueOnce({ httpStatus, message: `服务错误 ${httpStatus}`, errorKey: `E_${httpStatus}` })
     const wrapper = mount(VersionSubmissionPanel, {
@@ -368,7 +478,7 @@ describe('版本上传与发布面板', () => {
     await flushPromises()
     await chooseValidFileAndSubmit(wrapper)
     expect(wrapper.text()).toContain(title)
-    expect(wrapper.text()).toContain(`E_${httpStatus}`)
+    expect(wrapper.text()).toContain(`服务错误 ${httpStatus}`)
     wrapper.unmount()
   })
 
@@ -399,7 +509,7 @@ describe('版本上传与发布面板', () => {
     })
     await flushPromises()
 
-    expect(wrapper.text()).toContain('任务存在未完成版本提交')
+    expect(wrapper.text()).toContain('任务有正在处理的版本提交，但当前账号无法查看进度')
     expect(wrapper.find('input[type="file"]').attributes('disabled')).toBeDefined()
     expect(getCurrentTaskVersionSubmission).not.toHaveBeenCalled()
     expect(uploadProtectedVersionFile).not.toHaveBeenCalled()
@@ -425,7 +535,7 @@ describe('版本上传与发布面板', () => {
 
     expect(wrapper.text()).toContain('状态恢复服务不可用')
     expect(wrapper.find('input[type="file"]').attributes('disabled')).toBeDefined()
-    await wrapper.findAll('button').find(item => item.text().includes('重试检查')).trigger('click')
+    await wrapper.findAll('button').find(item => item.text().includes('重新检查')).trigger('click')
     await flushPromises()
     expect(getCurrentTaskVersionSubmission).toHaveBeenCalledTimes(2)
     expect(wrapper.find('input[type="file"]').attributes('disabled')).toBeUndefined()
@@ -446,7 +556,7 @@ describe('版本上传与发布面板', () => {
     await wrapper.findAllComponents(ElButton).find(button => button.text().includes('上传并提交版本')).trigger('click')
     await flushPromises()
 
-    expect(wrapper.text()).toContain('不能包含换行、Tab 或其他控制字符')
+    expect(wrapper.text()).toContain('修改说明不能换行或包含不可见字符')
     expect(uploadProtectedVersionFile).not.toHaveBeenCalled()
     wrapper.unmount()
   })

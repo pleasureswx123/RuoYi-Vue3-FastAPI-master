@@ -12,8 +12,9 @@ StorageOperationType = Literal[
     'ensure_shot_directory',
     'ensure_asset_directory',
     'reconcile_directory',
+    'renumber_shot_directories',
 ]
-StorageAggregateType = Literal['project', 'episode', 'shot', 'asset']
+StorageAggregateType = Literal['project', 'episode', 'scene', 'shot', 'asset']
 StorageOperationStatus = Literal[
     'pending',
     'processing',

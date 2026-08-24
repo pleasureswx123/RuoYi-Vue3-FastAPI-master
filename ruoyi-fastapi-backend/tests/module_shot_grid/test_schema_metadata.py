@@ -6,7 +6,7 @@ from module_admin.entity.do.file_do import SysFileInfo  # noqa: F401
 from module_admin.entity.do.user_do import SysUser  # noqa: F401
 from module_shot_grid.schema import SHOT_GRID_TABLE_NAMES
 
-EXPECTED_TABLE_COUNT = 25
+EXPECTED_TABLE_COUNT = 26
 
 
 def _primary_key_columns(table_name: str) -> tuple[str, ...]:
@@ -56,7 +56,7 @@ def test_database_guards_the_main_concurrency_invariants() -> None:
     expected_indexes = {
         'uk_sg_episode_no_active',
         'uk_sg_scene_no_active',
-        'uk_sg_shot_no_active',
+        'uk_sg_shot_scene_no_active',
         'uk_sg_task_shot',
         'uk_sg_task_asset_item',
         'uk_sg_version_task_final',
@@ -106,6 +106,7 @@ def test_json_columns_compile_to_jsonb_on_postgresql() -> None:
 
     assert str(Base.metadata.tables['sg_version'].c.ai_params.type.compile(dialect=dialect)) == 'JSONB'
     assert str(Base.metadata.tables['sg_note'].c.annotations.type.compile(dialect=dialect)) == 'JSONB'
+    assert str(Base.metadata.tables['sg_review_issue_draft'].c.annotations.type.compile(dialect=dialect)) == 'JSONB'
     assert str(Base.metadata.tables['sg_import_batch'].c.result_summary.type.compile(dialect=dialect)) == 'JSONB'
 
 

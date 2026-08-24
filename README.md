@@ -1,291 +1,85 @@
-<h1 align="center">
-    <img alt="logo" src="https://oscimg.oschina.net/oscnet/up-d3d0a9303e11d522a06cd263f3079027715.png">
-</h1>
-<h1 align="center" style="margin: 30px 0 30px; font-weight: bold;">RuoYi-Vue3-FastAPI</h1>
-<h4 align="center">基于RuoYi-Vue3+FastAPI前后端分离的快速开发框架</h4>
-<p align="center">
-    <a href="https://gitee.com/insistence2022/RuoYi-Vue3-FastAPI/stargazers">
-        <img alt="Gitee" src="https://gitee.com/insistence2022/RuoYi-Vue3-FastAPI/badge/star.svg?theme=dark">
-    </a>
-    <a href="https://github.com/insistence/RuoYi-Vue3-FastAPI">
-        <img alt="Github" src="https://img.shields.io/github/stars/insistence/RuoYi-Vue3-FastAPI?style=social">
-    </a>
-    <a href="https://github.com/insistence/RuoYi-Vue3-FastAPI/actions?query=branch%3Amaster+event%3Apush+workflow%3A%22%22Playwright+Tests%22%22">
-        <img alt="Playwright Tests" src="https://github.com/insistence/RuoYi-Vue3-FastAPI/workflows/Playwright Tests/badge.svg">
-    </a>
-    <a href="https://github.com/insistence/RuoYi-Vue3-FastAPI/actions?query=branch%3Amaster+event%3Apush+workflow%3A%22%22Ruff+Check%22%22">
-        <img alt="Ruff Check" src="https://github.com/insistence/RuoYi-Vue3-FastAPI/workflows/Ruff Check/badge.svg">
-    </a>
-    <a href="https://gitee.com/insistence2022/RuoYi-Vue3-FastAPI">
-        <img alt="project version" src="https://img.shields.io/badge/version-1.10.0-brightgreen.svg">
-    </a>
-    <a href="https://github.com/astral-sh/ruff">
-        <img alt="Ruff" src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json">
-    </a>
-    <a href="https://gitee.com/insistence2022/RuoYi-Vue3-FastAPI/blob/master/LICENSE">
-        <img alt="LICENSE" src="https://img.shields.io/github/license/mashape/apistatus.svg">
-    </a>
-    <img alt="node version" src="https://img.shields.io/badge/node-≥18-blue">
-    <img alt="python version" src="https://img.shields.io/badge/python-≥3.10-blue">
-    <img alt="mysql version" src="https://img.shields.io/badge/MySQL-≥5.7-blue">
-    <img alt="redis version" src="https://img.shields.io/badge/redis-≥6.2-blue">
-</p>
+# Shot Grid｜AI 影视制作协作平台
 
-## 平台简介
+Shot Grid 面向影视短片项目团队，统一管理项目、镜头、资产、制作任务、版本提交、审核反馈和文件交付。平台关注的是制作协作与版本闭环，不是在线视频剪辑器或 AI 内容生成器。
 
-RuoYi-Vue3-FastAPI是一套全部开源的快速开发平台，毫无保留给个人及企业免费使用。
+本项目以 RuoYi-Vue3-FastAPI 作为管理平台基座，复用其登录认证、RBAC、动态菜单、文件管理、插件运行时、日志与系统管理能力；Shot Grid 业务前端和业务域均在此基础上独立演进。
 
-* 前端采用Vue3、Element Plus，基于<u>[RuoYi-Vue3](https://github.com/yangzongzhuan/RuoYi-Vue3)</u>前端项目修改。
-* 移动端采用uni-app、Vue3、Vite，内置tailwindcss，基于<u>[RuoYi-App](https://github.com/yangzongzhuan/RuoYi-App)</u>项目修改。
-* 后端采用FastAPI、sqlalchemy、MySQL（PostgreSQL）、Redis、OAuth2 & Jwt。
-* 权限认证使用OAuth2 & Jwt，支持多终端认证系统。
-* 支持加载动态权限菜单，多方式轻松权限控制。
-* Vue2版本：
-  * Gitte仓库地址：<https://gitee.com/insistence2022/RuoYi-Vue-FastAPI>
-  * GitHub仓库地址：<https://github.com/insistence/RuoYi-Vue-FastAPI>
-* 纯Python版本：
-  * Gitte仓库地址：<https://gitee.com/insistence2022/dash-fastapi-admin>
-  * GitHub仓库地址：<https://github.com/insistence/Dash-FastAPI-Admin>
-* 特别鸣谢：<u>[RuoYi-Vue3](https://github.com/yangzongzhuan/RuoYi-Vue3)</u>、<u>[RuoYi-App](https://github.com/yangzongzhuan/RuoYi-App)</u>
+## 核心能力
 
-## 内置功能
+- 项目结构：项目、集、场次、镜头，以及角色、场景、道具三类资产。
+- 制作协作：镜头或资产制作分项对应唯一任务，支持委派、改派、开始制作和进度跟踪。
+- 版本管理：版本不可变，保留提交文件、制作说明、媒体派生和完整历史。
+- 审核闭环：审核问题、画面标注、退回修改、再次提交与最终版本确认。
+- 文件与目录：受保护文件、业务引用、NAS 目录任务、版本发布和缩略图/代理媒体派生。
+- 平台治理：用户、角色、项目成员、数据范围、权限菜单、审计日志和系统配置。
 
-1. 用户管理：用户是系统操作者，该功能主要完成系统用户配置。
-2. 角色管理：角色菜单权限分配、设置角色按机构进行数据范围权限划分。
-3. 菜单管理：配置系统菜单，操作权限，按钮权限标识等。
-4. 部门管理：配置系统组织机构（公司、部门、小组）。
-5. 岗位管理：配置系统用户所属担任职务。
-6. 字典管理：对系统中经常使用的一些较为固定的数据进行维护。
-7. 参数管理：对系统动态配置常用参数。
-8. 通知公告：系统通知公告信息发布维护。
-9. 操作日志：系统正常操作日志记录和查询；系统异常信息日志记录和查询。
-10. 登录日志：系统登录日志记录查询包含登录异常。
-11. 在线用户：当前系统中活跃用户状态监控。
-12. 定时任务：在线（添加、修改、删除）任务调度包含执行结果日志。
-13. 服务监控：监视当前系统CPU、内存、磁盘、堆栈等相关信息。
-14. 缓存监控：对系统的缓存信息查询，命令统计等。
-15. 传输加密：支持前后端请求加密、响应解密、公钥轮换、运行策略下发与监控统计。
-16. 在线构建器：拖动表单元素生成相应的HTML代码。
-17. 系统接口：根据业务代码自动生成相关的api接口文档。
-18. 代码生成：配置数据库表信息一键生成前后端代码（python、sql、vue、js），支持下载。
-19. AI管理：提供AI模型管理和AI对话功能。
-20. 文件管理：统一管理公开文件和受保护附件，支持访问控制、业务引用保护、操作审计、回收站、保留策略及存储对账。
-21. 插件系统：支持插件发现、安装、启停、升级、卸载与清理，提供依赖与配置管理、迁移与种子、定时任务、菜单权限、批量预演、健康诊断、操作审计及前后端插件脚手架。
+核心业务链路：
 
-## 演示图
-
-<table>
-    <tr>
-        <td>
-            <img alt="login" src="https://gitee.com/insistence2022/ruoyi-fastapi-pictures/raw/master/vue3/web/login.png">
-        </td>
-        <td>
-            <img alt="dashboard" src="https://gitee.com/insistence2022/ruoyi-fastapi-pictures/raw/master/vue3/web/dashboard.png">
-        </td>
-    </tr>
-    <tr>
-        <td>
-            <img alt="user" src="https://gitee.com/insistence2022/ruoyi-fastapi-pictures/raw/master/vue3/web/user.png">
-        </td>
-        <td>
-            <img alt="role" src="https://gitee.com/insistence2022/ruoyi-fastapi-pictures/raw/master/vue3/web/role.png">
-        </td>
-    </tr>
-    <tr>
-        <td>
-            <img alt="menu" src="https://gitee.com/insistence2022/ruoyi-fastapi-pictures/raw/master/vue3/web/menu.png">
-        </td>
-        <td>
-            <img alt="dept" src="https://gitee.com/insistence2022/ruoyi-fastapi-pictures/raw/master/vue3/web/dept.png">
-        </td>
-    </tr>
-    <tr>
-        <td>
-            <img alt=""post src="https://gitee.com/insistence2022/ruoyi-fastapi-pictures/raw/master/vue3/web/post.png">
-        </td>
-        <td>
-            <img alt="dict" src="https://gitee.com/insistence2022/ruoyi-fastapi-pictures/raw/master/vue3/web/dict.png">
-        </td>
-    </tr>  
-    <tr>
-        <td>
-            <img alt="config" src="https://gitee.com/insistence2022/ruoyi-fastapi-pictures/raw/master/vue3/web/config.png">
-        </td>
-        <td>
-            <img alt="notice" src="https://gitee.com/insistence2022/ruoyi-fastapi-pictures/raw/master/vue3/web/notice.png">
-        </td>
-    </tr>
-    <tr>
-        <td>
-            <img alt="operLog" src="https://gitee.com/insistence2022/ruoyi-fastapi-pictures/raw/master/vue3/web/operLog.png">
-        </td>
-        <td>
-            <img alt="loginLog" src="https://gitee.com/insistence2022/ruoyi-fastapi-pictures/raw/master/vue3/web/loginLog.png">
-        </td>
-    </tr>
-    <tr>
-        <td>
-            <img alt="online" src="https://gitee.com/insistence2022/ruoyi-fastapi-pictures/raw/master/vue3/web/online.png">
-        </td>
-        <td>
-            <img alt="job" src="https://gitee.com/insistence2022/ruoyi-fastapi-pictures/raw/master/vue3/web/job.png">
-        </td>
-    </tr>
-    <tr>
-        <td>
-            <img alt="server" src="https://gitee.com/insistence2022/ruoyi-fastapi-pictures/raw/master/vue3/web/server.png">
-        </td>
-        <td>
-            <img alt="cache" src="https://gitee.com/insistence2022/ruoyi-fastapi-pictures/raw/master/vue3/web/cache.png">
-        </td>
-    </tr>
-    <tr>
-        <td>
-            <img alt="cacheList" src="https://gitee.com/insistence2022/ruoyi-fastapi-pictures/raw/master/vue3/web/cacheList.png">
-        </td>
-        <td>
-            <img alt="form" src="https://gitee.com/insistence2022/ruoyi-fastapi-pictures/raw/master/vue3/web/form.png">
-        </td>
-    </tr>
-    <tr>
-        <td>
-            <img alt="api" src="https://gitee.com/insistence2022/ruoyi-fastapi-pictures/raw/master/vue3/web/api.png">
-        </td>
-        <td>
-            <img alt="gen" src="https://gitee.com/insistence2022/ruoyi-fastapi-pictures/raw/master/vue3/web/gen.png">
-        </td>
-    </tr>
-    <tr>
-        <td>
-            <img alt="aiModel" src="https://gitee.com/insistence2022/ruoyi-fastapi-pictures/raw/master/vue3/web/aiModel.png">
-        </td>
-        <td>
-            <img alt="aiChat" src="https://gitee.com/insistence2022/ruoyi-fastapi-pictures/raw/master/vue3/web/aiChat.png">
-        </td>
-    </tr>
-    <tr>
-        <td>
-            <img alt="file" src="https://gitee.com/insistence2022/ruoyi-fastapi-pictures/raw/master/vue3/web/file.png">
-        </td>
-        <td>
-            <img alt="plugin" src="https://gitee.com/insistence2022/ruoyi-fastapi-pictures/raw/master/vue3/web/plugin.png">
-        </td>
-    </tr>
-    <tr>
-        <td>
-            <img alt="profile" src="https://gitee.com/insistence2022/ruoyi-fastapi-pictures/raw/master/vue3/web/profile.png">
-        </td>
-    </tr>
-</table>
-
-<table>
-    <tr>
-        <td>
-            <img alt="applogin" src="https://gitee.com/insistence2022/ruoyi-fastapi-pictures/raw/master/vue3/app/login.png">
-        </td>
-        <td>
-            <img alt="appWorkbench" src="https://gitee.com/insistence2022/ruoyi-fastapi-pictures/raw/master/vue3/app/workbench.png">
-        </td>
-        <td>
-            <img alt="appProfile" src="https://gitee.com/insistence2022/ruoyi-fastapi-pictures/raw/master/vue3/app/profile.png">
-        </td>
-    </tr>
-</table>
-
-## 在线体验
-
-* *账号：admin*
-* *密码：admin123*
-* 演示地址：<a href="https://vfadmin.insistence.tech">vfadmin管理系统<a>
-
-## 项目开发及发布相关
-
-### 当前项目本地启动（推荐）
-
-当前本地开发拓扑为：Docker Compose 只启动 PostgreSQL 和 Redis，后端与前端都在 Windows 宿主机运行。这样后端代码修改后可直接由 Uvicorn 热更新，也能直接访问 Windows UNC/SMB/NAS 路径。
-
-#### 1. 环境要求
-
-- Docker Desktop（需要启用 Docker Compose）；
-- Python `>=3.10`（建议团队统一使用 Python 3.11.x，并先执行 `python --version` 确认版本）；
-- FFmpeg（启用 Shot Grid 缩略图或代理媒体 Worker 时需要，并确保 `ffmpeg` 已加入 `PATH`）；
-- Node.js `^18.0.0 || ^20.0.0 || >=22.0.0`；
-- npm；
-- Windows PowerShell。
-
-本地后端需要安装 Python，启用媒体派生时还需要安装 FFmpeg。Python 依赖安装在项目虚拟环境中，不会污染系统 Python；日常修改代码不需要重复安装依赖。
-
-首次创建本地数据库时，确认 `ruoyi-fastapi-backend/.env.dev` 使用 Docker 映射到宿主机的端口。Compose 默认创建数据库 `ruoyi-fastapi`，默认开发账号为 `postgres/root`。这些默认值只允许用于本地开发，不得用于生产环境。
-
-```dotenv
-DB_TYPE = 'postgresql'
-DB_HOST = '127.0.0.1'
-DB_PORT = 15432
-DB_USERNAME = 'postgres'
-DB_PASSWORD = 'root'
-DB_DATABASE = 'ruoyi-fastapi'
-REDIS_HOST = '127.0.0.1'
-REDIS_PORT = 16379
-REDIS_DATABASE = 0
+```text
+项目
+  ├─ 集 → 场次 → 镜头 → 唯一制作任务 ─┐
+  └─ 资产 → 制作分项 → 唯一制作任务 ─┤
+                                      ↓
+                               不可变版本提交
+                                      ↓
+                              审核通过 / 退回修改
+                                      ↓
+                               最终版本与制作履历
 ```
 
-已有本地环境可以继续使用自己的数据库名和 Redis DB，但对应数据库必须已经存在。
+## 技术架构
 
-#### 2. 只用 Docker 启动 PostgreSQL 和 Redis
+```text
+浏览器
+  ├─ Shot Grid 业务前端（Vue 3 / Element Plus，端口 5174）
+  └─ 平台管理端（Vue 3 / Element Plus）
+                │ Axios / Vite 或 Nginx 代理
+                ▼
+FastAPI（端口 9099）
+  ├─ Controller → Service → DAO → SQLAlchemy
+  ├─ PostgreSQL：业务数据、版本、审核、任务和 Outbox
+  ├─ Redis：会话、缓存、限流、日志流和分布式协调
+  ├─ 受保护文件：上传、引用、下载、回收和完整性校验
+  └─ Worker：NAS 目录、版本发布、缩略图和代理媒体派生
+```
 
-在仓库根目录执行：
+当前主数据库是 **PostgreSQL**。仓库保留的 MySQL 文件和 Compose 仅属于兼容能力，不代表当前项目的默认运行环境。
+
+## 仓库结构
+
+| 路径 | 说明 |
+| --- | --- |
+| `shot-grid-frontend/` | Shot Grid 独立业务前端，日常业务开发的主要入口 |
+| `ruoyi-fastapi-backend/` | FastAPI 后端、Shot Grid 业务模块、迁移、SQL 与 Worker |
+| `ruoyi-fastapi-frontend/` | 平台管理端，用于用户、角色、菜单、文件、插件和系统配置 |
+| `ruoyi-fastapi-test/` | 独立 Playwright 端到端测试工程 |
+| `docker-compose.dev.yml` | 本地开发：后端、PostgreSQL、Redis |
+| `docker-compose.pg.yml` | PostgreSQL 完整部署参考拓扑 |
+| `docker-compose.my.yml` | 保留的 MySQL 兼容拓扑，不是当前默认路径 |
+
+## 本地开发
+
+### 环境要求
+
+- Windows 10/11 + PowerShell 7
+- Docker Desktop（支持 `docker compose`）
+- Node.js `^18.0.0 || ^20.0.0 || >=22.0.0`
+- npm
+- 仅在宿主机启动后端时需要 Python `>=3.10`；团队建议使用 Python 3.11.x
+- 仅在宿主机执行媒体派生时需要 FFmpeg
+
+### 方式一：Docker 后端 + 宿主机前端（推荐）
+
+该方式适合日常页面、接口和媒体派生开发。后端开发镜像固定 Python 3.11.15 并内置 FFmpeg。
+
+1. 在仓库根目录启动后端、PostgreSQL 和 Redis：
 
 ```powershell
-docker compose -f docker-compose.dev.yml up -d postgres redis
+docker compose -f docker-compose.dev.yml up -d --build
 docker compose -f docker-compose.dev.yml ps
 ```
 
-#### 3. 在宿主机启动后端
-
-首次启动时，在新的 PowerShell 窗口创建虚拟环境并安装 PostgreSQL 依赖：
-
-```powershell
-cd ruoyi-fastapi-backend
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-python -m pip install -r requirements-pg.txt
-```
-
-如果 PowerShell 禁止执行激活脚本，也可以不激活虚拟环境，直接将后续命令中的 `python` 替换为 `.\.venv\Scripts\python.exe`。
-
-首次建库或拉取到新迁移后执行：
-
-```powershell
-python -m alembic upgrade head
-```
-
-启动后端开发服务器：
-
-```powershell
-python -m uvicorn server:create_app --factory --host 127.0.0.1 --port 9099 --reload
-```
-
-`--reload` 会监控后端源码并在文件变化后自动重启进程。新增或修改 Python 依赖时才需要重新执行 `python -m pip install -r requirements-pg.txt`。
-
-后端地址：
-
-```text
-http://127.0.0.1:9099
-http://127.0.0.1:9099/docs
-```
-
-启用 Shot Grid 媒体派生 Worker 前，确认 FFmpeg 可用：
-
-```powershell
-ffmpeg -version
-```
-
-如果 FFmpeg 未加入 `PATH`，可在 `.env.dev` 中通过 `SHOT_GRID_MEDIA_WORKER_FFMPEG_PATH` 配置可执行文件的绝对路径。
-
-#### 4. 启动 Shot Grid 前端
-
-另开一个 PowerShell 窗口：
+2. 在新的 PowerShell 窗口启动 Shot Grid 前端：
 
 ```powershell
 cd shot-grid-frontend
@@ -293,15 +87,16 @@ npm.cmd ci
 npm.cmd run dev
 ```
 
-浏览器访问：
+3. 打开以下地址：
 
-```text
-http://127.0.0.1:5174
-```
+- Shot Grid：<http://127.0.0.1:5174>
+- 后端 OpenAPI：<http://127.0.0.1:9099/openapi.json>
 
-开发服务器会把 `/dev-api` 转发到 `http://127.0.0.1:9099`。
+Vite 默认把 `/dev-api` 转发到 `http://127.0.0.1:9099`。全新本地数据库由 PostgreSQL 初始化 SQL 建立；初始化账号仅用于本地开发，首次登录后应立即修改默认密码。
 
-如需启动 RuoYi 系统管理前端，另开窗口执行：
+全新初始化库沿用基座开发账号 `admin / admin123`。该账号不得用于共享、测试或生产环境。
+
+需要配置平台用户、角色、菜单、权限或系统参数时，可另开窗口启动平台管理端：
 
 ```powershell
 cd ruoyi-fastapi-frontend
@@ -309,158 +104,144 @@ npm.cmd install
 npm.cmd run dev
 ```
 
-#### 5. 停止本地服务
+平台管理端默认地址为 <http://127.0.0.1:80>。该工程当前没有提交依赖锁文件，安装结果可能随依赖版本变化；不要把一次本地安装描述为可复现构建。
 
-先在后端和前端窗口按 `Ctrl+C`，再在仓库根目录停止基础设施：
+
+常用诊断命令：
+
+```powershell
+docker compose -f docker-compose.dev.yml logs -f backend
+docker compose -f docker-compose.dev.yml exec backend python --version
+docker compose -f docker-compose.dev.yml exec backend ffmpeg -version
+```
+
+> Linux 后端容器会关闭 Windows NAS 目录 Worker 和版本发布 Worker，只启用媒体派生 Worker。因此该模式不能作为真实 UNC/SMB/NAS 验收证据。
+
+### 方式二：Docker 基础设施 + Windows 宿主机后端
+
+需要直接访问 Windows UNC/SMB/NAS、调试目录 Worker 或版本发布 Worker 时，使用该方式。
+
+1. 只启动 PostgreSQL 和 Redis：
+
+```powershell
+docker compose -f docker-compose.dev.yml up -d postgres redis
+docker compose -f docker-compose.dev.yml ps
+```
+
+2. 检查 `ruoyi-fastapi-backend/.env.dev`：
+
+- PostgreSQL 应连接 `127.0.0.1:15432`；
+- Redis 应连接 `127.0.0.1:16379`；
+- 数据库名必须与实际本地库一致；
+- 不要把真实密码、JWT Secret、RSA 私钥或 Provider Key 提交到仓库；
+- 按需配置三个 Shot Grid Worker 和 `SHOT_GRID_MEDIA_WORKER_FFMPEG_PATH`。
+
+3. 创建后端虚拟环境并安装 PostgreSQL 依赖：
+
+```powershell
+cd ruoyi-fastapi-backend
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements-pg.txt
+python -m pip install -e .
+```
+
+4. 校验数据库和应用配置，然后启动：
+
+```powershell
+ruoyi app doctor --env=dev
+ruoyi app run --env=dev
+```
+
+已有数据库升级前先备份并检查版本：
+
+```powershell
+python -m alembic current
+python -m alembic heads
+```
+
+只有确认数据库已处于受支持的 Alembic 迁移链时，才执行：
+
+```powershell
+python -m alembic upgrade head
+```
+
+无版本标记的历史库不能直接 `stamp` 或升级；应先在克隆库核对结构和数据。全新本地库通常由 `ruoyi-fastapi-pg.sql` 初始化，无需重复执行增量迁移。
+
+5. 后端健康后，按“方式一”的前端命令启动 `shot-grid-frontend`。
+
+### 停止本地环境
 
 ```powershell
 docker compose -f docker-compose.dev.yml down
 ```
 
-不要附加 `-v`，否则会删除本地 PostgreSQL 和 Redis 命名卷。
+普通 `down` 不删除 PostgreSQL 和 Redis 命名卷。除非明确要清空全部本地数据，不要执行 `down -v`。
 
-如需验证完整 Linux 容器拓扑，可按 [后端 Docker 本地开发指南](./ruoyi-fastapi-backend/docs/docker_dev_guide.md) 单独执行；它属于集成验证方式，不是日常本地开发的默认启动方式。Linux 容器不能直接执行 Windows UNC/SMB 目录操作，因此真实 NAS 开发与验收应使用本节的宿主机后端。
+## 常用检查
 
-### 传输层加解密配置说明
+日常开发按改动范围执行最小但充分的检查。
 
-后端密钥配置与轮换说明：[ruoyi-fastapi-backend/docs/transport_crypto_config.md](./ruoyi-fastapi-backend/docs/transport_crypto_config.md)
+Shot Grid 前端：
 
-### 开发
-
-```bash
-# 克隆项目
-git clone https://gitee.com/insistence2022/RuoYi-Vue3-FastAPI.git
-
-# 进入项目根目录
-cd RuoYi-Vue3-FastAPI
+```powershell
+cd shot-grid-frontend
+npm.cmd run lint
+npm.cmd run test
+npm.cmd run build:prod
 ```
 
-#### 前端
+后端：
 
-```bash
-# 进入前端目录
-cd ruoyi-fastapi-frontend
-
-# 安装依赖
-npm install 或 yarn --registry=https://registry.npmmirror.com
-
-# 建议不要直接使用 cnpm 安装依赖，会有各种诡异的 bug。可以通过如下操作解决 npm 下载速度慢的问题
-npm install --registry=https://registry.npmmirror.com
-
-# 启动服务
-npm run dev 或 yarn dev
-```
-
-#### 移动端
-
-```bash
-# 进入移动端目录
-cd ruoyi-fastapi-app
-
-# 安装依赖
-npm install -g pnpm
-pnpm install
-
-# 启动 H5
-pnpm dev:h5
-
-# 启动微信小程序
-pnpm dev:mp-weixin
-```
-
-移动端详细文档请参考：[ruoyi-fastapi-app/README.md](./ruoyi-fastapi-app/README.md)
-
-#### 后端
-
-```bash
-# 进入后端目录
+```powershell
+python -m ruff check ruoyi-fastapi-backend ruoyi-fastapi-test
+python -m ruff format ruoyi-fastapi-backend ruoyi-fastapi-test --check
 cd ruoyi-fastapi-backend
-
-# 如果使用的是MySQL数据库，请执行以下命令安装项目依赖环境
-pip3 install -r requirements.txt
-# 如果使用的是PostgreSQL数据库，请执行以下命令安装项目依赖环境
-pip3 install -r requirements-pg.txt
-
-# 安装AI插件依赖，如果不需要AI插件，可忽略此步骤
-ruoyi plugin install-deps ai
-
-# 配置环境
-在.env.dev文件中配置开发环境的数据库和redis
-
-# 运行sql文件
-1.新建数据库ruoyi-fastapi(默认，可修改)
-2.如果使用的是MySQL数据库，使用命令或数据库连接工具运行sql文件夹下的ruoyi-fastapi.sql；如果使用的是PostgreSQL数据库，使用命令或数据库连接工具运行sql文件夹下的ruoyi-fastapi-pg.sql
-
-# 运行后端
-ruoyi app run --env=dev
+python -m pytest -q
 ```
 
-后端 CLI 使用说明请参考：[ruoyi-fastapi-backend/docs/cli_usage.md](./ruoyi-fastapi-backend/docs/cli_usage.md)
+完整 E2E 需要真实启动前端、后端、PostgreSQL 和 Redis：
 
-#### 访问
-
-```bash
-# 默认账号密码
-账号：admin
-密码：admin123
-
-# 浏览器访问
-地址：http://localhost:80
+```powershell
+cd ruoyi-fastapi-test
+python -m pytest -v
 ```
 
-### 发布
+构建成功、服务健康或 Swagger 可访问都不等于业务端到端验证通过。
 
-#### 前端
+## 数据与文件边界
 
-```bash
-# 构建测试环境
-npm run build:stage 或 yarn build:stage
+- 版本文件使用平台受保护文件能力，并通过业务引用保持事务一致性。
+- 文件仍被业务引用时不得直接删除；私有文件访问默认拒绝。
+- NAS 目录操作由 Outbox 与 Leader Worker 协调，数据库事务中不得等待 SMB I/O。
+- 缩略图和代理媒体必须由媒体 Worker 派生，不得用原始大文件冒充代理媒体。
+- 真实 NAS 验收必须覆盖正式 Windows 服务账号、共享 ACL、目录创建、版本发布和故障恢复。
 
-# 构建生产环境
-npm run build:prod 或 yarn build:prod
-```
+## 部署说明
 
-#### 后端
+`docker-compose.pg.yml` 提供 PostgreSQL 完整拓扑参考，但生产上线前仍必须完成环境化配置和安全验收，包括：
 
-```bash
-# 配置环境
-在.env.prod文件中配置生产环境的数据库和redis
+- 替换全部默认密码、JWT Secret、RSA 密钥和第三方 Provider Key；
+- 为 PostgreSQL、Redis 和业务文件配置可恢复的持久化与备份；
+- 收紧 CORS、数据库端口、Redis 端口和反向代理访问边界；
+- 配置 Windows NAS/版本 Worker、FFmpeg 与正式服务账号；
+- 验证登录、权限、数据隔离、数据库写入、Redis 会话、文件下载和完整业务旅程。
 
-# 运行后端
-ruoyi app run --env=prod
-```
+当前生产页面路径约定为 `/shot-grid-app/`，API 前缀为 `/prod-api/`。更详细的反向代理和业务边界见 `shot-grid-frontend/README.md`。
 
-### Docker Compose部署方式
+## 进一步阅读
 
-> ⚠️ **警告：** 默认未做数据持久化配置，请注意数据备份或自行配置持久化
+- [Shot Grid 业务前端说明](shot-grid-frontend/README.md)
+- [后端 Docker 本地开发指南](ruoyi-fastapi-backend/docs/docker_dev_guide.md)
+- [后端 CLI 使用说明](ruoyi-fastapi-backend/docs/cli_usage.md)
+- [文件管理接入指南](ruoyi-fastapi-backend/docs/file_management_usage_guide.md)
+- [插件开发说明](ruoyi-fastapi-backend/docs/plugin_development.md)
+- [传输加密配置](ruoyi-fastapi-backend/docs/transport_crypto_config.md)
+- [项目协作与架构约束](AGENTS.md)
 
-#### MySQL版本
+## 基座与致谢
 
-```bash
-docker compose -f docker-compose.my.yml up -d --build
-```
+本项目基于 [RuoYi-Vue3-FastAPI](https://github.com/insistence/RuoYi-Vue3-FastAPI) 与 [RuoYi-Vue3](https://github.com/yangzongzhuan/RuoYi-Vue3) 进行业务化建设。上游框架提供了重要的平台基础能力；本仓库 README 只描述当前 Shot Grid 产品、运行方式与交付边界。
 
-#### PostgreSQL版本
-
-```bash
-docker compose -f docker-compose.pg.yml up -d --build
-```
-
-## 交流与赞助
-
-如果有对本项目及FastAPI感兴趣的朋友，欢迎加入知识星球一起交流学习，让我们一起变得更强。如果你觉得这个项目帮助到了你，你可以请作者喝杯咖啡表示鼓励☕。扫描下面微信二维码添加微信备注VF-Admin即可进群。
-<table>
-    <tr>
-        <td>
-            <img alt="zsxq" src="https://gitee.com/insistence2022/ruoyi-fastapi-pictures/raw/master/common/zsxq.jpg">
-        </td>
-        <td>
-            <img alt="zanzhu" src="https://gitee.com/insistence2022/ruoyi-fastapi-pictures/raw/master/common/zanzhu.jpg">
-        </td>
-    </tr>
-    <tr>
-        <td>
-            <img alt="wxcode" src="https://gitee.com/insistence2022/ruoyi-fastapi-pictures/raw/master/common/wxcode.jpg">
-        </td>
-    </tr>
-</table>
+使用、分发或二次开发前，请同时检查本仓库和所依赖上游项目的许可证要求。

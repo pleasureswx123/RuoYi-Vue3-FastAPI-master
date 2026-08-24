@@ -48,12 +48,30 @@ export function getEpisodePage(projectId, params, options = {}) {
   })
 }
 
+export function createEpisode(projectId, data) {
+  return request({
+    url: projectUrl(projectId, '/episodes'),
+    method: 'post',
+    data,
+    silentError: true
+  })
+}
+
 export function getScenePage(projectId, episodeId, params, options = {}) {
   return request({
     url: `${projectUrl(projectId, '/episodes')}/${assertPositiveId(episodeId, '集')}/scenes`,
     method: 'get',
     params,
     signal: options.signal,
+    silentError: true
+  })
+}
+
+export function createScene(projectId, episodeId, data) {
+  return request({
+    url: `${projectUrl(projectId, '/episodes')}/${assertPositiveId(episodeId, '集')}/scenes`,
+    method: 'post',
+    data,
     silentError: true
   })
 }
@@ -99,6 +117,15 @@ export function createShot(projectId, data) {
 export function updateShot(projectId, shotId, data) {
   return request({
     url: shotUrl(projectId, shotId),
+    method: 'put',
+    data,
+    silentError: true
+  })
+}
+
+export function reorderShot(projectId, shotId, data) {
+  return request({
+    url: shotUrl(projectId, shotId, '/sequence'),
     method: 'put',
     data,
     silentError: true

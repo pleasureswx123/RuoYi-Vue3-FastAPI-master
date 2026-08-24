@@ -1,19 +1,18 @@
 import io
-from pathlib import Path
 
 import pytest
 from openpyxl import Workbook
+from pydantic import ValidationError
 
 from module_shot_grid.config import ShotGridImportConfig
 from module_shot_grid.entity.vo.asset_import_vo import AssetImportCommitRequestModel
 from module_shot_grid.exceptions import ShotGridDomainException
 from module_shot_grid.service.asset_excel_parser import AssetExcelParser
+from module_shot_grid.service.asset_import_template_service import ShotGridAssetImportTemplateService
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
-ASSET_SAMPLE = REPO_ROOT / 'shot-grid-frontend' / 'docs' / '资产-样表.xlsx'
-HEADERS = ['类型', '名称', '描述', '制作分项', '备注', '状态', '制作人']
+ASSET_SAMPLE = ShotGridAssetImportTemplateService.TEMPLATE_PATH
+HEADERS = ['类型', '名称', '描述', '制作分项', '备注', '状态']
 EXCEL_LAST_ROW = 1_048_576
-COMPOSITE_ASSIGNEE_ROW = 16
 DUPLICATE_ROW_COUNT = 2
 
 
@@ -29,7 +28,7 @@ def _minimal_workbook() -> Workbook:
     sheet = workbook.active
     sheet.title = 'Sheet1'
     sheet.append(HEADERS)
-    sheet.append(['场景', '控制室', '控制室描述', '恐怖气氛主视角', '重点', None, 'maker'])
+    sheet.append(['场景', '控制室', '控制室描述', '恐怖气氛主视角', '重点', None])
     return workbook
 
 
@@ -37,25 +36,21 @@ def test_real_asset_sample_has_frozen_counts_and_warnings() -> None:
     result = AssetExcelParser().parse(ASSET_SAMPLE.read_bytes())
 
     assert result.summary.model_dump(by_alias=True) == {
-        'totalRows': 20,
-        'validRows': 19,
-        'warningRows': 3,
-        'errorRows': 1,
-        'distinctAssets': 12,
-        'distinctAssetItems': 20,
+        'totalRows': 6,
+        'validRows': 6,
+        'warningRows': 0,
+        'errorRows': 0,
+        'distinctAssets': 4,
+        'distinctAssetItems': 6,
         'byType': {
-            'Character': {'assets': 6, 'items': 12, 'validRows': 11, 'warningRows': 0, 'errorRows': 1},
-            'Environment': {'assets': 2, 'items': 4, 'validRows': 4, 'warningRows': 0, 'errorRows': 0},
-            'Prop': {'assets': 4, 'items': 4, 'validRows': 4, 'warningRows': 3, 'errorRows': 0},
+            'Character': {'assets': 1, 'items': 2, 'validRows': 2, 'warningRows': 0, 'errorRows': 0},
+            'Environment': {'assets': 1, 'items': 2, 'validRows': 2, 'warningRows': 0, 'errorRows': 0},
+            'Prop': {'assets': 2, 'items': 2, 'validRows': 2, 'warningRows': 0, 'errorRows': 0},
         },
         'estimatedAutoMatches': 0,
     }
     assert [warning.error_key for warning in result.workbook_warnings] == ['SG_IMPORT_READONLY_COLUMNS_IGNORED']
-    warning_rows = [row.row_number for row in result.rows if row.warnings]
-    assert warning_rows == [6, 7, 8]
-    error_row = next(row for row in result.rows if row.errors)
-    assert error_row.row_number == COMPOSITE_ASSIGNEE_ROW
-    assert [issue.error_key for issue in error_row.errors] == ['SG_TASK_ASSIGNEE_AMBIGUOUS']
+    assert not any(row.warnings or row.errors for row in result.rows)
 
 
 def test_merged_parent_cells_are_inherited_without_blind_forward_fill() -> None:
@@ -64,8 +59,8 @@ def test_merged_parent_cells_are_inherited_without_blind_forward_fill() -> None:
 
     assert by_row[2].normalized.asset_name == by_row[3].normalized.asset_name
     assert by_row[2].normalized.item_description == by_row[3].normalized.item_description
-    assert by_row[18].normalized.asset_name == by_row[19].normalized.asset_name
-    assert by_row[18].normalized.item_description != by_row[19].normalized.item_description
+    assert by_row[4].normalized.asset_name == by_row[5].normalized.asset_name
+    assert by_row[4].normalized.item_description == by_row[5].normalized.item_description
 
     workbook = _minimal_workbook()
     workbook.active.append([None, None, None, '第二分项'])
@@ -143,7 +138,6 @@ def test_row_limit_rejects_sparse_malicious_tail_before_full_scan() -> None:
         ('B', 'İ' * 200, 'assetName'),
         ('D', 'İ' * 240, 'productionItem'),
         ('E', '备' * 501, 'remark'),
-        ('G', '制' * 31, 'assigneeUserName'),
     ],
 )
 def test_values_and_casefold_keys_fit_database_lengths(column: str, value: str, field_name: str) -> None:
@@ -165,6 +159,12 @@ def test_commit_selection_is_composite_and_allows_partial_parent_group() -> None
     )
     assert [row.key() for row in request.selected_rows] == [('Sheet1', 2)]
 
+    with pytest.raises(ValidationError):
+        AssetImportCommitRequestModel(
+            importToken='token',
+            selectedRows=[{'sheetName': 'Sheet1', 'rowNumber': 2, 'assigneeUserId': 7}],
+        )
+
     with pytest.raises(ValueError):
         AssetImportCommitRequestModel(
             importToken='token',
@@ -173,3 +173,13 @@ def test_commit_selection_is_composite_and_allows_partial_parent_group() -> None
                 {'sheetName': 'Sheet1', 'rowNumber': 2},
             ],
         )
+
+
+def test_assignee_column_is_not_supported_by_current_template() -> None:
+    workbook = _minimal_workbook()
+    workbook.active['G1'] = '制作人'
+
+    with pytest.raises(ShotGridDomainException) as exc_info:
+        AssetExcelParser().parse(_save_workbook(workbook))
+
+    assert exc_info.value.error_key == 'SG_IMPORT_HEADER_INVALID'

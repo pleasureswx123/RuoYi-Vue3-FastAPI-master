@@ -1,20 +1,26 @@
 const STATUS_META = {
-  unassigned: { label: '未分配', tone: 'muted' },
+  unassigned: { label: '待分配', tone: 'warning' },
   not_started: { label: '未开始', tone: 'muted' },
-  in_progress: { label: '制作中', tone: 'warning' },
-  reviewing: { label: '待审核', tone: 'info' },
+  preparing: { label: '目录准备中', tone: 'info' },
+  in_progress: { label: '制作中', tone: 'primary' },
+  reviewing: { label: '待审核', tone: 'purple' },
   revision: { label: '修改中', tone: 'danger' },
   completed: { label: '已完成', tone: 'success' }
 }
 
 const DIRECTORY_META = {
-  pending: { label: '目录待创建', tone: 'warning' },
-  ready: { label: '目录就绪', tone: 'success' },
-  failed: { label: '目录失败', tone: 'danger' }
+  not_created: { label: '开始制作时创建', tone: 'muted' },
+  pending: { label: '目录准备中', tone: 'info' },
+  ready: { label: '目录已就绪', tone: 'info' },
+  failed: { label: '目录处理异常', tone: 'danger' }
 }
 
 export function shotStatusMeta(status) {
   return STATUS_META[status] || { label: '未知镜头状态', tone: 'muted' }
+}
+
+export function shotStatusTagClass(status) {
+  return `shot-status-tag--${Object.hasOwn(STATUS_META, status) ? status : 'unknown'}`
 }
 
 export function directoryStatusMeta(status) {

@@ -1,14 +1,16 @@
-import { ElButton, ElCard, ElDatePicker, ElDialog, ElDrawer, ElForm, ElFormItem, ElIcon, ElInput, ElInputNumber, ElMessageBox, ElOption, ElPagination, ElRadioButton, ElRadioGroup, ElSelect, ElTable, ElTableColumn, ElTag } from 'element-plus'
+import { ElAlert, ElButton, ElCard, ElDatePicker, ElDescriptions, ElDescriptionsItem, ElDialog, ElDrawer, ElForm, ElFormItem, ElIcon, ElInput, ElInputNumber, ElMessageBox, ElOption, ElPagination, ElRadioButton, ElRadioGroup, ElSelect, ElTable, ElTableColumn, ElTag, ElUpload } from 'element-plus'
 import { createPinia, setActivePinia } from 'pinia'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { getProjectDetail, getProjectMembers, getProjectPage } from '@/api/shot-grid/projects'
+import { getProjectDetail, getProjectPage } from '@/api/shot-grid/projects'
 import {
   batchAssignShotTasks,
   batchDeleteShots,
   commitShotImport,
+  createEpisode,
+  createScene,
   createShot,
   getEpisodePage,
   getScenePage,
@@ -17,6 +19,7 @@ import {
   listShotAssignees,
   previewShotImport,
   assignShotTask,
+  reorderShot,
   updateShot
 } from '@/api/shot-grid/shots'
 import { useSessionStore } from '@/store/modules/session'
@@ -24,9 +27,13 @@ import { setElSelectValue } from '../helpers/elementPlus'
 import ShotDetailView from '@/views/shot/ShotDetailView.vue'
 import ShotListView from '@/views/shot/ShotListView.vue'
 import ShotAssignDialog from '@/views/shot/components/ShotAssignDialog.vue'
+import EpisodeSceneCreateDialog from '@/views/shot/components/EpisodeSceneCreateDialog.vue'
 import ShotFormDialog from '@/views/shot/components/ShotFormDialog.vue'
 import ShotImportDialog from '@/views/shot/components/ShotImportDialog.vue'
 
+const sortableCreate = vi.hoisted(() => vi.fn(() => ({ destroy: vi.fn() })))
+
+vi.mock('sortablejs', () => ({ default: { create: sortableCreate } }))
 vi.mock('@/api/shot-grid/projects', () => ({
   assertPositiveId: value => {
     const result = Number(value)
@@ -34,7 +41,6 @@ vi.mock('@/api/shot-grid/projects', () => ({
     return result
   },
   getProjectDetail: vi.fn(),
-  getProjectMembers: vi.fn(),
   getProjectPage: vi.fn()
 }))
 vi.mock('@/api/shot-grid/shots', () => ({
@@ -43,6 +49,8 @@ vi.mock('@/api/shot-grid/shots', () => ({
   batchAssignShotTasks: vi.fn(),
   batchDeleteShots: vi.fn(),
   commitShotImport: vi.fn(),
+  createEpisode: vi.fn(),
+  createScene: vi.fn(),
   createShot: vi.fn(),
   downloadProtectedThumbnail: vi.fn(),
   getEpisodePage: vi.fn(),
@@ -51,6 +59,7 @@ vi.mock('@/api/shot-grid/shots', () => ({
   getShotPage: vi.fn(),
   listShotAssignees: vi.fn(),
   previewShotImport: vi.fn(),
+  reorderShot: vi.fn(),
   updateShot: vi.fn()
 }))
 
@@ -67,7 +76,7 @@ const shotRow = {
   sceneName: '动力舱',
   shotNo: 1,
   shotCode: 'S001',
-  storageDirName: 'S001',
+  storageDirName: '001_S001',
   directoryStatus: 'ready',
   durationMs: 3500,
   shotSize: '近景',
@@ -82,6 +91,7 @@ const shotRow = {
   environmentAssets: [{ assetId: 2, assetName: '动力舱', assetType: 'Environment' }],
   characterAssets: [],
   sortOrder: 1,
+  sequencePosition: 1,
   status: 'in_progress',
   assignee: { userId: 7, nickName: 'YJF', producerCode: 'YJF' },
   thumbnail: null,
@@ -92,7 +102,7 @@ const shotRow = {
   taskLockVersion: 4
 }
 
-const formComponents = { ElButton, ElDatePicker, ElForm, ElFormItem, ElIcon, ElInput, ElInputNumber, ElOption, ElSelect }
+const formComponents = { ElAlert, ElButton, ElDatePicker, ElDescriptions, ElDescriptionsItem, ElForm, ElFormItem, ElIcon, ElInput, ElInputNumber, ElOption, ElSelect, ElUpload }
 
 async function mountView(permissions = ['shotgrid:shot:list', 'shotgrid:shot:add', 'shotgrid:shot:import', 'shotgrid:member:list'], configureRouter = null) {
   const pinia = createPinia()
@@ -128,7 +138,13 @@ async function mountDetailView(path = '/projects/8/shots/41') {
   })
   await router.push(path)
   await router.isReady()
-  const wrapper = mount(ShotDetailView, { global: { plugins: [router], components: { ...formComponents, ElTag } } })
+  const wrapper = mount(ShotDetailView, {
+    global: {
+      plugins: [router],
+      components: { ...formComponents, ElDialog, ElTag },
+      stubs: { ProductionHistoryPanel: true }
+    }
+  })
   await flushPromises()
   return { wrapper, router }
 }
@@ -160,16 +176,21 @@ function shotDetail(projectId, shotId, shotCode, description) {
 
 describe('镜头管理真实列表页', () => {
   beforeEach(() => {
+    sortableCreate.mockClear()
     getProjectPage.mockResolvedValue({ rows: [projectRow], total: 1, hasNext: false })
     getProjectDetail.mockResolvedValue({ data: { ...projectRow, projectTypeName: 'AI 影视短片', aspectRatio: '16:9', projectStatus: 'active', storageStatus: 'ready', myProjectRole: 'director' } })
-    getProjectMembers.mockResolvedValue({ rows: [{ userId: 7, userName: '杨景锋', nickName: 'YJF', projectRole: 'creator', producerCode: 'YJF' }] })
-    getEpisodePage.mockResolvedValue({ rows: [{ episodeId: 21, episodeCode: 'EP001', episodeName: '第一集' }], total: 1, hasNext: false })
-    getScenePage.mockResolvedValue({ rows: [{ sceneId: 31, sceneCode: '001', sceneName: '动力舱' }], total: 1, hasNext: false })
+    getEpisodePage.mockResolvedValue({ rows: [{ episodeId: 21, episodeNo: 1, episodeCode: 'EP001', episodeName: '第一集', sortOrder: 10 }], total: 1, hasNext: false })
+    getScenePage.mockResolvedValue({ rows: [{ sceneId: 31, sceneNo: 1, sceneCode: '001', sceneName: '动力舱', sortOrder: 10 }], total: 1, hasNext: false })
     listShotAssignees.mockResolvedValue({ rows: [{ userId: 7, userName: '杨景锋', nickName: 'YJF', projectRole: 'creator', producerCode: 'YJF' }], total: 1, hasNext: false })
     getShotPage.mockResolvedValue({ rows: [shotRow], total: 1, hasNext: false })
     getShotDetail.mockResolvedValue({ data: shotDetail(8, 41, 'S001', '镜头缓慢推进动力舱') })
     batchAssignShotTasks.mockResolvedValue({ data: { assignedShotIds: [41], assignedCount: 1 } })
     batchDeleteShots.mockResolvedValue({ data: { deletedShotIds: [41], deletedCount: 1 } })
+    createEpisode.mockReset()
+    createScene.mockReset()
+    createEpisode.mockResolvedValue({ data: { episodeId: 22, episodeNo: 2, episodeCode: 'EP002' } })
+    createScene.mockResolvedValue({ data: { sceneId: 32, episodeId: 21, sceneNo: 2, sceneCode: '002' } })
+    reorderShot.mockResolvedValue({ data: { shotId: 41, sequencePosition: 1, lockVersion: 1 } })
   })
 
   it('在项目范围内展示同一真实结果的三种视图与写入入口', async () => {
@@ -195,7 +216,8 @@ describe('镜头管理真实列表页', () => {
     await flushPromises()
     expect(getShotPage).toHaveBeenCalledWith(8, expect.objectContaining({ pageNum: 1 }), expect.anything())
     expect(wrapper.text()).toContain('LCFR · 罗刹夫人')
-    expect(wrapper.text()).toContain('EP001 / 001 / S001')
+    expect(wrapper.find('.shot-identity strong').text()).toBe('EP001 / 001 / S001')
+    expect(wrapper.find('.shot-identity small').text()).toBe('本场第 1 镜 · 3.5 秒')
     expect(wrapper.text()).toContain('镜头缓慢推进动力舱')
     expect(wrapper.text()).toContain('台词 / 对白')
     expect(wrapper.text()).toContain('动力系统恢复了吗？')
@@ -203,20 +225,31 @@ describe('镜头管理真实列表页', () => {
     expect(wrapper.text()).toContain('冷蓝色调')
     expect(wrapper.text()).toContain('保持画面压迫感')
     expect(wrapper.find('.shot-table-wrap').text()).toContain('杨景锋')
+    const tableColumns = wrapper.findAllComponents(ElTableColumn)
+    const rightFixedColumns = tableColumns.filter(column => column.props('fixed') === 'right')
+    expect(rightFixedColumns.map(column => column.props('label'))).toEqual(['制作人', '状态', '操作'])
+    expect(tableColumns.slice(-3).map(column => column.props('label'))).toEqual(['制作人', '状态', '操作'])
     expect(wrapper.text()).toContain('导入 Excel')
     expect(wrapper.text()).toContain('新建镜头')
     expect(findTag(wrapper, '场景 · 动力舱').props()).toMatchObject({ type: 'primary', size: 'small', effect: 'plain', round: true })
-    expect(findTag(wrapper, '制作中').props()).toMatchObject({ type: 'warning', effect: 'light', round: true })
-    expect(findTag(wrapper, '目录就绪').props()).toMatchObject({ type: 'success', effect: 'plain', round: true })
+    expect(findTag(wrapper, '制作中').props()).toMatchObject({ type: 'primary', effect: 'light', round: true })
+    expect(findTag(wrapper, '制作中').classes()).toEqual(expect.arrayContaining(['shot-status-tag', 'shot-status-tag--in_progress']))
+    expect(wrapper.find('.shot-table-wrap').text()).not.toContain('目录已就绪')
     expect(wrapper.find('.shot-chip').exists()).toBe(false)
 
     const viewSwitch = wrapper.findComponent(ElRadioGroup)
     viewSwitch.vm.$emit('update:modelValue', 'card')
     await flushPromises()
     expect(wrapper.find('.shot-card').exists()).toBe(true)
+    expect(wrapper.find('.shot-card h3').text()).toBe('S001 · 第 1 镜')
+    expect(wrapper.find('.shot-card header small').text()).toBe('EP001 / 001')
+    expect(findTag(wrapper, '制作中').classes()).toEqual(expect.arrayContaining(['shot-status-tag', 'shot-status-tag--in_progress']))
     viewSwitch.vm.$emit('update:modelValue', 'storyboard')
     await flushPromises()
     expect(wrapper.find('.story-frame').exists()).toBe(true)
+    expect(wrapper.find('.story-frame__index').text()).toBe('01')
+    expect(wrapper.find('.story-frame strong').text()).toBe('EP001 · 001 · S001')
+    expect(wrapper.find('.story-frame small').text()).toContain('本场第 1 镜 · 3.5 秒')
     wrapper.unmount()
   })
 
@@ -237,6 +270,267 @@ describe('镜头管理真实列表页', () => {
       effect: 'plain',
       round: true
     })
+    wrapper.unmount()
+  })
+
+  it('单场无附加筛选时通过表格拖拽调用专用场内重排接口', async () => {
+    const mutableShot = {
+      ...shotRow,
+      status: 'unassigned',
+      assignee: null,
+      storageDirName: null,
+      directoryStatus: 'not_created',
+      latestVersion: null
+    }
+    const secondShot = { ...mutableShot, shotId: 42, shotNo: 2, shotCode: 'S002', sequencePosition: 2 }
+    getShotPage.mockResolvedValue({ rows: [mutableShot, secondShot], total: 2, hasNext: false })
+    const { wrapper } = await mountView([
+      'shotgrid:shot:list',
+      'shotgrid:shot:edit',
+      'shotgrid:member:list'
+    ])
+    const filterSelects = wrapper.find('.shot-filters').findAllComponents(ElSelect)
+
+    await setElSelectValue(filterSelects[0], '21')
+    await flushPromises()
+    expect(wrapper.text()).toContain('请选择具体场次后可排序')
+    expect(sortableCreate).not.toHaveBeenCalled()
+
+    await setElSelectValue(filterSelects[1], '31')
+    await flushPromises()
+    await flushPromises()
+
+    expect(sortableCreate).toHaveBeenCalled()
+    const options = sortableCreate.mock.calls.at(-1)[1]
+    expect(options).toMatchObject({
+      forceFallback: true,
+      fallbackOnBody: true,
+      fallbackTolerance: 3
+    })
+    await options.onEnd({ oldIndex: 0, newIndex: 1 })
+
+    expect(reorderShot).toHaveBeenCalledWith(8, 41, {
+      lockVersion: 0,
+      sequencePosition: 2
+    })
+    wrapper.unmount()
+  })
+
+  it('历史镜头号不连续时失败关闭排序入口', async () => {
+    getShotPage.mockResolvedValue({
+      rows: [
+        { ...shotRow, status: 'unassigned', shotNo: 2, shotCode: 'S002', sequencePosition: 2 },
+        { ...shotRow, shotId: 42, status: 'unassigned', shotNo: 4, shotCode: 'S004', sequencePosition: 4 }
+      ],
+      total: 2,
+      hasNext: false
+    })
+    const { wrapper } = await mountView([
+      'shotgrid:shot:list',
+      'shotgrid:shot:edit',
+      'shotgrid:member:list'
+    ])
+    const filterSelects = wrapper.find('.shot-filters').findAllComponents(ElSelect)
+
+    await setElSelectValue(filterSelects[0], '21')
+    await flushPromises()
+    await setElSelectValue(filterSelects[1], '31')
+    await flushPromises()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('当前场次镜头号不连续，请先完成历史数据治理后再排序')
+    expect(wrapper.find('.shot-drag-handle').exists()).toBe(false)
+    expect(sortableCreate).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('移动区间存在冻结目录时不提交重排', async () => {
+    const firstShot = {
+      ...shotRow,
+      status: 'unassigned',
+      assignee: null,
+      storageDirName: null,
+      directoryStatus: 'not_created',
+      latestVersion: null
+    }
+    const frozenShot = {
+      ...firstShot,
+      shotId: 42,
+      shotNo: 2,
+      shotCode: 'S002',
+      sequencePosition: 2,
+      storageDirName: '001_S002',
+      directoryStatus: 'ready'
+    }
+    const thirdShot = { ...firstShot, shotId: 43, shotNo: 3, shotCode: 'S003', sequencePosition: 3 }
+    getShotPage.mockResolvedValue({ rows: [firstShot, frozenShot, thirdShot], total: 3, hasNext: false })
+    const { wrapper } = await mountView([
+      'shotgrid:shot:list',
+      'shotgrid:shot:edit',
+      'shotgrid:member:list'
+    ])
+    const filterSelects = wrapper.find('.shot-filters').findAllComponents(ElSelect)
+
+    await setElSelectValue(filterSelects[0], '21')
+    await flushPromises()
+    await setElSelectValue(filterSelects[1], '31')
+    await flushPromises()
+    await flushPromises()
+
+    const options = sortableCreate.mock.calls.at(-1)[1]
+    await options.onEnd({ oldIndex: 0, newIndex: 2 })
+
+    expect(reorderShot).not.toHaveBeenCalled()
+    expect(wrapper.findAll('.shot-drag-handle')[1].classes()).toContain('is-disabled')
+    expect(wrapper.findAll('.shot-drag-handle')[1].attributes('title')).toBe('该镜头目录已冻结，不能调整顺序')
+    wrapper.unmount()
+  })
+
+  it('具体场次超过一页时先加载整场，再按整场位置拖拽', async () => {
+    const sceneShots = Array.from({ length: 25 }, (_value, index) => ({
+      ...shotRow,
+      shotId: 100 + index,
+      shotNo: index + 1,
+      shotCode: `S${String(index + 1).padStart(3, '0')}`,
+      sequencePosition: index + 1,
+      sortOrder: (index + 1) * 10,
+      storageDirName: null,
+      directoryStatus: 'not_created',
+      status: 'unassigned',
+      assignee: null,
+      lockVersion: index
+    }))
+    getShotPage.mockImplementation((_projectId, params) => {
+      if (!params.sceneId) return Promise.resolve({ rows: [shotRow], total: 1, hasNext: false })
+      if (params.pageSize === 100) return Promise.resolve({ rows: sceneShots, total: 25, hasNext: false })
+      return Promise.resolve({ rows: sceneShots.slice(0, 20), total: 25, hasNext: true })
+    })
+    const { wrapper } = await mountView([
+      'shotgrid:shot:list',
+      'shotgrid:shot:edit',
+      'shotgrid:member:list'
+    ])
+    const filterSelects = wrapper.find('.shot-filters').findAllComponents(ElSelect)
+
+    await setElSelectValue(filterSelects[0], '21')
+    await flushPromises()
+    await setElSelectValue(filterSelects[1], '31')
+    await flushPromises()
+    await flushPromises()
+
+    expect(wrapper.findAll('.shot-identity')).toHaveLength(25)
+    expect(wrapper.findComponent(ElPagination).exists()).toBe(false)
+    expect(sortableCreate).toHaveBeenCalled()
+    const options = sortableCreate.mock.calls.at(-1)[1]
+    await options.onEnd({ oldIndex: 0, newIndex: 24 })
+
+    expect(reorderShot).toHaveBeenCalledWith(8, 100, {
+      lockVersion: 0,
+      sequencePosition: 25
+    })
+    wrapper.unmount()
+  }, 10_000)
+
+  it('具体场次只保留拖拽排序，不再暴露独立重编号动作', async () => {
+    const { wrapper } = await mountView([
+      'shotgrid:shot:list',
+      'shotgrid:shot:edit',
+      'shotgrid:member:list'
+    ])
+    const filterSelects = wrapper.find('.shot-filters').findAllComponents(ElSelect)
+
+    await setElSelectValue(filterSelects[0], '21')
+    await flushPromises()
+    expect(wrapper.findAllComponents(ElButton).some(button => button.text() === '按当前顺序重新编号')).toBe(false)
+
+    await setElSelectValue(filterSelects[1], '31')
+    await flushPromises()
+    expect(wrapper.findAllComponents(ElButton).some(button => button.text() === '按当前顺序重新编号')).toBe(false)
+    expect(wrapper.text()).toContain('当前场次无需排序')
+    wrapper.unmount()
+  })
+
+  it('项目管理人可从镜头页新建下一集和当前集下一场', async () => {
+    const permissions = [
+      'shotgrid:shot:list',
+      'shotgrid:episode:add',
+      'shotgrid:scene:add',
+      'shotgrid:member:list'
+    ]
+    const { wrapper } = await mountView(permissions)
+
+    await wrapper.findAllComponents(ElButton).find(button => button.text() === '新建集').trigger('click')
+    await flushPromises()
+    let hierarchyDialog = wrapper.findComponent(EpisodeSceneCreateDialog)
+    expect(hierarchyDialog.props('mode')).toBe('episode')
+    expect(hierarchyDialog.findComponent(ElForm).props('model').number).toBe(2)
+    await hierarchyDialog.findAllComponents(ElButton).find(button => button.text() === '新建集').trigger('click')
+    await flushPromises()
+    expect(createEpisode).toHaveBeenCalledWith(8, expect.objectContaining({ episodeNo: 2, sortOrder: 20 }))
+
+    await wrapper.findAllComponents(ElButton).find(button => button.text() === '新建场次').trigger('click')
+    await flushPromises()
+    hierarchyDialog = wrapper.findComponent(EpisodeSceneCreateDialog)
+    expect(hierarchyDialog.props('mode')).toBe('scene')
+    expect(hierarchyDialog.findComponent(ElForm).props('model')).toMatchObject({ episodeId: '21', number: 2 })
+    await hierarchyDialog.findAllComponents(ElButton).find(button => button.text() === '新建场次').trigger('click')
+    await flushPromises()
+    expect(createScene).toHaveBeenCalledWith(8, 21, expect.objectContaining({ sceneNo: 2, sortOrder: 20 }))
+    wrapper.unmount()
+  })
+
+  it('从具体场次打开新建镜头时继承当前集场并加载末尾位置', async () => {
+    const { wrapper } = await mountView([
+      'shotgrid:shot:list',
+      'shotgrid:shot:add',
+      'shotgrid:member:list'
+    ])
+    const filterSelects = wrapper.find('.shot-filters').findAllComponents(ElSelect)
+
+    await setElSelectValue(filterSelects[0], '21')
+    await flushPromises()
+    await setElSelectValue(filterSelects[1], '31')
+    await flushPromises()
+    await wrapper.findAllComponents(ElButton).find(button => button.text() === '新建镜头').trigger('click')
+    await flushPromises()
+    await flushPromises()
+
+    const dialog = wrapper.findComponent(ShotFormDialog)
+    expect(dialog.props()).toMatchObject({
+      initialEpisodeId: '21',
+      initialSceneId: '31'
+    })
+    expect(dialog.findComponent(ElForm).props('model')).toMatchObject({
+      episodeId: '21',
+      sceneId: '31',
+      sequencePosition: 2
+    })
+    expect(getShotPage).toHaveBeenCalledWith(8, expect.objectContaining({ episodeId: 21, sceneId: 31 }), expect.anything())
+    wrapper.unmount()
+  })
+
+  it('新建场次允许创建 000 序场并自动使用规范名称', async () => {
+    const { wrapper } = await mountView([
+      'shotgrid:shot:list',
+      'shotgrid:scene:add',
+      'shotgrid:member:list'
+    ])
+
+    await wrapper.findAllComponents(ElButton).find(button => button.text() === '新建场次').trigger('click')
+    await flushPromises()
+    const hierarchyDialog = wrapper.findComponent(EpisodeSceneCreateDialog)
+    const form = hierarchyDialog.findComponent(ElForm)
+    form.props('model').number = 0
+    await flushPromises()
+
+    expect(form.props('model').name).toBe('序')
+    await hierarchyDialog.findAllComponents(ElButton).find(button => button.text() === '新建场次').trigger('click')
+    await flushPromises()
+
+    expect(createScene).toHaveBeenCalledWith(8, 21, expect.objectContaining({
+      sceneNo: 0,
+      sceneName: '序'
+    }))
     wrapper.unmount()
   })
 
@@ -306,11 +600,17 @@ describe('镜头管理真实列表页', () => {
     expect(router.currentRoute.value.path).toBe('/shots')
     expect(document.body.textContent).toContain('镜头详情 · S001')
     expect(document.body.textContent).toContain('制作信息')
+    const productionSection = document.body.querySelector('.shot-overview .shot-overview__production')
+    expect(productionSection).not.toBeNull()
+    expect(productionSection.textContent).toContain('制作内容')
+    expect(productionSection.textContent).toContain('镜头缓慢推进动力舱')
+    expect(document.body.querySelector('.shot-hero__main').textContent).not.toContain('镜头缓慢推进动力舱')
+    expect(document.body.querySelector('.detail-grid .shot-overview__production')).toBeNull()
     expect(getShotDetail).toHaveBeenCalledWith(8, 41, expect.objectContaining({ signal: expect.any(AbortSignal) }))
     wrapper.unmount()
   })
 
-  it('未开始镜头可勾选、编辑和批量删除，已开始镜头禁止删除', async () => {
+  it('未开始镜头可勾选、编辑和批量删除，已开始镜头禁止编辑和删除', async () => {
     const notStartedShot = { ...shotRow, status: 'not_started' }
     getShotPage.mockResolvedValue({ rows: [notStartedShot], total: 1, hasNext: false })
     getShotDetail.mockResolvedValue({ data: shotDetail(8, 41, 'S001', '镜头缓慢推进动力舱') })
@@ -335,6 +635,7 @@ describe('镜头管理真实列表页', () => {
     await wrapper.find('button[aria-label="刷新镜头"]').trigger('click')
     await flushPromises()
     expect(wrapper.findAllComponents({ name: 'ElCheckbox' }).find(item => item.attributes('aria-label') === '选择 S001').props('disabled')).toBe(true)
+    expect(wrapper.findAll('button').map(button => button.text())).not.toContain('编辑')
     confirmSpy.mockRestore()
     wrapper.unmount()
   })
@@ -402,6 +703,7 @@ describe('镜头管理真实列表页', () => {
     })
     const { wrapper } = await mountView()
     await wrapper.findAll('button').find(button => button.text().includes('导入 Excel')).trigger('click')
+    await flushPromises()
     const importDialog = wrapper.findComponent(ShotImportDialog)
     importDialog.vm.$emit('imported', { createdShots: 1 }, {
       projectId: 8,
@@ -490,6 +792,7 @@ describe('镜头管理真实列表页', () => {
     expect(getShotPage).toHaveBeenCalledTimes(callsAfterCreateSwitch)
 
     await wrapper.findAll('button').find(button => button.text().includes('导入 Excel')).trigger('click')
+    await flushPromises()
     const oldImportDialog = wrapper.findComponent(ShotImportDialog).vm
     const oldImportGeneration = oldImportDialog.$props.operationGeneration
     const fileInput = document.body.querySelector('.import-flow input[type="file"]')
@@ -498,18 +801,18 @@ describe('镜头管理真实列表页', () => {
     fileInput.dispatchEvent(new Event('change', { bubbles: true }))
     await flushPromises()
     Array.from(document.body.querySelectorAll('.import-flow button'))
-      .find(button => button.textContent.includes('检查文件'))
+      .find(button => button.textContent.includes('预览导入内容'))
       .click()
     await flushPromises()
     expect(previewShotImport).toHaveBeenCalledWith(9, file, expect.anything())
     expect(document.body.textContent).toContain('旧项目镜头')
-    expect(document.body.textContent).toContain('正式导入 1 行')
+    expect(document.body.textContent).toContain('确认导入 1 条')
 
     await setElSelectValue(wrapper.find('.project-context').findComponent({ name: 'ElSelect' }), '8')
     await flushPromises()
     expect(document.body.querySelector('.import-flow')).toBeNull()
     expect(document.body.textContent).not.toContain('旧项目镜头')
-    expect(document.body.textContent).not.toContain('正式导入 1 行')
+    expect(document.body.textContent).not.toContain('确认导入 1 条')
     const callsAfterImportSwitch = getShotPage.mock.calls.length
     oldImportDialog.$emit('imported', { createdShots: 1 }, {
       projectId: 9,
@@ -582,6 +885,12 @@ describe('镜头管理真实列表页', () => {
 describe('镜头 Element Plus 表单契约', () => {
   beforeEach(() => {
     getScenePage.mockResolvedValue({ rows: [{ sceneId: 31, sceneCode: '001', sceneName: '动力舱' }], total: 1, hasNext: false })
+    getShotPage.mockReset()
+    getShotPage.mockResolvedValue({
+      rows: [{ ...shotRow, status: 'unassigned', assignee: null, storageDirName: null, directoryStatus: 'not_created' }],
+      total: 1,
+      hasNext: false
+    })
     createShot.mockReset()
     createShot.mockResolvedValue({ data: { ...shotRow, shotId: 45, shotCode: 'S005' } })
     updateShot.mockReset()
@@ -594,8 +903,7 @@ describe('镜头 Element Plus 表单契约', () => {
       props: {
         projectId: 8,
         operationGeneration: 1,
-        episodes: [{ episodeId: 21, episodeCode: 'EP001', episodeName: '第一集' }],
-        members: [{ userId: 7, nickName: '杨景锋', projectRole: 'creator' }]
+        episodes: [{ episodeId: 21, episodeCode: 'EP001', episodeName: '第一集' }]
       },
       global: { components: formComponents }
     })
@@ -604,12 +912,11 @@ describe('镜头 Element Plus 表单契约', () => {
     const formItem = prop => formItems.find(item => item.props('prop') === prop)
     const submitButton = wrapper.findAllComponents(ElButton).find(button => button.text() === '创建镜头')
 
-    expect(form.props('model')).toMatchObject({ episodeId: '', sceneId: '', shotNo: null, sortOrder: 0, durationSeconds: 0 })
+    expect(form.props('model')).toMatchObject({ episodeId: '', sceneId: '', sequencePosition: null, durationSeconds: 0 })
     expect(form.props('rules')).toMatchObject({
       episodeId: expect.any(Array),
       sceneId: expect.any(Array),
-      shotNo: expect.any(Array),
-      sortOrder: expect.any(Array),
+      sequencePosition: expect.any(Array),
       durationSeconds: expect.any(Array),
       description: expect.any(Array)
     })
@@ -622,8 +929,8 @@ describe('镜头 Element Plus 表单契约', () => {
 
     await setElSelectValue(formItem('episodeId').findComponent(ElSelect), '21')
     await flushPromises()
-    formItem('shotNo').findComponent(ElInputNumber).vm.$emit('update:modelValue', 5)
-    formItem('sortOrder').findComponent(ElInputNumber).vm.$emit('update:modelValue', 2)
+    expect(getShotPage).toHaveBeenLastCalledWith(8, expect.objectContaining({ episodeId: 21, sceneId: 31 }), expect.anything())
+    await setElSelectValue(formItem('sequencePosition').findComponent(ElSelect), 1)
     formItem('durationSeconds').findComponent(ElInputNumber).vm.$emit('update:modelValue', 1.25)
     formItem('description').findComponent(ElInput).vm.$emit('update:modelValue', '  动力舱推进镜头  ')
     await flushPromises()
@@ -632,18 +939,81 @@ describe('镜头 Element Plus 表单契约', () => {
 
     expect(createShot).toHaveBeenCalledWith(8, expect.objectContaining({
       sceneId: 31,
-      shotNo: 5,
       durationMs: 1250,
       description: '动力舱推进镜头',
-      sortOrder: 2,
+      sequencePosition: 1,
       assetIds: []
     }))
+    const createPayload = createShot.mock.calls[0][1]
+    expect(createPayload).not.toHaveProperty('shotNo')
+    expect(createPayload).not.toHaveProperty('assigneeUserId')
+    expect(createPayload).not.toHaveProperty('taskDescription')
+    expect(wrapper.text()).toContain('创建后状态：未分配')
     expect(wrapper.emitted('saved')).toHaveLength(1)
 
     await wrapper.findAllComponents(ElButton).find(button => button.text() === '取消').trigger('click')
     await flushPromises()
-    expect(form.props('model')).toMatchObject({ episodeId: '', sceneId: '', shotNo: null, sortOrder: 0, durationSeconds: 0, description: '' })
+    expect(form.props('model')).toMatchObject({ episodeId: '', sceneId: '', sequencePosition: null, durationSeconds: 0, description: '' })
     expect(wrapper.emitted('close')).toHaveLength(1)
+    wrapper.unmount()
+  })
+
+  it('历史镜头号不连续时禁止新建并清空场内位置', async () => {
+    getShotPage.mockResolvedValue({
+      rows: [
+        { ...shotRow, status: 'unassigned', shotNo: 2, shotCode: 'S002', sequencePosition: 2 },
+        { ...shotRow, shotId: 42, status: 'unassigned', shotNo: 4, shotCode: 'S004', sequencePosition: 4 }
+      ],
+      total: 2,
+      hasNext: false
+    })
+    const wrapper = mount(ShotFormDialog, {
+      props: {
+        projectId: 8,
+        operationGeneration: 2,
+        episodes: [{ episodeId: 21, episodeCode: 'EP001', episodeName: '第一集' }],
+        initialEpisodeId: '21',
+        initialSceneId: '31'
+      },
+      global: { components: formComponents }
+    })
+    await flushPromises()
+    await flushPromises()
+
+    const form = wrapper.findComponent(ElForm)
+    const submitButton = wrapper.findAllComponents(ElButton).find(button => button.text() === '创建镜头')
+    expect(form.props('model').sequencePosition).toBeNull()
+    expect(wrapper.text()).toContain('当前场次镜头号不连续，请先完成历史数据治理后再新建镜头')
+    expect(submitButton.props('disabled')).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('新建镜头只展示不会推动冻结目录的安全插入位置', async () => {
+    getShotPage.mockResolvedValue({
+      rows: [
+        { ...shotRow, status: 'unassigned', shotNo: 1, shotCode: 'S001', sequencePosition: 1 },
+        { ...shotRow, shotId: 42, status: 'unassigned', assignee: null, shotNo: 2, shotCode: 'S002', sequencePosition: 2, storageDirName: null, directoryStatus: 'not_created' }
+      ],
+      total: 2,
+      hasNext: false
+    })
+    const wrapper = mount(ShotFormDialog, {
+      props: {
+        projectId: 8,
+        operationGeneration: 3,
+        episodes: [{ episodeId: 21, episodeCode: 'EP001', episodeName: '第一集' }],
+        initialEpisodeId: '21',
+        initialSceneId: '31'
+      },
+      global: { components: formComponents }
+    })
+    await flushPromises()
+    await flushPromises()
+
+    const sequenceField = wrapper.findAllComponents(ElFormItem).find(item => item.props('prop') === 'sequencePosition')
+    const values = sequenceField.findAllComponents(ElOption).map(option => option.props('value'))
+    expect(values).toEqual([2, 3])
+    expect(wrapper.findComponent(ElForm).props('model').sequencePosition).toBe(3)
     wrapper.unmount()
   })
 
@@ -663,7 +1033,19 @@ describe('镜头 Element Plus 表单契约', () => {
     const submitButton = wrapper.findAllComponents(ElButton).find(button => button.text() === '创建并分配任务')
 
     expect(form.props('rules')).toMatchObject({ assigneeUserId: expect.any(Array), priority: expect.any(Array), dueDate: expect.any(Array) })
-    expect(formItems.map(item => item.props('prop'))).toEqual(['assigneeUserId', 'priority', 'dueDate', 'taskDescription'])
+    expect(formItems.map(item => item.props('prop'))).toEqual(['assigneeUserId', 'priority', 'dueDate'])
+    expect(wrapper.find('textarea').exists()).toBe(false)
+    const productionInfo = wrapper.find('.assign-form__production')
+    expect(productionInfo.text()).toContain('完整制作信息')
+    expect(productionInfo.text()).toContain(shotRow.description)
+    expect(productionInfo.text()).toContain(shotRow.shotSize)
+    expect(productionInfo.text()).toContain(shotRow.cameraPosition)
+    expect(productionInfo.text()).toContain(shotRow.cameraMovement)
+    expect(productionInfo.text()).toContain(shotRow.focalLength)
+    expect(productionInfo.text()).toContain(shotRow.dialogue)
+    expect(productionInfo.text()).toContain(shotRow.soundEffect)
+    expect(productionInfo.text()).toContain(shotRow.colorReference)
+    expect(productionInfo.text()).toContain(shotRow.remark)
     expect(submitButton.props('nativeType')).toBe('button')
 
     await submitButton.trigger('click')
@@ -672,14 +1054,12 @@ describe('镜头 Element Plus 表单契约', () => {
 
     await setElSelectValue(formItem('assigneeUserId').findComponent(ElSelect), '7')
     formItem('dueDate').findComponent(ElDatePicker).vm.$emit('update:modelValue', '2026-09-01')
-    formItem('taskDescription').findComponent(ElInput).vm.$emit('update:modelValue', '完成镜头视频制作')
     await flushPromises()
     await submitButton.trigger('click')
     await flushPromises()
 
     expect(assignShotTask).toHaveBeenCalledWith(8, 41, {
       assigneeUserId: 7,
-      taskDescription: '完成镜头视频制作',
       priority: 'normal',
       dueDate: '2026-09-01'
     })
@@ -689,6 +1069,34 @@ describe('镜头 Element Plus 表单契约', () => {
     await flushPromises()
     expect(form.props('model')).toMatchObject({ assigneeUserId: '', dueDate: '', priority: 'normal' })
     expect(wrapper.emitted('close')).toHaveLength(1)
+    wrapper.unmount()
+  })
+
+  it('镜头任务改派仍完整展示只读制作信息，并只保留制作人字段', () => {
+    const wrapper = mount(ShotAssignDialog, {
+      props: {
+        projectId: 8,
+        operationGeneration: 4,
+        shot: {
+          ...shotRow,
+          task: {
+            assignee: { userId: 7, nickName: '杨景锋' },
+            priority: 'high',
+            dueDate: '2026-09-01',
+            lockVersion: 3
+          }
+        },
+        members: [{ userId: 7, nickName: '杨景锋', projectRole: 'creator' }]
+      },
+      global: { components: formComponents }
+    })
+
+    expect(wrapper.findAllComponents(ElFormItem).map(item => item.props('prop'))).toEqual(['assigneeUserId'])
+    const productionInfo = wrapper.find('.assign-form__production')
+    expect(productionInfo.text()).toContain(shotRow.description)
+    expect(productionInfo.text()).toContain(shotRow.soundEffect)
+    expect(productionInfo.text()).toContain(shotRow.colorReference)
+    expect(wrapper.find('textarea').exists()).toBe(false)
     wrapper.unmount()
   })
 })
@@ -722,7 +1130,7 @@ describe('镜头详情跨项目请求隔离', () => {
 
     const { wrapper } = await mountDetailView()
     expect(findTag(wrapper, '修改中').props()).toMatchObject({ type: 'danger', effect: 'light', round: true })
-    expect(findTag(wrapper, '目录失败').props()).toMatchObject({ type: 'danger', effect: 'plain', round: true })
+    expect(findTag(wrapper, '目录处理异常').props()).toMatchObject({ type: 'danger', effect: 'plain', round: true })
     expect(findTag(wrapper, '待审核').props()).toMatchObject({ type: 'warning', effect: 'light', round: true })
     expect(findTag(wrapper, '紧急').props()).toMatchObject({ type: 'danger', effect: 'plain', round: true })
     expect(findTag(wrapper, '已退回').props()).toMatchObject({ type: 'danger', effect: 'light', round: true })
@@ -745,11 +1153,12 @@ describe('镜头详情跨项目请求隔离', () => {
     expect(wrapper.text()).toContain('旧项目镜头')
 
     await wrapper.findAll('button').find(button => button.text().includes('编辑镜头')).trigger('click')
+    await flushPromises()
     expect(document.body.querySelector('.shot-form')).not.toBeNull()
 
     await router.push('/projects/9/shots/51')
     await flushPromises()
-    expect(wrapper.text()).toContain('正在加载镜头详情')
+    expect(wrapper.find('.detail-loading').attributes('aria-busy')).toBe('true')
     expect(wrapper.text()).not.toContain('旧项目镜头')
     expect(document.body.querySelector('.shot-form')).toBeNull()
     expect(wrapper.text()).not.toContain('编辑镜头')

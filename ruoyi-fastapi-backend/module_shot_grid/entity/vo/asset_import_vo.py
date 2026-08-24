@@ -24,11 +24,7 @@ class AssetImportNormalizedRowModel(ShotGridApiModel):
     production_item: str | None = Field(default=None, description='制作分项名称')
     production_item_key: str | None = Field(default=None, description='制作分项匹配键')
     item_description: str | None = Field(default=None, description='制作分项描述')
-    task_description: str | None = Field(default=None, description='制作任务要求')
     remark: str | None = Field(default=None, description='制作分项备注')
-    assignee_user_name: str | None = Field(default=None, description='Excel 原始制作人文本')
-    assignee_user_id: int | None = Field(default=None, description='唯一匹配的项目成员用户ID')
-    producer_code: str | None = Field(default=None, description='制作人用户昵称（内部兼容字段）')
     import_row_key: str | None = Field(default=None, description='来源文件、Sheet和行号幂等键')
 
 
@@ -87,9 +83,7 @@ class AssetImportPreviewResponseModel(ShotGridApiModel):
 
 
 class AssetImportSelectedRowModel(ImportSelectedRowModel):
-    """正式提交时允许为单个制作分项覆盖或清空制作人。"""
-
-    assignee_user_id: int | None = Field(default=None, gt=0, description='制作人用户ID；显式 null 表示未分配')
+    """资产导入选择行；导入只创建资产及制作分项，不承载任务委派。"""
 
 
 class AssetImportCommitRequestModel(ShotGridApiModel):
@@ -114,7 +108,6 @@ class AssetImportCommitResultModel(ShotGridApiModel):
     created_assets_by_type: dict[str, int] = Field(default_factory=dict, description='各类型新增父资产数')
     reused_assets: int = Field(default=0, ge=0, description='复用已有父资产数')
     created_asset_items: int = Field(default=0, ge=0, description='新增制作分项数')
-    created_tasks: int = Field(default=0, ge=0, description='新增资产图片任务数')
     missing_production_item_warnings: int = Field(default=0, ge=0, description='缺少制作分项警告数')
     auto_matched_requirements: int = Field(default=0, ge=0, description='本次自动匹配需求数')
     pending_requirements: int = Field(default=0, ge=0, description='项目仍待匹配需求数')

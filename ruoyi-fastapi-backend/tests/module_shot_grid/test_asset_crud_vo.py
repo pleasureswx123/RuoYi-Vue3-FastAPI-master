@@ -9,7 +9,6 @@ from module_shot_grid.entity.vo.asset_crud_vo import (
     ShotGridAssetUpdateModel,
 )
 
-ASSIGNEE_USER_ID = 2
 SQL_BIGINT_MAX = 9_223_372_036_854_775_807
 
 
@@ -20,8 +19,6 @@ def _asset_create(**changes: object) -> ShotGridAssetCreateModel:
         'items': [
             {
                 'productionItem': ' 主视角 ',
-                'assigneeUserId': 2,
-                'taskDescription': '制作场景参考图',
             }
         ],
     }
@@ -29,12 +26,11 @@ def _asset_create(**changes: object) -> ShotGridAssetCreateModel:
     return ShotGridAssetCreateModel.model_validate(payload)
 
 
-def test_asset_create_normalizes_text_and_keeps_single_assignee() -> None:
+def test_asset_create_normalizes_text_without_creating_task_input() -> None:
     command = _asset_create()
 
     assert command.asset_name == '动力舱室内'
     assert command.items[0].production_item == '主视角'
-    assert command.items[0].assignee_user_id == ASSIGNEE_USER_ID
 
 
 @pytest.mark.parametrize(
@@ -65,12 +61,14 @@ def test_asset_create_rejects_duplicate_named_items() -> None:
         )
 
 
-def test_asset_item_update_distinguishes_omitted_and_explicit_null_assignee() -> None:
+def test_asset_item_update_rejects_task_assignment_fields() -> None:
     omitted = ShotGridAssetItemUpdateModel(productionItem='主视角', lockVersion=0)
-    explicit_null = ShotGridAssetItemUpdateModel(productionItem='主视角', assigneeUserId=None, lockVersion=0)
+    assert omitted.production_item == '主视角'
 
-    assert 'assignee_user_id' not in omitted.model_fields_set
-    assert 'assignee_user_id' in explicit_null.model_fields_set
+    with pytest.raises(ValidationError):
+        ShotGridAssetItemUpdateModel(productionItem='主视角', assigneeUserId=None, lockVersion=0)
+    with pytest.raises(ValidationError):
+        ShotGridAssetItemUpdateModel(productionItem='主视角', taskDescription='旧任务要求', lockVersion=0)
 
     with pytest.raises(ValidationError):
         ShotGridAssetItemUpdateModel(sortOrder=None, lockVersion=0)
@@ -87,9 +85,11 @@ def test_asset_query_restricts_sort_and_page_size() -> None:
         ShotGridAssetListQueryModel(pageSize=101)
 
 
-def test_asset_assignee_rejects_id_outside_postgresql_bigint() -> None:
+def test_asset_create_rejects_task_assignment_and_query_bounds_assignee_filter() -> None:
     with pytest.raises(ValidationError):
-        _asset_create(items=[{'productionItem': '主视角', 'assigneeUserId': SQL_BIGINT_MAX + 1}])
+        _asset_create(items=[{'productionItem': '主视角', 'assigneeUserId': 2}])
+    with pytest.raises(ValidationError):
+        _asset_create(items=[{'productionItem': '主视角', 'taskDescription': '任务要求'}])
 
     with pytest.raises(ValidationError):
         ShotGridAssetListQueryModel(assigneeUserId=SQL_BIGINT_MAX + 1)

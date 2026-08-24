@@ -31,19 +31,6 @@ class RecordingDb:
 
 
 @pytest.mark.asyncio
-async def test_assignable_members_only_include_active_members_and_users() -> None:
-    db = RecordingDb()
-
-    await AssetImportDao.get_member_candidates(db, 1, {'maker'})  # type: ignore[arg-type]
-    compiled = str(db.statement.compile(compile_kwargs={'literal_binds': True}))
-
-    assert "sg_project_member.member_status = 'active'" in compiled
-    assert "sg_project_member.project_role = 'creator'" in compiled
-    assert "sys_user.status = '0'" in compiled
-    assert "sys_user.del_flag = '0'" in compiled
-
-
-@pytest.mark.asyncio
 async def test_project_storage_query_keeps_project_status_visible_and_locks_project_row() -> None:
     db = RecordingDb()
 

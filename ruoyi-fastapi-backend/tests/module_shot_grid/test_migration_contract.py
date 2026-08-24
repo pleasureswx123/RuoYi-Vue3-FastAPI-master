@@ -5,12 +5,15 @@ from sqlalchemy import DateTime
 
 from config.database import Base
 from module_shot_grid.schema import (
+    SHOT_GRID_DEFERRED_SHOT_DIRECTORY_SCHEMA_REVISION,
     SHOT_GRID_IMPORT_SCHEMA_REVISION,
     SHOT_GRID_INITIAL_SCHEMA_REVISION,
     SHOT_GRID_MANAGED_USER_ROLE_SCHEMA_REVISION,
     SHOT_GRID_MEMBER_SCHEMA_REVISION,
     SHOT_GRID_PERMISSION_CODES,
     SHOT_GRID_REPAIR_SCHEMA_REVISION,
+    SHOT_GRID_REVIEW_ISSUE_DRAFT_SCHEMA_REVISION,
+    SHOT_GRID_SCENE_SEQUENCE_GUARD_SCHEMA_REVISION,
     SHOT_GRID_SCHEMA_REVISION,
     SHOT_GRID_SHOT_DELETE_SCHEMA_REVISION,
     SHOT_GRID_STORAGE_WORKER_SCHEMA_REVISION,
@@ -269,8 +272,11 @@ def test_task_version_review_migration_is_an_explicit_non_postgresql_noop() -> N
 
 def test_postgresql_baseline_is_stamped_at_the_current_head() -> None:
     baseline = (BACKEND_ROOT / 'sql' / 'ruoyi-fastapi-pg.sql').read_text(encoding='utf-8')
+    shot_table = baseline.split('CREATE TABLE sg_shot (', maxsplit=1)[1].split('\n);', maxsplit=1)[0]
 
     assert f"insert into alembic_version(version_num) values ('{SHOT_GRID_SCHEMA_REVISION}');" in baseline
+    assert '\tstorage_dir_name VARCHAR(32),' in shot_table
+    assert '\tstorage_dir_name VARCHAR(32) NOT NULL' not in shot_table
     assert 'selection_hash CHAR(64)' in baseline
     assert 'result_summary JSONB' in baseline
     assert 'ck_sg_asset_item_import_source' in baseline
@@ -282,6 +288,9 @@ def test_postgresql_baseline_is_stamped_at_the_current_head() -> None:
     assert 'uk_sg_version_submission_source_file' in baseline
     assert 'idx_sg_task_assignee_status_due' in baseline
     assert 'uk_sg_review_action_idempotency' in baseline
+    assert 'CREATE TABLE sg_review_issue_draft' in baseline
+    assert 'uk_sg_review_list_id_project' in baseline
+    assert 'idx_sg_review_issue_draft_list_version_time' in baseline
     assert 'CREATE TABLE sg_managed_user_role' in baseline
     assert 'fk_sg_managed_user_role_user_role' in baseline
     assert 'REFERENCES sys_user_role (user_id, role_id) ON DELETE CASCADE' in baseline
@@ -300,6 +309,41 @@ def test_postgresql_baseline_is_stamped_at_the_current_head() -> None:
     assert (
         "CREATE UNIQUE INDEX uk_sg_scene_no_active ON sg_scene (episode_id, scene_no) WHERE del_flag = '0'" in baseline
     )
+
+
+def test_scene_sequence_guard_extends_deferred_directory_revision_and_fails_before_mutation() -> None:
+    migration = _migration_namespace(SHOT_GRID_SCENE_SEQUENCE_GUARD_SCHEMA_REVISION)
+    source = Path(migration['__file__']).read_text(encoding='utf-8')
+
+    assert migration['revision'] == SHOT_GRID_SCENE_SEQUENCE_GUARD_SCHEMA_REVISION
+    assert migration['down_revision'] == SHOT_GRID_DEFERRED_SHOT_DIRECTORY_SCHEMA_REVISION
+    assert source.index('DO $shot_grid_scene_sequence_guard$') < source.index('UPDATE sg_shot')
+    assert 'SG_SHOT_SEQUENCE_NOT_CONTIGUOUS' in source
+    assert 'PARTITION BY scene_id' in source
+    assert "WHERE lifecycle_status = 'active' AND del_flag = '0'" in source
+
+
+def test_scene_sequence_guard_is_an_explicit_non_postgresql_noop() -> None:
+    migration = _migration_namespace(SHOT_GRID_SCENE_SEQUENCE_GUARD_SCHEMA_REVISION)
+
+    for action_name in ('upgrade', 'downgrade'):
+        action = migration[action_name]
+        action.__globals__['_is_postgresql'] = lambda: False
+        action()
+
+
+def test_review_issue_draft_migration_extends_scene_guard_and_preserves_drafts_on_downgrade() -> None:
+    migration = _migration_namespace(SHOT_GRID_REVIEW_ISSUE_DRAFT_SCHEMA_REVISION)
+    source = Path(migration['__file__']).read_text(encoding='utf-8')
+
+    assert migration['revision'] == SHOT_GRID_REVIEW_ISSUE_DRAFT_SCHEMA_REVISION
+    assert migration['down_revision'] == SHOT_GRID_SCENE_SEQUENCE_GUARD_SCHEMA_REVISION
+    assert "'sg_review_issue_draft'" in source
+    assert 'INSERT INTO sg_review_issue_draft' in source
+    assert 'DELETE FROM sg_note AS note' in source
+    assert 'INSERT INTO sg_note' in source
+    assert 'sg_version_issue_response' in source
+    assert 'sg_issue_verification' in source
 
 
 def test_managed_user_role_migration_only_adds_provenance_table() -> None:
@@ -344,15 +388,16 @@ def test_migration_ddl_contains_every_named_metadata_constraint_and_index() -> N
     assert 'TIMESTAMP(0) WITHOUT TIME ZONE' in ddl
 
 
-def test_migration_seeds_all_and_only_the_frozen_permissions() -> None:
+def test_initial_migration_seeds_frozen_and_legacy_permissions_without_duplicates() -> None:
     migration = _migration_namespace(SHOT_GRID_INITIAL_SCHEMA_REVISION)
     permission_sequence = [migration['ROOT_MENU_SEED'][-1]]
     permission_sequence.extend(seed[-1] for seed in migration['CHILD_MENU_SEEDS'])
     permission_sequence.extend(seed[-1] for seed in migration['PERMISSION_BUTTON_SEEDS'])
+    legacy_permissions = {'shotgrid:note:reply', 'shotgrid:note:resolve'}
 
-    assert len(permission_sequence) == len(SHOT_GRID_PERMISSION_CODES)
+    assert len(permission_sequence) == len(SHOT_GRID_PERMISSION_CODES | legacy_permissions)
     assert len(permission_sequence) == len(set(permission_sequence))
-    assert set(permission_sequence) == SHOT_GRID_PERMISSION_CODES
+    assert set(permission_sequence) == SHOT_GRID_PERMISSION_CODES | legacy_permissions
 
 
 def test_migration_seeds_the_frozen_dictionary_types() -> None:

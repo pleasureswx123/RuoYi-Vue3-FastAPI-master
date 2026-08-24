@@ -9,6 +9,8 @@ const props = defineProps({
   taskId: { type: Number, required: true },
   taskKind: { type: String, required: true },
   taskStatus: { type: String, required: true },
+  versionCount: { type: Number, default: 0 },
+  productionDescription: { type: String, default: '' },
   openIssues: { type: Array, default: () => [] },
   allowedActions: { type: Array, default: () => [] },
   hasUncommittedSubmission: { type: Boolean, default: false },
@@ -71,6 +73,8 @@ function focusIssue(issue) {
       :task-id="taskId"
       :task-kind="taskKind"
       :task-status="taskStatus"
+      :version-count="versionCount"
+      :production-description="productionDescription"
       :open-issues="openIssues"
       :allowed-actions="allowedActions"
       :has-uncommitted-submission="hasUncommittedSubmission"

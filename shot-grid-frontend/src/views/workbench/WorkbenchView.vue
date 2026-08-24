@@ -296,7 +296,7 @@ onBeforeUnmount(() => {
           <el-select v-model="query.taskKind" class="sg-select" placeholder="全部类型" aria-label="按任务类型筛选" @change="submitFilters"><el-option label="全部类型" value="" /><el-option label="镜头视频" value="shot_video" /><el-option label="资产图片" value="asset_image" /></el-select>
         </el-form-item>
         <el-form-item class="task-filter-item" label="任务状态" prop="taskStatus">
-          <el-select v-model="query.taskStatus" class="sg-select" placeholder="全部状态" aria-label="按任务状态筛选" @change="submitFilters"><el-option label="全部状态" value="" /><el-option label="未开始" value="not_started" /><el-option label="制作中" value="in_progress" /><el-option label="待审核" value="pending_review" /><el-option label="待修订" value="revision" /><el-option label="已完成" value="completed" /></el-select>
+          <el-select v-model="query.taskStatus" class="sg-select" placeholder="全部状态" aria-label="按任务状态筛选" @change="submitFilters"><el-option label="全部状态" value="" /><el-option label="未开始" value="not_started" /><el-option label="目录准备中" value="preparing" /><el-option label="制作中" value="in_progress" /><el-option label="待审核" value="pending_review" /><el-option label="待修订" value="revision" /><el-option label="已完成" value="completed" /></el-select>
         </el-form-item>
         <el-form-item class="task-filter-item" label="优先级" prop="priority">
           <el-select v-model="query.priority" class="sg-select" placeholder="全部优先级" aria-label="按优先级筛选" @change="submitFilters"><el-option label="全部优先级" value="" /><el-option label="紧急" value="urgent" /><el-option label="高" value="high" /><el-option label="普通" value="normal" /><el-option label="低" value="low" /></el-select>

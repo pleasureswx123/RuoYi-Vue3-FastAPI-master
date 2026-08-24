@@ -25,6 +25,7 @@ import AssetAssignDialog from '@/views/asset/components/AssetAssignDialog.vue'
 import AssetFormDialog from '@/views/asset/components/AssetFormDialog.vue'
 import AssetImportDialog from '@/views/asset/components/AssetImportDialog.vue'
 import AssetItemFormDialog from '@/views/asset/components/AssetItemFormDialog.vue'
+import ProtectedAssetThumbnail from '@/views/asset/components/ProtectedAssetThumbnail.vue'
 import AssetRequirementDialog from '@/views/asset/components/AssetRequirementDialog.vue'
 
 vi.mock('@/api/shot-grid/projects', () => ({
@@ -152,7 +153,13 @@ async function mountDetail(path = '/projects/8/assets/31', permissions = ['shotg
   })
   await router.push(path)
   await router.isReady()
-  const wrapper = mount(AssetDetailView, { global: { plugins: [pinia, router], components: { ElButton, ElDatePicker, ElForm, ElFormItem, ElIcon, ElInput, ElTag } } })
+  const wrapper = mount(AssetDetailView, {
+    global: {
+      plugins: [pinia, router],
+      components: { ElButton, ElDatePicker, ElForm, ElFormItem, ElIcon, ElInput, ElTag },
+      stubs: { ProductionHistoryPanel: true, ProtectedAssetThumbnail: true }
+    }
+  })
   await flushPromises()
   return { wrapper, router }
 }
@@ -164,6 +171,7 @@ function mountAssetDialog(component, props) {
       components: {
         ElAlert,
         ElButton,
+        ElCard,
         ElDatePicker,
         ElDialog,
         ElForm,
@@ -177,6 +185,11 @@ function mountAssetDialog(component, props) {
         ElTable,
         ElTableColumn,
         ElTag
+      },
+      stubs: {
+        ElDialog: {
+          template: '<section><slot name="header" /><slot /><slot name="footer" /></section>'
+        }
       },
       directives: { loading: ElLoading.directive }
     }
@@ -201,14 +214,20 @@ describe('资产管理真实列表页', () => {
     expect(filterForm.findComponent(ElInput).classes()).toContain('sg-input')
     expect(wrapper.text()).toContain('LCFR · 罗刹夫人')
     expect(wrapper.text()).toContain('动力舱室内')
-    expect(wrapper.text()).toContain('12')
+    expect(wrapper.text()).toContain('1个资产')
     expect(wrapper.find('.asset-table-wrap').text()).toContain('杨景锋')
     expect(wrapper.text()).toContain('导入 Excel')
     expect(wrapper.text()).toContain('新建资产')
     const tableTags = wrapper.find('.asset-table-wrap').findAllComponents(ElTag)
     expect(tableTags.find(tag => tag.text() === '场景')?.props('type')).toBe('primary')
-    expect(tableTags.find(tag => tag.text() === '制作中')?.props('type')).toBe('warning')
-    expect(tableTags.find(tag => tag.text() === '目录就绪')?.props('type')).toBe('success')
+    const productionStatusTag = tableTags.find(tag => tag.text() === '制作中')
+    expect(productionStatusTag.props()).toMatchObject({ type: 'primary', effect: 'light', round: true })
+    expect(productionStatusTag.classes()).toEqual(expect.arrayContaining(['asset-status-tag', 'asset-status-tag--in_progress']))
+    expect(wrapper.find('.asset-table-wrap').text()).not.toContain('目录已就绪')
+    const tableColumns = wrapper.findAllComponents(ElTableColumn)
+    const rightFixedColumns = tableColumns.filter(column => column.props('fixed') === 'right')
+    expect(rightFixedColumns.map(column => column.props('label'))).toEqual(['制作人', '状态', '操作'])
+    expect(tableColumns.slice(-3).map(column => column.props('label'))).toEqual(['制作人', '状态', '操作'])
 
     const filterSelects = wrapper.find('.asset-filters').findAllComponents({ name: 'ElSelect' })
     await setElSelectValue(filterSelects[0], 'Environment')
@@ -399,8 +418,8 @@ describe('资产详情动作镜像与路由隔离', () => {
     expect(wrapper.text()).toContain('分配任务')
     const tags = wrapper.findAllComponents(ElTag)
     expect(tags.find(tag => tag.text() === '场景')?.props('type')).toBe('primary')
-    expect(tags.find(tag => tag.text() === '制作中')?.props('type')).toBe('warning')
-    expect(tags.find(tag => tag.text() === '目录就绪')?.props('type')).toBe('success')
+    expect(tags.find(tag => tag.text() === '制作中')?.props('type')).toBe('primary')
+    expect(tags.find(tag => tag.text() === '目录已就绪')?.props('type')).toBe('primary')
     expect(tags.find(tag => tag.text() === '活动')?.props('type')).toBe('success')
     wrapper.unmount()
 
@@ -412,6 +431,76 @@ describe('资产详情动作镜像与路由隔离', () => {
     expect(restrictedButtons).not.toContain('归档资产')
     expect(restrictedButtons).not.toContain('分配任务')
     restricted.wrapper.unmount()
+  })
+
+  it('详情头部按活动制作分项顺序展示各自当前缩略图', async () => {
+    const firstThumbnail = {
+      fileId: 'thumbnail-1',
+      name: '主视角.jpg',
+      url: '/shot-grid/versions/91/files/thumbnail-1/download'
+    }
+    const secondThumbnail = {
+      fileId: 'thumbnail-2',
+      name: '反打视角.jpg',
+      url: '/shot-grid/versions/92/files/thumbnail-2/download'
+    }
+    getAssetDetail.mockResolvedValue({
+      data: {
+        ...assetDetail(),
+        items: [
+          {
+            ...assetItem,
+            assetItemId: 42,
+            productionItem: '反打视角',
+            sortOrder: 20,
+            latestVersion: { versionNo: 2, versionStatus: 'final' },
+            thumbnail: secondThumbnail
+          },
+          {
+            ...assetItem,
+            assetItemId: 41,
+            productionItem: '主视角',
+            sortOrder: 10,
+            latestVersion: { versionNo: 1, versionStatus: 'pending_review' },
+            thumbnail: firstThumbnail
+          },
+          {
+            ...assetItem,
+            assetItemId: 43,
+            productionItem: '已归档视角',
+            lifecycleStatus: 'archived'
+          }
+        ]
+      }
+    })
+
+    const { wrapper } = await mountDetail()
+    const gallery = wrapper.find('.asset-hero__gallery')
+    const thumbnails = gallery.findAllComponents(ProtectedAssetThumbnail)
+    expect(thumbnails).toHaveLength(2)
+    expect(thumbnails.map(component => component.props('thumbnail'))).toEqual([firstThumbnail, secondThumbnail])
+    expect(gallery.text()).toContain('主视角V001 · 待审核')
+    expect(gallery.text()).toContain('反打视角V002 · 最终版本')
+    expect(gallery.text()).not.toContain('已归档视角')
+    wrapper.unmount()
+  })
+
+  it('制作任务开始后详情页不再提供编辑分项入口', async () => {
+    getAssetDetail.mockResolvedValue({
+      data: {
+        ...assetDetail(),
+        items: [{
+          ...assetItem,
+          task: { assigneeUserId: 7, assigneeName: '曲占锋', taskStatus: 'in_progress', priority: 'normal' },
+          allowedActions: ['task.assign']
+        }]
+      }
+    })
+    const { wrapper } = await mountDetail()
+    const buttons = wrapper.findAll('button').map(button => button.text())
+    expect(buttons).not.toContain('编辑分项')
+    expect(buttons).toContain('改派任务')
+    wrapper.unmount()
   })
 
   it('制作分项任务、优先级与版本状态使用对应 ElTag 类型', async () => {
@@ -571,8 +660,7 @@ describe('资产表单统一使用 Element Plus 校验链路', () => {
   it('资产创建表单在名称校验通过后由点击按钮创建资产', async () => {
     const wrapper = mountAssetDialog(AssetFormDialog, {
       projectId: 8,
-      operationGeneration: 1,
-      members: [memberRow]
+      operationGeneration: 1
     })
     const form = wrapper.findComponent(ElForm)
     const createButton = form.findAllComponents(ElButton).find(button => button.text() === '创建资产')
@@ -588,26 +676,26 @@ describe('资产表单统一使用 Element Plus 校验链路', () => {
     await createButton.trigger('click')
     await flushPromises()
     expect(createAsset).toHaveBeenCalledWith(8, expect.objectContaining({ assetName: '新场景资产', assetType: 'Character' }))
+    const createPayload = createAsset.mock.calls[0][1]
+    expect(createPayload.items[0]).not.toHaveProperty('assigneeUserId')
+    expect(createPayload.items[0]).not.toHaveProperty('taskDescription')
+    expect(wrapper.text()).toContain('创建后状态：未分配')
     wrapper.unmount()
   })
 
-  it('制作分项表单使用 Form 规则阻止未命名分项直接分配制作人', async () => {
+  it('制作分项表单只保存未分配分项，任务由后续分配操作创建', async () => {
     const wrapper = mountAssetDialog(AssetItemFormDialog, {
       projectId: 8,
       operationGeneration: 1,
-      asset: assetDetail(),
-      members: [memberRow]
+      asset: assetDetail()
     })
     const form = wrapper.findComponent(ElForm)
     const sortItem = form.findAllComponents(ElFormItem).find(item => item.props('prop') === 'sortOrder')
     const saveButton = form.findAllComponents(ElButton).find(button => button.text() === '新增分项')
     expect(sortItem.findComponent(ElInputNumber).exists()).toBe(true)
-
-    form.props('model').assigneeUserId = '7'
-    await wrapper.vm.$nextTick()
-    await saveButton.trigger('click')
-    await flushPromises()
-    expect(createAssetItem).not.toHaveBeenCalled()
+    expect(form.props('model')).not.toHaveProperty('assigneeUserId')
+    expect(form.props('model')).not.toHaveProperty('taskDescription')
+    expect(wrapper.text()).toContain('保存后状态：未分配')
 
     form.props('model').productionItem = '恐怖气氛主视角'
     form.props('model').sortOrder = 2
@@ -615,6 +703,9 @@ describe('资产表单统一使用 Element Plus 校验链路', () => {
     await saveButton.trigger('click')
     await flushPromises()
     expect(createAssetItem).toHaveBeenCalledWith(8, 31, expect.objectContaining({ sortOrder: 2 }))
+    const itemPayload = createAssetItem.mock.calls[0][2]
+    expect(itemPayload).not.toHaveProperty('assigneeUserId')
+    expect(itemPayload).not.toHaveProperty('taskDescription')
     wrapper.unmount()
   })
 
@@ -642,7 +733,7 @@ describe('资产表单统一使用 Element Plus 校验链路', () => {
     await wrapper.findAllComponents(ElButton).find(button => button.text() === '选择资产').trigger('click')
     await flushPromises()
     const resolveForm = wrapper.findAllComponents(ElForm).find(form => form.attributes('aria-label') === '资产需求匹配表单')
-    const resolveButton = wrapper.findAllComponents(ElButton).find(button => button.text() === '确认匹配')
+    const resolveButton = wrapper.findAll('button').find(button => button.text().includes('确认匹配'))
     expect(resolveForm.props('rules')).toHaveProperty('assetId')
     expect(resolveForm.props('rules')).toHaveProperty('reason')
 

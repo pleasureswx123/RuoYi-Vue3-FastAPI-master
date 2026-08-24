@@ -1,7 +1,8 @@
 from datetime import date, datetime
+from http import HTTPStatus
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from sqlalchemy.exc import IntegrityError
@@ -26,6 +27,7 @@ ASSET_ITEM_ID = 50
 ASSIGNEE_USER_ID = 2
 INITIAL_TASK_LOCK_VERSION = 3
 UPDATED_TASK_LOCK_VERSION = 4
+SHOT_DURATION_MS = 8000
 
 
 def _current_user(
@@ -71,6 +73,9 @@ def _task(
     return SimpleNamespace(
         task_id=TASK_ID,
         project_id=PROJECT_ID,
+        task_kind='shot_video',
+        shot_id=SHOT_ID,
+        asset_item_id=None,
         assignee_user_id=assignee_user_id,
         task_status='not_started',
         priority='normal',
@@ -105,6 +110,7 @@ def _task_row(**overrides: Any) -> dict[str, Any]:
         'project_code': 'LCFR',
         'project_name': '罗刹夫人',
         'project_status': 'active',
+        'assignee_user_name': '杨景锋',
         'assignee_nick_name': '杨景锋',
         'assignee_producer_code': 'YJF',
         'assignee_member_status': 'active',
@@ -114,8 +120,17 @@ def _task_row(**overrides: Any) -> dict[str, Any]:
         'scene_no': 1,
         'scene_name': '动力舱',
         'shot_no': 1,
-        'shot_storage_dir_name': 'S001',
+        'shot_storage_dir_name': '001_S001',
+        'shot_duration_ms': SHOT_DURATION_MS,
         'shot_description': '主角进入动力舱',
+        'shot_size': '中景',
+        'shot_camera_position': '平视机位',
+        'shot_camera_movement': '缓慢推进',
+        'shot_focal_length': '35',
+        'shot_dialogue': '准备启动。',
+        'shot_sound_effect': '轻微电流声',
+        'shot_color_reference': '冷蓝色调',
+        'shot_remark': '保持画面稳定',
         'shot_lifecycle_status': 'active',
         'asset_id': None,
         'production_item': None,
@@ -159,9 +174,61 @@ def test_task_detail_builds_target_version_and_permission_actions() -> None:
 
     assert detail.target.target_type == 'shot'
     assert detail.target.target_name == 'EP001-001-S001'
+    assert detail.assignee.user_name == '杨景锋'
+    assert detail.shot_production is not None
+    assert detail.shot_production.duration_ms == SHOT_DURATION_MS
+    assert detail.shot_production.description == '主角进入动力舱'
+    assert detail.shot_production.shot_size == '中景'
+    assert detail.shot_production.camera_position == '平视机位'
+    assert detail.shot_production.camera_movement == '缓慢推进'
+    assert detail.shot_production.focal_length == '35'
+    assert detail.shot_production.dialogue == '准备启动。'
+    assert detail.shot_production.sound_effect == '轻微电流声'
+    assert detail.shot_production.color_reference == '冷蓝色调'
+    assert detail.shot_production.remark == '保持画面稳定'
     assert detail.latest_version is not None
     assert detail.latest_version.version_number == 'V001'
     assert detail.allowed_actions == ['version.add']
+
+
+def test_task_detail_hides_legacy_internal_worker_owner() -> None:
+    detail = ShotGridTaskService._build_detail(
+        _task_row(
+            update_by=(
+                '31412-9d227a:31412:c380be68a38c43aebe690f61258a664f:'
+                'a58a5b5baeb5'
+            )
+        ),
+        _current_user(user_id=ASSIGNEE_USER_ID),
+        _access(user_id=ASSIGNEE_USER_ID, role='creator'),
+    )
+
+    assert detail.update_by == '系统目录服务'
+
+
+@pytest.mark.asyncio
+async def test_task_detail_recovers_legacy_worker_owner_from_directory_operation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw_worker_owner = (
+        '31412-9d227a:31412:c380be68a38c43aebe690f61258a664f:'
+        'a58a5b5baeb5'
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.task_service.ShotGridTaskDao.get_task_detail',
+        AsyncMock(return_value=_task_row(update_by=raw_worker_owner)),
+    )
+    operation_actor = AsyncMock(return_value='曲占锋')
+    monkeypatch.setattr(
+        'module_shot_grid.service.task_service.ShotGridTaskDao.get_latest_succeeded_shot_directory_operation_actor',
+        operation_actor,
+    )
+
+    db = AsyncMock()
+    row = await ShotGridTaskService._require_task_detail(db, TASK_ID)
+
+    assert row['update_by'] == '曲占锋'
+    operation_actor.assert_awaited_once_with(db, PROJECT_ID, SHOT_ID)
 
 
 def test_task_detail_hides_version_add_while_uncommitted_submission_exists() -> None:
@@ -173,6 +240,50 @@ def test_task_detail_hides_version_add_while_uncommitted_submission_exists() -> 
 
     assert detail.has_uncommitted_submission is True
     assert 'version.add' not in detail.allowed_actions
+
+
+def test_task_detail_does_not_offer_production_actions_to_director_or_all_scope() -> None:
+    row = _task_row(task_status='not_started', assignee_user_id=ASSIGNEE_USER_ID)
+    current_user = _current_user(user_id=ASSIGNEE_USER_ID)
+
+    director_actions = ShotGridTaskService._allowed_actions(
+        row,
+        current_user,
+        _access(user_id=ASSIGNEE_USER_ID, role='director'),
+    )
+    all_scope_actions = ShotGridTaskService._allowed_actions(
+        row,
+        current_user,
+        _access(user_id=ASSIGNEE_USER_ID, all_scope=True),
+    )
+    creator_actions = ShotGridTaskService._allowed_actions(
+        row,
+        current_user,
+        _access(user_id=ASSIGNEE_USER_ID, role='creator'),
+    )
+
+    assert 'task.start' not in director_actions
+    assert 'task.start' not in all_scope_actions
+    assert 'task.start' in creator_actions
+
+
+def test_task_detail_only_offers_edit_before_task_starts() -> None:
+    current_user = _current_user()
+    access = _access()
+
+    not_started_actions = ShotGridTaskService._allowed_actions(
+        _task_row(task_status='not_started'),
+        current_user,
+        access,
+    )
+    in_progress_actions = ShotGridTaskService._allowed_actions(
+        _task_row(task_status='in_progress'),
+        current_user,
+        access,
+    )
+
+    assert 'task.edit' in not_started_actions
+    assert 'task.edit' not in in_progress_actions
 
 
 @pytest.mark.asyncio
@@ -203,7 +314,7 @@ async def test_assign_shot_locks_project_target_task_then_member_and_audits(
     async def lock_target(*_args: Any, **_kwargs: Any) -> tuple[Any, Any, Any]:
         events.append('target')
         return (
-            SimpleNamespace(storage_dir_name='S001'),
+            SimpleNamespace(shot_no=1, storage_dir_name='001_S001', description='镜头原始制作内容'),
             SimpleNamespace(episode_no=1),
             SimpleNamespace(scene_no=1),
         )
@@ -263,7 +374,7 @@ async def test_assign_shot_locks_project_target_task_then_member_and_audits(
         SHOT_ID,
         ShotGridTaskAssignModel(
             assigneeUserId=ASSIGNEE_USER_ID,
-            taskDescription='完成镜头',
+            taskDescription='客户端尝试篡改制作要求',
             priority='high',
         ),
         _current_user(),
@@ -276,6 +387,7 @@ async def test_assign_shot_locks_project_target_task_then_member_and_audits(
     assigned_task = audit.await_args.kwargs['task']
     assert assigned_task.task_name == 'EP001-001-S001 镜头视频制作'
     assert assigned_task.task_status == 'not_started'
+    assert assigned_task.requirements == '镜头原始制作内容'
     assert assigned_task.lock_version == 0
     db.commit.assert_awaited_once()
     db.rollback.assert_not_awaited()
@@ -294,7 +406,7 @@ async def test_existing_task_assignment_requires_task_lock_and_rolls_back(
         'module_shot_grid.service.task_service.ShotGridTaskDao.lock_shot_target',
         AsyncMock(
             return_value=(
-                SimpleNamespace(storage_dir_name='S001'),
+                SimpleNamespace(shot_no=1, storage_dir_name='001_S001', description='镜头原始制作内容'),
                 SimpleNamespace(episode_no=1),
                 SimpleNamespace(scene_no=1),
             )
@@ -377,12 +489,12 @@ async def test_batch_assign_shots_assigns_all_selected_shots_in_one_transaction(
     target_lock = AsyncMock(
         side_effect=[
             (
-                SimpleNamespace(storage_dir_name='S001'),
+                SimpleNamespace(shot_no=1, storage_dir_name='001_S001', description='第一镜制作内容'),
                 SimpleNamespace(episode_no=1),
                 SimpleNamespace(scene_no=1),
             ),
             (
-                SimpleNamespace(storage_dir_name='S002'),
+                SimpleNamespace(shot_no=2, storage_dir_name='001_S002', description='第二镜制作内容'),
                 SimpleNamespace(episode_no=1),
                 SimpleNamespace(scene_no=1),
             ),
@@ -436,6 +548,10 @@ async def test_batch_assign_shots_assigns_all_selected_shots_in_one_transaction(
     assert result.reassigned_task_count == 1
     assert [call.args[2] for call in target_lock.await_args_list] == [first_shot_id, second_shot_id]
     assert assign_task.await_count == expected_count
+    assert assign_task.await_args_list[0].kwargs['command'].task_description == '第一镜制作内容'
+    assert 'task_description' in assign_task.await_args_list[0].kwargs['command'].model_fields_set
+    assert assign_task.await_args_list[1].kwargs['command'].task_description is None
+    assert 'task_description' not in assign_task.await_args_list[1].kwargs['command'].model_fields_set
     audit.assert_awaited_once()
     db.commit.assert_awaited_once()
     db.rollback.assert_not_awaited()
@@ -460,7 +576,7 @@ async def test_assign_asset_item_locks_asset_and_item_before_task(
 
     async def lock_item(*_args: Any, **_kwargs: Any) -> Any:
         events.append('item')
-        return SimpleNamespace(asset_id=ASSET_ID, production_item=None)
+        return SimpleNamespace(asset_id=ASSET_ID, production_item='主视角')
 
     async def lock_task(*_args: Any, **_kwargs: Any) -> None:
         events.append('task')
@@ -517,7 +633,7 @@ async def test_assign_asset_item_locks_asset_and_item_before_task(
         'module_shot_grid.service.task_service.ShotGridTaskService._build_detail',
         lambda *_args: expected,
     )
-    db = AsyncMock()
+    db = SimpleNamespace(add=MagicMock(), commit=AsyncMock(), rollback=AsyncMock())
 
     result = await ShotGridTaskService.assign_asset_item(
         db,
@@ -531,7 +647,7 @@ async def test_assign_asset_item_locks_asset_and_item_before_task(
     assert result is expected
     assert events == ['project', 'item-preview', 'asset', 'item', 'task', 'member', 'insert']
     assigned_task = audit.await_args.kwargs['task']
-    assert assigned_task.task_name == '动力舱室内 - 待补制作分项'
+    assert assigned_task.task_name == '动力舱室内 - 主视角'
     assert assigned_task.asset_item_id == ASSET_ITEM_ID
     assert assigned_task.shot_id is None
     db.commit.assert_awaited_once()
@@ -622,12 +738,34 @@ async def test_start_task_allows_owner_and_increments_lock_in_same_transaction(
     )
     monkeypatch.setattr(
         'module_shot_grid.service.task_service.ShotGridTaskService._lock_mutable_project',
-        AsyncMock(),
+        AsyncMock(return_value=(SimpleNamespace(), SimpleNamespace(storage_status='ready'))),
     )
     _patch_locked_access(monkeypatch, access)
     monkeypatch.setattr(
         'module_shot_grid.service.task_service.ShotGridTaskService._lock_task',
         AsyncMock(return_value=task),
+    )
+    shot = SimpleNamespace(
+        shot_id=SHOT_ID,
+        shot_no=1,
+        storage_dir_name=None,
+        update_by='old',
+        update_time=None,
+        lock_version=0,
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.task_service.ShotGridTaskDao.lock_shot_target',
+        AsyncMock(
+            return_value=(
+                shot,
+                SimpleNamespace(storage_dir_name='EP001'),
+                SimpleNamespace(scene_no=1),
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.task_service.ShotGridTaskDao.get_latest_shot_directory_operation_status',
+        AsyncMock(return_value=None),
     )
     monkeypatch.setattr(
         'module_shot_grid.service.task_service.ShotGridTaskDao.flush',
@@ -640,14 +778,19 @@ async def test_start_task_allows_owner_and_increments_lock_in_same_transaction(
     )
     monkeypatch.setattr(
         'module_shot_grid.service.task_service.ShotGridTaskService._require_task_detail',
-        AsyncMock(return_value=_task_row(task_status='in_progress', lock_version=4)),
+        AsyncMock(return_value=_task_row(task_status='preparing', lock_version=4)),
     )
     expected = object()
     monkeypatch.setattr(
         'module_shot_grid.service.task_service.ShotGridTaskService._build_detail',
         lambda *_args: expected,
     )
-    db = AsyncMock()
+    db = SimpleNamespace(
+        add=MagicMock(),
+        flush=AsyncMock(),
+        commit=AsyncMock(),
+        rollback=AsyncMock(),
+    )
 
     result = await ShotGridTaskService.start_task(
         db,
@@ -657,7 +800,8 @@ async def test_start_task_allows_owner_and_increments_lock_in_same_transaction(
     )
 
     assert result is expected
-    assert task.task_status == 'in_progress'
+    assert task.task_status == 'preparing'
+    assert shot.storage_dir_name == '001_S001'
     assert task.lock_version == UPDATED_TASK_LOCK_VERSION
     audit.assert_awaited_once()
     db.commit.assert_awaited_once()
@@ -665,17 +809,25 @@ async def test_start_task_allows_owner_and_increments_lock_in_same_transaction(
 
 
 @pytest.mark.asyncio
-async def test_start_task_rejects_non_owner_creator_and_rolls_back(
+@pytest.mark.parametrize(
+    'access',
+    [
+        _access(user_id=1, role='creator'),
+        _access(user_id=ASSIGNEE_USER_ID, role='director'),
+        _access(user_id=ASSIGNEE_USER_ID, all_scope=True),
+    ],
+)
+async def test_start_task_rejects_non_owner_creator_director_and_all_scope(
     monkeypatch: pytest.MonkeyPatch,
+    access: ShotGridProjectAccessModel,
 ) -> None:
-    access = _access(user_id=1, role='creator')
     monkeypatch.setattr(
         'module_shot_grid.service.task_service.ShotGridTaskService._resolve_task_access',
         AsyncMock(return_value=(PROJECT_ID, access)),
     )
     monkeypatch.setattr(
         'module_shot_grid.service.task_service.ShotGridTaskService._lock_mutable_project',
-        AsyncMock(),
+        AsyncMock(return_value=(SimpleNamespace(), SimpleNamespace(storage_status='ready'))),
     )
     _patch_locked_access(monkeypatch, access)
     monkeypatch.setattr(
@@ -689,7 +841,7 @@ async def test_start_task_rejects_non_owner_creator_and_rolls_back(
             db,
             TASK_ID,
             ShotGridTaskStartModel(lockVersion=INITIAL_TASK_LOCK_VERSION),
-            _current_user(user_id=1),
+            _current_user(user_id=access.user_id),
         )
 
     assert exc_info.value.error_key == 'SG_TASK_ACTION_DENIED'
@@ -703,7 +855,7 @@ async def test_start_task_rechecks_active_membership_after_project_lock_and_roll
 ) -> None:
     current_user = _current_user(user_id=ASSIGNEE_USER_ID)
     pre_access = _access(user_id=ASSIGNEE_USER_ID, role='creator')
-    project_lock = AsyncMock()
+    project_lock = AsyncMock(return_value=(SimpleNamespace(), SimpleNamespace(storage_status='ready')))
     task_lock = AsyncMock()
     monkeypatch.setattr(
         'module_shot_grid.service.task_service.ShotGridTaskService._resolve_task_access',
@@ -758,7 +910,7 @@ async def test_start_task_rejects_stale_lock_version_and_rolls_back(
     )
     monkeypatch.setattr(
         'module_shot_grid.service.task_service.ShotGridTaskService._lock_mutable_project',
-        AsyncMock(),
+        AsyncMock(return_value=(SimpleNamespace(), SimpleNamespace(storage_status='ready'))),
     )
     _patch_locked_access(monkeypatch, access)
     monkeypatch.setattr(
@@ -845,6 +997,64 @@ async def test_update_task_applies_full_snapshot_and_audits_before_commit(
     assert task.lock_version == UPDATED_TASK_LOCK_VERSION
     audit.assert_awaited_once()
     db.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_update_task_rejects_task_after_production_started(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    task = _task(lock_version=INITIAL_TASK_LOCK_VERSION)
+    task.task_status = 'in_progress'
+    access = _access()
+    monkeypatch.setattr(
+        'module_shot_grid.service.task_service.ShotGridTaskService._resolve_task_access',
+        AsyncMock(return_value=(PROJECT_ID, access)),
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.task_service.ShotGridTaskService._lock_mutable_project',
+        AsyncMock(),
+    )
+    _patch_locked_access(monkeypatch, access)
+    monkeypatch.setattr(
+        'module_shot_grid.service.task_service.ShotGridTaskService._lock_task',
+        AsyncMock(return_value=task),
+    )
+    flush = AsyncMock()
+    monkeypatch.setattr(
+        'module_shot_grid.service.task_service.ShotGridTaskDao.flush',
+        flush,
+    )
+    audit = AsyncMock()
+    monkeypatch.setattr(
+        'module_shot_grid.service.task_service.ShotGridTaskService._audit',
+        audit,
+    )
+    db = AsyncMock()
+
+    with pytest.raises(ShotGridDomainException) as exc_info:
+        await ShotGridTaskService.update_task(
+            db,
+            TASK_ID,
+            ShotGridTaskUpdateModel(
+                requirements='新要求',
+                priority='high',
+                dueDate=date(2026, 8, 30),
+                lockVersion=INITIAL_TASK_LOCK_VERSION,
+            ),
+            _current_user(),
+        )
+
+    assert exc_info.value.http_status == HTTPStatus.CONFLICT
+    assert exc_info.value.error_key == 'SG_INVALID_STATE_TRANSITION'
+    assert exc_info.value.message == '任务开始制作后不可编辑'
+    assert task.requirements == '原要求'
+    assert task.priority == 'normal'
+    assert task.due_date is None
+    assert task.lock_version == INITIAL_TASK_LOCK_VERSION
+    flush.assert_not_awaited()
+    audit.assert_not_awaited()
+    db.commit.assert_not_awaited()
+    db.rollback.assert_awaited_once()
 
 
 @pytest.mark.asyncio

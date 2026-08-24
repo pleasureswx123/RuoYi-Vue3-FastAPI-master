@@ -39,7 +39,7 @@ def _payload() -> ImportPreviewTokenPayloadModel:
         importType='shot',
         previewedBy=3,
         fileSha256='a' * 64,
-        templateVersion='shot-v1',
+        templateVersion='shot-v2',
         expiresAt=datetime.now() + timedelta(minutes=5),
         rows=[{'sheetName': 'EP001', 'rowNumber': 2}],
     )

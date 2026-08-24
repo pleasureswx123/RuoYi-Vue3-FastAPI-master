@@ -1,20 +1,21 @@
 import io
-from pathlib import Path
 
 import pytest
 from openpyxl import Workbook, load_workbook
+from pydantic import ValidationError
 
 from module_shot_grid.config import ShotGridImportConfig
 from module_shot_grid.entity.vo.import_common_vo import ImportIssueModel
 from module_shot_grid.entity.vo.shot_import_vo import ShotImportCommitRequestModel
 from module_shot_grid.exceptions import ShotGridDomainException
 from module_shot_grid.service.shot_excel_parser import ShotExcelParser
+from module_shot_grid.service.shot_import_template_service import ShotGridShotImportTemplateService
 
-ASSIGNEE_USER_ID = 7
-
-REPO_ROOT = Path(__file__).resolve().parents[3]
-SHOT_SAMPLE = REPO_ROOT / 'shot-grid-frontend' / 'docs' / '镜头-样表.xlsx'
+SHOT_SAMPLE = ShotGridShotImportTemplateService.TEMPLATE_PATH
 FIRST_SORT_ORDER = 10
+TWO_VALID_ROWS = 2
+VALID_ROWS_AFTER_INJECTED_ERRORS = 2
+ERROR_ROWS_AFTER_INJECTED_ERRORS = 22
 SQL_INTEGER_OVERFLOW = 2_147_483_648
 SQL_BIGINT_MILLISECONDS_OVERFLOW_SECONDS = '9223372036854775.808'
 
@@ -31,7 +32,7 @@ def _minimal_workbook() -> Workbook:
     sheet = workbook.active
     sheet.title = 'EP001'
     sheet.append(list(ShotExcelParser.EXPECTED_HEADERS))
-    sheet.append(['序', 'S001', 1.5, None, None, '镜头描述', None, None, None, '35/25', '太空'])
+    sheet.append(['序', 'S001', 1.5, None, '镜头描述', None, None, None, '35/25', '太空'])
     return workbook
 
 
@@ -54,22 +55,22 @@ def test_real_sample_has_frozen_structure_and_exact_counts() -> None:
     assert (first.scene_no, first.scene_code, first.scene_name) == (0, '000', '序')
     assert (first.shot_no, first.shot_code, first.duration_ms, first.focal_length) == (1, 'S001', 8000, '135')
     assert first.sort_order == FIRST_SORT_ORDER
-    assert first.asset_requirements[0].raw_name == '太空'
+    assert first.asset_requirements[0].raw_name == '示例场景01'
     assert result.rows[2].normalized is not None
-    assert result.rows[2].normalized.focal_length == '35/25'
+    assert result.rows[2].normalized.focal_length == '示例选项04'
     assert result.rows[3].normalized is not None
-    assert result.rows[3].normalized.focal_length == '24/18'
+    assert result.rows[3].normalized.focal_length == '示例选项05'
     assert [warning.error_key for warning in result.workbook_warnings] == ['SG_IMPORT_READONLY_COLUMNS_IGNORED']
 
 
-def test_summary_keeps_parsed_structure_when_assignee_matching_fails() -> None:
+def test_summary_keeps_parsed_structure_when_business_validation_fails() -> None:
     result = ShotExcelParser().parse(SHOT_SAMPLE.read_bytes())
     for row in result.rows[2:]:
         row.errors.append(
             ImportIssueModel(
-                errorKey='SG_IMPORT_ASSIGNEE_NOT_FOUND',
-                message='制作人无法匹配',
-                fieldName='assigneeUserName',
+                errorKey='SG_IMPORT_FIELD_INVALID',
+                message='业务字段未通过校验',
+                fieldName='description',
                 sheetName=row.sheet_name,
                 rowNumber=row.row_number,
             )
@@ -78,8 +79,8 @@ def test_summary_keeps_parsed_structure_when_assignee_matching_fails() -> None:
 
     summary = ShotExcelParser.build_summary(result.rows)
 
-    assert summary.valid_rows == 2
-    assert summary.error_rows == 22
+    assert summary.valid_rows == VALID_ROWS_AFTER_INJECTED_ERRORS
+    assert summary.error_rows == ERROR_ROWS_AFTER_INJECTED_ERRORS
     assert (summary.distinct_episodes, summary.distinct_scenes, summary.distinct_shots) == (2, 8, 24)
 
 
@@ -98,9 +99,9 @@ def test_parser_ignores_auxiliary_columns_after_first_blank_header() -> None:
 def test_parser_ignores_readonly_values_and_formulas() -> None:
     workbook = _minimal_workbook()
     sheet = workbook.active
-    sheet['E2'] = '=1+1'
-    sheet['P2'] = '=1+1'
-    sheet.append([None, None, None, None, '只读缩略图', *([None] * 10), 'completed'])
+    sheet['D2'] = '=1+1'
+    sheet['O2'] = '=1+1'
+    sheet.append([None, None, None, '只读缩略图', *([None] * 10), 'completed'])
 
     result = ShotExcelParser().parse(_save_workbook(workbook))
 
@@ -109,10 +110,21 @@ def test_parser_ignores_readonly_values_and_formulas() -> None:
     assert result.rows[0].errors == []
 
 
-def test_duplicate_shot_number_across_scenes_is_row_error() -> None:
+def test_same_shot_number_can_restart_in_another_scene() -> None:
     workbook = _minimal_workbook()
     sheet = workbook.active
-    sheet.append(['01场', 'S001', 1, None, None, '第二个镜头'])
+    sheet.append(['01场', 'S001', 1, None, '第二个镜头'])
+
+    result = ShotExcelParser().parse(_save_workbook(workbook))
+
+    assert result.summary.valid_rows == TWO_VALID_ROWS
+    assert result.summary.error_rows == 0
+    assert result.summary.distinct_shots == TWO_VALID_ROWS
+
+
+def test_duplicate_shot_number_in_same_scene_is_row_error() -> None:
+    workbook = _minimal_workbook()
+    workbook.active.append(['序', 'S001', 1, None, '同场重复镜头'])
 
     result = ShotExcelParser().parse(_save_workbook(workbook))
 
@@ -155,7 +167,7 @@ def test_positive_scene_name_is_not_persisted_from_code_cell() -> None:
 
 def test_header_mismatch_is_workbook_error() -> None:
     workbook = _minimal_workbook()
-    workbook.active['F1'] = '错误表头'
+    workbook.active['E1'] = '错误表头'
 
     with pytest.raises(ShotGridDomainException) as exc_info:
         ShotExcelParser().parse(_save_workbook(workbook))
@@ -165,7 +177,7 @@ def test_header_mismatch_is_workbook_error() -> None:
 
 def test_row_limit_uses_frozen_error_key() -> None:
     workbook = _minimal_workbook()
-    workbook.active.append(['01场', 'S002', 1, None, None, '第二个镜头'])
+    workbook.active.append(['01场', 'S002', 1, None, '第二个镜头'])
 
     with pytest.raises(ShotGridDomainException) as exc_info:
         ShotExcelParser(ShotGridImportConfig(max_rows_per_workbook=1)).parse(_save_workbook(workbook))
@@ -199,7 +211,7 @@ def test_episode_number_must_fit_database_integer() -> None:
         ('A', str(SQL_INTEGER_OVERFLOW), 'SG_IMPORT_SCENE_INVALID'),
         ('B', f'S{SQL_INTEGER_OVERFLOW}', 'SG_IMPORT_SHOT_NO_INVALID'),
         ('C', SQL_BIGINT_MILLISECONDS_OVERFLOW_SECONDS, 'SG_IMPORT_DURATION_INVALID'),
-        ('D', '制' * 31, 'SG_IMPORT_FIELD_TOO_LONG'),
+        ('F', '大' * 41, 'SG_IMPORT_FIELD_TOO_LONG'),
     ],
 )
 def test_row_values_must_fit_database_and_member_boundaries(column: str, value: object, error_key: str) -> None:
@@ -222,11 +234,11 @@ def test_commit_selection_uses_sheet_and_row_composite_identity() -> None:
     )
     assert [row.key() for row in request.selected_rows] == [('EP001', 2), ('EP002', 2)]
 
-    override_request = ShotImportCommitRequestModel(
-        importToken='token',
-        selectedRows=[{'sheetName': 'EP001', 'rowNumber': 2, 'assigneeUserId': ASSIGNEE_USER_ID}],
-    )
-    assert override_request.selected_rows[0].assignee_user_id == ASSIGNEE_USER_ID
+    with pytest.raises(ValidationError):
+        ShotImportCommitRequestModel(
+            importToken='token',
+            selectedRows=[{'sheetName': 'EP001', 'rowNumber': 2, 'assigneeUserId': 7}],
+        )
 
     with pytest.raises(ValueError):
         ShotImportCommitRequestModel(
@@ -244,7 +256,7 @@ def test_real_sample_has_no_formula_in_main_region() -> None:
         assert not any(
             cell.data_type == 'f'
             for sheet in workbook.worksheets
-            for row in sheet.iter_rows(min_row=1, max_row=sheet.max_row, min_col=1, max_col=16)
+            for row in sheet.iter_rows(min_row=1, max_row=sheet.max_row, min_col=1, max_col=15)
             for cell in row
         )
     finally:

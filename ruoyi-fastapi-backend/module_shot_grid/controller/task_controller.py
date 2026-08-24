@@ -96,7 +96,7 @@ async def get_shot_grid_task_detail(
 
 @task_controller.put(
     '/tasks/{taskId}',
-    summary='修改任务要求、优先级和截止日期',
+    summary='修改未开始任务的要求、优先级和截止日期',
     response_model=DataResponseModel[ShotGridTaskDetailModel],
     dependencies=[UserInterfaceAuthDependency('shotgrid:task:edit')],
 )

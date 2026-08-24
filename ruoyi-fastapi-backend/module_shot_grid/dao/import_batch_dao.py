@@ -121,8 +121,7 @@ class ShotGridImportBatchDao:
     ) -> None:
         now = datetime.now()
         batch.batch_status = 'committed'
-        # 预检后允许用户修正“制作人”这类可处理错误。正式提交重新校验通过后，
-        # 已提交行可能多于预检时的直接有效行，需要同步最终有效数以保持批次计数一致。
+        # 正式提交会重新校验所选行；同步最终有效数，确保批次计数与实际落库结果一致。
         batch.valid_rows = max(batch.valid_rows, committed_rows)
         batch.committed_rows = committed_rows
         batch.selection_hash = selection_hash

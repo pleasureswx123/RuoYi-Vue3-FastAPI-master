@@ -14,7 +14,7 @@ describe('版本展示契约', () => {
   it('完整映射六种提交状态且只把 committed/failed 视为终态', () => {
     expect(submissionStatusOrder).toEqual(['pending', 'publishing', 'published', 'committing', 'committed'])
     expect(['pending', 'publishing', 'published', 'committing', 'committed', 'failed'].map(status => submissionStatusMeta(status).label)).toEqual([
-      '等待发布', '正在发布', '文件已发布', '正在落库', '版本已形成', '发布失败'
+      '等待发布', '正在发布', '文件已保存', '正在生成版本', '版本已生成', '发布失败'
     ])
     expect(isSubmissionTerminal('pending')).toBe(false)
     expect(isSubmissionTerminal('committed')).toBe(true)
@@ -28,8 +28,8 @@ describe('版本展示契约', () => {
       [404, '版本资源不存在'],
       [409, '版本状态发生冲突'],
       [413, '文件超过上传上限'],
-      [416, '文件读取范围无效'],
-      [503, '版本服务异常']
+      [416, '文件下载信息已失效'],
+      [503, '版本处理异常']
     ]
     cases.forEach(([httpStatus, title]) => {
       expect(versionErrorState({ httpStatus, errorKey: `E_${httpStatus}`, message: `错误 ${httpStatus}` })).toMatchObject({

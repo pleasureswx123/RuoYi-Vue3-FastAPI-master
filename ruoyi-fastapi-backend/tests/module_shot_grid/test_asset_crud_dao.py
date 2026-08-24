@@ -120,19 +120,6 @@ async def test_version_immutability_guard_is_project_and_item_scoped() -> None:
 
 
 @pytest.mark.asyncio
-async def test_assignable_asset_member_requires_active_relation_and_enabled_user() -> None:
-    db = _SequenceDb([_MappingResult([])])
-
-    result = await ShotGridAssetCrudDao.get_assignable_member(db, 10, 2)  # type: ignore[arg-type]
-
-    assert result is None
-    compiled = _sql(db.statements[0])
-    assert "sg_project_member.member_status = 'active'" in compiled
-    assert "sys_user.status = '0'" in compiled
-    assert "sys_user.del_flag = '0'" in compiled
-
-
-@pytest.mark.asyncio
 async def test_asset_thumbnail_projection_is_project_scoped_and_uses_latest_version_rows() -> None:
     refs_db = _SequenceDb([_MappingResult([])])
     versions_db = _SequenceDb([_MappingResult([])])
@@ -181,4 +168,6 @@ async def test_active_task_asset_projection_matches_archive_guard() -> None:
     assert result == {20}
     assert 'sg_task.project_id = 10' in compiled
     assert 'sg_asset_item.asset_id IN (20, 21)' in compiled
-    assert "sg_task.task_status IN ('not_started', 'in_progress', 'pending_review', 'revision')" in compiled
+    assert (
+        "sg_task.task_status IN ('not_started', 'preparing', 'in_progress', 'pending_review', 'revision')" in compiled
+    )

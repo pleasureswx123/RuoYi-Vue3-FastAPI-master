@@ -9,8 +9,8 @@ from module_shot_grid.exceptions import ShotGridDomainException, shot_grid_error
 class ShotGridShotImportTemplateService:
     """读取并校验随 Shot Grid 后端部署的镜头导入模板。"""
 
-    TEMPLATE_PATH = Path(__file__).resolve().parents[1] / 'resources' / 'templates' / 'shot-v1.xlsx'
-    EXPECTED_SHA256 = 'f6370bbb14548b645782abf0734e930ec10470565821ba6c8fd1b6a2d9d96ee0'
+    TEMPLATE_PATH = Path(__file__).resolve().parents[1] / 'resources' / 'templates' / 'shot-v2.xlsx'
+    EXPECTED_SHA256 = 'b6f24078ca56295e9e6cce50bb3455af198dfffe5c08f8d85605a68c09439ece'
     DOWNLOAD_FILE_NAME = f'镜头导入模板-{SHOT_TEMPLATE_VERSION}.xlsx'
 
     @classmethod

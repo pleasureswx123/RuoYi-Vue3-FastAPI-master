@@ -5,18 +5,19 @@ const TYPE_META = {
 }
 
 const STATUS_META = {
-  unassigned: { label: '未分配', tone: 'muted' },
+  unassigned: { label: '待分配', tone: 'warning' },
   not_started: { label: '未开始', tone: 'muted' },
-  in_progress: { label: '制作中', tone: 'warning' },
-  reviewing: { label: '待审核', tone: 'info' },
+  preparing: { label: '目录准备中', tone: 'info' },
+  in_progress: { label: '制作中', tone: 'primary' },
+  reviewing: { label: '待审核', tone: 'purple' },
   revision: { label: '修改中', tone: 'danger' },
   completed: { label: '已完成', tone: 'success' }
 }
 
 const DIRECTORY_META = {
-  pending: { label: '目录待创建', tone: 'warning' },
-  ready: { label: '目录就绪', tone: 'success' },
-  failed: { label: '目录失败', tone: 'danger' }
+  pending: { label: '目录准备中', tone: 'info' },
+  ready: { label: '目录已就绪', tone: 'info' },
+  failed: { label: '目录处理异常', tone: 'danger' }
 }
 
 export function assetTypeMeta(assetType) {
@@ -104,4 +105,7 @@ export function assetAssigneeSummary(assigneeUserIds, members = []) {
   const unavailableCount = ids.length - visible.length
   if (unavailableCount > 0) visible.push(`另 ${unavailableCount} 人不可分配`)
   return visible.join('、')
+}
+export function assetStatusTagClass(status) {
+  return `asset-status-tag--${Object.hasOwn(STATUS_META, status) ? status : 'unknown'}`
 }

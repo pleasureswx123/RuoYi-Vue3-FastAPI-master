@@ -1,4 +1,4 @@
-from unittest.mock import AsyncMock
+from unittest.mock import ANY, AsyncMock
 
 import pytest
 
@@ -70,7 +70,7 @@ async def test_search_filters_resource_types_by_permissions(monkeypatch: pytest.
     assert result.shots.items[0].title == 'EP001-002-S003'
     assert result.shots.items[0].target_path == '/projects/8/shots/31'
     search_shots.assert_awaited_once_with(
-        pytest.ANY,
+        ANY,
         keyword='推进器',
         limit=8,
         user_id=7,

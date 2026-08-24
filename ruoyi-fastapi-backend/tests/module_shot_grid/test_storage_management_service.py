@@ -134,6 +134,7 @@ async def test_dynamic_retry_revalidates_project_access_and_current_path(
         project_id=PROJECT_ID,
         aggregate_type='shot',
         aggregate_id=4001,
+        operation_type='create_directory',
         target_relative_path=r'VIDEO\EP001\S001',
         operation_status='failed',
     )
@@ -191,6 +192,7 @@ async def test_dynamic_retry_rejects_changed_target_and_rolls_back(monkeypatch: 
         project_id=PROJECT_ID,
         aggregate_type='episode',
         aggregate_id=2001,
+        operation_type='create_directory',
         target_relative_path=r'VIDEO\EP001',
         operation_status='failed',
     )

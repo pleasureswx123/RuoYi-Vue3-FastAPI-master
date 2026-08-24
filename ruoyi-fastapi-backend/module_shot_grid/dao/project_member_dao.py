@@ -226,7 +226,9 @@ class ShotGridProjectMemberDao:
                         ShotGridTask.project_id == project_id,
                         ShotGridTask.assignee_user_id == user_id,
                         ShotGridTask.del_flag == '0',
-                        ShotGridTask.task_status.in_(('not_started', 'in_progress', 'pending_review', 'revision')),
+                        ShotGridTask.task_status.in_(
+                            ('not_started', 'preparing', 'in_progress', 'pending_review', 'revision')
+                        ),
                     )
                 )
             ).scalar_one()

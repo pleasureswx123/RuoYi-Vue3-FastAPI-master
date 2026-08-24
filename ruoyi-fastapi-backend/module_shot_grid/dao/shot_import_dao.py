@@ -1,14 +1,12 @@
 from collections.abc import Iterable
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from module_admin.entity.do.user_do import SysUser
 from module_shot_grid.entity.do.asset_do import ShotGridAsset
 from module_shot_grid.entity.do.project_do import (
     ShotGridEpisode,
     ShotGridProject,
-    ShotGridProjectMember,
     ShotGridScene,
     ShotGridShot,
 )
@@ -39,67 +37,6 @@ class ShotGridShotImportDao:
         if row is None:
             return None, None
         return row[0], row[1]
-
-    @staticmethod
-    async def list_assignable_members(
-        db: AsyncSession,
-        project_id: int,
-        names: set[str],
-    ) -> list[tuple[int, str, str, str | None]]:
-        if not names:
-            return []
-        statement = (
-            select(
-                SysUser.user_id,
-                SysUser.user_name,
-                SysUser.nick_name,
-                func.upper(SysUser.nick_name).label('producer_code'),
-            )
-            .join(
-                ShotGridProjectMember,
-                ShotGridProjectMember.user_id == SysUser.user_id,
-            )
-            .where(
-                ShotGridProjectMember.project_id == project_id,
-                ShotGridProjectMember.member_status == 'active',
-                ShotGridProjectMember.project_role == 'creator',
-                SysUser.status == '0',
-                SysUser.del_flag == '0',
-                (SysUser.user_name.in_(names) | SysUser.nick_name.in_(names)),
-            )
-        )
-        return [tuple(row) for row in (await db.execute(statement)).all()]
-
-    @staticmethod
-    async def list_assignable_members_by_ids(
-        db: AsyncSession,
-        project_id: int,
-        user_ids: set[int],
-    ) -> list[tuple[int, str, str, str | None]]:
-        """按用户 ID 重新核验导入界面显式选择的制作人。"""
-        if not user_ids:
-            return []
-        statement = (
-            select(
-                SysUser.user_id,
-                SysUser.user_name,
-                SysUser.nick_name,
-                func.upper(SysUser.nick_name).label('producer_code'),
-            )
-            .join(
-                ShotGridProjectMember,
-                ShotGridProjectMember.user_id == SysUser.user_id,
-            )
-            .where(
-                ShotGridProjectMember.project_id == project_id,
-                ShotGridProjectMember.member_status == 'active',
-                ShotGridProjectMember.project_role == 'creator',
-                SysUser.status == '0',
-                SysUser.del_flag == '0',
-                SysUser.user_id.in_(user_ids),
-            )
-        )
-        return [tuple(row) for row in (await db.execute(statement)).all()]
 
     @staticmethod
     async def list_environment_assets(
@@ -152,17 +89,24 @@ class ShotGridShotImportDao:
     @staticmethod
     async def list_shots(
         db: AsyncSession,
-        episode_ids: Iterable[int],
-        shot_numbers: set[int],
+        scene_ids: Iterable[int],
+        shot_numbers: set[int] | None = None,
+        *,
+        for_update: bool = False,
     ) -> list[ShotGridShot]:
-        episode_id_list = list(episode_ids)
-        if not episode_id_list or not shot_numbers:
+        scene_id_list = list(scene_ids)
+        if not scene_id_list:
             return []
         statement = select(ShotGridShot).where(
-            ShotGridShot.episode_id.in_(episode_id_list),
-            ShotGridShot.shot_no.in_(shot_numbers),
+            ShotGridShot.scene_id.in_(scene_id_list),
             ShotGridShot.del_flag == '0',
         )
+        if shot_numbers is not None:
+            if not shot_numbers:
+                return []
+            statement = statement.where(ShotGridShot.shot_no.in_(shot_numbers))
+        if for_update:
+            statement = statement.with_for_update()
         return list((await db.execute(statement)).scalars().all())
 
     @staticmethod

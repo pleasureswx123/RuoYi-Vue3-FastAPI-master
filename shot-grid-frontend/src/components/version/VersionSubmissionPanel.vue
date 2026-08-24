@@ -27,6 +27,8 @@ const props = defineProps({
   taskId: { type: Number, required: true },
   taskKind: { type: String, required: true },
   taskStatus: { type: String, required: true },
+  versionCount: { type: Number, default: 0 },
+  productionDescription: { type: String, default: '' },
   openIssues: { type: Array, default: () => [] },
   allowedActions: { type: Array, default: () => [] },
   hasUncommittedSubmission: { type: Boolean, default: false },
@@ -40,12 +42,11 @@ const emit = defineEmits(['committed', 'submission-change', 'focus-issue'])
 
 const selectedFile = ref(null)
 const changelog = ref('')
-const aiParamsText = ref('')
-const issueResponseTexts = ref({})
+const issueHandlingStates = ref({})
+const issueUnhandledReasons = ref({})
 const submissionFormRef = ref(null)
 const fileUploadRef = ref(null)
 const formValidating = ref(false)
-const activeComposerSections = ref([])
 const openIssueSnapshotHash = ref('')
 const uploadResult = ref(null)
 const uploadProgress = ref(0)
@@ -75,26 +76,34 @@ const canSubmit = computed(() => (
   props.allowedActions.includes('version.add') &&
   props.hasAddPermission
 ))
+const changelogPlaceholder = computed(() => {
+  const description = String(props.productionDescription || '').trim()
+  if (Number(props.versionCount) === 0 && description) {
+    const excerpt = description.length > 120 ? `${description.slice(0, 120)}…` : description
+    return `首次提交可参考制作内容：“${excerpt}”。请说明本版本实际完成情况和需要审核人关注的内容。`
+  }
+  return '说明本版本完成内容、修改点或需要审核人关注的部分。'
+})
 const issueResponses = computed(() => props.taskStatus === 'revision'
   ? props.openIssues.map(issue => ({
       issueId: Number(issue.issueId),
-      responseText: String(issueResponseTexts.value[issue.issueId] || '').trim()
+      responseText: issueHandlingStates.value[issue.issueId] === 'unhandled'
+        ? `未处理：${String(issueUnhandledReasons.value[issue.issueId] || '').trim()}`
+        : '已处理'
     }))
   : [])
 const submissionFormModel = computed(() => ({
   selectedFile: selectedFile.value,
   changelog: changelog.value,
-  aiParamsText: aiParamsText.value,
-  issueResponseTexts: issueResponseTexts.value
+  issueHandlingStates: issueHandlingStates.value,
+  issueUnhandledReasons: issueUnhandledReasons.value
 }))
 const submissionFormRules = {
   selectedFile: [{ validator: validateSelectedFile, trigger: 'change' }],
-  changelog: [{ validator: validateChangelog, trigger: 'blur' }],
-  aiParamsText: [{ validator: validateAiParams, trigger: 'blur' }]
+  changelog: [{ validator: validateChangelog, trigger: 'blur' }]
 }
-const issueResponseRules = [
-  { required: true, whitespace: true, message: '请填写该问题的本轮处理说明', trigger: ['blur', 'change'] },
-  { max: 5000, message: '单条问题处理说明不能超过 5000 个字符', trigger: 'blur' }
+const issueHandlingStateRules = [
+  { required: true, message: '请选择该问题的处理情况', trigger: 'change' }
 ]
 const hasActiveSubmission = computed(() => Boolean(submission.value && submission.value.submissionStatus !== 'committed'))
 const isBusy = computed(() => formValidating.value || recovering.value || ['preflighting', 'uploading', 'submitting', 'retrying'].includes(phase.value))
@@ -143,12 +152,11 @@ function abortRequests() {
 
 function resetComposer() {
   formValidating.value = false
-  activeComposerSections.value = []
   selectedFile.value = null
   fileUploadRef.value?.clearFiles?.()
   changelog.value = ''
-  aiParamsText.value = ''
-  issueResponseTexts.value = Object.fromEntries(props.openIssues.map(issue => [issue.issueId, '']))
+  issueHandlingStates.value = Object.fromEntries(props.openIssues.map(issue => [issue.issueId, 'handled']))
+  issueUnhandledReasons.value = Object.fromEntries(props.openIssues.map(issue => [issue.issueId, '']))
   openIssueSnapshotHash.value = ''
   uploadResult.value = null
   uploadProgress.value = 0
@@ -354,21 +362,6 @@ function chooseFile(uploadFile) {
   idempotency.reset()
 }
 
-function parseAiParams() {
-  const normalized = aiParamsText.value.trim()
-  if (!normalized) return null
-  let value
-  try {
-    value = JSON.parse(normalized)
-  } catch {
-    throw new TypeError('AI 参数必须是有效 JSON')
-  }
-  if ((typeof value !== 'object' || value === null) || new Blob([JSON.stringify(value)]).size > 64 * 1024) {
-    throw new TypeError('AI 参数必须是对象或数组，且不能超过 64 KiB')
-  }
-  return value
-}
-
 function validateSelectedFile(_rule, file, callback) {
   if (!file) return callback(new Error('请先选择版本文件'))
   const extension = file.name?.includes('.') ? file.name.split('.').pop().toLowerCase() : ''
@@ -390,13 +383,23 @@ function validateChangelog(_rule, value, callback) {
   callback()
 }
 
-function validateAiParams(_rule, _value, callback) {
-  try {
-    parseAiParams()
-    callback()
-  } catch (error) {
-    callback(new Error(error.message))
-  }
+function issueUnhandledReasonRules(issueId) {
+  return [{
+    validator: (_rule, value, callback) => {
+      if (issueHandlingStates.value[issueId] !== 'unhandled') return callback()
+      const normalized = String(value || '').trim()
+      if (!normalized) return callback(new Error('请说明该问题本轮未处理的原因'))
+      if (normalized.length > 5000) return callback(new Error('未处理说明不能超过 5000 个字符'))
+      callback()
+    },
+    trigger: ['blur', 'change']
+  }]
+}
+
+function changeIssueHandling(issueId, handlingState) {
+  if (handlingState !== 'handled') return
+  issueUnhandledReasons.value[issueId] = ''
+  submissionFormRef.value?.clearValidate(`issueUnhandledReasons.${issueId}`)
 }
 
 async function submitVersion() {
@@ -410,7 +413,6 @@ async function submitVersion() {
   }
   formValidating.value = true
   let valid = false
-  let aiParams
   try {
     await submissionFormRef.value?.validate((result, invalidFields) => {
       valid = result
@@ -423,7 +425,6 @@ async function submitVersion() {
       validationMessage.value = '退回修改任务缺少待处理问题，请刷新任务'
       return
     }
-    aiParams = parseAiParams()
   } catch (error) {
     validationMessage.value = error.message
     return
@@ -449,7 +450,6 @@ async function submitVersion() {
         fileName: targetFile.name,
         fileSize: targetFile.size,
         changelog: normalizedChangelog,
-        aiParams,
         issueResponses: issueResponses.value
       }
       const preflightResponse = await preflightVersionSubmission(
@@ -512,7 +512,6 @@ async function submitVersion() {
     const payload = {
       fileId: uploadResult.value.fileId,
       changelog: normalizedChangelog,
-      aiParams,
       openIssueSnapshotHash: openIssueSnapshotHash.value,
       issueResponses: issueResponses.value
     }
@@ -591,8 +590,10 @@ watch(
 watch(
   () => props.openIssues.map(issue => issue.issueId),
   issueIds => {
-    const current = issueResponseTexts.value
-    issueResponseTexts.value = Object.fromEntries(issueIds.map(issueId => [issueId, current[issueId] || '']))
+    const currentStates = issueHandlingStates.value
+    const currentReasons = issueUnhandledReasons.value
+    issueHandlingStates.value = Object.fromEntries(issueIds.map(issueId => [issueId, currentStates[issueId] || 'handled']))
+    issueUnhandledReasons.value = Object.fromEntries(issueIds.map(issueId => [issueId, currentReasons[issueId] || '']))
   }
 )
 
@@ -636,7 +637,7 @@ onBeforeUnmount(() => {
       </el-button>
     </el-alert>
 
-    <el-form v-else-if="!submission" ref="submissionFormRef" :model="submissionFormModel" :rules="submissionFormRules" class="submission-form" label-position="top" aria-label="提交新版本">
+    <el-form v-else-if="!submission" ref="submissionFormRef" :model="submissionFormModel" :rules="submissionFormRules" class="submission-form" label-position="top" label-width="auto" aria-label="提交新版本">
       <el-form-item class="submission-file-field" prop="selectedFile">
         <el-upload ref="fileUploadRef" class="file-picker" :class="{ 'has-file': selectedFile }" action="#" :auto-upload="false" :show-file-list="false" :accept="acceptAttribute" :disabled="composerLocked || !canSubmit" :on-change="chooseFile">
           <el-icon><UploadFilled /></el-icon>
@@ -652,11 +653,11 @@ onBeforeUnmount(() => {
         <header class="issue-response-panel__heading">
           <div>
             <p class="sg-eyebrow">REVIEW ISSUES</p>
-            <h4>逐条说明本轮如何处理</h4>
+            <h4>逐条确认本轮处理结果</h4>
           </div>
           <el-tag type="warning" effect="plain" size="small" round>{{ openIssues.length }} 条待处理</el-tag>
         </header>
-        <p class="issue-response-help">每条说明会随新版本永久保存，审核人将在下一版逐条确认是否已修复。</p>
+        <p class="issue-response-help">默认标记为已处理；如本轮暂未处理，请说明原因。结果会随新版本永久保存。</p>
         <div v-if="openIssues.length" class="issue-response-list">
           <article v-for="(issue, index) in openIssues" :key="issue.issueId">
             <div class="issue-response-title">
@@ -667,15 +668,33 @@ onBeforeUnmount(() => {
             <el-button class="issue-source-link" link type="primary" @click="emit('focus-issue', issue)">
               查看来源版本{{ issue.annotations?.items?.length ? `与 ${issue.annotations.items.length} 处画面标注` : '' }}
             </el-button>
-            <el-form-item class="field-label" label="本轮处理说明" :prop="`issueResponseTexts.${issue.issueId}`" :rules="issueResponseRules">
+            <el-form-item class="field-label issue-handling-field" label="本轮处理情况" :prop="`issueHandlingStates.${issue.issueId}`" :rules="issueHandlingStateRules">
+              <el-radio-group
+                v-model="issueHandlingStates[issue.issueId]"
+                size="small"
+                :disabled="composerLocked || !canSubmit"
+                :aria-label="`问题 ${index + 1} 本轮处理情况`"
+                @change="changeIssueHandling(issue.issueId, $event)"
+              >
+                <el-radio-button label="已处理" value="handled" />
+                <el-radio-button label="未处理" value="unhandled" />
+              </el-radio-group>
+            </el-form-item>
+            <el-form-item
+              v-if="issueHandlingStates[issue.issueId] === 'unhandled'"
+              class="field-label issue-unhandled-reason"
+              label="未处理说明"
+              :prop="`issueUnhandledReasons.${issue.issueId}`"
+              :rules="issueUnhandledReasonRules(issue.issueId)"
+            >
               <el-input
-                v-model="issueResponseTexts[issue.issueId]"
+                v-model="issueUnhandledReasons[issue.issueId]"
                 type="textarea"
                 maxlength="5000"
                 :rows="3"
                 show-word-limit
                 :disabled="composerLocked || !canSubmit"
-                placeholder="说明具体改了什么、如何改，以及需要审核人重点确认的位置。"
+                placeholder="请说明本轮为什么暂不处理，以及后续计划。"
               />
             </el-form-item>
           </article>
@@ -683,15 +702,9 @@ onBeforeUnmount(() => {
         <el-empty v-else class="issue-response-empty" :image-size="48" description="当前没有可处理问题，请刷新任务后再提交" />
       </el-card>
 
-      <el-form-item class="field-label" label="本轮修改说明" prop="changelog">
-        <el-input v-model="changelog" type="textarea" maxlength="5000" :rows="4" show-word-limit :disabled="composerLocked || !canSubmit" placeholder="说明本版本完成内容、修改点或需要审核人关注的部分。" />
+      <el-form-item class="field-label changelog-field" label="本轮修改说明" prop="changelog">
+        <el-input v-model="changelog" type="textarea" maxlength="5000" :rows="4" show-word-limit :disabled="composerLocked || !canSubmit" :placeholder="changelogPlaceholder" />
       </el-form-item>
-
-      <el-collapse v-model="activeComposerSections" class="ai-params">
-        <el-collapse-item title="AI 生成参数（可选 JSON）" name="ai-params">
-          <el-form-item prop="aiParamsText"><el-input v-model="aiParamsText" type="textarea" :rows="4" :disabled="composerLocked || !canSubmit" placeholder='例如：{"model":"...","seed":42}' /></el-form-item>
-        </el-collapse-item>
-      </el-collapse>
 
       <el-progress v-if="phase === 'uploading'" class="upload-progress" :percentage="uploadProgress" :stroke-width="8" :status="uploadProgress >= 100 ? 'success' : undefined" aria-label="版本文件上传进度" />
       <el-alert v-if="uploadedOnly" class="uploaded-boundary" title="文件已上传，正式版本尚未生成" type="warning" :closable="false" show-icon>
@@ -743,6 +756,9 @@ onBeforeUnmount(() => {
 .issue-response-title span { color: var(--sg-text-muted); font-size: 9px; }
 .issue-response-list article > p { margin: 0; color: var(--sg-text-secondary); font-size: 11px; line-height: 1.65; white-space: pre-wrap; }
 .issue-source-link { justify-self: start; height: auto; padding: 0; font-size: 10px; }
+.issue-handling-field :deep(.el-radio-group) { display: flex; width: 100%; }
+.issue-handling-field :deep(.el-radio-button) { flex: 1 1 0; }
+.issue-handling-field :deep(.el-radio-button__inner) { width: 100%; }
 .issue-response-empty { padding: 18px; border: 1px dashed rgba(244, 92, 92, 0.3); border-radius: 9px; }
 .file-picker { width: 100%; }
 .file-picker :deep(.el-upload) { position: relative; display: grid; box-sizing: border-box; width: 100%; min-height: 84px; padding: 18px; cursor: pointer; background: rgba(255, 255, 255, 0.025); border: 1px dashed var(--sg-border-strong); border-radius: var(--sg-radius-md); grid-template-columns: auto minmax(0, 1fr) auto; gap: 14px; align-items: center; }
@@ -755,11 +771,6 @@ onBeforeUnmount(() => {
 .file-picker b { color: var(--sg-accent); font-size: 12px; }
 .field-label { display: grid; gap: 8px; }
 .field-label :deep(.el-form-item__label) { color: var(--sg-text-secondary); font-size: 12px; }
-.ai-params { color: var(--sg-text-secondary); font-size: 12px; border-color: var(--sg-border); }
-.ai-params:deep(.el-collapse-item__header),
-.ai-params:deep(.el-collapse-item__wrap) { color: var(--sg-text-secondary); background: transparent; border-color: var(--sg-border); }
-.ai-params:deep(.el-collapse-item__content) { padding-bottom: 12px; }
-.ai-params :deep(.el-form-item) { margin-bottom: 0; }
 .upload-progress { width: 100%; }
 .uploaded-boundary { font-size: 11px; line-height: 1.6; }
 .uploaded-boundary .el-button { margin-top: 8px; }

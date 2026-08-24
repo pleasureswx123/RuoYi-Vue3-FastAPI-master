@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.routing import APIRoute
 
 from common.aspect.interface_auth import CheckUserInterfaceAuth
 from common.router import auto_register_controller_files
@@ -13,8 +14,10 @@ EXPECTED_ROUTES = {
     ('GET', '/shot-grid/projects/{projectId}/shots'): 'shotgrid:shot:list',
     ('POST', '/shot-grid/projects/{projectId}/shots'): 'shotgrid:shot:add',
     ('POST', '/shot-grid/projects/{projectId}/shots/batch-delete'): 'shotgrid:shot:archive',
+    ('POST', '/shot-grid/projects/{projectId}/shots/renumber'): 'shotgrid:shot:edit',
     ('GET', '/shot-grid/projects/{projectId}/shots/{shotId}'): 'shotgrid:shot:query',
     ('PUT', '/shot-grid/projects/{projectId}/shots/{shotId}'): 'shotgrid:shot:edit',
+    ('PUT', '/shot-grid/projects/{projectId}/shots/{shotId}/sequence'): 'shotgrid:shot:edit',
     ('POST', '/shot-grid/projects/{projectId}/shots/{shotId}/archive'): 'shotgrid:shot:archive',
 }
 
@@ -48,7 +51,12 @@ def test_import_static_router_is_registered_before_dynamic_shot_id_router() -> N
     )
     # FastAPI 新版本不再为已展开的 APIRoute 保留 original_router；
     # 直接检查最终匹配顺序，也更接近生产路由语义。
-    paths = [route.path for route in app.routes]
+    paths = []
+    for route in app.routes:
+        if isinstance(route, APIRoute):
+            paths.append(route.path)
+        elif hasattr(route, 'effective_candidates'):
+            paths.extend(candidate.path for candidate in route.effective_candidates())
 
     assert paths.index('/shot-grid/projects/{projectId}/shots/import/preview') < paths.index(
         '/shot-grid/projects/{projectId}/shots/{shotId}'

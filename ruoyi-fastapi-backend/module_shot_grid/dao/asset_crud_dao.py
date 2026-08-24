@@ -15,7 +15,7 @@ from module_shot_grid.entity.do.version_do import (
 )
 from module_shot_grid.entity.vo.asset_crud_vo import ShotGridAssetListQueryModel
 
-ACTIVE_TASK_STATUSES = ('not_started', 'in_progress', 'pending_review', 'revision')
+ACTIVE_TASK_STATUSES = ('not_started', 'preparing', 'in_progress', 'pending_review', 'revision')
 STATUS_RANK_REVISION = 5
 STATUS_RANK_REVIEWING = 4
 STATUS_RANK_IN_PROGRESS = 3
@@ -502,8 +502,7 @@ class ShotGridAssetCrudDao:
                 select(ShotGridAssetItem.asset_id)
                 .outerjoin(
                     ShotGridTask,
-                    (ShotGridTask.asset_item_id == ShotGridAssetItem.asset_item_id)
-                    & (ShotGridTask.del_flag == '0'),
+                    (ShotGridTask.asset_item_id == ShotGridAssetItem.asset_item_id) & (ShotGridTask.del_flag == '0'),
                 )
                 .where(
                     ShotGridAssetItem.project_id == project_id,
@@ -657,34 +656,6 @@ class ShotGridAssetCrudDao:
         )
         return bool(result.rowcount)
 
-    @staticmethod
-    async def get_assignable_member(db: AsyncSession, project_id: int, user_id: int) -> dict[str, Any] | None:
-        """只返回活动项目成员且平台账号仍正常的制作人。"""
-
-        row = (
-            (
-                await db.execute(
-                    select(
-                        ShotGridProjectMember.user_id,
-                        func.upper(SysUser.nick_name).label('producer_code'),
-                        SysUser.nick_name,
-                    )
-                    .join(SysUser, SysUser.user_id == ShotGridProjectMember.user_id)
-                    .where(
-                        ShotGridProjectMember.project_id == project_id,
-                        ShotGridProjectMember.user_id == user_id,
-                        ShotGridProjectMember.member_status == 'active',
-                        ShotGridProjectMember.project_role == 'creator',
-                        SysUser.status == '0',
-                        SysUser.del_flag == '0',
-                    )
-                )
-            )
-            .mappings()
-            .one_or_none()
-        )
-        return dict(row) if row is not None else None
-
     @classmethod
     async def has_versions_for_item(cls, db: AsyncSession, project_id: int, asset_item_id: int) -> bool:
         return bool(
@@ -754,12 +725,6 @@ class ShotGridAssetCrudDao:
         db.add(item)
         await db.flush()
         return item
-
-    @classmethod
-    async def add_task(cls, db: AsyncSession, task: ShotGridTask) -> ShotGridTask:
-        db.add(task)
-        await db.flush()
-        return task
 
     @classmethod
     async def add_storage_operation(cls, db: AsyncSession, operation: ShotGridStorageOperation) -> None:

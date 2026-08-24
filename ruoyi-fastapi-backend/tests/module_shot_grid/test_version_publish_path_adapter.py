@@ -28,7 +28,7 @@ def _prepare_roots(tmp_path: Path, content: bytes, extension: str) -> tuple[Path
     source_path.parent.mkdir(parents=True)
     source_path.write_bytes(content)
     nas_root = tmp_path / 'nas'
-    target_parent = nas_root / 'AI影视短片' / '罗刹夫人' / 'VIDEO' / 'EP01' / 'S001'
+    target_parent = nas_root / 'AI影视短片' / '罗刹夫人' / 'VIDEO' / 'EP01' / '001_S001'
     target_parent.mkdir(parents=True)
     return source_root, nas_root, f'2026/08/upload.{extension}'
 
@@ -43,8 +43,8 @@ def _context(nas_root: Path, storage_key: str, content: bytes) -> VersionPublish
         source_sha256=hashlib.sha256(content).hexdigest(),
         source_file_size=len(content),
         business_file_name=business_name,
-        target_relative_path=f'VIDEO\\EP01\\S001\\{business_name}',
-        temporary_relative_path=(f'VIDEO\\EP01\\S001\\.sgtmp-{SUBMISSION_ID}-a{ATTEMPT_COUNT}-abc123.part'),
+        target_relative_path=f'VIDEO\\EP01\\001_S001\\{business_name}',
+        temporary_relative_path=(f'VIDEO\\EP01\\001_S001\\.sgtmp-{SUBMISSION_ID}-a{ATTEMPT_COUNT}-abc123.part'),
         storage_status='ready',
         protocol='smb_unc',
         configured_root_path=str(nas_root),
@@ -184,7 +184,7 @@ def test_each_attempt_requires_its_own_temporary_name(tmp_path: Path) -> None:
     second = replace(
         first,
         attempt_count=2,
-        temporary_relative_path='VIDEO\\EP01\\S001\\.sgtmp-7-a2-other.part',
+        temporary_relative_path='VIDEO\\EP01\\001_S001\\.sgtmp-7-a2-other.part',
     )
 
     assert first.temporary_relative_path != second.temporary_relative_path

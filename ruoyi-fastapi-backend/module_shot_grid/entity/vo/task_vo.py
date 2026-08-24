@@ -10,7 +10,7 @@ from module_shot_grid.entity.vo.common_vo import (
 )
 
 TaskKind = Literal['shot_video', 'asset_image']
-TaskStatus = Literal['not_started', 'in_progress', 'pending_review', 'revision', 'completed']
+TaskStatus = Literal['not_started', 'preparing', 'in_progress', 'pending_review', 'revision', 'completed']
 TaskPriority = Literal['low', 'normal', 'high', 'urgent']
 SQL_BIGINT_MAX = 9_223_372_036_854_775_807
 
@@ -61,7 +61,7 @@ class ShotGridMineTaskListQueryModel(ShotGridTaskFilterModel):
 
 
 class ShotGridTaskUpdateModel(ShotGridLockVersionModel):
-    """修改任务要求、优先级和截止日期的完整快照。"""
+    """修改未开始任务的要求、优先级和截止日期的完整快照。"""
 
     model_config = ConfigDict(extra='forbid')
 
@@ -189,6 +189,7 @@ class ShotGridTaskAssigneeModel(ShotGridApiModel):
     """任务负责人摘要；历史任务的成员缩写允许为空。"""
 
     user_id: int
+    user_name: str | None = None
     nick_name: str | None = None
     producer_code: str | None = None
     member_status: Literal['active', 'removed'] | None = None
@@ -250,9 +251,25 @@ class ShotGridTaskListItemModel(ShotGridApiModel):
     update_time: datetime
 
 
+class ShotGridTaskShotProductionModel(ShotGridApiModel):
+    """镜头任务详情中的完整只读制作信息。"""
+
+    duration_ms: int = Field(ge=0)
+    description: str | None = None
+    shot_size: str | None = None
+    camera_position: str | None = None
+    camera_movement: str | None = None
+    focal_length: str | None = None
+    dialogue: str | None = None
+    sound_effect: str | None = None
+    color_reference: str | None = None
+    remark: str | None = None
+
+
 class ShotGridTaskDetailModel(ShotGridTaskListItemModel):
     """任务详情；完整版本和意见继续走独立分页接口。"""
 
+    shot_production: ShotGridTaskShotProductionModel | None = None
     remark: str | None = None
     create_by: str
     update_by: str

@@ -33,6 +33,7 @@ HTTP_NOT_FOUND = 404
 HTTP_CONFLICT = 409
 HTTP_UNPROCESSABLE_ENTITY = 422
 HTTP_SERVICE_UNAVAILABLE = 503
+EMPTY_ISSUE_SNAPSHOT_HASH = ShotGridVersionSubmissionService._issue_snapshot_hash([])
 
 
 def _shot_context() -> dict[str, object]:
@@ -44,7 +45,7 @@ def _shot_context() -> dict[str, object]:
         'scene_no': 1,
         'shot_no': 1,
         'episode_storage_dir_name': 'EP01',
-        'shot_storage_dir_name': 'S001',
+        'shot_storage_dir_name': '001_S001',
     }
 
 
@@ -103,6 +104,64 @@ def _ready_asset_context(*, production_item: str | None = '动力舱恐怖气氛
     }
 
 
+def test_submit_access_only_allows_current_assignee_creator() -> None:
+    task = SimpleNamespace(assignee_user_id=USER_ID)
+    owner_creator = ShotGridProjectAccessModel(
+        projectId=PROJECT_ID,
+        userId=USER_ID,
+        projectRole='creator',
+        hasAllScope=False,
+    )
+    ShotGridVersionSubmissionService._require_submit_access(owner_creator, task, USER_ID)
+
+    denied = [
+        ShotGridProjectAccessModel(
+            projectId=PROJECT_ID,
+            userId=USER_ID,
+            projectRole='director',
+            hasAllScope=False,
+        ),
+        ShotGridProjectAccessModel(
+            projectId=PROJECT_ID,
+            userId=USER_ID,
+            projectRole=None,
+            hasAllScope=True,
+        ),
+        ShotGridProjectAccessModel(
+            projectId=PROJECT_ID,
+            userId=USER_ID + 1,
+            projectRole='creator',
+            hasAllScope=False,
+        ),
+    ]
+    for access in denied:
+        with pytest.raises(ShotGridDomainException) as exc_info:
+            ShotGridVersionSubmissionService._require_submit_access(access, task, access.user_id)
+        assert exc_info.value.error_key == 'SG_PROJECT_ACCESS_DENIED'
+
+
+def test_retry_access_only_allows_current_assignee_creator() -> None:
+    row = {'assignee_user_id': USER_ID}
+    owner_creator = ShotGridProjectAccessModel(
+        projectId=PROJECT_ID,
+        userId=USER_ID,
+        projectRole='creator',
+        hasAllScope=False,
+    )
+    ShotGridVersionSubmissionService._require_retry_access(owner_creator, row, USER_ID)
+
+    manager_access = ShotGridProjectAccessModel(
+        projectId=PROJECT_ID,
+        userId=USER_ID + 1,
+        projectRole='director',
+        hasAllScope=True,
+    )
+    with pytest.raises(ShotGridDomainException) as exc_info:
+        ShotGridVersionSubmissionService._require_retry_access(manager_access, row, manager_access.user_id)
+
+    assert exc_info.value.error_key == 'SG_PROJECT_ACCESS_DENIED'
+
+
 class _RollbackExpiringSource:
     """模拟 AsyncSession.rollback 后禁止同步读取的持久 ORM 文件对象。"""
 
@@ -150,6 +209,10 @@ def _patch_submit_preflight(
         AsyncMock(return_value=unresolved),
     )
     monkeypatch.setattr(
+        'module_shot_grid.service.version_submission_service.ShotGridVersionSubmissionDao.get_open_issue_identities',
+        AsyncMock(return_value=[]),
+    )
+    monkeypatch.setattr(
         'module_shot_grid.service.version_submission_service.ShotGridVersionSubmissionDao.next_reserved_version_no',
         AsyncMock(return_value=2),
     )
@@ -179,6 +242,7 @@ async def test_submit_preflight_returns_stable_ready_contract_without_writes(
         'taskKind': 'shot_video',
         'taskStatus': 'in_progress',
         'fileExtension': 'mov',
+        'openIssueSnapshotHash': EMPTY_ISSUE_SNAPSHOT_HASH,
         'allowedActions': ['version.add'],
     }
     db.commit.assert_not_awaited()
@@ -518,6 +582,10 @@ async def test_create_freezes_source_storage_key_before_preflight_rollback(monke
         AsyncMock(return_value=None),
     )
     monkeypatch.setattr(
+        'module_shot_grid.service.version_submission_service.ShotGridVersionSubmissionDao.get_open_issue_identities',
+        AsyncMock(return_value=[]),
+    )
+    monkeypatch.setattr(
         'module_shot_grid.service.version_submission_service.FileInfoDao.get_file_info_by_id_for_update',
         AsyncMock(return_value=locked_file),
     )
@@ -530,7 +598,11 @@ async def test_create_freezes_source_storage_key_before_preflight_rollback(monke
         AsyncMock(return_value=True),
     )
 
-    command = ShotGridVersionSubmissionCreateModel(fileId=FILE_ID, changelog='完成首版')
+    command = ShotGridVersionSubmissionCreateModel(
+        fileId=FILE_ID,
+        changelog='完成首版',
+        openIssueSnapshotHash=EMPTY_ISSUE_SNAPSHOT_HASH,
+    )
     with pytest.raises(ShotGridDomainException) as exc_info:
         await ShotGridVersionSubmissionService.create_submission(
             db,
@@ -767,6 +839,7 @@ async def test_concurrent_idempotency_unique_conflict_replays_same_command(
         source_file_id=FILE_ID,
         changelog='修改完成',
         ai_params={'seed': 1},
+        open_issue_snapshot_hash=EMPTY_ISSUE_SNAPSHOT_HASH,
         submission_status='pending',
         reserved_version_no=1,
         business_file_name='WGZR_EP001_001_S001_YJF_V001_1786094626499.mp4',
@@ -775,6 +848,11 @@ async def test_concurrent_idempotency_unique_conflict_replays_same_command(
         fileId=FILE_ID,
         changelog='修改完成',
         aiParams={'seed': 1},
+        openIssueSnapshotHash=EMPTY_ISSUE_SNAPSHOT_HASH,
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.version_submission_service.ShotGridVersionSubmissionDao.get_submission_issue_responses',
+        AsyncMock(return_value=[]),
     )
     monkeypatch.setattr(
         'module_shot_grid.service.version_submission_service.ShotGridVersionSubmissionDao.lock_project',
@@ -795,7 +873,7 @@ async def test_concurrent_idempotency_unique_conflict_replays_same_command(
             return_value=ShotGridProjectAccessModel(
                 projectId=PROJECT_ID,
                 userId=USER_ID,
-                projectRole='director',
+                projectRole='creator',
             )
         ),
     )
@@ -842,8 +920,8 @@ async def test_formal_commit_switches_temp_reference_and_commits_whole_review_ch
         reserved_version_no=3,
         generated_at_ms=1_786_094_626_499,
         business_file_name='WGZR_EP001_001_S001_YJF_V003_1786094626499.mp4',
-        target_relative_path='VIDEO\\EP01\\S001\\WGZR_EP001_001_S001_YJF_V003_1786094626499.mp4',
-        temporary_relative_path='VIDEO\\EP01\\S001\\.sgtmp-30-a1-temp.part',
+        target_relative_path='VIDEO\\EP01\\001_S001\\WGZR_EP001_001_S001_YJF_V003_1786094626499.mp4',
+        temporary_relative_path='VIDEO\\EP01\\001_S001\\.sgtmp-30-a1-temp.part',
         source_sha256=FILE_HASH,
         source_file_size=123,
         changelog='按意见修改',

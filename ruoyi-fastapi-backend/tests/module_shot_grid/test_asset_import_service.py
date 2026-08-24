@@ -5,6 +5,7 @@ from typing import Any
 from unittest.mock import AsyncMock, Mock
 
 import pytest
+from pydantic import ValidationError
 
 from common.enums import BusinessType
 from module_shot_grid.dao.asset_import_dao import AssetImportDao
@@ -23,7 +24,6 @@ from module_shot_grid.service.asset_import_service import AssetImportService
 from module_shot_grid.service.import_preview_store import ImportPreviewStore
 
 BATCH_ID = 11
-ASSIGNEE_USER_ID = 7
 CONFLICT_STATUS = 409
 UNPROCESSABLE_ENTITY_STATUS = 422
 
@@ -59,7 +59,7 @@ def _payload(rows: list[AssetImportPreviewRowModel]) -> ImportPreviewTokenPayloa
         importType='asset',
         previewedBy=3,
         fileSha256='f' * 64,
-        templateVersion='asset-v1',
+        templateVersion='asset-v2',
         expiresAt=datetime.now() + timedelta(minutes=5),
         rows=[row.model_dump(mode='json', by_alias=True) for row in rows],
     )
@@ -71,7 +71,6 @@ def _result_snapshot() -> dict[str, Any]:
         committedRows=1,
         createdAssetsByType={'Character': 0, 'Environment': 1, 'Prop': 0},
         createdAssetItems=1,
-        createdTasks=0,
         missingProductionItemWarnings=0,
         autoMatchedRequirements=1,
         pendingRequirements=0,
@@ -112,15 +111,11 @@ def test_selection_hash_is_order_independent_but_sheet_sensitive() -> None:
     assert AssetImportService._selection_hash(first) == AssetImportService._selection_hash(reversed_request)
     assert AssetImportService._selection_hash(first) != AssetImportService._selection_hash(changed_sheet)
 
-    unassigned = AssetImportCommitRequestModel(
-        importToken='token',
-        selectedRows=[{'sheetName': 'Sheet1', 'rowNumber': 2, 'assigneeUserId': None}],
-    )
-    unchanged = AssetImportCommitRequestModel(
-        importToken='token',
-        selectedRows=[{'sheetName': 'Sheet1', 'rowNumber': 2}],
-    )
-    assert AssetImportService._selection_hash(unassigned) != AssetImportService._selection_hash(unchanged)
+    with pytest.raises(ValidationError):
+        AssetImportCommitRequestModel(
+            importToken='token',
+            selectedRows=[{'sheetName': 'Sheet1', 'rowNumber': 2, 'assigneeUserId': None}],
+        )
 
 
 @pytest.mark.parametrize('value', [None, '', '   ', 'x' * 101, 'line\nbreak'])
@@ -146,26 +141,20 @@ def test_partial_parent_selection_is_self_contained() -> None:
     assert selected[0].normalized.asset_name == '控制室'
 
 
-def test_assignee_error_can_be_cleared_to_unassigned_during_commit() -> None:
+def test_invalid_preview_row_cannot_be_repaired_during_commit_selection() -> None:
     row = _row(can_import=False)
-    row.normalized.assignee_user_name = '无法匹配'
-    row.errors = [
-        ImportIssueModel(
-            errorKey='SG_TASK_ASSIGNEE_INVALID',
-            fieldName='assigneeUserName',
-            message='制作人无法匹配',
-        )
-    ]
-    selected = AssetImportService._select_rows(
-        _payload([row]),
-        AssetImportCommitRequestModel(
-            importToken='token',
-            selectedRows=[{'sheetName': 'Sheet1', 'rowNumber': 2, 'assigneeUserId': None}],
-        ),
-    )
+    row.errors = [ImportIssueModel(errorKey='SG_IMPORT_FIELD_INVALID', fieldName='assetName', message='资产名称无效')]
 
-    assert selected[0].can_import is True
-    assert selected[0].errors == []
+    with pytest.raises(ShotGridDomainException) as exc_info:
+        AssetImportService._select_rows(
+            _payload([row]),
+            AssetImportCommitRequestModel(
+                importToken='token',
+                selectedRows=[{'sheetName': 'Sheet1', 'rowNumber': 2}],
+            ),
+        )
+
+    assert exc_info.value.error_key == 'SG_IMPORT_HAS_ERRORS'
 
 
 def test_replay_requires_same_token_and_selection_snapshot() -> None:
@@ -328,7 +317,6 @@ async def test_commit_transaction_audits_before_database_commit(monkeypatch: pyt
 
     monkeypatch.setattr(AssetImportService, '_require_ready_storage', AsyncMock())
     monkeypatch.setattr(AssetImportService, '_validate_storage_segments', Mock())
-    monkeypatch.setattr(AssetImportService, '_resolve_assignees', AsyncMock())
     monkeypatch.setattr(AssetImportService, '_raise_selected_row_errors', Mock())
     monkeypatch.setattr(AssetImportService, '_persist_selected_rows', AsyncMock(return_value=result))
 
@@ -485,13 +473,11 @@ def test_only_owner_or_all_scope_can_commit_preview_token() -> None:
 
 
 @pytest.mark.asyncio
-async def test_missing_item_still_persists_remark_and_creates_one_main_task(
+async def test_missing_item_persists_remark_without_creating_task(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     row = _row(production_item=None)
     row.normalized.remark = '后续补充分项'
-    row.normalized.task_description = '先完成主视角'
-    row.normalized.assignee_user_id = ASSIGNEE_USER_ID
     captured: dict[str, Any] = {}
 
     async def add_item(_db: Any, item: Any) -> Any:
@@ -499,14 +485,9 @@ async def test_missing_item_still_persists_remark_and_creates_one_main_task(
         item.asset_item_id = 21
         return item
 
-    async def add_task(_db: Any, task: Any) -> Any:
-        captured['task'] = task
-        return task
-
     monkeypatch.setattr(AssetImportDao, 'add_asset_item', add_item)
-    monkeypatch.setattr(AssetImportDao, 'add_task', add_task)
 
-    task_count, warning_count = await AssetImportService._create_asset_items(
+    warning_count = await AssetImportService._create_asset_items(
         object(),  # type: ignore[arg-type]
         project_id=2,
         batch=SimpleNamespace(batch_id=BATCH_ID),  # type: ignore[arg-type]
@@ -518,9 +499,7 @@ async def test_missing_item_still_persists_remark_and_creates_one_main_task(
         now=datetime.now(),
     )
 
-    assert (task_count, warning_count) == (1, 1)
+    assert warning_count == 1
     assert captured['item'].production_item is None
     assert captured['item'].remark == '后续补充分项'
-    assert captured['task'].task_kind == 'asset_image'
-    assert captured['task'].assignee_user_id == ASSIGNEE_USER_ID
-    assert captured['task'].requirements == '先完成主视角'
+    assert set(captured) == {'item'}

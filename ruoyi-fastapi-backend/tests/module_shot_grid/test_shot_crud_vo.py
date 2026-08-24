@@ -11,6 +11,7 @@ from module_shot_grid.entity.vo.shot_crud_vo import (
 )
 
 SQL_BIGINT_MAX = 9_223_372_036_854_775_807
+SECOND_SEQUENCE_POSITION = 2
 
 
 def test_shot_write_model_normalizes_text_and_rejects_duplicate_assets() -> None:
@@ -27,6 +28,8 @@ def test_shot_write_model_normalizes_text_and_rejects_duplicate_assets() -> None
     assert command.focal_length == '35/25'
     assert command.dialogue is None
     assert command.asset_ids == [4001, 4002]
+    assert command.sort_order is None
+    assert command.sequence_position is None
 
     with pytest.raises(ValidationError):
         ShotGridShotCreateModel(
@@ -37,7 +40,34 @@ def test_shot_write_model_normalizes_text_and_rejects_duplicate_assets() -> None
         )
 
 
-def test_update_requires_complete_asset_snapshot_and_preserves_assignee_omission() -> None:
+def test_shot_write_uses_one_scene_position_for_shot_number_and_rejects_dual_semantics() -> None:
+    command = ShotGridShotCreateModel(
+        sceneId=20,
+        description='镜头描述',
+        sequencePosition=SECOND_SEQUENCE_POSITION,
+    )
+
+    assert command.sequence_position == SECOND_SEQUENCE_POSITION
+    assert command.sort_order is None
+
+    with pytest.raises(ValidationError):
+        ShotGridShotCreateModel(
+            sceneId=20,
+            shotNo=1,
+            description='镜头描述',
+            sequencePosition=SECOND_SEQUENCE_POSITION,
+        )
+
+    with pytest.raises(ValidationError):
+        ShotGridShotCreateModel(
+            sceneId=20,
+            description='镜头描述',
+            sequencePosition=SECOND_SEQUENCE_POSITION,
+            sortOrder=20,
+        )
+
+
+def test_update_requires_complete_asset_snapshot_and_rejects_task_assignment() -> None:
     with pytest.raises(ValidationError):
         ShotGridShotUpdateModel(
             sceneId=20,
@@ -48,22 +78,29 @@ def test_update_requires_complete_asset_snapshot_and_preserves_assignee_omission
 
     command = ShotGridShotUpdateModel(
         sceneId=20,
-        shotNo=1,
         description='镜头描述',
         assetIds=[],
         lockVersion=0,
     )
-    assert 'assignee_user_id' not in command.model_fields_set
+    assert command.asset_ids == []
 
-    explicit = ShotGridShotUpdateModel(
-        sceneId=20,
-        shotNo=1,
-        description='镜头描述',
-        assigneeUserId=None,
-        assetIds=[],
-        lockVersion=0,
-    )
-    assert 'assignee_user_id' in explicit.model_fields_set
+    with pytest.raises(ValidationError):
+        ShotGridShotUpdateModel(
+            sceneId=20,
+            shotNo=1,
+            description='镜头描述',
+            assigneeUserId=None,
+            assetIds=[],
+            lockVersion=0,
+        )
+
+    with pytest.raises(ValidationError):
+        ShotGridShotCreateModel(
+            sceneId=20,
+            shotNo=1,
+            description='镜头描述',
+            assigneeUserId=2,
+        )
 
 
 def test_list_query_rejects_non_whitelisted_sort_column() -> None:
@@ -90,15 +127,11 @@ def test_historical_task_assignee_allows_missing_producer_code() -> None:
 
 
 def test_batch_delete_requires_unique_shots_and_lock_versions() -> None:
-    command = ShotGridShotBatchDeleteModel(
-        items=[{'shotId': 41, 'lockVersion': 0}, {'shotId': 42, 'lockVersion': 3}]
-    )
+    command = ShotGridShotBatchDeleteModel(items=[{'shotId': 41, 'lockVersion': 0}, {'shotId': 42, 'lockVersion': 3}])
     assert [item.shot_id for item in command.items] == [41, 42]
 
     with pytest.raises(ValidationError):
-        ShotGridShotBatchDeleteModel(
-            items=[{'shotId': 41, 'lockVersion': 0}, {'shotId': 41, 'lockVersion': 1}]
-        )
+        ShotGridShotBatchDeleteModel(items=[{'shotId': 41, 'lockVersion': 0}, {'shotId': 41, 'lockVersion': 1}])
 
 
 @pytest.mark.parametrize(
@@ -131,7 +164,6 @@ def test_shot_write_models_reject_identity_and_lifecycle_extras(model_type: type
     'payload',
     [
         {'sceneId': SQL_BIGINT_MAX + 1},
-        {'assigneeUserId': SQL_BIGINT_MAX + 1},
         {'assetIds': [SQL_BIGINT_MAX + 1]},
     ],
 )
