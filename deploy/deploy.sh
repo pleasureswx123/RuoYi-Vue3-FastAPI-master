@@ -111,6 +111,7 @@ check_port() {
 
 check_port "${ADMIN_PORT:-12580}"
 check_port "${SHOT_GRID_PORT:-12581}"
+check_port "${POSTGRES_PORT:-12582}"
 
 "${COMPOSE[@]}" config --quiet
 
@@ -150,6 +151,27 @@ fi
 echo '执行 PostgreSQL Alembic 增量迁移'
 "${COMPOSE[@]}" run --rm --no-deps backend \
     ruoyi db upgrade --env=production --output=json --allow-prod --yes --revision=head
+
+reader_role="${POSTGRES_READER_ROLE:-}"
+if [[ -n "$reader_role" ]]; then
+    [[ "$reader_role" =~ ^[a-z_][a-z0-9_]{0,62}$ ]] \
+        || fail 'POSTGRES_READER_ROLE 不是安全的 PostgreSQL 角色名'
+    {
+        printf "\\set reader_role '%s'\n" "$reader_role"
+        cat <<'SQL'
+\set ON_ERROR_STOP on
+SELECT format('GRANT SELECT ON TABLE %I.%I TO %I', schemaname, tablename, :'reader_role')
+FROM pg_tables
+WHERE schemaname = 'public'
+  AND tablename LIKE 'sg\_%' ESCAPE '\'
+  AND EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'reader_role')
+ORDER BY tablename
+\gexec
+SQL
+    } | "${COMPOSE[@]}" exec -T postgres sh -ec \
+        'exec psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' >/dev/null
+    echo "已刷新 PostgreSQL Navicat 只读角色的 sg_* 表权限：$reader_role"
+fi
 
 echo '执行生产配置、数据库、Redis 与传输加密预检'
 "${COMPOSE[@]}" run --rm --no-deps backend ruoyi app doctor --env=production --output=json

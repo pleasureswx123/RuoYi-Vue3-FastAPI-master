@@ -24,6 +24,9 @@ export RUOYI_ENV_FILE="$ENV_FILE"
 export APP_RELEASE_ID="${APP_RELEASE_ID_OVERRIDE:-${APP_RELEASE_ID:-local}}"
 COMPOSE=(docker compose --project-name "$PROJECT_NAME" --env-file "$ENV_FILE" -f "$ROOT_DIR/docker-compose.prod.yml")
 
+echo "PostgreSQL（Navicat 只读）：${POSTGRES_BIND_ADDRESS:-127.0.0.1}:${POSTGRES_PORT:-12582} / ${POSTGRES_READER_ROLE:-ruoyi_navicat_reader}"
+echo
+
 nas_mount_map_compact="${SHOT_GRID_NAS_UNC_MOUNT_MAP:-}"
 nas_mount_map_compact="${nas_mount_map_compact//[[:space:]]/}"
 if [[ -n "$nas_mount_map_compact" && "$nas_mount_map_compact" != '{}' ]]; then

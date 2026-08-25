@@ -14,7 +14,7 @@
 | API 前缀 | 两个前端都通过同域 `/prod-api/` 反向代理到后端 |
 | 生产配置 | `/etc/ruoyi-shot-grid/production.env`，权限必须为 `0600` |
 | 部署状态和备份 | `/var/lib/ruoyi-shot-grid` |
-| 数据库 | 本项目独立 PostgreSQL 16，不映射宿主机端口 |
+| 数据库 | 本项目独立 PostgreSQL 16；Navicat 只读入口 `192.168.10.122:12582` |
 | Redis | 本项目独立 Redis 7，不映射宿主机端口 |
 | 当前 HTTP 决策 | 仅在公司可信内网使用；传输层 Web Crypto 已关闭 |
 
@@ -27,14 +27,15 @@
 | 平台管理前端 | `http://192.168.10.122:12580/` | `12580 → admin-frontend:80` | `http://admin-frontend:80` | 无持久化卷 | 浏览器入口；`/prod-api/*` 反向代理到后端 |
 | Shot Grid 前端 | `http://192.168.10.122:12581/shot-grid-app/` | `12581 → shot-grid-frontend:80` | `http://shot-grid-frontend:80/shot-grid-app/` | 无持久化卷 | 业务前端入口；`/prod-api/*` 反向代理到后端 |
 | FastAPI 后端 | 不直接开放；浏览器通过两个前端的 `/prod-api/` 访问 | 不映射宿主机端口 | `http://backend:9099` | `ruoyi-shot-grid-prod_backend_files` → 容器 `/app/vf_admin` → 宿主机 `/var/lib/docker/volumes/ruoyi-shot-grid-prod_backend_files/_data` | 登录、权限、业务规则、文件接口和数据库事务 |
-| PostgreSQL 16 | 不直接开放，不能使用 `192.168.10.122:5432` 连接 | 不映射宿主机端口 | `postgres:5432` | `ruoyi-shot-grid-prod_postgres_data` → 容器 `/var/lib/postgresql/data` → 宿主机 `/var/lib/docker/volumes/ruoyi-shot-grid-prod_postgres_data/_data` | 仅后端和运维命令可访问；用户名、密码和数据库名来自生产 `.env` |
+| PostgreSQL 16 | `192.168.10.122:12582`（仅公司内网、Navicat 只读账号） | `192.168.10.122:12582 → postgres:5432` | `postgres:5432` | `ruoyi-shot-grid-prod_postgres_data` → 容器 `/var/lib/postgresql/data` → 宿主机 `/var/lib/docker/volumes/ruoyi-shot-grid-prod_postgres_data/_data` | 应用账号不对外提供；Navicat 账号只允许查询 `sg_*` 表，最多 3 个连接、单条查询 30 秒超时 |
 | Redis 7 | 不直接开放，不能使用 `192.168.10.122:6379` 连接 | 不映射宿主机端口 | `redis:6379` | `ruoyi-shot-grid-prod_redis_data` → 容器 `/data` → 宿主机 `/var/lib/docker/volumes/ruoyi-shot-grid-prod_redis_data/_data` | 登录会话、验证码、缓存、限流、日志流和多 Worker 协调 |
 
-当前外部端口边界只有：
+当前外部端口边界：
 
 ```text
 192.168.10.122:12580  平台管理前端
 192.168.10.122:12581  Shot Grid 前端
+192.168.10.122:12582  PostgreSQL（Navicat 只读）
 ```
 
 后端、PostgreSQL 和 Redis 共同位于 Docker 网络 `ruoyi-shot-grid-prod_app_network`。容器之间使用服务名 `backend`、`postgres`、`redis` 访问，不使用服务器内网 IP，也不依赖服务器上其他项目的数据库或 Redis。
@@ -63,7 +64,33 @@ docker compose --project-name ruoyi-shot-grid-prod \
   exec redis sh -ec 'export REDISCLI_AUTH="$REDIS_PASSWORD"; exec redis-cli -n "${REDIS_DATABASE:-2}"'
 ```
 
-不要为了使用数据库客户端而直接在 `docker-compose.prod.yml` 中增加 `5432:5432` 或 `6379:6379`。确需从办公电脑直连时，应单独评审访问来源、防火墙、账号权限、临时 SSH 隧道和操作审计，不应把数据库或 Redis 长期暴露到公司整个网段。
+### 1.2 使用 Navicat 查看 Shot Grid 数据
+
+Navicat 新建 PostgreSQL 连接时填写：
+
+| 字段 | 值 |
+| --- | --- |
+| 主机 | `192.168.10.122` |
+| 端口 | `12582` |
+| 初始数据库 | `ruoyi_fastapi` |
+| 用户名 | `ruoyi_navicat_reader` |
+| SSL | 关闭 |
+
+密码不写入 Git 或本文档。由服务器 root 查看一次只读凭据：
+
+```bash
+ssh root@192.168.10.122
+cat /etc/ruoyi-shot-grid/navicat-reader.env
+```
+
+该账号只能 `SELECT` 当前数据库中的 `sg_*` Shot Grid 表，不能增删改数据，也不能读取平台用户密码、系统配置等 `sys_*` 表。首次配置或需要轮换密码时执行：
+
+```bash
+cd /opt/ruoyi-shot-grid
+RUOYI_ENV_FILE=/etc/ruoyi-shot-grid/production.env bash deploy/setup-postgres-reader.sh
+```
+
+宿主机 `5432` 已被服务器原有项目占用，禁止改成 `5432:5432`；Redis 仍不映射宿主机端口。Navicat 只用于只读排查，正式的数据修复、迁移和删除必须走应用接口或经过审计的运维流程。
 
 服务器上还有其他项目。所有生产命令必须带项目名 `ruoyi-shot-grid-prod` 和本项目 Compose 文件，禁止执行全局 `docker system prune`，禁止对本项目执行 `down -v`，也不要停止或重建其他项目容器。
 
@@ -141,8 +168,8 @@ docker volume inspect \
 
 | 配置组 | 关键变量 | 作用 |
 | --- | --- | --- |
-| Compose/端口与运行身份 | `COMPOSE_PROJECT_NAME`、`ADMIN_PORT`、`SHOT_GRID_PORT`、`BACKEND_APP_UID/GID` | 保证项目名、`12580/12581` 和后端非 root 身份不漂移 |
-| PostgreSQL | `POSTGRES_USER`、`POSTGRES_PASSWORD`、`POSTGRES_DB` | 初始化和连接本项目独立数据库 |
+| Compose/端口与运行身份 | `COMPOSE_PROJECT_NAME`、`ADMIN_PORT`、`SHOT_GRID_PORT`、`POSTGRES_BIND_ADDRESS/PORT`、`BACKEND_APP_UID/GID` | 保证项目名、`12580/12581/12582` 和后端非 root 身份不漂移 |
+| PostgreSQL | `POSTGRES_USER`、`POSTGRES_PASSWORD`、`POSTGRES_DB`、`POSTGRES_READER_ROLE` | 初始化和连接本项目独立数据库；只读密码单独保存在服务器凭据文件 |
 | Redis | `REDIS_PASSWORD`、`REDIS_DATABASE` | 会话、验证码、缓存和协调 |
 | FastAPI | `APP_WORKERS`、`APP_ROOT_PATH`、`APP_CORS_ALLOWED_ORIGINS` | 后端进程和反向代理边界 |
 | JWT | `JWT_SECRET_KEY`、过期时间 | 登录令牌签名；修改会让旧令牌失效 |
@@ -192,7 +219,7 @@ deploy/remote-deploy.ps1
 
 | Compose 文件 | 包含的服务 | 使用场景 | 当前公司生产是否使用 |
 | --- | --- | --- | --- |
-| `docker-compose.prod.yml` | PostgreSQL 16、Redis 7、FastAPI 后端、管理前端、Shot Grid 前端 | 公司内网正式部署；独立网络、三个命名卷、日志轮转、健康门禁，仅映射 `12580/12581` | **是，唯一生效的生产 Compose 文件** |
+| `docker-compose.prod.yml` | PostgreSQL 16、Redis 7、FastAPI 后端、管理前端、Shot Grid 前端 | 公司内网正式部署；独立网络、三个命名卷、日志轮转、健康门禁，映射 `12580/12581` 和只读数据库端口 `12582` | **是，唯一生效的生产 Compose 文件** |
 | `docker-compose.dev.yml` | 开发后端、PostgreSQL 14、Redis 7 | 本机开发；只绑定 `127.0.0.1:9099/15432/16379`，项目名为 `ruoyi-fastapi-local-dev` | 否 |
 | `docker-compose.pg.yml` | 旧 PostgreSQL 全栈、Redis、后端和两个前端 | 历史 PostgreSQL 兼容参考，固定暴露 `19099/15432/16379`，缺少当前生产安全和持久化边界 | 否，禁止用于 `192.168.10.122` 正式部署 |
 | `docker-compose.my.yml` | 旧 MySQL 全栈、Redis、后端和管理前端 | 历史 MySQL 兼容参考 | 否；当前主数据库是 PostgreSQL |
