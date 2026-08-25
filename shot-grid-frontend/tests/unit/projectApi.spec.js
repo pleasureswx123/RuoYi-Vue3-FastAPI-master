@@ -14,6 +14,7 @@ import {
   getProjectRoleOptions,
   getStorageRootOptions,
   previewProjectPath,
+  purgeProject,
   retryProjectStorage,
   updateProject
 } from '@/api/shot-grid/projects'
@@ -64,6 +65,18 @@ describe('项目 API 契约', () => {
 
     expect(request.mock.calls[0][0]).toMatchObject({ url: '/shot-grid/projects/9', method: 'put', data: update })
     expect(request.mock.calls[1][0]).toMatchObject({ url: '/shot-grid/projects/9/members', method: 'post' })
+  })
+
+  it('项目永久删除使用独立受保护路径并发送二次确认数据', () => {
+    const payload = { projectName: '测试项目', reason: '演示测试数据', lockVersion: 4 }
+    purgeProject(9, payload)
+
+    expect(request).toHaveBeenCalledWith({
+      url: '/shot-grid/projects/9/purge',
+      method: 'post',
+      data: payload,
+      silentError: true
+    })
   })
 
   it('项目选项使用 Shot Grid 专用只读接口', () => {

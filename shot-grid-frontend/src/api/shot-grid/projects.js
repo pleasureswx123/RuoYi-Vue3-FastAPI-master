@@ -130,6 +130,15 @@ export function archiveProject(projectId, data) {
   })
 }
 
+export function purgeProject(projectId, data) {
+  return request({
+    url: projectUrl(projectId, '/purge'),
+    method: 'post',
+    data,
+    silentError: true
+  })
+}
+
 export function getProjectMembers(projectId, params = {}, options = {}) {
   return request({
     url: projectUrl(projectId, '/members'),

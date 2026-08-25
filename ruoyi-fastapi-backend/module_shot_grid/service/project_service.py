@@ -41,6 +41,7 @@ class ShotGridProjectService:
     PROJECT_ACTION_PERMISSIONS = {
         'project.edit': 'shotgrid:project:edit',
         'project.archive': 'shotgrid:project:archive',
+        'project.delete': 'shotgrid:project:delete',
         'member.manage': ('shotgrid:member:add', 'shotgrid:member:edit', 'shotgrid:member:remove'),
         'scene.create': 'shotgrid:scene:add',
         'shot.create': 'shotgrid:shot:add',
@@ -527,16 +528,25 @@ class ShotGridProjectService:
     ) -> list[str]:
         if not (access.has_all_scope or current_role == 'director'):
             return []
+        delete_action = (
+            ['project.delete']
+            if access.has_all_scope
+            and cls._has_permission(current_user, cls.PROJECT_ACTION_PERMISSIONS['project.delete'])
+            else []
+        )
         if project_status == 'archived':
-            return []
+            return delete_action
         if project_status == 'completed':
-            return (
+            archive_action = (
                 ['project.archive']
                 if cls._has_permission(current_user, cls.PROJECT_ACTION_PERMISSIONS['project.archive'])
                 else []
             )
+            return [*archive_action, *delete_action]
         actions: list[str] = []
         for action, permissions in cls.PROJECT_ACTION_PERMISSIONS.items():
+            if action == 'project.delete' and not access.has_all_scope:
+                continue
             if action == 'storage.retry' and storage_status != 'failed':
                 continue
             required = (permissions,) if isinstance(permissions, str) else permissions

@@ -6,7 +6,7 @@ from module_admin.entity.do.file_do import SysFileInfo  # noqa: F401
 from module_admin.entity.do.user_do import SysUser  # noqa: F401
 from module_shot_grid.schema import SHOT_GRID_TABLE_NAMES
 
-EXPECTED_TABLE_COUNT = 26
+EXPECTED_TABLE_COUNT = 27
 
 
 def _primary_key_columns(table_name: str) -> tuple[str, ...]:
@@ -108,6 +108,21 @@ def test_json_columns_compile_to_jsonb_on_postgresql() -> None:
     assert str(Base.metadata.tables['sg_note'].c.annotations.type.compile(dialect=dialect)) == 'JSONB'
     assert str(Base.metadata.tables['sg_review_issue_draft'].c.annotations.type.compile(dialect=dialect)) == 'JSONB'
     assert str(Base.metadata.tables['sg_import_batch'].c.result_summary.type.compile(dialect=dialect)) == 'JSONB'
+    assert str(Base.metadata.tables['sg_project_purge'].c.file_manifest.type.compile(dialect=dialect)) == 'JSONB'
+
+
+def test_project_purge_queue_is_independent_and_guards_lease_states() -> None:
+    purge = Base.metadata.tables['sg_project_purge']
+    checks = {
+        constraint.name: str(constraint.sqltext)
+        for constraint in purge.constraints
+        if isinstance(constraint, CheckConstraint)
+    }
+
+    assert not [constraint for constraint in purge.constraints if isinstance(constraint, ForeignKeyConstraint)]
+    assert "purge_status = 'processing'" in checks['ck_sg_project_purge_execution_state']
+    assert 'lease_owner is not null' in checks['ck_sg_project_purge_execution_state']
+    assert 'completed_time is not null' in checks['ck_sg_project_purge_execution_state']
 
 
 def test_datetime_columns_compile_to_second_precision_on_postgresql() -> None:

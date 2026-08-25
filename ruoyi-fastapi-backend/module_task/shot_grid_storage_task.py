@@ -27,10 +27,23 @@ async def run_shot_grid_storage_outbox() -> None:
             return
 
         worker_module = importlib.import_module('module_shot_grid.service.storage_worker_service')
+        purge_worker_module = importlib.import_module('module_shot_grid.service.project_purge_worker_service')
+        worker_id = scheduler_util.get_application_lock_owner_token()
         async with database_module.AsyncSessionLocal() as query_db:
+            await purge_worker_module.ShotGridProjectPurgeWorkerService.run_scheduled_batch(
+                query_db,
+                worker_id=worker_id,
+                max_operations=worker_config.batch_size,
+                leader_predicate=scheduler_util.is_application_leader,
+                lease_seconds=worker_config.lease_seconds,
+                max_attempts=worker_config.max_attempts,
+                retry_delays_seconds=worker_config.retry_delays_seconds,
+                operation_timeout_seconds=worker_config.operation_timeout_seconds,
+                heartbeat_seconds=worker_config.heartbeat_seconds,
+            )
             await worker_module.ShotGridStorageWorkerService.run_scheduled_batch(
                 query_db,
-                worker_id=scheduler_util.get_application_lock_owner_token(),
+                worker_id=worker_id,
                 max_operations=worker_config.batch_size,
                 leader_predicate=scheduler_util.is_application_leader,
                 lease_seconds=worker_config.lease_seconds,

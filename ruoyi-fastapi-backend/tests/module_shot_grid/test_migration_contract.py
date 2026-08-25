@@ -11,6 +11,7 @@ from module_shot_grid.schema import (
     SHOT_GRID_MANAGED_USER_ROLE_SCHEMA_REVISION,
     SHOT_GRID_MEMBER_SCHEMA_REVISION,
     SHOT_GRID_PERMISSION_CODES,
+    SHOT_GRID_PROJECT_PURGE_SCHEMA_REVISION,
     SHOT_GRID_REPAIR_SCHEMA_REVISION,
     SHOT_GRID_REVIEW_ISSUE_DRAFT_SCHEMA_REVISION,
     SHOT_GRID_SCENE_SEQUENCE_GUARD_SCHEMA_REVISION,
@@ -346,6 +347,20 @@ def test_review_issue_draft_migration_extends_scene_guard_and_preserves_drafts_o
     assert 'sg_issue_verification' in source
 
 
+def test_project_purge_migration_extends_review_draft_and_installs_safe_queue() -> None:
+    migration = _migration_namespace(SHOT_GRID_PROJECT_PURGE_SCHEMA_REVISION)
+    source = Path(migration['__file__']).read_text(encoding='utf-8')
+
+    assert migration['revision'] == SHOT_GRID_PROJECT_PURGE_SCHEMA_REVISION
+    assert migration['down_revision'] == SHOT_GRID_REVIEW_ISSUE_DRAFT_SCHEMA_REVISION
+    assert "'sg_project_purge'" in source
+    assert 'ck_sg_project_purge_execution_state' in source
+    assert 'idx_sg_project_purge_due' in source
+    assert 'shotgrid:project:delete' in source
+    assert 'ForeignKeyConstraint' not in source
+    assert 'cannot downgrade while sg_project_purge contains deletion audit rows' in source
+
+
 def test_managed_user_role_migration_only_adds_provenance_table() -> None:
     migration = _migration_namespace(SHOT_GRID_MANAGED_USER_ROLE_SCHEMA_REVISION)
     source = Path(migration['__file__']).read_text(encoding='utf-8')
@@ -390,9 +405,11 @@ def test_migration_ddl_contains_every_named_metadata_constraint_and_index() -> N
 
 def test_initial_migration_seeds_frozen_and_legacy_permissions_without_duplicates() -> None:
     migration = _migration_namespace(SHOT_GRID_INITIAL_SCHEMA_REVISION)
+    purge_migration = _migration_namespace(SHOT_GRID_PROJECT_PURGE_SCHEMA_REVISION)
     permission_sequence = [migration['ROOT_MENU_SEED'][-1]]
     permission_sequence.extend(seed[-1] for seed in migration['CHILD_MENU_SEEDS'])
     permission_sequence.extend(seed[-1] for seed in migration['PERMISSION_BUTTON_SEEDS'])
+    permission_sequence.append(purge_migration['PERMISSION'])
     legacy_permissions = {'shotgrid:note:reply', 'shotgrid:note:resolve'}
 
     assert len(permission_sequence) == len(SHOT_GRID_PERMISSION_CODES | legacy_permissions)

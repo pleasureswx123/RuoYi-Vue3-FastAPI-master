@@ -151,6 +151,42 @@ class ShotGridProjectArchiveModel(ShotGridLockVersionModel):
         return value.strip()
 
 
+class ShotGridProjectPurgeModel(ShotGridLockVersionModel):
+    """永久删除项目请求；项目名称用于防误操作二次确认。"""
+
+    model_config = ConfigDict(extra='forbid')
+
+    project_name: str = Field(min_length=1, max_length=200, description='必须与当前项目名称完全一致')
+    reason: str = Field(min_length=2, max_length=500, description='永久删除原因')
+
+    @field_validator('project_name', 'reason', mode='before')
+    @classmethod
+    def normalize_required_text(cls, value: Any) -> str:
+        if not isinstance(value, str):
+            raise ValueError('项目名称和删除原因必须是字符串')
+        return value.strip()
+
+
+class ShotGridProjectPurgeAcceptedModel(ShotGridApiModel):
+    """项目业务数据已删除、物理文件清理已受理。"""
+
+    purge_id: int = Field(description='项目永久删除任务ID')
+    project_id: int = Field(description='已删除项目ID')
+    project_code: str = Field(description='已删除项目代号')
+    project_name: str = Field(description='已删除项目名称')
+    purge_status: Literal['pending', 'processing', 'retry_wait', 'succeeded', 'failed'] = Field(
+        description='NAS与独占平台文件物理清理状态'
+    )
+
+
+class ShotGridProjectPurgeAcceptedResponseModel(ResponseBaseModel):
+    """项目永久删除真实 HTTP 202 响应。"""
+
+    code: Literal[202] = Field(default=202, description='响应码')
+    msg: str = Field(default='项目业务数据已删除，物理文件正在后台清理', description='响应信息')
+    data: ShotGridProjectPurgeAcceptedModel = Field(description='永久删除受理结果')
+
+
 class ShotGridProjectMutationResultModel(ShotGridApiModel):
     """项目编辑或归档后的稳定响应快照。"""
 

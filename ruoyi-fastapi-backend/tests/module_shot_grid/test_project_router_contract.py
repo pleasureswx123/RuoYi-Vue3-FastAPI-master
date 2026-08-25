@@ -22,6 +22,7 @@ EXPECTED_ROUTES = {
     ('PUT', '/shot-grid/projects/{projectId}'): 'shotgrid:project:edit',
     ('GET', '/shot-grid/projects/{projectId}'): 'shotgrid:project:query',
     ('POST', '/shot-grid/projects/{projectId}/archive'): 'shotgrid:project:archive',
+    ('POST', '/shot-grid/projects/{projectId}/purge'): 'shotgrid:project:delete',
     ('GET', '/shot-grid/projects/{projectId}/storage'): 'shotgrid:storage:path',
     ('GET', '/shot-grid/projects/{projectId}/overview'): 'shotgrid:project:overview',
     ('GET', '/shot-grid/projects/{projectId}/members'): 'shotgrid:member:list',

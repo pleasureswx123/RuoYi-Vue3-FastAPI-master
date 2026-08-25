@@ -19,6 +19,7 @@ from sqlalchemy import (
 from config.database import Base
 from module_shot_grid.entity.do.base_do import (
     SHOT_GRID_DATETIME,
+    SHOT_GRID_JSON,
     ShotGridCreateAuditMixin,
     ShotGridMutableAuditMixin,
 )
@@ -72,6 +73,75 @@ class ShotGridProject(ShotGridMutableAuditMixin, Base):
             postgresql_where=text("project_status <> 'archived' AND del_flag = '0'"),
         ),
         {'comment': 'Shot Grid项目主表'},
+    )
+
+
+class ShotGridProjectPurge(Base):
+    """项目永久删除队列与最小审计记录；不依赖已删除的项目外键。"""
+
+    __tablename__ = 'sg_project_purge'
+
+    purge_id = Column(BigInteger, primary_key=True, nullable=False, autoincrement=True, comment='项目删除任务ID')
+    project_id = Column(BigInteger, nullable=False, comment='被删除项目ID快照')
+    project_code = Column(String(12), nullable=False, comment='被删除项目代号快照')
+    project_name = Column(String(200), nullable=False, comment='被删除项目名称快照')
+    root_path_snapshot = Column(String(1000), nullable=False, comment='NAS根路径快照')
+    project_relative_path = Column(String(1200), nullable=False, comment='项目相对NAS根路径快照')
+    project_path_snapshot = Column(String(2000), nullable=False, comment='项目完整UNC路径快照')
+    file_manifest = Column(SHOT_GRID_JSON, nullable=False, comment='待清理的项目独占平台文件快照')
+    purge_status = Column(String(20), nullable=False, server_default='pending', comment='删除任务状态')
+    attempt_count = Column(Integer, nullable=False, server_default='0', comment='已执行次数')
+    next_retry_time = Column(SHOT_GRID_DATETIME, nullable=True, comment='下次允许重试时间')
+    lease_owner = Column(String(100), nullable=True, comment='Worker租约持有者')
+    lease_until = Column(SHOT_GRID_DATETIME, nullable=True, comment='Worker租约到期时间')
+    requested_by_user_id = Column(BigInteger, nullable=False, comment='发起用户ID快照')
+    requested_by = Column(String(64), nullable=False, comment='发起账号快照')
+    reason = Column(String(500), nullable=False, comment='永久删除原因')
+    last_error_key = Column(String(100), nullable=True, comment='最近错误键')
+    last_error_message = Column(String(500), nullable=True, comment='最近净化错误摘要')
+    create_time = Column(SHOT_GRID_DATETIME, nullable=False, default=datetime.now, comment='创建时间')
+    update_time = Column(
+        SHOT_GRID_DATETIME,
+        nullable=False,
+        default=datetime.now,
+        onupdate=datetime.now,
+        comment='更新时间',
+    )
+    completed_time = Column(SHOT_GRID_DATETIME, nullable=True, comment='物理清理完成或最终失败时间')
+
+    __table_args__ = (
+        UniqueConstraint('project_id', name='uk_sg_project_purge_project'),
+        CheckConstraint("btrim(project_code) <> ''", name='ck_sg_project_purge_code'),
+        CheckConstraint("btrim(project_name) <> ''", name='ck_sg_project_purge_name'),
+        CheckConstraint("btrim(root_path_snapshot) <> ''", name='ck_sg_project_purge_root_path'),
+        CheckConstraint("btrim(project_relative_path) <> ''", name='ck_sg_project_purge_relative_path'),
+        CheckConstraint("btrim(project_path_snapshot) <> ''", name='ck_sg_project_purge_project_path'),
+        CheckConstraint("jsonb_typeof(file_manifest) = 'array'", name='ck_sg_project_purge_file_manifest'),
+        CheckConstraint(
+            "purge_status in ('pending', 'processing', 'retry_wait', 'succeeded', 'failed')",
+            name='ck_sg_project_purge_status',
+        ),
+        CheckConstraint('attempt_count >= 0', name='ck_sg_project_purge_attempt_count'),
+        CheckConstraint("btrim(requested_by) <> ''", name='ck_sg_project_purge_requested_by'),
+        CheckConstraint("btrim(reason) <> ''", name='ck_sg_project_purge_reason'),
+        CheckConstraint(
+            '(lease_owner is null and lease_until is null) or '
+            "(lease_owner is not null and btrim(lease_owner) <> '' and lease_until is not null)",
+            name='ck_sg_project_purge_lease',
+        ),
+        CheckConstraint(
+            "(purge_status = 'pending' and next_retry_time is null and lease_owner is null "
+            'and lease_until is null and completed_time is null) or '
+            "(purge_status = 'processing' and next_retry_time is null and lease_owner is not null "
+            'and lease_until is not null and completed_time is null) or '
+            "(purge_status = 'retry_wait' and next_retry_time is not null and lease_owner is null "
+            'and lease_until is null and completed_time is null) or '
+            "(purge_status in ('succeeded', 'failed') and next_retry_time is null and lease_owner is null "
+            'and lease_until is null and completed_time is not null)',
+            name='ck_sg_project_purge_execution_state',
+        ),
+        Index('idx_sg_project_purge_due', 'purge_status', 'next_retry_time', 'lease_until', 'purge_id'),
+        {'comment': 'Shot Grid项目永久删除队列与最小审计记录'},
     )
 
 

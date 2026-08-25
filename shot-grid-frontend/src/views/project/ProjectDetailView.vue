@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { ArrowLeft, Edit, Lock, Refresh } from '@element-plus/icons-vue'
+import { ArrowLeft, Delete, Edit, Lock, Refresh } from '@element-plus/icons-vue'
 
 import { assertPositiveId, getProjectDetail, getProjectOverview } from '@/api/shot-grid/projects'
 import { useSessionStore } from '@/store/modules/session'
@@ -10,6 +10,7 @@ import { tagTypeFromTone } from '@/utils/tag'
 import ProjectArchiveDialog from '@/views/project/components/ProjectArchiveDialog.vue'
 import ProjectEditDialog from '@/views/project/components/ProjectEditDialog.vue'
 import ProjectMemberPanel from '@/views/project/components/ProjectMemberPanel.vue'
+import ProjectPurgeDialog from '@/views/project/components/ProjectPurgeDialog.vue'
 import ProjectStatePanel from '@/views/project/components/ProjectStatePanel.vue'
 import ProjectStoragePanel from '@/views/project/components/ProjectStoragePanel.vue'
 import {
@@ -31,6 +32,7 @@ const errorState = ref(null)
 const overviewError = ref(null)
 const showEdit = ref(false)
 const showArchive = ref(false)
+const showPurge = ref(false)
 let controller = null
 
 const projectId = computed(() => {
@@ -98,9 +100,16 @@ async function handleArchived() {
   await loadProject()
 }
 
+async function handlePurged() {
+  showPurge.value = false
+  ElMessage.success('项目业务数据已删除，NAS 与独占文件正在后台清理')
+  await router.replace('/projects')
+}
+
 async function refreshAndCloseDialogs() {
   showEdit.value = false
   showArchive.value = false
+  showPurge.value = false
   await loadProject()
 }
 
@@ -134,6 +143,7 @@ onBeforeUnmount(() => controller?.abort())
           <el-button :icon="Refresh" :loading="loading" @click="loadProject">刷新</el-button>
           <el-button v-if="allowedActions.has('project.edit')" :icon="Edit" @click="showEdit = true">编辑项目</el-button>
           <el-button v-if="allowedActions.has('project.archive')" type="danger" plain :icon="Lock" @click="showArchive = true">归档</el-button>
+          <el-button v-if="allowedActions.has('project.delete')" type="danger" :icon="Delete" @click="showPurge = true">永久删除</el-button>
         </div>
         <el-descriptions class="project-hero__meta" :column="3" border>
           <el-descriptions-item label="项目类型"><el-tag size="small" effect="plain" type="primary">{{ project.projectTypeName }}</el-tag></el-descriptions-item>
@@ -172,6 +182,7 @@ onBeforeUnmount(() => controller?.abort())
 
       <ProjectEditDialog v-if="showEdit" :project="project" @close="showEdit = false" @saved="handleSaved" @refresh="refreshAndCloseDialogs" />
       <ProjectArchiveDialog v-if="showArchive" :project="project" @close="showArchive = false" @archived="handleArchived" @refresh="refreshAndCloseDialogs" />
+      <ProjectPurgeDialog v-if="showPurge" :project="project" @close="showPurge = false" @purged="handlePurged" @refresh="refreshAndCloseDialogs" />
     </template>
   </section>
 </template>

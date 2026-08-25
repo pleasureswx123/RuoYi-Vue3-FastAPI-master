@@ -17,13 +17,15 @@ SHOT_GRID_SHOT_RENUMBER_SCHEMA_REVISION = '20260820_14'
 SHOT_GRID_DEFERRED_SHOT_DIRECTORY_SCHEMA_REVISION = '20260821_15'
 SHOT_GRID_SCENE_SEQUENCE_GUARD_SCHEMA_REVISION = '20260821_16'
 SHOT_GRID_REVIEW_ISSUE_DRAFT_SCHEMA_REVISION = '20260821_17'
-SHOT_GRID_SCHEMA_REVISION = SHOT_GRID_REVIEW_ISSUE_DRAFT_SCHEMA_REVISION
+SHOT_GRID_PROJECT_PURGE_SCHEMA_REVISION = '20260825_18'
+SHOT_GRID_SCHEMA_REVISION = SHOT_GRID_PROJECT_PURGE_SCHEMA_REVISION
 
 SHOT_GRID_NAVIGATION_ROUTE_KEYS = ('workbench', 'projects', 'shots', 'assets', 'reviews', 'files')
 
 SHOT_GRID_TABLE_NAMES = frozenset(
     {
         'sg_project',
+        'sg_project_purge',
         'sg_project_member',
         'sg_managed_user_role',
         'sg_episode',
@@ -65,6 +67,7 @@ SHOT_GRID_PERMISSION_CODES = frozenset(
         'shotgrid:project:add',
         'shotgrid:project:edit',
         'shotgrid:project:archive',
+        'shotgrid:project:delete',
         'shotgrid:project:start',
         'shotgrid:project:complete',
         'shotgrid:project:overview',

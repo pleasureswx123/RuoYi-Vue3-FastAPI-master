@@ -70,6 +70,7 @@ async def test_disabled_worker_does_not_create_session_or_import_worker_service(
 
     async_session_local.assert_not_called()
     assert call('module_shot_grid.service.storage_worker_service') not in import_module.call_args_list
+    assert call('module_shot_grid.service.project_purge_worker_service') not in import_module.call_args_list
 
 
 @pytest.mark.asyncio
@@ -94,6 +95,7 @@ async def test_mysql_wrapper_does_not_import_shot_grid() -> None:
     async_session_local.assert_not_called()
     assert call('module_shot_grid.config') not in import_module.call_args_list
     assert call('module_shot_grid.service.storage_worker_service') not in import_module.call_args_list
+    assert call('module_shot_grid.service.project_purge_worker_service') not in import_module.call_args_list
 
 
 @pytest.mark.asyncio
@@ -114,6 +116,7 @@ async def test_leader_wrapper_passes_worker_safety_configuration() -> None:
         heartbeat_seconds=HEARTBEAT_SECONDS,
     )
     run_scheduled_batch = AsyncMock(return_value=())
+    run_purge_batch = AsyncMock(return_value=())
     module_map = {
         'config.get_scheduler': SimpleNamespace(SchedulerUtil=scheduler_util),
         'config.database': SimpleNamespace(
@@ -123,6 +126,9 @@ async def test_leader_wrapper_passes_worker_safety_configuration() -> None:
         'module_shot_grid.config': SimpleNamespace(SHOT_GRID_STORAGE_WORKER_CONFIG=worker_config),
         'module_shot_grid.service.storage_worker_service': SimpleNamespace(
             ShotGridStorageWorkerService=SimpleNamespace(run_scheduled_batch=run_scheduled_batch),
+        ),
+        'module_shot_grid.service.project_purge_worker_service': SimpleNamespace(
+            ShotGridProjectPurgeWorkerService=SimpleNamespace(run_scheduled_batch=run_purge_batch),
         ),
     }
 
@@ -134,6 +140,17 @@ async def test_leader_wrapper_passes_worker_safety_configuration() -> None:
 
     scheduler_util.is_application_leader.assert_called_once_with()
     scheduler_util.get_application_lock_owner_token.assert_called_once_with()
+    run_purge_batch.assert_awaited_once_with(
+        session,
+        worker_id='leader-owner-token',
+        max_operations=BATCH_SIZE,
+        leader_predicate=scheduler_util.is_application_leader,
+        lease_seconds=LEASE_SECONDS,
+        max_attempts=MAX_ATTEMPTS,
+        retry_delays_seconds=RETRY_DELAYS_SECONDS,
+        operation_timeout_seconds=OPERATION_TIMEOUT_SECONDS,
+        heartbeat_seconds=HEARTBEAT_SECONDS,
+    )
     run_scheduled_batch.assert_awaited_once_with(
         session,
         worker_id='leader-owner-token',
@@ -181,6 +198,9 @@ async def test_shutdown_drain_waits_for_active_storage_job() -> None:
         'module_shot_grid.config': SimpleNamespace(SHOT_GRID_STORAGE_WORKER_CONFIG=worker_config),
         'module_shot_grid.service.storage_worker_service': SimpleNamespace(
             ShotGridStorageWorkerService=SimpleNamespace(run_scheduled_batch=controlled_batch),
+        ),
+        'module_shot_grid.service.project_purge_worker_service': SimpleNamespace(
+            ShotGridProjectPurgeWorkerService=SimpleNamespace(run_scheduled_batch=AsyncMock(return_value=())),
         ),
     }
 

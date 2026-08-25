@@ -94,6 +94,46 @@ RUOYI_ENV_FILE=/etc/ruoyi-shot-grid/production.env bash deploy/setup-postgres-re
 
 服务器上还有其他项目。所有生产命令必须带项目名 `ruoyi-shot-grid-prod` 和本项目 Compose 文件，禁止执行全局 `docker system prune`，禁止对本项目执行 `down -v`，也不要停止或重建其他项目容器。
 
+### 1.3 Shot Grid 测试/Demo 项目如何删除
+
+“归档”和“永久删除”不是一回事：
+
+| 操作 | 数据库业务数据 | NAS 项目目录 | 是否可恢复 | 适用场景 |
+| --- | --- | --- | --- | --- |
+| 归档 | 保留 | 保留 | 可以继续查看，后续可通过受控流程恢复 | 真实项目结束后冻结写入 |
+| 永久删除 | 删除 | 后台异步删除 | 不可恢复 | 明确无保留价值的测试、Demo 项目 |
+
+永久删除入口位于 Shot Grid 的“项目 → 项目详情”页右上角。只有同时具备 `shotgrid:project:delete` 接口权限和“全部数据权限”的平台管理员才能看到按钮；普通项目管理员、制作人员和审核人员不能删除整个项目。
+
+执行时必须：
+
+1. 确认没有正在提交版本、导入、媒体派生或 NAS 目录任务；如有，系统会拒绝删除。
+2. 完整输入当前项目名称，避免选错项目。
+3. 填写删除原因，例如“公司演示产生的测试项目”。
+4. 点击“确认永久删除”。项目业务数据会在一个数据库事务中删除，随后返回项目列表。
+
+NAS 项目目录和该项目独占的上传文件由后台 Worker 清理。NAS 暂时不可访问时不会把任务当成成功，而是记录到独立表 `sg_project_purge` 并自动重试；该表只保留项目代码、名称、删除原因、操作者、路径快照、执行状态和错误摘要等最小审计，不保留已删除的项目业务图。页面提示“后台清理”不代表物理目录已经完成删除。
+
+可用 Navicat 只读账号查看最近删除和清理状态：
+
+```sql
+SELECT purge_id,
+       project_code,
+       project_name,
+       purge_status,
+       attempt_count,
+       requested_by,
+       reason,
+       create_time,
+       completed_time,
+       last_error_key,
+       last_error_message
+FROM sg_project_purge
+ORDER BY purge_id DESC;
+```
+
+状态含义：`pending` 等待处理，`processing` 正在清理，`retry_wait` 等待自动重试，`succeeded` 已完成，`failed` 达到重试上限或发生不可自动恢复的错误。禁止在 Navicat 中直接删除 `sg_project` 或其他 `sg_*` 表；这会绕过外键顺序、文件引用、NAS 清理、角色同步和审计。
+
 ## 2. 从浏览器到数据的完整链路
 
 ```text

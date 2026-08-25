@@ -26,6 +26,7 @@ drop table if exists sg_episode;
 drop table if exists sg_asset;
 drop table if exists sg_storage_root;
 drop table if exists sg_project;
+drop table if exists sg_project_purge;
 drop table if exists sg_managed_user_role;
 
 -- ----------------------------
@@ -1616,6 +1617,68 @@ COMMENT ON COLUMN sg_project.remark IS '备注';
 COMMENT ON COLUMN sg_project.lock_version IS '乐观锁版本';
 COMMENT ON COLUMN sg_project.del_flag IS '删除标志（0正常 2删除）';
 
+-- sg_project_purge
+CREATE TABLE sg_project_purge (
+	purge_id BIGSERIAL NOT NULL,
+	project_id BIGINT NOT NULL,
+	project_code VARCHAR(12) NOT NULL,
+	project_name VARCHAR(200) NOT NULL,
+	root_path_snapshot VARCHAR(1000) NOT NULL,
+	project_relative_path VARCHAR(1200) NOT NULL,
+	project_path_snapshot VARCHAR(2000) NOT NULL,
+	file_manifest JSONB NOT NULL,
+	purge_status VARCHAR(20) DEFAULT 'pending' NOT NULL,
+	attempt_count INTEGER DEFAULT '0' NOT NULL,
+	next_retry_time TIMESTAMP(0) WITHOUT TIME ZONE,
+	lease_owner VARCHAR(100),
+	lease_until TIMESTAMP(0) WITHOUT TIME ZONE,
+	requested_by_user_id BIGINT NOT NULL,
+	requested_by VARCHAR(64) NOT NULL,
+	reason VARCHAR(500) NOT NULL,
+	last_error_key VARCHAR(100),
+	last_error_message VARCHAR(500),
+	create_time TIMESTAMP(0) WITHOUT TIME ZONE NOT NULL,
+	update_time TIMESTAMP(0) WITHOUT TIME ZONE NOT NULL,
+	completed_time TIMESTAMP(0) WITHOUT TIME ZONE,
+	PRIMARY KEY (purge_id),
+	CONSTRAINT uk_sg_project_purge_project UNIQUE (project_id),
+	CONSTRAINT ck_sg_project_purge_code CHECK (btrim(project_code) <> ''),
+	CONSTRAINT ck_sg_project_purge_name CHECK (btrim(project_name) <> ''),
+	CONSTRAINT ck_sg_project_purge_root_path CHECK (btrim(root_path_snapshot) <> ''),
+	CONSTRAINT ck_sg_project_purge_relative_path CHECK (btrim(project_relative_path) <> ''),
+	CONSTRAINT ck_sg_project_purge_project_path CHECK (btrim(project_path_snapshot) <> ''),
+	CONSTRAINT ck_sg_project_purge_file_manifest CHECK (jsonb_typeof(file_manifest) = 'array'),
+	CONSTRAINT ck_sg_project_purge_status CHECK (purge_status in ('pending', 'processing', 'retry_wait', 'succeeded', 'failed')),
+	CONSTRAINT ck_sg_project_purge_attempt_count CHECK (attempt_count >= 0),
+	CONSTRAINT ck_sg_project_purge_requested_by CHECK (btrim(requested_by) <> ''),
+	CONSTRAINT ck_sg_project_purge_reason CHECK (btrim(reason) <> ''),
+	CONSTRAINT ck_sg_project_purge_lease CHECK ((lease_owner is null and lease_until is null) or (lease_owner is not null and btrim(lease_owner) <> '' and lease_until is not null)),
+	CONSTRAINT ck_sg_project_purge_execution_state CHECK ((purge_status = 'pending' and next_retry_time is null and lease_owner is null and lease_until is null and completed_time is null) or (purge_status = 'processing' and next_retry_time is null and lease_owner is not null and lease_until is not null and completed_time is null) or (purge_status = 'retry_wait' and next_retry_time is not null and lease_owner is null and lease_until is null and completed_time is null) or (purge_status in ('succeeded', 'failed') and next_retry_time is null and lease_owner is null and lease_until is null and completed_time is not null))
+);
+CREATE INDEX idx_sg_project_purge_due ON sg_project_purge (purge_status, next_retry_time, lease_until, purge_id);
+COMMENT ON TABLE sg_project_purge IS 'Shot Grid项目永久删除队列与最小审计记录';
+COMMENT ON COLUMN sg_project_purge.purge_id IS '项目删除任务ID';
+COMMENT ON COLUMN sg_project_purge.project_id IS '被删除项目ID快照';
+COMMENT ON COLUMN sg_project_purge.project_code IS '被删除项目代号快照';
+COMMENT ON COLUMN sg_project_purge.project_name IS '被删除项目名称快照';
+COMMENT ON COLUMN sg_project_purge.root_path_snapshot IS 'NAS根路径快照';
+COMMENT ON COLUMN sg_project_purge.project_relative_path IS '项目相对NAS根路径快照';
+COMMENT ON COLUMN sg_project_purge.project_path_snapshot IS '项目完整UNC路径快照';
+COMMENT ON COLUMN sg_project_purge.file_manifest IS '待清理的项目独占平台文件快照';
+COMMENT ON COLUMN sg_project_purge.purge_status IS '删除任务状态';
+COMMENT ON COLUMN sg_project_purge.attempt_count IS '已执行次数';
+COMMENT ON COLUMN sg_project_purge.next_retry_time IS '下次允许重试时间';
+COMMENT ON COLUMN sg_project_purge.lease_owner IS 'Worker租约持有者';
+COMMENT ON COLUMN sg_project_purge.lease_until IS 'Worker租约到期时间';
+COMMENT ON COLUMN sg_project_purge.requested_by_user_id IS '发起用户ID快照';
+COMMENT ON COLUMN sg_project_purge.requested_by IS '发起账号快照';
+COMMENT ON COLUMN sg_project_purge.reason IS '永久删除原因';
+COMMENT ON COLUMN sg_project_purge.last_error_key IS '最近错误键';
+COMMENT ON COLUMN sg_project_purge.last_error_message IS '最近净化错误摘要';
+COMMENT ON COLUMN sg_project_purge.create_time IS '创建时间';
+COMMENT ON COLUMN sg_project_purge.update_time IS '更新时间';
+COMMENT ON COLUMN sg_project_purge.completed_time IS '物理清理完成或最终失败时间';
+
 -- sg_storage_root
 CREATE TABLE sg_storage_root (
 	storage_root_id BIGSERIAL NOT NULL,
@@ -2823,6 +2886,7 @@ values
     ('projects', 2, '创建项目', 'shotgrid:project:add'),
     ('projects', 3, '修改项目', 'shotgrid:project:edit'),
     ('projects', 4, '归档项目', 'shotgrid:project:archive'),
+    ('projects', 14, '永久删除项目', 'shotgrid:project:delete'),
     ('projects', 5, '将筹备中项目转为进行中', 'shotgrid:project:start'),
     ('projects', 6, '完成项目并执行完整性校验', 'shotgrid:project:complete'),
     ('files', 6, '重试项目或业务目录初始化', 'shotgrid:storage:retry'),
@@ -2954,7 +3018,7 @@ create table if not exists alembic_version (
     constraint alembic_version_pkc primary key (version_num)
 );
 delete from alembic_version;
-insert into alembic_version(version_num) values ('20260821_17');
+insert into alembic_version(version_num) values ('20260825_18');
 
 
 CREATE OR REPLACE FUNCTION "find_in_set"(int8, varchar)

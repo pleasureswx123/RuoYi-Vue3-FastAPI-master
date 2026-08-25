@@ -36,6 +36,7 @@ import {
   getStorageOperationPage,
   getStorageRootOptions,
   previewProjectPath,
+  purgeProject,
   retryProjectStorage,
   updateProject,
   updateProjectMember
@@ -47,6 +48,7 @@ import ProjectArchiveDialog from '@/views/project/components/ProjectArchiveDialo
 import ProjectCreateDialog from '@/views/project/components/ProjectCreateDialog.vue'
 import ProjectEditDialog from '@/views/project/components/ProjectEditDialog.vue'
 import ProjectMemberPanel from '@/views/project/components/ProjectMemberPanel.vue'
+import ProjectPurgeDialog from '@/views/project/components/ProjectPurgeDialog.vue'
 import ProjectStoragePanel from '@/views/project/components/ProjectStoragePanel.vue'
 
 vi.mock('@/api/shot-grid/projects', () => ({
@@ -69,6 +71,7 @@ vi.mock('@/api/shot-grid/projects', () => ({
   getStorageOperationPage: vi.fn(),
   getStorageRootOptions: vi.fn(),
   previewProjectPath: vi.fn(),
+  purgeProject: vi.fn(),
   removeProjectMember: vi.fn(),
   retryProjectStorage: vi.fn(),
   retryStorageOperation: vi.fn(),
@@ -172,6 +175,7 @@ describe('项目管理页面', () => {
     createProject.mockResolvedValue({ data: { projectId: 8 } })
     updateProject.mockResolvedValue({ data: { ...projectRow, lockVersion: 2 } })
     archiveProject.mockResolvedValue({ data: { ...projectRow, projectStatus: 'archived' } })
+    purgeProject.mockResolvedValue({ data: { purgeId: 91, projectId: 8, purgeStatus: 'pending' } })
     getProjectMembers.mockResolvedValue({ rows: [] })
     addProjectMember.mockResolvedValue({ data: {} })
     updateProjectMember.mockResolvedValue({ data: {} })
@@ -433,6 +437,34 @@ describe('项目管理页面', () => {
     await flushPromises()
     expect(archiveProject).toHaveBeenCalledWith(8, { reason: '项目已经完成交付', lockVersion: 4 })
     expect(submitButton.props('nativeType')).toBe('button')
+    wrapper.unmount()
+  })
+
+  it('永久删除要求项目名称完全一致和删除原因后才提交', async () => {
+    const wrapper = mount(ProjectPurgeDialog, {
+      props: { project: { ...projectRow, lockVersion: 4 } },
+      global: { components: formComponents, stubs: { ProjectModal: projectModalStub } }
+    })
+    const form = wrapper.findComponent(ElForm)
+    const submitButton = buttonByText(form, '确认永久删除')
+    form.props('model').projectName = '错误名称'
+    form.props('model').reason = '演示测试数据'
+    await nextTick()
+    await submitButton.trigger('click')
+    await flushPromises()
+    expect(purgeProject).not.toHaveBeenCalled()
+
+    form.props('model').projectName = ' 罗刹夫人 '
+    await nextTick()
+    await submitButton.trigger('click')
+    await flushPromises()
+    expect(purgeProject).toHaveBeenCalledWith(8, {
+      projectName: '罗刹夫人',
+      reason: '演示测试数据',
+      lockVersion: 4
+    })
+    expect(submitButton.props('nativeType')).toBe('button')
+    expect(wrapper.emitted('purged')).toEqual([[{ purgeId: 91, projectId: 8, purgeStatus: 'pending' }]])
     wrapper.unmount()
   })
 

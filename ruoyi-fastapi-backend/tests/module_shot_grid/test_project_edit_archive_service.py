@@ -264,6 +264,25 @@ def test_completed_project_detail_only_allows_archive() -> None:
     assert actions == ['project.archive']
 
 
+def test_only_platform_all_scope_with_delete_permission_gets_permanent_delete_action() -> None:
+    user = _current_user()
+    user.permissions.extend(['shotgrid:project:delete', 'shotgrid:project:all'])
+    actions = ShotGridProjectService._allowed_actions(
+        user,
+        ShotGridProjectAccessModel(
+            projectId=PROJECT_ID,
+            userId=7,
+            projectRole=None,
+            hasAllScope=True,
+        ),
+        None,
+        project_status='archived',
+        storage_status='ready',
+    )
+
+    assert actions == ['project.delete']
+
+
 @pytest.mark.asyncio
 async def test_archive_project_preserves_row_and_freezes_response_before_commit(
     monkeypatch: pytest.MonkeyPatch,

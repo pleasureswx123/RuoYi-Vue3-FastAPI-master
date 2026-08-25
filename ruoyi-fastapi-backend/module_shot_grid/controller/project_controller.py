@@ -27,10 +27,13 @@ from module_shot_grid.entity.vo.project_vo import (
     ShotGridProjectListQueryModel,
     ShotGridProjectMutationResultModel,
     ShotGridProjectOverviewModel,
+    ShotGridProjectPurgeAcceptedResponseModel,
+    ShotGridProjectPurgeModel,
     ShotGridProjectStorageStatusModel,
     ShotGridProjectUpdateModel,
 )
 from module_shot_grid.service.project_overview_service import ShotGridProjectOverviewService
+from module_shot_grid.service.project_purge_service import ShotGridProjectPurgeService
 from module_shot_grid.service.project_service import ShotGridProjectService
 from utils.response_util import ResponseUtil
 
@@ -136,6 +139,33 @@ async def archive_shot_grid_project(
         access,
     )
     return ResponseUtil.success(msg='归档成功', data=result)
+
+
+@project_controller.post(
+    '/{projectId}/purge',
+    summary='永久删除项目及其关联业务数据',
+    status_code=202,
+    response_model=ShotGridProjectPurgeAcceptedResponseModel,
+    dependencies=[UserInterfaceAuthDependency('shotgrid:project:delete')],
+)
+@ApiCacheEvict(namespaces=ApiGroup.USER_PERMISSION_MUTATION, evict_response_codes={202})
+async def purge_shot_grid_project(
+    request: Request,
+    project_id: Annotated[int, Path(alias='projectId', gt=0, le=SQL_BIGINT_MAX)],
+    command: ShotGridProjectPurgeModel,
+    query_db: Annotated[AsyncSession, DBSessionDependency()],
+    current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
+    access: Annotated[ShotGridProjectAccessModel, ProjectAccessDependency()],
+) -> Response:
+    result = await ShotGridProjectPurgeService.purge_project(
+        query_db,
+        project_id=project_id,
+        command=command,
+        current_user=current_user,
+        access=access,
+    )
+    response_model = ShotGridProjectPurgeAcceptedResponseModel(data=result)
+    return JSONResponse(status_code=202, content=jsonable_encoder(response_model.model_dump(by_alias=True)))
 
 
 @project_controller.get(
