@@ -15,12 +15,20 @@ FileRole = Literal[
     'last_frame',
     'reference',
 ]
+FileCenterVisibleRole = Literal[
+    'review_media',
+    'source_original',
+    'source_repaired',
+    'first_frame',
+    'last_frame',
+    'reference',
+]
 
 
 class ShotGridProjectFileQueryModel(ShotGridPageQueryModel):
     """项目正式版本文件分页查询。"""
 
-    file_role: FileRole | None = Field(default=None, description='文件用途')
+    file_role: FileCenterVisibleRole | None = Field(default=None, description='可见业务文件用途')
     version_status: Literal['pending_review', 'rejected', 'final'] | None = Field(
         default=None,
         description='版本状态',

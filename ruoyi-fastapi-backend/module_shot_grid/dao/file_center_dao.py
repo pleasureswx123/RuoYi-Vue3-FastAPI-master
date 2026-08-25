@@ -13,6 +13,8 @@ from module_shot_grid.entity.vo.file_center_vo import ShotGridProjectFileQueryMo
 class ShotGridFileCenterDao:
     """文件中心数据访问；只读取正式版本文件关系。"""
 
+    HIDDEN_DERIVED_ROLES = ('thumbnail', 'proxy_media')
+
     @classmethod
     async def get_project_files(
         cls,
@@ -83,6 +85,7 @@ class ShotGridFileCenterDao:
                 ShotGridTask.del_flag == '0',
                 SysFileInfo.status == 'active',
                 SysFileInfo.del_flag == '0',
+                ShotGridVersionFile.file_role.notin_(cls.HIDDEN_DERIVED_ROLES),
             )
         )
         if query.file_role:

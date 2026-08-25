@@ -87,6 +87,9 @@ describe('文件与 NAS 一级页', () => {
     expect(toolbarFormComponent.props('labelPosition')).toBe('top')
     expect(filterForm.classes()).toContain('el-form')
     expect(filterForm.findAll('.el-form-item')).toHaveLength(4)
+    const roleOptionValues = filterForm.findAllComponents({ name: 'ElOption' }).map(option => option.props('value'))
+    expect(roleOptionValues).not.toContain('thumbnail')
+    expect(roleOptionValues).not.toContain('proxy_media')
     expect(getProjectFilePage).toHaveBeenCalledWith('8', expect.objectContaining({
       pageNum: 1,
       fileRole: undefined,
