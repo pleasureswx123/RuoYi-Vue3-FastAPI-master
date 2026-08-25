@@ -886,7 +886,7 @@ onBeforeUnmount(() => { disposed = true; destroyRowSortable(); projectController
 
         <div v-else-if="viewMode === 'table'" class="shot-table-wrap" :class="{ 'is-refreshing':shotsLoading }">
           <el-table ref="shotTableRef" class="shot-data-table" :data="shots" row-key="shotId" max-height="620">
-            <el-table-column v-if="canDragSort" width="38" fixed="left" align="center"><template #default="scope"><el-icon class="shot-drag-handle" :class="{ 'is-disabled': !isShotOrderMutable(scope.row) }" :title="isShotOrderMutable(scope.row) ? '拖拽调整场内顺序，Sxxx 将同步更新' : shotOrderLockReason(scope.row)"><Rank /></el-icon></template></el-table-column>
+            <!-- <el-table-column v-if="canDragSort" width="38" fixed="left" align="center"><template #default="scope"><el-icon class="shot-drag-handle" :class="{ 'is-disabled': !isShotOrderMutable(scope.row) }" :title="isShotOrderMutable(scope.row) ? '拖拽调整场内顺序，Sxxx 将同步更新' : shotOrderLockReason(scope.row)"><Rank /></el-icon></template></el-table-column> -->
             <el-table-column width="48" fixed="left" align="center">
               <template #header>
                 <el-checkbox aria-label="选择当前页可批量操作镜头" :model-value="allSelectableSelected" :indeterminate="selectedShots.length > 0 && !allSelectableSelected" :disabled="!selectableShots.length || deleting || assigning" @change="toggleAllSelectable" />
