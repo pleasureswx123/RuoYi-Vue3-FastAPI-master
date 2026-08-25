@@ -27,7 +27,7 @@ COMPOSE=(docker compose --project-name "$PROJECT_NAME" --env-file "$ENV_FILE" -f
 nas_mount_map_compact="${SHOT_GRID_NAS_UNC_MOUNT_MAP:-}"
 nas_mount_map_compact="${nas_mount_map_compact//[[:space:]]/}"
 if [[ -n "$nas_mount_map_compact" && "$nas_mount_map_compact" != '{}' ]]; then
-    nas_host_mount="${SHOT_GRID_NAS_HOST_MOUNT:-/mnt/ruoyi-shot-grid/shotgrid-main}"
+    nas_host_mount="${SHOT_GRID_NAS_HOST_MOUNT:-/mnt/ruoyi-shot-grid/shotgrid-main/ShotGridProd}"
     echo "后端应用身份：UID ${BACKEND_APP_UID:-100} / GID ${BACKEND_APP_GID:-101}"
     echo "NAS 挂载："
     findmnt -T "$nas_host_mount" -o TARGET,SOURCE,FSTYPE,OPTIONS || true

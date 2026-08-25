@@ -4,7 +4,8 @@ set -Eeuo pipefail
 NAS_SERVER="${NAS_SERVER:-192.168.10.64}"
 NAS_SHARE="${NAS_SHARE:-web}"
 NAS_PREFIX_PATH="${NAS_PREFIX_PATH:-ShotGridProd}"
-NAS_MOUNT_PATH="${NAS_MOUNT_PATH:-/mnt/ruoyi-shot-grid/shotgrid-main}"
+NAS_SHARE_MOUNT_PATH="${NAS_SHARE_MOUNT_PATH:-${NAS_MOUNT_PATH:-/mnt/ruoyi-shot-grid/shotgrid-main}}"
+NAS_APPLICATION_ROOT="$NAS_SHARE_MOUNT_PATH/$NAS_PREFIX_PATH"
 NAS_CREDENTIAL_FILE="${NAS_CREDENTIAL_FILE:-/etc/ruoyi-shot-grid/nas-credentials}"
 BACKEND_APP_UID="${BACKEND_APP_UID:-100}"
 BACKEND_APP_GID="${BACKEND_APP_GID:-101}"
@@ -43,6 +44,13 @@ fi
     || fail 'BACKEND_APP_UID 必须是正整数'
 [[ "$BACKEND_APP_GID" =~ ^[0-9]+$ && "$BACKEND_APP_GID" -gt 0 ]] \
     || fail 'BACKEND_APP_GID 必须是正整数'
+[[ -n "$NAS_PREFIX_PATH" && "$NAS_PREFIX_PATH" != /* ]] \
+    || fail 'NAS_PREFIX_PATH 必须是共享内的相对路径'
+case "/$NAS_PREFIX_PATH/" in
+    */../*|*/./*) fail 'NAS_PREFIX_PATH 不能包含 . 或 .. 路径段' ;;
+esac
+[[ "$NAS_PREFIX_PATH" != *$'\r'* && "$NAS_PREFIX_PATH" != *$'\n'* ]] \
+    || fail 'NAS_PREFIX_PATH 不能包含换行符'
 
 umask 077
 install -d -m 0700 "$(dirname "$NAS_CREDENTIAL_FILE")"
@@ -69,19 +77,19 @@ install -m 0600 "$credential_tmp" "$NAS_CREDENTIAL_FILE"
 grep -Fqx "username=$NAS_USERNAME" "$NAS_CREDENTIAL_FILE" \
     || fail '凭据文件中的 NAS 用户名与本次输入不一致'
 
-install -d -m 0750 "$NAS_MOUNT_PATH"
-if findmnt -rn -T "$NAS_MOUNT_PATH" -o FSTYPE | grep -Eq '^(cifs|smb3)$'; then
-    umount "$NAS_MOUNT_PATH"
-elif findmnt -rn -T "$NAS_MOUNT_PATH" -o TARGET | grep -Fxq "$NAS_MOUNT_PATH"; then
-    fail "$NAS_MOUNT_PATH 已被其他文件系统占用"
+install -d -m 0750 "$NAS_SHARE_MOUNT_PATH"
+if findmnt -rn -T "$NAS_SHARE_MOUNT_PATH" -o FSTYPE | grep -Eq '^(cifs|smb3)$'; then
+    umount "$NAS_SHARE_MOUNT_PATH"
+elif findmnt -rn -T "$NAS_SHARE_MOUNT_PATH" -o TARGET | grep -Fxq "$NAS_SHARE_MOUNT_PATH"; then
+    fail "$NAS_SHARE_MOUNT_PATH 已被其他文件系统占用"
 fi
 
 sed "/^${FSTAB_BEGIN//\//\\/}$/,/^${FSTAB_END//\//\\/}$/d" "$FSTAB_FILE" > "$fstab_tmp"
 {
     cat "$fstab_tmp"
     printf '%s\n' "$FSTAB_BEGIN"
-    printf '//%s/%s %s cifs credentials=%s,prefixpath=%s,vers=3.0,iocharset=utf8,rw,nosuid,nodev,noexec,_netdev,nofail,x-systemd.automount,uid=%s,gid=%s,forceuid,forcegid,file_mode=0660,dir_mode=0770 0 0\n' \
-        "$NAS_SERVER" "$NAS_SHARE" "$NAS_MOUNT_PATH" "$NAS_CREDENTIAL_FILE" "$NAS_PREFIX_PATH" \
+    printf '//%s/%s %s cifs credentials=%s,vers=3.0,iocharset=utf8,rw,nosuid,nodev,noexec,_netdev,nofail,x-systemd.automount,uid=%s,gid=%s,forceuid,forcegid,file_mode=0660,dir_mode=0770 0 0\n' \
+        "$NAS_SERVER" "$NAS_SHARE" "$NAS_SHARE_MOUNT_PATH" "$NAS_CREDENTIAL_FILE" \
         "$BACKEND_APP_UID" "$BACKEND_APP_GID"
     printf '%s\n' "$FSTAB_END"
 } > "${fstab_tmp}.new"
@@ -90,11 +98,13 @@ install -m 0644 "${fstab_tmp}.new" "$FSTAB_FILE"
 rm -f -- "${fstab_tmp}.new"
 
 systemctl daemon-reload
-mount "$NAS_MOUNT_PATH"
-filesystem_type="$(findmnt -rn -T "$NAS_MOUNT_PATH" -o FSTYPE)"
+mount "$NAS_SHARE_MOUNT_PATH"
+filesystem_type="$(findmnt -rn -T "$NAS_SHARE_MOUNT_PATH" -o FSTYPE)"
 [[ "$filesystem_type" = cifs || "$filesystem_type" = smb3 ]] || fail '挂载结果不是 cifs/smb3'
+[[ -d "$NAS_APPLICATION_ROOT" ]] \
+    || fail "NAS 业务根目录不存在：//$NAS_SERVER/$NAS_SHARE/$NAS_PREFIX_PATH；请先在 NAS 上确认目录和账号权限"
 
-probe_file="$NAS_MOUNT_PATH/.shotgrid-deploy-probe-$(openssl rand -hex 12).tmp"
+probe_file="$NAS_APPLICATION_ROOT/.shotgrid-deploy-probe-$(openssl rand -hex 12).tmp"
 probe_link="${probe_file}.link"
 probe_payload="$(openssl rand -hex 32)"
 run_as_backend() {
@@ -111,4 +121,5 @@ probe_file=''
 probe_link=''
 
 unset NAS_PASSWORD
-echo "NAS 挂载及应用身份（UID $BACKEND_APP_UID / GID $BACKEND_APP_GID）读写删除、硬链接验证成功：//$NAS_SERVER/$NAS_SHARE/$NAS_PREFIX_PATH → $NAS_MOUNT_PATH"
+echo "NAS 共享挂载成功：//$NAS_SERVER/$NAS_SHARE → $NAS_SHARE_MOUNT_PATH"
+echo "NAS 业务根目录及应用身份（UID $BACKEND_APP_UID / GID $BACKEND_APP_GID）读写删除、硬链接验证成功：//$NAS_SERVER/$NAS_SHARE/$NAS_PREFIX_PATH → $NAS_APPLICATION_ROOT"

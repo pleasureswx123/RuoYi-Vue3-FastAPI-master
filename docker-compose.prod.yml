@@ -79,7 +79,7 @@ services:
     volumes:
       - backend_files:/app/vf_admin
       - type: bind
-        source: ${SHOT_GRID_NAS_HOST_MOUNT:-/mnt/ruoyi-shot-grid/shotgrid-main}
+        source: ${SHOT_GRID_NAS_HOST_MOUNT:-/mnt/ruoyi-shot-grid/shotgrid-main/ShotGridProd}
         target: ${SHOT_GRID_NAS_CONTAINER_MOUNT:-/mnt/ruoyi-shot-grid/shotgrid-main}
         read_only: false
     depends_on:

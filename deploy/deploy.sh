@@ -45,7 +45,7 @@ if [[ -n "$nas_mount_map_compact" && "$nas_mount_map_compact" != '{}' ]]; then
         || fail 'BACKEND_APP_UID 必须是正整数'
     [[ "$backend_app_gid" =~ ^[0-9]+$ && "$backend_app_gid" -gt 0 ]] \
         || fail 'BACKEND_APP_GID 必须是正整数'
-    nas_host_mount="${SHOT_GRID_NAS_HOST_MOUNT:-/mnt/ruoyi-shot-grid/shotgrid-main}"
+    nas_host_mount="${SHOT_GRID_NAS_HOST_MOUNT:-/mnt/ruoyi-shot-grid/shotgrid-main/ShotGridProd}"
     nas_container_mount="${SHOT_GRID_NAS_CONTAINER_MOUNT:-/mnt/ruoyi-shot-grid/shotgrid-main}"
     [[ "$nas_host_mount" = /* ]] || fail 'SHOT_GRID_NAS_HOST_MOUNT 必须是宿主机绝对路径'
     [[ "$nas_container_mount" = /* ]] || fail 'SHOT_GRID_NAS_CONTAINER_MOUNT 必须是容器内绝对路径'

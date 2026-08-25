@@ -331,7 +331,7 @@ python -m pytest -v
 
 ## 14. Docker 与部署
 
-- 本地开发优先使用 `docker-compose.dev.yml` 启动后端、PostgreSQL 和 Redis；前端继续在宿主机运行。后端开发镜像固定 Python 3.11.15 并内置 FFmpeg。本地 Linux 容器默认关闭 NAS 目录与版本发布 Worker；生产 Linux 只有在宿主机已将 SMB 共享挂载为 CIFS、Compose 只读配置了明确的 UNC→容器挂载路径映射、运行时确认文件系统类型为 `cifs/smb3`，并完成服务账号真实读写删除探测后才能启用。生产后端应用身份固定为 UID 100 / GID 101，CIFS 必须同时使用 `uid=100,gid=101,forceuid,forcegid`，安装脚本必须以该非 root 身份验证创建、回读、删除和硬链接；root 探测成功不能作为后端可写证据。Windows 运行节点仍可直接使用 UNC。临时本地目录、普通 bind 目录或手工修改数据库健康状态都不能作为真实 NAS 验收。
+- 本地开发优先使用 `docker-compose.dev.yml` 启动后端、PostgreSQL 和 Redis；前端继续在宿主机运行。后端开发镜像固定 Python 3.11.15 并内置 FFmpeg。本地 Linux 容器默认关闭 NAS 目录与版本发布 Worker；生产 Linux 只有在宿主机已将 SMB 共享挂载为 CIFS、Compose 只读配置了明确的 UNC→容器挂载路径映射、运行时确认文件系统类型为 `cifs/smb3`，并完成服务账号真实读写删除探测后才能启用。公司服务器必须把完整 `//192.168.10.64/web` 挂到宿主机 `/mnt/ruoyi-shot-grid/shotgrid-main`，再只把其 `ShotGridProd` 子目录绑定到容器的 `/mnt/ruoyi-shot-grid/shotgrid-main`；不得依赖该服务器实际会忽略的 CIFS `prefixpath`，也不得把完整 `web` 共享直接绑定进后端。生产后端应用身份固定为 UID 100 / GID 101，CIFS 必须同时使用 `uid=100,gid=101,forceuid,forcegid`，安装脚本必须以该非 root 身份在业务根目录验证创建、回读、删除和硬链接；root 探测成功不能作为后端可写证据。Windows 运行节点仍可直接使用 UNC。临时本地目录、普通 bind 目录或手工修改数据库健康状态都不能作为真实 NAS 验收。
 - 公司内网 `192.168.10.122` 的正式部署使用 `docker-compose.prod.yml` 和固定项目名 `ruoyi-shot-grid-prod`；只映射平台管理端 `12580` 与 Shot Grid `12581`，PostgreSQL、Redis、后端和业务文件必须留在本项目独立网络/命名卷内，不得复用或重启服务器既有项目。
 - 当前两个入口固定使用 HTTP；由于浏览器不会为普通内网 HTTP IP 开放 Web Crypto，服务器生产环境必须按已评审例外关闭传输加密，并把 `APP_CORS_ALLOWED_ORIGINS` 限制为两个明确的 HTTP 来源。不得通过前端伪随机降级或隐藏错误来冒充加密仍然生效。
 - 生产发布统一走 `deploy/deploy.sh`：先构建版本镜像，再等待独立依赖健康、创建 PostgreSQL 备份、执行 Alembic 迁移和应用/加密预检，最后健康门禁切换；禁止把 `docker-compose.pg.yml` 当作该服务器的生产文件。

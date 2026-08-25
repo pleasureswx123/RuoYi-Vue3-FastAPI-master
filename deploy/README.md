@@ -446,9 +446,12 @@ Windows 后端可以直接访问 UNC。公司 Ubuntu 生产节点通过显式映
 
 ```text
 \\192.168.10.64\web\ShotGridProd
-  → Ubuntu /mnt/ruoyi-shot-grid/shotgrid-main
+  → Ubuntu 共享挂载 /mnt/ruoyi-shot-grid/shotgrid-main
+  → Ubuntu 业务根目录 /mnt/ruoyi-shot-grid/shotgrid-main/ShotGridProd
   → 后端容器 /mnt/ruoyi-shot-grid/shotgrid-main
 ```
+
+宿主机挂载的是完整 `web` 共享，Compose 只把其中的 `ShotGridProd` 子目录绑定到后端容器。不要依赖 CIFS `prefixpath=ShotGridProd`：当前公司服务器的内核/挂载工具组合会忽略该参数，若把整个共享直接绑定进容器，Worker 会把项目误建到 `\\192.168.10.64\web` 根下。
 
 不能只创建一个普通目录或只增加 Docker bind mount。后端在每次探测、目录操作和版本发布前都会确认映射根实际位于 `cifs/smb3` 文件系统；NAS 没有挂载时必须失败关闭，防止把正式文件写进 Ubuntu 本地磁盘。
 
@@ -468,8 +471,9 @@ bash deploy/setup-nas-mount.sh
 1. 提示输入 NAS 用户名、密码和可选域/工作组；
 2. 将凭据保存到 `/etc/ruoyi-shot-grid/nas-credentials`，权限固定为 `0600`；
 3. 在 `/etc/fstab` 中维护带边界标记的 CIFS 挂载项；
-4. 挂载到 `/mnt/ruoyi-shot-grid/shotgrid-main`；
-5. 使用后端真实应用身份（默认 UID `100` / GID `101`）创建、回读、删除随机临时文件并验证硬链接；只有完整通过才报告成功。
+4. 把完整 `web` 共享挂载到 `/mnt/ruoyi-shot-grid/shotgrid-main`；
+5. 确认共享内的 `ShotGridProd` 业务根目录存在；
+6. 在 `/mnt/ruoyi-shot-grid/shotgrid-main/ShotGridProd` 中使用后端真实应用身份（默认 UID `100` / GID `101`）创建、回读、删除随机临时文件并验证硬链接；只有完整通过才报告成功。
 
 当前服务器必须已安装 `mount.cifs`。Ubuntu 软件源可用时执行：
 
@@ -492,7 +496,7 @@ NAS_USERNAME=quanhq NAS_DOMAIN='' bash deploy/setup-nas-mount.sh
 ```dotenv
 BACKEND_APP_UID=100
 BACKEND_APP_GID=101
-SHOT_GRID_NAS_HOST_MOUNT=/mnt/ruoyi-shot-grid/shotgrid-main
+SHOT_GRID_NAS_HOST_MOUNT=/mnt/ruoyi-shot-grid/shotgrid-main/ShotGridProd
 SHOT_GRID_NAS_CONTAINER_MOUNT=/mnt/ruoyi-shot-grid/shotgrid-main
 SHOT_GRID_NAS_UNC_MOUNT_MAP='{"\\\\192.168.10.64\\web\\ShotGridProd":"/mnt/ruoyi-shot-grid/shotgrid-main"}'
 SHOT_GRID_NAS_REQUIRE_CIFS_MOUNT=true
@@ -508,7 +512,7 @@ cd /opt/ruoyi-shot-grid
 bash deploy/deploy.sh
 ```
 
-`deploy.sh` 会在构建和切换前确认宿主机挂载类型，并强制检查 `uid=100,gid=101,forceuid,forcegid`；参数不一致时发布会在数据库迁移和应用切换前失败。`docker-compose.prod.yml` 再把同一路径映射到后端容器。两个 Worker 只有在 PostgreSQL、显式启用且当前进程持有 Application Leader 时才消费任务。
+`deploy.sh` 会在构建和切换前确认宿主机业务根目录实际位于 CIFS 挂载中，并强制检查 `uid=100,gid=101,forceuid,forcegid`；参数不一致时发布会在数据库迁移和应用切换前失败。`docker-compose.prod.yml` 只把宿主机的 `ShotGridProd` 子目录绑定到容器内映射根，因此容器看不到也不会误写 `web` 共享中的其他目录。两个 Worker 只有在 PostgreSQL、显式启用且当前进程持有 Application Leader 时才消费任务。
 
 ### 13.3 验证与故障处理
 
@@ -518,6 +522,7 @@ bash deploy/deploy.sh
 cd /opt/ruoyi-shot-grid
 bash deploy/status.sh
 findmnt -T /mnt/ruoyi-shot-grid/shotgrid-main
+findmnt -T /mnt/ruoyi-shot-grid/shotgrid-main/ShotGridProd
 ```
 
 然后由有权限的平台账号进入“系统管理 → NAS 根目录”，对目标执行“探测”。探测必须显示 `healthy`，它会真实执行随机文件的独占创建、回读和删除。只有 `enabled + healthy` 的根目录才会进入 Shot Grid 创建项目的下拉框。
