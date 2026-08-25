@@ -59,6 +59,9 @@ services:
     build:
       context: ./ruoyi-fastapi-backend
       dockerfile: Dockerfile.prod
+      args:
+        APP_UID: ${BACKEND_APP_UID:-100}
+        APP_GID: ${BACKEND_APP_GID:-101}
     image: ruoyi-shot-grid-backend:${APP_RELEASE_ID:-local}
     restart: unless-stopped
     init: true

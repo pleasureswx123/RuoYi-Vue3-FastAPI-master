@@ -25,7 +25,7 @@
 
 - 实际开发、运行、迁移和验收默认使用 PostgreSQL。
 - 默认依赖文件为 `requirements-pg.txt`。
-- 默认本地环境由根目录 `docker-compose.dev.yml` 启动后端、PostgreSQL 和 Redis；后端固定 Python 3.11.15、使用 `requirements-pg.lock.txt` 锁定 Python 依赖并内置 FFmpeg，前端仍在宿主机运行。本地 Linux 后端容器默认关闭 NAS 目录 Worker 和版本发布 Worker；生产 Linux 仅允许通过显式 `SHOT_GRID_NAS_UNC_MOUNT_MAP` 把业务 UNC 映射到容器内 CIFS 挂载目录，并在真实 I/O 前验证该目录位于 `cifs/smb3` 文件系统。没有映射、挂载失效或普通宿主机目录必须失败关闭；详见 `docs/docker_dev_guide.md` 和根目录 `deploy/README.md`。
+- 默认本地环境由根目录 `docker-compose.dev.yml` 启动后端、PostgreSQL 和 Redis；后端固定 Python 3.11.15、使用 `requirements-pg.lock.txt` 锁定 Python 依赖并内置 FFmpeg，前端仍在宿主机运行。本地 Linux 后端容器默认关闭 NAS 目录 Worker 和版本发布 Worker；生产 Linux 仅允许通过显式 `SHOT_GRID_NAS_UNC_MOUNT_MAP` 把业务 UNC 映射到容器内 CIFS 挂载目录，并在真实 I/O 前验证该目录位于 `cifs/smb3` 文件系统。生产镜像中的 `app` 身份固定为 UID 100 / GID 101，CIFS 必须使用匹配的 `uid/gid + forceuid/forcegid`，真实验收必须用该非 root 身份覆盖创建、回读、删除和硬链接；root 身份成功不能替代。没有映射、挂载失效或普通宿主机目录必须失败关闭；详见 `docs/docker_dev_guide.md` 和根目录 `deploy/README.md`。
 - `requirements.txt`、MySQL SQL 和 MySQL Compose 属于保留的兼容路径，不是当前首要运行基线。
 
 新增 Shot Grid 或其他独立业务模块时，业务设计文档不能替代后端事实核对。实现前必须逐项对齐当前 DO/VO、响应与异常、权限依赖、文件引用、时间与逻辑删除语义以及 PostgreSQL 迁移约定；兼容扩展必须显式标注并验证，禁止把设计草案直接当成后端已有契约。

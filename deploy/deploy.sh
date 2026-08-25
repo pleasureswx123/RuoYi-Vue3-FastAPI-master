@@ -39,6 +39,12 @@ PROJECT_NAME="${COMPOSE_PROJECT_NAME:-$PROJECT_NAME}"
 nas_mount_map_compact="${SHOT_GRID_NAS_UNC_MOUNT_MAP:-}"
 nas_mount_map_compact="${nas_mount_map_compact//[[:space:]]/}"
 if [[ -n "$nas_mount_map_compact" && "$nas_mount_map_compact" != '{}' ]]; then
+    backend_app_uid="${BACKEND_APP_UID:-100}"
+    backend_app_gid="${BACKEND_APP_GID:-101}"
+    [[ "$backend_app_uid" =~ ^[0-9]+$ && "$backend_app_uid" -gt 0 ]] \
+        || fail 'BACKEND_APP_UID 必须是正整数'
+    [[ "$backend_app_gid" =~ ^[0-9]+$ && "$backend_app_gid" -gt 0 ]] \
+        || fail 'BACKEND_APP_GID 必须是正整数'
     nas_host_mount="${SHOT_GRID_NAS_HOST_MOUNT:-/mnt/ruoyi-shot-grid/shotgrid-main}"
     nas_container_mount="${SHOT_GRID_NAS_CONTAINER_MOUNT:-/mnt/ruoyi-shot-grid/shotgrid-main}"
     [[ "$nas_host_mount" = /* ]] || fail 'SHOT_GRID_NAS_HOST_MOUNT 必须是宿主机绝对路径'
@@ -46,6 +52,13 @@ if [[ -n "$nas_mount_map_compact" && "$nas_mount_map_compact" != '{}' ]]; then
     nas_filesystem_type="$(findmnt -rn -T "$nas_host_mount" -o FSTYPE || true)"
     [[ "$nas_filesystem_type" = cifs || "$nas_filesystem_type" = smb3 ]] \
         || fail "NAS 目录未正确挂载为 cifs/smb3：$nas_host_mount；请先执行 bash deploy/setup-nas-mount.sh"
+    nas_mount_options="$(findmnt -rn -T "$nas_host_mount" -o OPTIONS || true)"
+    for required_option in "uid=$backend_app_uid" "gid=$backend_app_gid" forceuid forcegid; do
+        case ",$nas_mount_options," in
+            *",$required_option,"*) ;;
+            *) fail "NAS 挂载缺少应用身份参数 $required_option；请重新执行 bash deploy/setup-nas-mount.sh" ;;
+        esac
+    done
 fi
 
 RELEASE_ID="${APP_RELEASE_ID_OVERRIDE:-$(git -C "$ROOT_DIR" rev-parse --short=12 HEAD)}"

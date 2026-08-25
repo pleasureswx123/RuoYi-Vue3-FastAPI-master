@@ -3,6 +3,8 @@ FROM python:3.11.15-slim-bookworm
 ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 ARG DEBIAN_MIRROR=http://deb.debian.org/debian
 ARG DEBIAN_SECURITY_MIRROR=http://deb.debian.org/debian-security
+ARG APP_UID=100
+ARG APP_GID=101
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -16,8 +18,8 @@ RUN sed -ri \
     && apt-get update \
     && apt-get install -y --no-install-recommends build-essential ffmpeg gosu libpq-dev \
     && rm -rf /var/lib/apt/lists/* \
-    && addgroup --system app \
-    && adduser --system --ingroup app --home /app app
+    && addgroup --system --gid "${APP_GID}" app \
+    && adduser --system --uid "${APP_UID}" --ingroup app --home /app app
 
 COPY requirements-pg.txt pyproject.toml ./
 COPY cli ./cli

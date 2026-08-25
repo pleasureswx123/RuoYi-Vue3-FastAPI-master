@@ -141,7 +141,7 @@ docker volume inspect \
 
 | 配置组 | 关键变量 | 作用 |
 | --- | --- | --- |
-| Compose/端口 | `COMPOSE_PROJECT_NAME`、`ADMIN_PORT`、`SHOT_GRID_PORT` | 保证项目名和 `12580/12581` 不漂移 |
+| Compose/端口与运行身份 | `COMPOSE_PROJECT_NAME`、`ADMIN_PORT`、`SHOT_GRID_PORT`、`BACKEND_APP_UID/GID` | 保证项目名、`12580/12581` 和后端非 root 身份不漂移 |
 | PostgreSQL | `POSTGRES_USER`、`POSTGRES_PASSWORD`、`POSTGRES_DB` | 初始化和连接本项目独立数据库 |
 | Redis | `REDIS_PASSWORD`、`REDIS_DATABASE` | 会话、验证码、缓存和协调 |
 | FastAPI | `APP_WORKERS`、`APP_ROOT_PATH`、`APP_CORS_ALLOWED_ORIGINS` | 后端进程和反向代理边界 |
@@ -452,6 +452,8 @@ Windows 后端可以直接访问 UNC。公司 Ubuntu 生产节点通过显式映
 
 不能只创建一个普通目录或只增加 Docker bind mount。后端在每次探测、目录操作和版本发布前都会确认映射根实际位于 `cifs/smb3` 文件系统；NAS 没有挂载时必须失败关闭，防止把正式文件写进 Ubuntu 本地磁盘。
 
+生产镜像入口虽然由 root 完成卷目录初始化，但 FastAPI、Scheduler 和两个 NAS Worker 最终都以 `app` 用户运行。该身份固定为 UID `100`、GID `101`；CIFS 必须使用 `uid=100,gid=101,forceuid,forcegid`。只用 root 在宿主机或 `docker exec` 中验证成功是不完整的，平台页面探测使用的非 root 应用身份仍可能返回“不可写”。
+
 ### 13.1 首次配置 NAS 服务账号
 
 NAS 密码不写入 Git、镜像、Compose 或生产 `.env`。在服务器交互执行：
@@ -467,7 +469,7 @@ bash deploy/setup-nas-mount.sh
 2. 将凭据保存到 `/etc/ruoyi-shot-grid/nas-credentials`，权限固定为 `0600`；
 3. 在 `/etc/fstab` 中维护带边界标记的 CIFS 挂载项；
 4. 挂载到 `/mnt/ruoyi-shot-grid/shotgrid-main`；
-5. 创建随机临时文件、回读并删除，只有完整通过才报告成功。
+5. 使用后端真实应用身份（默认 UID `100` / GID `101`）创建、回读、删除随机临时文件并验证硬链接；只有完整通过才报告成功。
 
 当前服务器必须已安装 `mount.cifs`。Ubuntu 软件源可用时执行：
 
@@ -476,13 +478,20 @@ apt-get update
 apt-get install -y cifs-utils
 ```
 
-NAS 密码发生变化后重新运行 `setup-nas-mount.sh`，不得把密码写到命令行参数或聊天记录。
+NAS 密码发生变化后重新运行 `setup-nas-mount.sh`，不得把密码写到命令行参数或聊天记录。如果交互输入的用户名需要明确固定，可执行下面的命令；密码仍由脚本隐藏输入：
+
+```bash
+cd /opt/ruoyi-shot-grid
+NAS_USERNAME=quanhq NAS_DOMAIN='' bash deploy/setup-nas-mount.sh
+```
 
 ### 13.2 生产环境变量
 
 真实挂载验证通过后，在 `/etc/ruoyi-shot-grid/production.env` 配置：
 
 ```dotenv
+BACKEND_APP_UID=100
+BACKEND_APP_GID=101
 SHOT_GRID_NAS_HOST_MOUNT=/mnt/ruoyi-shot-grid/shotgrid-main
 SHOT_GRID_NAS_CONTAINER_MOUNT=/mnt/ruoyi-shot-grid/shotgrid-main
 SHOT_GRID_NAS_UNC_MOUNT_MAP='{"\\\\192.168.10.64\\web\\ShotGridProd":"/mnt/ruoyi-shot-grid/shotgrid-main"}'
@@ -499,7 +508,7 @@ cd /opt/ruoyi-shot-grid
 bash deploy/deploy.sh
 ```
 
-`deploy.sh` 会在构建和切换前确认宿主机挂载类型；`docker-compose.prod.yml` 再把同一路径映射到后端容器。两个 Worker 只有在 PostgreSQL、显式启用且当前进程持有 Application Leader 时才消费任务。
+`deploy.sh` 会在构建和切换前确认宿主机挂载类型，并强制检查 `uid=100,gid=101,forceuid,forcegid`；参数不一致时发布会在数据库迁移和应用切换前失败。`docker-compose.prod.yml` 再把同一路径映射到后端容器。两个 Worker 只有在 PostgreSQL、显式启用且当前进程持有 Application Leader 时才消费任务。
 
 ### 13.3 验证与故障处理
 
@@ -512,6 +521,15 @@ findmnt -T /mnt/ruoyi-shot-grid/shotgrid-main
 ```
 
 然后由有权限的平台账号进入“系统管理 → NAS 根目录”，对目标执行“探测”。探测必须显示 `healthy`，它会真实执行随机文件的独占创建、回读和删除。只有 `enabled + healthy` 的根目录才会进入 Shot Grid 创建项目的下拉框。
+
+如果宿主机 root 可以写，但页面显示“后端服务账号没有该目录的读写删除权限”或“不可写”，先检查挂载身份参数：
+
+```bash
+findmnt -T /mnt/ruoyi-shot-grid/shotgrid-main -o TARGET,SOURCE,FSTYPE,OPTIONS
+docker top ruoyi-shot-grid-prod-backend-1 -eo pid,user,group,comm,args
+```
+
+`findmnt` 必须同时看到 `uid=100`、`gid=101`、`forceuid`、`forcegid`。缺少任一项时不要修改数据库健康状态，应重新执行 `setup-nas-mount.sh`，再执行正式一键发布和页面探测。脚本会以应用身份做验证，因此不会再出现“root 验证成功、页面仍不可写”的假通过。
 
 禁止：
 
