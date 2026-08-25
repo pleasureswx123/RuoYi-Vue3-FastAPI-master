@@ -11,7 +11,7 @@ from module_shot_grid.entity.vo.common_vo import (
 
 AssetType = Literal['Character', 'Environment', 'Prop']
 AssetWorkStatus = Literal['unassigned', 'not_started', 'preparing', 'in_progress', 'reviewing', 'revision', 'completed']
-DirectoryStatus = Literal['pending', 'ready', 'failed']
+DirectoryStatus = Literal['not_created', 'pending', 'ready', 'failed']
 LifecycleStatus = Literal['active', 'archived']
 TaskStatus = Literal['not_started', 'preparing', 'in_progress', 'pending_review', 'revision', 'completed']
 SQL_INTEGER_MAX = 2_147_483_647

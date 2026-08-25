@@ -203,7 +203,7 @@ sg_project / sg_shot / sg_asset / sg_version / sg_note
 
 只新增 DO、只修改初始化 SQL 或只写设计文档，都不算数据库交付完成。JSONB、部分唯一索引等 PostgreSQL 专用实现必须明确限制在 PostgreSQL 路径，不得无意影响仓库保留的 MySQL 兼容模块。
 
-当前 Shot Grid Alembic head 为 `20260821_17`。06 增加任务/版本/审核完整性约束；07 增加 `sg_media_derivation`、领取租约/重试状态，以及每版本唯一 `thumbnail`/`proxy_media` 部分索引；08 增加平台 NAS 根目录管理菜单；09 将可安全释放编号的历史误删镜头统一为归档加逻辑删除；10 切换到跨版本修改问题闭环；11 修复媒体派生文件的版本引用类型；12 以 PostgreSQL-only 迁移增加 `sg_managed_user_role` 来源标记；13 调整 `sg_shot.sort_order` 数据字典语义；14 将活动镜头唯一约束切换为 `(scene_id, shot_no)` 并增加兼容重编号 Outbox；15 允许 `storage_dir_name` 为空，将镜头目录冻结延迟到任务开始并增加 `preparing`；16 在修改任何排序键前失败关闭地校验每场活动镜头已形成 `S001..Snnn`，通过后只把 `sort_order` 规范为 `shot_no * 10`，不猜测镜头号或 NAS 目录；17 增加仅审核方可见的 `sg_review_issue_draft`，审核人退回时在同一事务中原子发布为不可变 `sg_note`。媒体 Worker 默认关闭：图片使用 Pillow 生成 JPEG 缩略图和网页代理，视频使用显式配置的 FFmpeg 生成 JPEG 缩略图和 H.264/AAC faststart MP4；工具缺失或解码失败必须持久化安全错误并让前端降级原媒体，不得将原文件登记为代理。生成物继续进入 `sys_file_info`、`sys_file_reference` 和 `sg_version_file`，成功提交前清理半成品。该增量链仍不是完整 RuoYi 空库 Alembic baseline。
+当前 Shot Grid Alembic head 为 `20260825_19`。06 增加任务/版本/审核完整性约束；07 增加 `sg_media_derivation`、领取租约/重试状态，以及每版本唯一 `thumbnail`/`proxy_media` 部分索引；08 增加平台 NAS 根目录管理菜单；09 将可安全释放编号的历史误删镜头统一为归档加逻辑删除；10 切换到跨版本修改问题闭环；11 修复媒体派生文件的版本引用类型；12 以 PostgreSQL-only 迁移增加 `sg_managed_user_role` 来源标记；13 调整 `sg_shot.sort_order` 数据字典语义；14 将活动镜头唯一约束切换为 `(scene_id, shot_no)` 并增加兼容重编号 Outbox；15 允许 `storage_dir_name` 为空，将镜头目录冻结延迟到任务开始并增加 `preparing`；16 在修改任何排序键前失败关闭地校验每场活动镜头已形成 `S001..Snnn`；17 增加仅审核方可见的 `sg_review_issue_draft`；18 增加项目永久删除审计与清理队列；19 删除“preparing 仅限镜头”的旧约束，将资产目录物理创建延迟到资产制作任务开始。媒体 Worker 默认关闭：图片使用 Pillow 生成 JPEG 缩略图和网页代理，视频使用显式配置的 FFmpeg 生成 JPEG 缩略图和 H.264/AAC faststart MP4；工具缺失或解码失败必须持久化安全错误并让前端降级原媒体，不得将原文件登记为代理。生成物继续进入 `sys_file_info`、`sys_file_reference` 和 `sg_version_file`，成功提交前清理半成品。该增量链仍不是完整 RuoYi 空库 Alembic baseline。
 
 媒体派生配置使用 `SHOT_GRID_MEDIA_WORKER_` 前缀；至少需要显式设置 `ENABLED=true` 才注册 Application Leader 内部任务，视频环境还需通过 `FFMPEG_PATH` 提供可执行文件。默认缩略图最长边 480、图片代理最长边 1920、视频代理最大宽度 1280；转换期间按 `HEARTBEAT_SECONDS` 续租，数据库回写继续使用 version + owner + attempt fencing。审核列表返回 `thumbnail` 和 `mediaDerivationStatus`，版本详情返回完整派生文件角色及同名状态；前端只能优先使用真实 `proxy_media`，代理加载失败时回退主 `review_media`。
 
@@ -1469,7 +1469,7 @@ ready
 - `ready` 前禁止创建集、场次、镜头、资产和版本提交。
 - 初始化失败不自动删除项目；用户可查看净化错误、执行幂等重试，或在没有业务数据时由管理员受控撤销。
 - 项目级初始化或对账成功才把 `sg_project_storage` 改为 `ready`，最终失败才改为 `failed`。动态集、镜头或资产目录失败只记录安全错误，不把已经就绪的项目根存储降级为初始化失败。
-- 集、镜头和资产响应中的 `directoryStatus` 是最新目录操作的只读映射：`pending/processing/retry_wait → pending`，`succeeded → ready`，`failed → failed`。补偿状态当前未由 Worker 产生；不存在操作时视为契约错误，不能默认返回 `ready`。
+- 集、镜头和资产响应中的 `directoryStatus` 是最新目录操作的只读映射：尚未开始制作且不存在对象目录操作时为 `not_created`，`pending/processing/retry_wait → pending`，`succeeded → ready`，`failed → failed`。补偿状态当前未由 Worker 产生；`not_created` 不能默认解释为 `ready`。
 - 人工重试不覆盖失败操作，也不创建第二条 `initialize_project`。项目及动态目录均创建新的 `reconcile_directory`，旧操作继续作为不可变执行历史。
 
 ### 7.6 项目生命周期与当前阶段
@@ -3009,7 +3009,7 @@ Header: X-Idempotency-Key
 `X-Idempotency-Key`、Token 和 `selection_hash` 保护同一预览与提交请求，不把语义相近但文件摘要已经变化的新工作簿视为同一请求；未命名分项的跨文件逻辑去重仍受上一节所述边界限制。
 
 - `sg_import_batch` 从 `previewed` 进入 `committing` 并最终成为 `committed`；
-- 按去重键创建资产、未分配制作分项和对应幂等目录 Outbox；
+- 按去重键创建资产和未分配制作分项，冻结稳定目录身份但不创建目录 Outbox；
 - 不创建资产图片任务；第一次委派必须另行调用第 15.1 节任务分配接口；
 - 按 `(project_id, asset_type, normalized_name)` 查询待匹配需求；
 - 唯一匹配时幂等创建 `sg_shot_asset` 并将需求改为 `matched`；
@@ -3082,7 +3082,7 @@ POST /shot-grid/tasks/{taskId}/start
 Permission: shotgrid:task:start
 ```
 
-请求体为 `{ "lockVersion": 0 }`。仅允许任务当前委派的活动 `creator` 本人开始任务；后端必须确认当前用户就是 `assignee_user_id`，对应项目成员仍为 `active + creator` 且平台账号有效。`director`、管理员、超级管理员和 `shotgrid:project:all` 不得代操作。资产任务仅允许 `not_started → in_progress`；镜头任务仅允许 `not_started → preparing`，在同一事务中冻结 `storageDirName`、创建幂等 `ensure_shot_directory` Outbox 并审计。Worker 只有在物理目录幂等创建成功后才以 owner + attempt fencing 回写 `preparing → in_progress`；失败时任务保持 `preparing`，可通过现有目录重试链恢复。乐观锁冲突返回 409。
+请求体为 `{ "lockVersion": 0 }`。仅允许任务当前委派的活动 `creator` 本人开始任务；后端必须确认当前用户就是 `assignee_user_id`，对应项目成员仍为 `active + creator` 且平台账号有效。`director`、管理员、超级管理员和 `shotgrid:project:all` 不得代操作。镜头和资产任务都只允许 `not_started → preparing`：镜头在同一事务中冻结 `storageDirName` 并创建幂等 `ensure_shot_directory`，资产锁定父资产并按已冻结的目录身份创建或复用幂等 `ensure_asset_directory`。同一父资产的多个制作分项共享一个目录操作。Worker 只有在物理目录幂等创建成功后才以 owner + attempt fencing 把该对象下已经 `preparing` 的任务回写为 `in_progress`；尚未点击开始的 `not_started` 任务不推进。失败时任务保持 `preparing`，可通过现有目录重试链恢复。乐观锁冲突返回 409。
 
 ### 15.3 上传并自动提交版本
 
@@ -3408,9 +3408,9 @@ Permissions:
 1. 生成并冻结安全 `storageDirName` 和路径键；
 2. 创建资产；
 3. 创建一个或多个制作分项；制作分项名称允许为空；
-4. 创建 `ensure_asset_directory` Outbox；
+4. 不创建 `ensure_asset_directory` Outbox，目录状态保持 `not_created`；
 5. 所有制作分项保持 `unassigned`，创建接口不接收 `assigneeUserId/taskDescription`，也不创建任务；
-6. 提交后异步确保 NAS 目录。项目管理人后续通过第 15.1 节独立委派，第一次委派才创建 `not_started` 的唯一 `asset_image` 任务。
+6. 项目管理人后续通过第 15.1 节独立委派，第一次委派才创建 `not_started` 的唯一 `asset_image` 任务；制作人开始该资产任一制作分项任务时才异步确保共享资产目录。
 
 资产详情返回制作分项列表、每个分项的唯一任务及最新/最终版本、后端动作集合、确定性缩略图、使用镜头数和 `directoryStatus`。资产类型、显示名称、规范键和 `storageDirName/storagePathKey` 在创建时组成不可拆分的稳定身份，普通 PUT 只接受描述、排序、备注和 `lockVersion`；该 PUT 是三项非身份主数据的完整快照，省略描述或备注表示清空，省略排序表示归零。重命名、改类型或目录迁移必须使用后续受控动作。制作分项仅在未分配或唯一任务仍为 `not_started` 且尚无版本时可补充或纠正主数据；任务进入 `preparing/in_progress/pending_review/revision/completed` 后，其名称、描述、排序和备注等主数据立即禁止普通修改。归档不能级联删除历史版本。资产和制作分项写接口均在锁内拒绝 `completed/archived` 项目；资产导入 preview 先普通读取拒绝，commit 再锁项目重检。
 
@@ -3591,7 +3591,7 @@ issueCount, openIssueCount
 
 - `laneType` 只允许 `shot|assetItem`；镜头泳道 `laneId` 为镜头 ID，资产泳道 `laneId` 为制作分项 ID。
 - `sourceImportBatchId` 只有当前正式记录保存了明确来源批次时才返回；为空时不得推断为 Excel 导入。
-- `task` 为空表示尚未建立任务；非空时返回 `taskId/taskName/taskKind/taskStatus/priority/dueDate/assignee/createTime/updateTime`。`taskKind` 只允许 `shot_video|asset_image`，`taskStatus` 只允许 `not_started|preparing|in_progress|pending_review|revision|completed`；`preparing` 仅用于镜头任务等待目录 Outbox。
+- `task` 为空表示尚未建立任务；非空时返回 `taskId/taskName/taskKind/taskStatus/priority/dueDate/assignee/createTime/updateTime`。`taskKind` 只允许 `shot_video|asset_image`，`taskStatus` 只允许 `not_started|preparing|in_progress|pending_review|revision|completed`；`preparing` 用于镜头或资产任务等待各自目录 Outbox。
 - `assignee` 与本节其他操作人统一使用安全摘要 `{userId?, userName?, nickName?}`；页面优先显示账号 `userName`，昵称仅为补充或历史回退。
 - `latestVersion` 和 `finalVersion` 使用 `{versionId,versionNo,versionNumber,versionStatus,submittedTime}`；`versionStatus` 只允许 `pending_review|rejected|final`。
 
@@ -3760,11 +3760,12 @@ failed
 | 新增/恢复成员 | 锁定目标用户与项目，新增或恢复项目成员，按全部活动成员关系增量维护平台角色与来源标记，写含 `platformRoleChanges` 的操作日志 |
 | 修改成员角色 | 锁定目标用户与项目，在未提交事务中更新项目角色，再按最新全部活动成员关系先补所需映射、后释放或保留旧映射，写含 `platformRoleChanges` 的操作日志 |
 | 移除成员 | 锁定目标用户与项目，软移除成员，按全部活动成员关系仅撤回 Shot Grid 有来源且无依赖的映射，写含 `platformRoleChanges` 的操作日志 |
-| 创建集或资产 | 业务实体；资产还包含未分配制作分项、稳定目录快照和目录 Outbox；不得创建任务 |
+| 创建集或资产 | 业务实体；集按集契约创建目录 Outbox，资产包含未分配制作分项和稳定目录快照但不创建对象目录 Outbox；均不得创建任务 |
 | 创建镜头 | 未分配镜头、场内连续 `shot_no`、镜头资产关系和操作审计；`storage_dir_name` 为空，不创建目录 Outbox 或任务 |
 | 导入镜头 | 导入批次、集、场次、未分配且场内连续的镜头、已匹配资产关系、待匹配资产需求和操作审计；镜头目录 Outbox 与任务创建数均固定为 0 |
 | 开始镜头任务 | 锁定项目/任务/镜头，冻结 `storage_dir_name`，任务进入 `preparing`，创建幂等目录 Outbox 并写操作审计；Worker 成功后单独回写 `in_progress` |
-| 导入资产 | 导入批次、去重资产、逐行未分配制作分项、稳定目录快照、目录 Outbox、待匹配需求解析、镜头资产关系、操作审计；任务创建数固定为 0 |
+| 导入资产 | 导入批次、去重资产、逐行未分配制作分项、稳定目录快照、待匹配需求解析、镜头资产关系、操作审计；资产目录 Outbox 与任务创建数均固定为 0 |
+| 开始资产任务 | 锁定项目/任务/父资产/制作分项，任务进入 `preparing`，按父资产创建或复用幂等目录 Outbox 并写操作审计；Worker 成功后只把该资产下已经开始的任务回写为 `in_progress` |
 | 分配目标 | 锁定项目和目标；新建唯一任务，或携带任务锁版本受控改派现有任务；存在任何非 committed 提交时整体拒绝 |
 | 暂存版本提交 | 锁定项目与任务、重查全部 open 问题、校验逐条处理说明覆盖、保留版本号、生成业务文件名和 NAS 目标、创建 `sg_version_submission` 与 `sg_version_issue_response`、建立 `shotgrid_version_submission` 临时文件引用 |
 | 正式提交版本 | 版本、版本文件及 NAS 摘要、切换为 `shotgrid_version` 主文件引用、自动审核单、任务状态、提交状态；版本通过 `submission_id` 反向关联 |

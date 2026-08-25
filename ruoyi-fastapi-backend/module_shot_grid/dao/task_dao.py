@@ -446,6 +446,23 @@ class ShotGridTaskDao:
         )
 
     @staticmethod
+    async def get_latest_asset_directory_operation_status(
+        db: AsyncSession,
+        project_id: int,
+        asset_id: int,
+    ) -> str | None:
+        return await db.scalar(
+            select(ShotGridStorageOperation.operation_status)
+            .where(
+                ShotGridStorageOperation.project_id == project_id,
+                ShotGridStorageOperation.aggregate_type == 'asset',
+                ShotGridStorageOperation.aggregate_id == asset_id,
+            )
+            .order_by(ShotGridStorageOperation.operation_id.desc())
+            .limit(1)
+        )
+
+    @staticmethod
     async def get_latest_succeeded_shot_directory_operation_actor(
         db: AsyncSession,
         project_id: int,

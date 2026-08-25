@@ -5,6 +5,7 @@ from sqlalchemy import DateTime
 
 from config.database import Base
 from module_shot_grid.schema import (
+    SHOT_GRID_DEFERRED_ASSET_DIRECTORY_SCHEMA_REVISION,
     SHOT_GRID_DEFERRED_SHOT_DIRECTORY_SCHEMA_REVISION,
     SHOT_GRID_IMPORT_SCHEMA_REVISION,
     SHOT_GRID_INITIAL_SCHEMA_REVISION,
@@ -359,6 +360,26 @@ def test_project_purge_migration_extends_review_draft_and_installs_safe_queue() 
     assert 'shotgrid:project:delete' in source
     assert 'ForeignKeyConstraint' not in source
     assert 'cannot downgrade while sg_project_purge contains deletion audit rows' in source
+
+
+def test_deferred_asset_directory_migration_extends_project_purge_and_allows_asset_preparing() -> None:
+    migration = _migration_namespace(SHOT_GRID_DEFERRED_ASSET_DIRECTORY_SCHEMA_REVISION)
+    source = Path(migration['__file__']).read_text(encoding='utf-8')
+
+    assert migration['revision'] == SHOT_GRID_DEFERRED_ASSET_DIRECTORY_SCHEMA_REVISION
+    assert migration['down_revision'] == SHOT_GRID_PROJECT_PURGE_SCHEMA_REVISION
+    assert "drop_constraint('ck_sg_task_preparing_kind'" in source
+    assert "task_kind = 'asset_image'" in source
+    assert '不能安全降级 20260825_19' in source
+
+
+def test_deferred_asset_directory_migration_is_an_explicit_non_postgresql_noop() -> None:
+    migration = _migration_namespace(SHOT_GRID_DEFERRED_ASSET_DIRECTORY_SCHEMA_REVISION)
+
+    for action_name in ('upgrade', 'downgrade'):
+        action = migration[action_name]
+        action.__globals__['_is_postgresql'] = lambda: False
+        action()
 
 
 def test_managed_user_role_migration_only_adds_provenance_table() -> None:

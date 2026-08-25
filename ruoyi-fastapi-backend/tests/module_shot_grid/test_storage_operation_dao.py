@@ -57,6 +57,8 @@ def test_claim_statement_uses_postgresql_skip_locked_and_recovers_expired_proces
     assert "operation_status = 'processing'" in sql
     assert 'lease_until <=' in sql
     assert 'attempt_count' not in str(statement.whereclause)
+    assert "aggregate_type != 'asset'" in sql
+    assert "sg_task.task_status IN ('preparing', 'in_progress', 'pending_review', 'revision', 'completed')" in sql
 
 
 @pytest.mark.asyncio
@@ -228,6 +230,45 @@ async def test_shot_directory_success_advances_only_preparing_shot_task() -> Non
     assert "task_status='in_progress'" in sql.replace(' ', '')
     assert "update_by='杨景锋'" in sql.replace(' ', '')
     assert 'sg_task.shot_id = 101' in sql
+    assert operation.operation_status == 'succeeded'
+    db.flush.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_asset_directory_success_advances_only_preparing_tasks_of_same_asset() -> None:
+    now = datetime(2026, 8, 25, 18, 30, 0)
+    operation = ShotGridStorageOperation(
+        operation_id=16,
+        project_id=10,
+        operation_type='ensure_asset_directory',
+        aggregate_type='asset',
+        aggregate_id=201,
+        target_relative_path=r'ASSET\Environment\动力舱室内',
+        operation_status='processing',
+        idempotency_key='asset-directory:10:201',
+        attempt_count=1,
+        lease_owner='worker-1',
+        lease_until=now + timedelta(minutes=5),
+        create_by='杨景锋',
+    )
+    db = AsyncMock()
+    db.execute.side_effect = [_ScalarResult(operation), _RowCountResult(), _ScalarResult(None)]
+
+    updated = await ShotGridStorageOperationDao.mark_succeeded(
+        db,
+        operation_id=16,
+        worker_id='worker-1',
+        expected_attempt_count=1,
+        now=now,
+    )
+
+    task_update = db.execute.await_args_list[1].args[0]
+    sql = str(task_update.compile(dialect=postgresql.dialect(), compile_kwargs={'literal_binds': True}))
+    assert updated
+    assert "sg_task.task_status = 'preparing'" in sql
+    assert "task_status='in_progress'" in sql.replace(' ', '')
+    assert 'sg_asset_item.asset_id = 201' in sql
+    assert "sg_task.task_kind = 'asset_image'" in sql
     assert operation.operation_status == 'succeeded'
     db.flush.assert_awaited_once()
 

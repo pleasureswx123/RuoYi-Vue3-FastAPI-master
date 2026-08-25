@@ -15,7 +15,7 @@ import {
 } from '@/views/asset/assetPresentation'
 
 describe('资产展示模型', () => {
-  it('稳定映射三种资产类型、状态和目录状态', () => {
+  it('稳定映射三种资产类型、状态和延迟目录状态', () => {
     expect(assetTypeMeta('Character').label).toBe('角色')
     expect(assetTypeMeta('Environment').label).toBe('场景')
     expect(assetTypeMeta('Prop').label).toBe('道具')
@@ -24,6 +24,7 @@ describe('资产展示模型', () => {
     expect(assetStatusMeta('reviewing').label).toBe('待审核')
     expect(assetStatusTagClass('in_progress')).toBe('asset-status-tag--in_progress')
     expect(assetStatusTagClass('unexpected')).toBe('asset-status-tag--unknown')
+    expect(assetDirectoryStatusMeta('not_created')).toMatchObject({ label: '开始制作时创建', tone: 'muted' })
     expect(assetDirectoryStatusMeta('ready')).toMatchObject({ label: '目录已就绪', tone: 'info' })
     expect(assetDirectoryStatusMeta('failed')).toMatchObject({ label: '目录处理异常', tone: 'danger' })
   })

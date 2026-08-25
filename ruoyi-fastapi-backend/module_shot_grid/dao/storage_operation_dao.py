@@ -1,9 +1,10 @@
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Select, and_, func, or_, select, update
+from sqlalchemy import Select, and_, exists, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from module_shot_grid.entity.do.asset_do import ShotGridAssetItem
 from module_shot_grid.entity.do.project_do import ShotGridShot
 from module_shot_grid.entity.do.storage_do import (
     ShotGridProjectStorage,
@@ -44,9 +45,33 @@ class ShotGridStorageOperationDao:
                 ShotGridStorageOperation.lease_until <= now,
             ),
         )
+        # 兼容升级前已经排队的资产目录操作：至少一个制作分项真正开始后才允许物理执行。
+        asset_production_started = exists(
+            select(1)
+            .select_from(ShotGridTask)
+            .join(
+                ShotGridAssetItem,
+                and_(
+                    ShotGridAssetItem.asset_item_id == ShotGridTask.asset_item_id,
+                    ShotGridAssetItem.project_id == ShotGridTask.project_id,
+                ),
+            )
+            .where(
+                ShotGridTask.project_id == ShotGridStorageOperation.project_id,
+                ShotGridTask.task_kind == 'asset_image',
+                ShotGridTask.task_status.in_(('preparing', 'in_progress', 'pending_review', 'revision', 'completed')),
+                ShotGridTask.del_flag == '0',
+                ShotGridAssetItem.asset_id == ShotGridStorageOperation.aggregate_id,
+                ShotGridAssetItem.del_flag == '0',
+            )
+        )
+        asset_directory_is_eligible = or_(
+            ShotGridStorageOperation.aggregate_type != 'asset',
+            asset_production_started,
+        )
         return (
             select(ShotGridStorageOperation)
-            .where(due_operation)
+            .where(due_operation, asset_directory_is_eligible)
             .order_by(
                 ShotGridStorageOperation.next_retry_time.asc().nullsfirst(),
                 ShotGridStorageOperation.operation_id.asc(),
@@ -165,23 +190,8 @@ class ShotGridStorageOperationDao:
 
         if cls._is_shot_renumber(operation):
             await cls._apply_shot_renumber(db, operation=operation, now=now)
-        elif cls._completes_shot_start(operation):
-            await db.execute(
-                update(ShotGridTask)
-                .where(
-                    ShotGridTask.project_id == operation.project_id,
-                    ShotGridTask.shot_id == operation.aggregate_id,
-                    ShotGridTask.task_kind == 'shot_video',
-                    ShotGridTask.task_status == 'preparing',
-                    ShotGridTask.del_flag == '0',
-                )
-                .values(
-                    task_status='in_progress',
-                    update_by=cls._operation_actor(operation),
-                    update_time=now,
-                    lock_version=ShotGridTask.lock_version + 1,
-                )
-            )
+        elif cls._completes_task_start(operation):
+            await db.execute(cls._advance_preparing_tasks_statement(operation, now))
 
         operation.operation_status = 'succeeded'
         operation.next_retry_time = None
@@ -396,11 +406,56 @@ class ShotGridStorageOperationDao:
         return operation.operation_type == 'renumber_shot_directories' and operation.aggregate_type == 'scene'
 
     @staticmethod
-    def _completes_shot_start(operation: ShotGridStorageOperation) -> bool:
-        return operation.aggregate_type == 'shot' and operation.operation_type in {
-            'ensure_shot_directory',
-            'reconcile_directory',
-        }
+    def _completes_task_start(operation: ShotGridStorageOperation) -> bool:
+        return (
+            operation.aggregate_type == 'shot'
+            and operation.operation_type in {'ensure_shot_directory', 'reconcile_directory'}
+        ) or (
+            operation.aggregate_type == 'asset'
+            and operation.operation_type in {'ensure_asset_directory', 'reconcile_directory'}
+        )
+
+    @classmethod
+    def _advance_preparing_tasks_statement(
+        cls,
+        operation: ShotGridStorageOperation,
+        now: datetime,
+    ) -> Any:
+        conditions = [
+            ShotGridTask.project_id == operation.project_id,
+            ShotGridTask.task_status == 'preparing',
+            ShotGridTask.del_flag == '0',
+        ]
+        if operation.aggregate_type == 'shot':
+            conditions.extend(
+                (
+                    ShotGridTask.shot_id == operation.aggregate_id,
+                    ShotGridTask.task_kind == 'shot_video',
+                )
+            )
+        else:
+            asset_item_ids = select(ShotGridAssetItem.asset_item_id).where(
+                ShotGridAssetItem.project_id == operation.project_id,
+                ShotGridAssetItem.asset_id == operation.aggregate_id,
+                ShotGridAssetItem.lifecycle_status == 'active',
+                ShotGridAssetItem.del_flag == '0',
+            )
+            conditions.extend(
+                (
+                    ShotGridTask.asset_item_id.in_(asset_item_ids),
+                    ShotGridTask.task_kind == 'asset_image',
+                )
+            )
+        return (
+            update(ShotGridTask)
+            .where(*conditions)
+            .values(
+                task_status='in_progress',
+                update_by=cls._operation_actor(operation),
+                update_time=now,
+                lock_version=ShotGridTask.lock_version + 1,
+            )
+        )
 
     @classmethod
     async def _apply_shot_renumber(

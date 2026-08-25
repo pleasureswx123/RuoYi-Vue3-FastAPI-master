@@ -500,7 +500,19 @@ class ShotGridTaskService:
             if task.task_status != 'not_started':
                 raise shot_grid_error(409, 'SG_INVALID_STATE_TRANSITION', '只有未开始任务可以执行开始动作')
             cls._require_lock_version(task.lock_version, command.lock_version)
+            asset = None
             if task.task_kind == 'asset_image':
+                asset_item_context = await ShotGridTaskDao.get_asset_item_project_context(
+                    db,
+                    project_id,
+                    task.asset_item_id,
+                )
+                if asset_item_context is None:
+                    raise shot_grid_error(404, 'SG_ASSET_ITEM_NOT_FOUND', '资产制作分项不存在或不可见')
+                asset_id, _asset_item_id = asset_item_context
+                asset = await ShotGridTaskDao.lock_asset(db, project_id, asset_id)
+                if asset is None:
+                    raise shot_grid_error(404, 'SG_ASSET_NOT_FOUND', '资产不存在或不可见')
                 item = await ShotGridTaskDao.lock_asset_item(db, project_id, task.asset_item_id)
                 if item is None:
                     raise shot_grid_error(404, 'SG_ASSET_ITEM_NOT_FOUND', '资产制作分项不存在或不可见')
@@ -508,9 +520,9 @@ class ShotGridTaskService:
 
             now = cls._now()
             directory_operation_id: int | None = None
+            if storage is None or storage.storage_status != 'ready':
+                raise shot_grid_error(409, 'SG_PROJECT_NOT_READY', '项目 NAS 存储尚未就绪，不能开始制作')
             if task.task_kind == 'shot_video':
-                if storage is None or storage.storage_status != 'ready':
-                    raise shot_grid_error(409, 'SG_PROJECT_NOT_READY', '项目 NAS 存储尚未就绪，不能开始镜头制作')
                 target = await ShotGridTaskDao.lock_shot_target(db, project_id, task.shot_id)
                 if target is None:
                     raise shot_grid_error(404, 'SG_SHOT_NOT_FOUND', '镜头不存在或不可见')
@@ -548,7 +560,32 @@ class ShotGridTaskService:
                 shot.update_time = now
                 shot.lock_version += 1
             else:
-                task.task_status = 'in_progress'
+                latest_directory_status = await ShotGridTaskDao.get_latest_asset_directory_operation_status(
+                    db,
+                    project_id,
+                    asset.asset_id,
+                )
+                if latest_directory_status == 'succeeded':
+                    task.task_status = 'in_progress'
+                else:
+                    task.task_status = 'preparing'
+                    if latest_directory_status is None:
+                        operation = ShotGridStorageOperation(
+                            project_id=project_id,
+                            operation_type='ensure_asset_directory',
+                            aggregate_type='asset',
+                            aggregate_id=asset.asset_id,
+                            target_relative_path=f'ASSET\\{asset.asset_type}\\{asset.storage_dir_name}',
+                            operation_status='pending',
+                            idempotency_key=f'asset-directory:{project_id}:{asset.asset_id}',
+                            attempt_count=0,
+                            create_by=actor_name,
+                            create_time=now,
+                            update_time=now,
+                        )
+                        db.add(operation)
+                        await db.flush()
+                        directory_operation_id = operation.operation_id
             task.update_by = actor_name
             task.update_time = now
             task.lock_version += 1
@@ -928,11 +965,7 @@ class ShotGridTaskService:
         owner_creator = access.project_role == 'creator' and owner
         target_ready = row['task_kind'] != 'asset_image' or is_asset_production_item_ready(row.get('production_item'))
         actions: list[str] = []
-        if (
-            director
-            and row['task_status'] == 'not_started'
-            and cls._has_permission(current_user, 'shotgrid:task:edit')
-        ):
+        if director and row['task_status'] == 'not_started' and cls._has_permission(current_user, 'shotgrid:task:edit'):
             actions.append('task.edit')
         if (
             director

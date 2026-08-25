@@ -17,7 +17,6 @@ from module_shot_grid.dao.import_batch_dao import ShotGridImportBatchDao
 from module_shot_grid.dao.project_audit_dao import ShotGridProjectAuditDao
 from module_shot_grid.entity.do.asset_do import ShotGridAsset, ShotGridAssetItem, ShotGridShotAsset
 from module_shot_grid.entity.do.import_do import ShotGridImportBatch
-from module_shot_grid.entity.do.storage_do import ShotGridStorageOperation
 from module_shot_grid.entity.vo.asset_import_vo import (
     AssetImportCommitRequestModel,
     AssetImportCommitResultModel,
@@ -485,22 +484,6 @@ class AssetImportService:
                     ),
                 )
                 created_assets_by_type[asset.asset_type] += 1
-                await AssetImportDao.add_storage_operation(
-                    db,
-                    ShotGridStorageOperation(
-                        project_id=project_id,
-                        operation_type='ensure_asset_directory',
-                        aggregate_type='asset',
-                        aggregate_id=asset.asset_id,
-                        target_relative_path=target_relative_path,
-                        operation_status='pending',
-                        idempotency_key=f'asset-directory:{project_id}:{asset.asset_id}',
-                        attempt_count=0,
-                        create_by=actor_name,
-                        create_time=now,
-                        update_time=now,
-                    ),
-                )
             selected_assets[key] = asset
         return selected_assets, created_assets_by_type, reused_assets
 

@@ -15,6 +15,7 @@ const STATUS_META = {
 }
 
 const DIRECTORY_META = {
+  not_created: { label: '开始制作时创建', tone: 'muted' },
   pending: { label: '目录准备中', tone: 'info' },
   ready: { label: '目录已就绪', tone: 'info' },
   failed: { label: '目录处理异常', tone: 'danger' }

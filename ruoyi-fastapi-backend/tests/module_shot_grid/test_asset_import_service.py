@@ -11,6 +11,7 @@ from common.enums import BusinessType
 from module_shot_grid.dao.asset_import_dao import AssetImportDao
 from module_shot_grid.dao.import_batch_dao import ShotGridImportBatchDao
 from module_shot_grid.dao.project_audit_dao import ShotGridProjectAuditDao
+from module_shot_grid.entity.do.asset_do import ShotGridAsset
 from module_shot_grid.entity.vo.access_vo import ShotGridProjectAccessModel
 from module_shot_grid.entity.vo.asset_import_vo import (
     AssetImportCommitRequestModel,
@@ -110,12 +111,42 @@ def test_selection_hash_is_order_independent_but_sheet_sensitive() -> None:
 
     assert AssetImportService._selection_hash(first) == AssetImportService._selection_hash(reversed_request)
     assert AssetImportService._selection_hash(first) != AssetImportService._selection_hash(changed_sheet)
-
     with pytest.raises(ValidationError):
         AssetImportCommitRequestModel(
             importToken='token',
             selectedRows=[{'sheetName': 'Sheet1', 'rowNumber': 2, 'assigneeUserId': None}],
         )
+
+
+@pytest.mark.asyncio
+async def test_resolve_new_asset_freezes_directory_identity_without_creating_outbox(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def add_asset(_db: Any, asset: ShotGridAsset) -> ShotGridAsset:
+        asset.asset_id = 99
+        return asset
+
+    monkeypatch.setattr(
+        'module_shot_grid.service.asset_import_service.AssetImportDao.add_asset',
+        AsyncMock(side_effect=add_asset),
+    )
+    row = _row()
+
+    selected, created_by_type, reused = await AssetImportService._resolve_assets(
+        AsyncMock(),
+        project_id=2,
+        grouped_rows={('Environment', '控制室'): [row]},
+        assets_by_key=defaultdict(list),
+        actor_name='director',
+        now=datetime(2026, 8, 25, 18, 0, 0),
+    )
+
+    asset = selected[('Environment', '控制室')]
+    assert asset.storage_dir_name == '控制室'
+    assert asset.storage_path_key == 'asset\\environment\\控制室'
+    assert created_by_type['Environment'] == 1
+    assert reused == 0
+    assert not hasattr(AssetImportDao, 'add_storage_operation')
 
 
 @pytest.mark.parametrize('value', [None, '', '   ', 'x' * 101, 'line\nbreak'])

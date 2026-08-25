@@ -725,8 +725,3 @@ class ShotGridAssetCrudDao:
         db.add(item)
         await db.flush()
         return item
-
-    @classmethod
-    async def add_storage_operation(cls, db: AsyncSession, operation: ShotGridStorageOperation) -> None:
-        db.add(operation)
-        await db.flush()

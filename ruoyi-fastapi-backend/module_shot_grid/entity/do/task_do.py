@@ -65,10 +65,6 @@ class ShotGridTask(ShotGridMutableAuditMixin, Base):
             name='ck_sg_task_status',
         ),
         CheckConstraint(
-            "task_status <> 'preparing' or task_kind = 'shot_video'",
-            name='ck_sg_task_preparing_kind',
-        ),
-        CheckConstraint(
             "priority in ('low', 'normal', 'high', 'urgent')",
             name='ck_sg_task_priority',
         ),

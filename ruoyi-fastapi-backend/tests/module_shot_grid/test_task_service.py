@@ -193,12 +193,7 @@ def test_task_detail_builds_target_version_and_permission_actions() -> None:
 
 def test_task_detail_hides_legacy_internal_worker_owner() -> None:
     detail = ShotGridTaskService._build_detail(
-        _task_row(
-            update_by=(
-                '31412-9d227a:31412:c380be68a38c43aebe690f61258a664f:'
-                'a58a5b5baeb5'
-            )
-        ),
+        _task_row(update_by=('31412-9d227a:31412:c380be68a38c43aebe690f61258a664f:a58a5b5baeb5')),
         _current_user(user_id=ASSIGNEE_USER_ID),
         _access(user_id=ASSIGNEE_USER_ID, role='creator'),
     )
@@ -210,10 +205,7 @@ def test_task_detail_hides_legacy_internal_worker_owner() -> None:
 async def test_task_detail_recovers_legacy_worker_owner_from_directory_operation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    raw_worker_owner = (
-        '31412-9d227a:31412:c380be68a38c43aebe690f61258a664f:'
-        'a58a5b5baeb5'
-    )
+    raw_worker_owner = '31412-9d227a:31412:c380be68a38c43aebe690f61258a664f:a58a5b5baeb5'
     monkeypatch.setattr(
         'module_shot_grid.service.task_service.ShotGridTaskDao.get_task_detail',
         AsyncMock(return_value=_task_row(update_by=raw_worker_owner)),
@@ -804,6 +796,94 @@ async def test_start_task_allows_owner_and_increments_lock_in_same_transaction(
     assert shot.storage_dir_name == '001_S001'
     assert task.lock_version == UPDATED_TASK_LOCK_VERSION
     audit.assert_awaited_once()
+    db.commit.assert_awaited_once()
+    db.rollback.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_start_asset_task_creates_shared_directory_outbox_and_enters_preparing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    task = _task(assignee_user_id=ASSIGNEE_USER_ID, lock_version=INITIAL_TASK_LOCK_VERSION)
+    task.task_kind = 'asset_image'
+    task.shot_id = None
+    task.asset_item_id = ASSET_ITEM_ID
+    access = _access(user_id=ASSIGNEE_USER_ID, role='creator')
+    monkeypatch.setattr(
+        'module_shot_grid.service.task_service.ShotGridTaskService._resolve_task_access',
+        AsyncMock(return_value=(PROJECT_ID, access)),
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.task_service.ShotGridTaskService._lock_mutable_project',
+        AsyncMock(return_value=(SimpleNamespace(), SimpleNamespace(storage_status='ready'))),
+    )
+    _patch_locked_access(monkeypatch, access)
+    monkeypatch.setattr(
+        'module_shot_grid.service.task_service.ShotGridTaskService._lock_task',
+        AsyncMock(return_value=task),
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.task_service.ShotGridTaskDao.get_asset_item_project_context',
+        AsyncMock(return_value=(ASSET_ID, ASSET_ITEM_ID)),
+    )
+    lock_asset = AsyncMock(
+        return_value=SimpleNamespace(
+            asset_id=ASSET_ID,
+            asset_type='Environment',
+            storage_dir_name='动力舱室内',
+        )
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.task_service.ShotGridTaskDao.lock_asset',
+        lock_asset,
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.task_service.ShotGridTaskDao.lock_asset_item',
+        AsyncMock(return_value=SimpleNamespace(production_item='主视角')),
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.task_service.ShotGridTaskDao.get_latest_asset_directory_operation_status',
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.task_service.ShotGridTaskDao.flush',
+        AsyncMock(),
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.task_service.ShotGridTaskService._audit',
+        AsyncMock(),
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.task_service.ShotGridTaskService._require_task_detail',
+        AsyncMock(return_value=_task_row(task_kind='asset_image', task_status='preparing', lock_version=4)),
+    )
+    expected = object()
+    monkeypatch.setattr(
+        'module_shot_grid.service.task_service.ShotGridTaskService._build_detail',
+        lambda *_args: expected,
+    )
+    db = SimpleNamespace(
+        add=MagicMock(),
+        flush=AsyncMock(),
+        commit=AsyncMock(),
+        rollback=AsyncMock(),
+    )
+
+    result = await ShotGridTaskService.start_task(
+        db,
+        TASK_ID,
+        ShotGridTaskStartModel(lockVersion=INITIAL_TASK_LOCK_VERSION),
+        _current_user(user_id=ASSIGNEE_USER_ID),
+    )
+
+    assert result is expected
+    assert task.task_status == 'preparing'
+    operation = db.add.call_args.args[0]
+    assert operation.operation_type == 'ensure_asset_directory'
+    assert operation.aggregate_id == ASSET_ID
+    assert operation.target_relative_path == 'ASSET\\Environment\\动力舱室内'
+    assert operation.idempotency_key == f'asset-directory:{PROJECT_ID}:{ASSET_ID}'
+    lock_asset.assert_awaited_once_with(db, PROJECT_ID, ASSET_ID)
     db.commit.assert_awaited_once()
     db.rollback.assert_not_awaited()
 

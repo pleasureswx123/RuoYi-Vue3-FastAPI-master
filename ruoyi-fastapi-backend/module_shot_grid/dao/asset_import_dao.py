@@ -10,7 +10,7 @@ from module_shot_grid.entity.do.asset_do import (
     ShotGridShotAssetRequirement,
 )
 from module_shot_grid.entity.do.project_do import ShotGridProject
-from module_shot_grid.entity.do.storage_do import ShotGridProjectStorage, ShotGridStorageOperation
+from module_shot_grid.entity.do.storage_do import ShotGridProjectStorage
 
 AssetKey = tuple[str, str]
 
@@ -112,16 +112,6 @@ class AssetImportDao:
         db.add(asset_item)
         await db.flush()
         return asset_item
-
-    @classmethod
-    async def add_storage_operation(
-        cls,
-        db: AsyncSession,
-        operation: ShotGridStorageOperation,
-    ) -> ShotGridStorageOperation:
-        db.add(operation)
-        await db.flush()
-        return operation
 
     @classmethod
     async def get_requirements_for_keys(

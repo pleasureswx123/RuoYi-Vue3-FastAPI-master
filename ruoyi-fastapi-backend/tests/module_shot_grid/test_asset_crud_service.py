@@ -77,7 +77,6 @@ def _patch_create_dependencies(monkeypatch: pytest.MonkeyPatch) -> dict[str, Asy
         'conflict': AsyncMock(return_value=False),
         'add_asset': AsyncMock(side_effect=add_asset),
         'add_item': AsyncMock(side_effect=add_item),
-        'add_operation': AsyncMock(),
         'audit': AsyncMock(),
         'detail': AsyncMock(return_value=object()),
     }
@@ -88,7 +87,6 @@ def _patch_create_dependencies(monkeypatch: pytest.MonkeyPatch) -> dict[str, Asy
         'conflict': 'ShotGridAssetCrudDao.asset_name_or_path_exists',
         'add_asset': 'ShotGridAssetCrudDao.add_asset',
         'add_item': 'ShotGridAssetCrudDao.add_item',
-        'add_operation': 'ShotGridAssetCrudDao.add_storage_operation',
         'audit': 'ShotGridProjectAuditDao.add_success_log',
         'detail': 'ShotGridAssetCrudService._build_asset_detail',
     }
@@ -98,7 +96,7 @@ def _patch_create_dependencies(monkeypatch: pytest.MonkeyPatch) -> dict[str, Asy
 
 
 @pytest.mark.asyncio
-async def test_create_asset_persists_items_outbox_and_audit_without_task_in_one_transaction(
+async def test_create_asset_persists_items_and_audit_without_directory_or_task_in_one_transaction(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     mocks = _patch_create_dependencies(monkeypatch)
@@ -117,9 +115,7 @@ async def test_create_asset_persists_items_outbox_and_audit_without_task_in_one_
     asset = mocks['add_asset'].await_args.args[1]
     assert asset.asset_name_key == '动力舱室内'
     assert asset.storage_path_key == 'asset\\environment\\动力舱室内'
-    operation = mocks['add_operation'].await_args.args[1]
-    assert operation.operation_type == 'ensure_asset_directory'
-    assert operation.target_relative_path == 'ASSET\\Environment\\动力舱室内'
+    assert not hasattr(ShotGridAssetCrudDao, 'add_storage_operation')
     mocks['audit'].assert_awaited_once()
     db.commit.assert_awaited_once()
     db.rollback.assert_not_awaited()
@@ -182,11 +178,6 @@ async def test_asset_update_changes_only_non_identity_metadata(
         'module_shot_grid.service.asset_crud_service.ShotGridAssetCrudService._lock_active_asset',
         AsyncMock(return_value=asset),
     )
-    add_operation = AsyncMock()
-    monkeypatch.setattr(
-        'module_shot_grid.service.asset_crud_service.ShotGridAssetCrudDao.add_storage_operation',
-        add_operation,
-    )
     monkeypatch.setattr(
         'module_shot_grid.service.asset_crud_service.ShotGridProjectAuditDao.add_success_log',
         AsyncMock(),
@@ -218,7 +209,6 @@ async def test_asset_update_changes_only_non_identity_metadata(
     assert asset.storage_path_key == 'asset\\environment\\动力舱室内'
     assert asset.description == '新描述'
     assert asset.sort_order == UPDATED_SORT_ORDER
-    add_operation.assert_not_awaited()
     db.commit.assert_awaited_once()
 
 
@@ -401,17 +391,11 @@ async def test_started_asset_item_cannot_be_edited_even_before_first_version(
         ('retry_wait', 'pending'),
         ('succeeded', 'ready'),
         ('failed', 'failed'),
+        (None, 'not_created'),
     ],
 )
-def test_directory_status_is_read_only_mapping(operation_status: str, directory_status: str) -> None:
+def test_directory_status_is_read_only_mapping(operation_status: str | None, directory_status: str) -> None:
     assert ShotGridAssetCrudService._directory_status(operation_status) == directory_status
-
-
-def test_missing_directory_operation_is_contract_error() -> None:
-    with pytest.raises(ShotGridDomainException) as exc_info:
-        ShotGridAssetCrudService._directory_status(None)
-
-    assert exc_info.value.error_key == 'SG_STORAGE_OPERATION_NOT_FOUND'
 
 
 @pytest.mark.asyncio

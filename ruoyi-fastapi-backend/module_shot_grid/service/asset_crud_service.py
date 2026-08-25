@@ -12,7 +12,6 @@ from module_shot_grid.dao.asset_crud_dao import ACTIVE_TASK_STATUSES, ShotGridAs
 from module_shot_grid.dao.project_audit_dao import ShotGridProjectAuditDao
 from module_shot_grid.dao.project_dao import ShotGridProjectDao
 from module_shot_grid.entity.do.asset_do import ShotGridAsset, ShotGridAssetItem
-from module_shot_grid.entity.do.storage_do import ShotGridStorageOperation
 from module_shot_grid.entity.do.task_do import ShotGridTask
 from module_shot_grid.entity.vo.access_vo import ShotGridProjectAccessModel
 from module_shot_grid.entity.vo.asset_crud_vo import (
@@ -153,7 +152,7 @@ class ShotGridAssetCrudService:
         cls._require_write_access(access, project_id, actor_user_id)
         try:
             await cls._lock_writable_project(db, project_id, current_user, actor_user_id)
-            asset_name, asset_name_key, storage_dir_name, target_path, storage_path_key = cls._asset_identity(
+            asset_name, asset_name_key, storage_dir_name, _target_path, storage_path_key = cls._asset_identity(
                 command.asset_type,
                 command.asset_name,
             )
@@ -187,22 +186,6 @@ class ShotGridAssetCrudService:
                     remark=command.remark,
                     lock_version=0,
                     del_flag='0',
-                ),
-            )
-            await ShotGridAssetCrudDao.add_storage_operation(
-                db,
-                ShotGridStorageOperation(
-                    project_id=project_id,
-                    operation_type='ensure_asset_directory',
-                    aggregate_type='asset',
-                    aggregate_id=asset.asset_id,
-                    target_relative_path=target_path,
-                    operation_status='pending',
-                    idempotency_key=f'asset-directory:{project_id}:{asset.asset_id}',
-                    attempt_count=0,
-                    create_by=actor_name,
-                    create_time=now,
-                    update_time=now,
                 ),
             )
             for item_command, production_item, production_item_key in item_payloads:
@@ -1246,7 +1229,7 @@ class ShotGridAssetCrudService:
     @staticmethod
     def _directory_status(operation_status: str | None) -> str:
         if operation_status is None:
-            raise shot_grid_error(404, 'SG_STORAGE_OPERATION_NOT_FOUND', '资产缺少目录操作记录')
+            return 'not_created'
         if operation_status in {'pending', 'processing', 'retry_wait', 'compensation_pending'}:
             return 'pending'
         if operation_status == 'succeeded':

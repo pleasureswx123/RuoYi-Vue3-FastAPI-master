@@ -227,7 +227,7 @@ docker compose -f docker-compose.pg.yml up -d shot-grid-frontend
 
 数据库终态为 11 个活动资产、19 个活动分项和 19 个任务，资产类型 Character 5、Environment 2、Prop 4；临时资产/分项均为 `archived/lockVersion=2`，活动数量未受影响。任务最终分布为蒋浩 8、嘉璋 3、占峰 8。自动匹配 1 条来自显式隔离资产需求夹具，不是镜头样表自然匹配。`sys_oper_log` 共 7 条且全部成功；12 条 `ensure_asset_directory` Outbox 全部 `pending`，符合 Worker 关闭预期。
 
-localStorage 为空、退出清理和缩略图空态等历史证据仍可参考；“复合制作人错误、导入创建 19 个任务、资产模板未交付”已被 v2 契约废止。当前必须重新验证 `asset-v2` 下载与摘要、A:F 6 列、全部制作分项未分配、任务创建数为 0，以及随后显式委派创建唯一任务。项目的逻辑 `storageStatus=ready` 夹具仍不能证明真实 UNC/NAS I/O。
+localStorage 为空、退出清理和缩略图空态等历史证据仍可参考；“复合制作人错误、导入创建 19 个任务、导入创建资产目录 Outbox、资产模板未交付”已被当前契约废止。当前必须重新验证 `asset-v2` 下载与摘要、A:F 6 列、全部制作分项未分配、目录状态 `not_created`、目录与任务创建数均为 0，以及随后显式委派创建唯一任务、制作人开始后进入 `preparing` 并触发共享资产目录。项目的逻辑 `storageStatus=ready` 夹具仍不能证明真实 UNC/NAS I/O。
 
 验收后已关闭 Playwright，停止后端 PID 29056/32996，删除唯一临时 Nginx 容器且未构建新镜像；18081/19099 空闲，隔离 PostgreSQL 库存在数/连接数为 0/0，Redis DB 15 `DBSIZE=0` 且 owner 键为 0，54 项 TEMP 精确删除。原 9099 PID 4820 仍监听，基础 PostgreSQL/Redis 保持 healthy。
 

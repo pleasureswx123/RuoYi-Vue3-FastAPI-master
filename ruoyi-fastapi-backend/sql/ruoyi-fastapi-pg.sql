@@ -2316,7 +2316,6 @@ CREATE TABLE sg_task (
 	CONSTRAINT ck_sg_task_name CHECK (btrim(task_name) <> ''),
 	CONSTRAINT ck_sg_task_owner_kind CHECK (((shot_id is not null and asset_item_id is null and task_kind = 'shot_video') or (shot_id is null and asset_item_id is not null and task_kind = 'asset_image'))),
 	CONSTRAINT ck_sg_task_status CHECK (task_status in ('not_started', 'preparing', 'in_progress', 'pending_review', 'revision', 'completed')),
-	CONSTRAINT ck_sg_task_preparing_kind CHECK (task_status <> 'preparing' or task_kind = 'shot_video'),
 	CONSTRAINT ck_sg_task_priority CHECK (priority in ('low', 'normal', 'high', 'urgent')),
 	CONSTRAINT ck_sg_task_lock_version CHECK (lock_version >= 0),
 	CONSTRAINT ck_sg_task_del_flag CHECK (del_flag in ('0', '2'))
@@ -3018,7 +3017,7 @@ create table if not exists alembic_version (
     constraint alembic_version_pkc primary key (version_num)
 );
 delete from alembic_version;
-insert into alembic_version(version_num) values ('20260825_18');
+insert into alembic_version(version_num) values ('20260825_19');
 
 
 CREATE OR REPLACE FUNCTION "find_in_set"(int8, varchar)
