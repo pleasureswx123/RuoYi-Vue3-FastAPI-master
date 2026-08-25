@@ -23,7 +23,7 @@
 
 资产类型、名称和完整目录身份在创建时一并冻结，普通 PUT 只修改描述、排序和备注；该 PUT 是三项非身份主数据的完整快照，省略描述或备注表示清空，省略排序表示归零。任何重命名、改类型或目录迁移都必须另建受控动作。制作分项在尚无版本时可补充或纠正主数据，已有正式版本后全部冻结；缺失制作分项只能作为未分配草稿保存或导入，首次分配、改派、批量分配、开始任务和资产图片版本提交均失败关闭。镜头号、集号和场次号也不提供普通改号。手工创建或 Excel 导入只创建镜头/资产制作分项，不接受制作人且不得创建任务；首次显式委派才创建唯一的 `not_started` 任务。正式版本事务按 `project → task/submission → version → auto_single review list → note` 锁序执行，避免项目元数据、改派、提交和审核并发穿透。
 
-NAS 目录 Worker 和版本发布 Worker 的代码路径已经建立，但所有环境样例分别以 `SHOT_GRID_STORAGE_WORKER_ENABLED=false`、`SHOT_GRID_VERSION_WORKER_ENABLED=false` 默认关闭。本批次使用临时本地目录验证路径适配器时必须显式注入 `allow_local_root=True`；生产适配器默认只接受 Windows UNC。尚未使用真实 NAS、正式 Windows Worker 服务账号和 NAS/AD/共享 ACL 完成隔离 UNC E2E，因此不得把本批交付描述成 NAS 生产验收通过；源码、Mock、迁移、Scheduler 注册或本地临时目录测试也不能替代该门禁。
+NAS 目录 Worker 和版本发布 Worker 的代码路径已经建立，所有环境样例仍以 `SHOT_GRID_STORAGE_WORKER_ENABLED=false`、`SHOT_GRID_VERSION_WORKER_ENABLED=false` 安全关闭。Windows 运行节点可直接使用 UNC；Linux 生产节点必须通过 `SHOT_GRID_NAS_UNC_MOUNT_MAP` 把规范化 UNC 映射到容器内 CIFS 目录，且每次探测、目录操作和版本发布前都要确认映射根位于 `cifs/smb3` 文件系统，防止挂载丢失后误写本地磁盘。本地测试只有显式 `allow_local_root=True` 才能使用临时目录。启用前仍必须以正式 NAS 服务账号完成共享 ACL、真实读写删除、目录创建、版本发布和失败恢复验收；源码、Mock、迁移或 Scheduler 注册不能替代该门禁。
 
 ## 项目角色与受管平台角色
 

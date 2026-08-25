@@ -24,6 +24,15 @@ export RUOYI_ENV_FILE="$ENV_FILE"
 export APP_RELEASE_ID="${APP_RELEASE_ID_OVERRIDE:-${APP_RELEASE_ID:-local}}"
 COMPOSE=(docker compose --project-name "$PROJECT_NAME" --env-file "$ENV_FILE" -f "$ROOT_DIR/docker-compose.prod.yml")
 
+nas_mount_map_compact="${SHOT_GRID_NAS_UNC_MOUNT_MAP:-}"
+nas_mount_map_compact="${nas_mount_map_compact//[[:space:]]/}"
+if [[ -n "$nas_mount_map_compact" && "$nas_mount_map_compact" != '{}' ]]; then
+    nas_host_mount="${SHOT_GRID_NAS_HOST_MOUNT:-/mnt/ruoyi-shot-grid/shotgrid-main}"
+    echo "NAS 挂载："
+    findmnt -T "$nas_host_mount" -o TARGET,SOURCE,FSTYPE,OPTIONS || true
+    echo
+fi
+
 "${COMPOSE[@]}" ps
 echo
 "${COMPOSE[@]}" exec -T backend ruoyi ops health --env=production --output=json

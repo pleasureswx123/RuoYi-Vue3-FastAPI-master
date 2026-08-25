@@ -8,6 +8,11 @@ from dataclasses import dataclass
 from pathlib import Path, PureWindowsPath
 from typing import Any
 
+from module_shot_grid.service.nas_mount_resolver import (
+    SHOT_GRID_NAS_MOUNT_RESOLVER,
+    NasMountResolutionError,
+    ShotGridNasMountResolver,
+)
 from module_shot_grid.service.project_path_service import ShotGridProjectPathService
 
 
@@ -46,6 +51,8 @@ class _StorageDirectoryPlan:
     containment_root: Path
     relative_directories: tuple[tuple[str, ...], ...]
     writable_directory: tuple[str, ...]
+    mapped_mount_root: Path | None
+    mount_resolver: ShotGridNasMountResolver
 
 
 @dataclass(frozen=True)
@@ -61,6 +68,8 @@ class _ShotRenumberPlan:
     episode_directory: tuple[str, ...]
     staging_dir_name: str
     items: tuple[_ShotDirectoryRename, ...]
+    mapped_mount_root: Path | None
+    mount_resolver: ShotGridNasMountResolver
 
 
 class StoragePathAdapterError(Exception):
@@ -98,9 +107,15 @@ class ShotGridStoragePathAdapter:
     SHOT_TARGET_PARTS = 3
     ASSET_TARGET_PARTS = 3
 
-    def __init__(self, *, allow_local_root: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        allow_local_root: bool = False,
+        nas_mount_resolver: ShotGridNasMountResolver | None = None,
+    ) -> None:
         # 本地根目录只用于自动化测试，生产调用保持默认关闭。
         self.allow_local_root = allow_local_root
+        self.nas_mount_resolver = nas_mount_resolver or SHOT_GRID_NAS_MOUNT_RESOLVER
 
     async def ensure_directories(self, context: StorageOperationPathContext) -> StorageDirectoryResult:
         if context.operation_type == 'renumber_shot_directories':
@@ -179,25 +194,33 @@ class ShotGridStoragePathAdapter:
             episode_directory=directory_plan.writable_directory,
             staging_dir_name=staging_dir_name,
             items=tuple(renames),
+            mapped_mount_root=directory_plan.mapped_mount_root,
+            mount_resolver=directory_plan.mount_resolver,
         )
 
     def _build_plan(self, context: StorageOperationPathContext) -> _StorageDirectoryPlan:
         self._validate_context(context)
-        root_path, is_unc = self._validated_root(context.configured_root_path)
-        snapshot_root, snapshot_is_unc = self._validated_root(context.root_path_snapshot)
+        root_path, is_unc, mapped_mount_root = self._validated_root(context.configured_root_path)
+        snapshot_root, snapshot_is_unc, snapshot_mount_root = self._validated_root(context.root_path_snapshot)
         if is_unc != snapshot_is_unc or self._canonical_path(root_path, is_unc) != self._canonical_path(
             snapshot_root,
             snapshot_is_unc,
         ):
             raise self._invalid_path_error()
+        if self._canonical_optional_path(mapped_mount_root) != self._canonical_optional_path(snapshot_mount_root):
+            raise self._invalid_path_error()
 
         project_parts = self._relative_parts(context.project_relative_path)
         recomposed_project = root_path.joinpath(*project_parts)
-        snapshot_project, project_is_unc = self._validated_absolute_path(context.project_path_snapshot)
+        snapshot_project, project_is_unc, project_mount_root = self._validated_absolute_path(
+            context.project_path_snapshot
+        )
         if project_is_unc != is_unc or self._canonical_path(
             recomposed_project,
             is_unc,
         ) != self._canonical_path(snapshot_project, project_is_unc):
+            raise self._invalid_path_error()
+        if self._canonical_optional_path(mapped_mount_root) != self._canonical_optional_path(project_mount_root):
             raise self._invalid_path_error()
 
         target_parts = self._relative_parts(context.target_relative_path)
@@ -218,6 +241,8 @@ class ShotGridStoragePathAdapter:
             containment_root=containment_root,
             relative_directories=relative_directories,
             writable_directory=writable_directory,
+            mapped_mount_root=mapped_mount_root,
+            mount_resolver=self.nas_mount_resolver,
         )
 
     def _validate_context(self, context: StorageOperationPathContext) -> None:
@@ -236,13 +261,13 @@ class ShotGridStoragePathAdapter:
         if context.operation_type not in {*self.EXPECTED_OPERATION_AGGREGATES, 'reconcile_directory'}:
             raise self._invalid_path_error()
 
-    def _validated_root(self, raw_path: str) -> tuple[Path, bool]:
-        path, is_unc = self._validated_absolute_path(raw_path)
-        if not is_unc and not self.allow_local_root:
+    def _validated_root(self, raw_path: str) -> tuple[Path, bool, Path | None]:
+        path, is_unc, mapped_mount_root = self._validated_absolute_path(raw_path)
+        if not is_unc and mapped_mount_root is None and not self.allow_local_root:
             raise self._invalid_path_error()
-        return path, is_unc
+        return path, is_unc, mapped_mount_root
 
-    def _validated_absolute_path(self, raw_path: str) -> tuple[Path, bool]:
+    def _validated_absolute_path(self, raw_path: str) -> tuple[Path, bool, Path | None]:
         if not isinstance(raw_path, str) or not raw_path or '\x00' in raw_path:
             raise self._invalid_path_error()
         normalized = unicodedata.normalize('NFC', raw_path.strip())
@@ -253,18 +278,24 @@ class ShotGridStoragePathAdapter:
                 raise self._invalid_path_error()
             if any(part in {'.', '..'} for part in windows_path.parts):
                 raise self._invalid_path_error()
-            if os.name != 'nt':
+            try:
+                resolved = self.nas_mount_resolver.resolve(normalized)
+            except NasMountResolutionError as exc:
                 raise StoragePathAdapterError(
                     error_key='SG_STORAGE_ROOT_UNAVAILABLE',
-                    safe_message='当前 Worker 无法访问 Windows UNC 根目录',
+                    safe_message='当前 Worker 没有可用的 UNC/CIFS 根目录映射',
                     retryable=True,
-                )
-            return Path(str(windows_path)), True
+                ) from exc
+            return resolved.path, resolved.windows_semantics, resolved.mapped_mount_root
 
         local_path = Path(normalized)
         if not local_path.is_absolute() or not self.allow_local_root:
             raise self._invalid_path_error()
-        return local_path, False
+        return local_path, False, None
+
+    @staticmethod
+    def _canonical_optional_path(path: Path | None) -> str | None:
+        return None if path is None else os.path.normcase(os.path.abspath(os.path.normpath(str(path))))
 
     @staticmethod
     def _canonical_path(path: Path, is_unc: bool) -> str:
@@ -359,6 +390,10 @@ class ShotGridStoragePathAdapter:
 
     @classmethod
     def _ensure_directories_sync(cls, plan: _StorageDirectoryPlan) -> StorageDirectoryResult:
+        try:
+            plan.mount_resolver.ensure_mount_ready(plan.mapped_mount_root)
+        except NasMountResolutionError as exc:
+            raise cls._root_unavailable_error() from exc
         root = plan.containment_root
         if not root.exists() or not root.is_dir():
             raise StoragePathAdapterError(
@@ -411,6 +446,10 @@ class ShotGridStoragePathAdapter:
     ) -> StorageDirectoryResult:
         """通过同集临时目录分两阶段迁移，允许失败后按同一载荷幂等续跑。"""
 
+        try:
+            plan.mount_resolver.ensure_mount_ready(plan.mapped_mount_root)
+        except NasMountResolutionError as exc:
+            raise cls._root_unavailable_error() from exc
         root = plan.containment_root
         if not root.exists() or not root.is_dir():
             raise StoragePathAdapterError(
@@ -500,6 +539,10 @@ class ShotGridStoragePathAdapter:
 
     @classmethod
     def _cleanup_renumber_journal_sync(cls, plan: _ShotRenumberPlan) -> None:
+        try:
+            plan.mount_resolver.ensure_mount_ready(plan.mapped_mount_root)
+        except NasMountResolutionError as exc:
+            raise cls._root_unavailable_error() from exc
         root = plan.containment_root
         episode_path = root.joinpath(*plan.episode_directory)
         staging_path = episode_path / plan.staging_dir_name

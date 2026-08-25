@@ -25,7 +25,7 @@
 
 - 实际开发、运行、迁移和验收默认使用 PostgreSQL。
 - 默认依赖文件为 `requirements-pg.txt`。
-- 默认本地环境由根目录 `docker-compose.dev.yml` 启动后端、PostgreSQL 和 Redis；后端固定 Python 3.11.15、使用 `requirements-pg.lock.txt` 锁定 Python 依赖并内置 FFmpeg，前端仍在宿主机运行。Linux 后端容器必须关闭 Windows UNC 目录 Worker 和版本发布 Worker，只允许启用媒体派生 Worker；详见 `docs/docker_dev_guide.md`。
+- 默认本地环境由根目录 `docker-compose.dev.yml` 启动后端、PostgreSQL 和 Redis；后端固定 Python 3.11.15、使用 `requirements-pg.lock.txt` 锁定 Python 依赖并内置 FFmpeg，前端仍在宿主机运行。本地 Linux 后端容器默认关闭 NAS 目录 Worker 和版本发布 Worker；生产 Linux 仅允许通过显式 `SHOT_GRID_NAS_UNC_MOUNT_MAP` 把业务 UNC 映射到容器内 CIFS 挂载目录，并在真实 I/O 前验证该目录位于 `cifs/smb3` 文件系统。没有映射、挂载失效或普通宿主机目录必须失败关闭；详见 `docs/docker_dev_guide.md` 和根目录 `deploy/README.md`。
 - `requirements.txt`、MySQL SQL 和 MySQL Compose 属于保留的兼容路径，不是当前首要运行基线。
 
 新增 Shot Grid 或其他独立业务模块时，业务设计文档不能替代后端事实核对。实现前必须逐项对齐当前 DO/VO、响应与异常、权限依赖、文件引用、时间与逻辑删除语义以及 PostgreSQL 迁移约定；兼容扩展必须显式标注并验证，禁止把设计草案直接当成后端已有契约。
@@ -269,7 +269,7 @@ PostgreSQL 迁移是当前项目的必需交付物。只有插件清单继续声
 - `initialize_project` 及项目级 `reconcile_directory` 的 `target_relative_path` 相对 NAS 存储根目录，值等于项目绑定的 `project_relative_path`；集、镜头、资产级 `ensure_*` 及 `reconcile_directory` 的目标相对项目根目录。不得把这两个作用域混为一套路径拼接规则。
 - Worker 必须先提交领取短事务，再在线程中执行路径校验、幂等建目录和写探针，最后以短事务回写结果；软超时只做诊断并继续心跳续租，不能声称能够硬终止仍在运行的 SMB I/O。APScheduler 的 AsyncIOExecutor 不会等待已取消 Job，因此正常关机和 Leader 失锁必须显式 drain 已登记的 NAS Job，完成当前 I/O 与租约收尾后才能关闭数据库或重新竞争。当前单轮批次串行消费，尚未启用批内并发。
 - 项目初始化成功才把项目存储改为 `ready`；项目级最终失败改为 `failed`。动态目录失败只记录安全错误，不得把已经就绪的项目根存储降级为初始化失败。人工重试不覆盖旧操作：项目和动态目录都新建 `reconcile_directory`，要求原因、幂等键和重新校验后的路径快照，并在同事务写操作日志。
-- 自动化测试只允许通过显式 `allow_local_root=True` 使用临时本地目录；生产适配器默认只接受 UNC。源码、迁移、Mock/临时目录测试和服务启动均不能替代真实 Windows Worker 账号、NAS/AD/共享 ACL 及隔离 UNC 根目录 E2E。
+- 自动化测试只允许通过显式 `allow_local_root=True` 使用临时本地目录。生产适配器只接受 Windows 直接 UNC，或由 `SHOT_GRID_NAS_UNC_MOUNT_MAP` 明确映射且运行时验证为 `cifs/smb3` 的 Linux 挂载目录；不得把任意本地绝对路径当成 NAS。源码、迁移、Mock/临时目录测试和服务启动均不能替代正式服务账号、NAS/AD/共享 ACL 及隔离 UNC 根目录 E2E。
 - 镜头、资产及制作分项的手工创建和 Excel 导入只创建生产对象、关系与目录 Outbox，聚合状态必须为 `unassigned`，不得接收制作人或创建任务。Excel 正式提交仅使用 `selectedRows[{sheetName,rowNumber}]`，不能只用跨 Sheet 不唯一的物理行号，也不得包含 `assigneeUserId`；预览明文 Token 和行明细只短期存 Redis，PostgreSQL `sg_import_batch.selection_hash/result_summary` 负责跨 Redis 生命周期的幂等重放。
 - 第一次委派必须走独立任务分配 Service，创建 `assignee_user_id` 非空、`task_status='not_started'` 的唯一 `shot_video` 或 `asset_image` 任务；后续改派只更新同一任务。仅当前委派且仍为活动项目 `creator` 的本人可以开始任务、提交版本或重试失败提交；管理人与任何全项目权限均不得代操作。本人开始任务进入 `in_progress`，正式提交不可变版本后进入 `pending_review`，审核通过时版本进入 `final` 且任务进入 `completed`，退回时任务进入 `revision` 并通过新版本循环。
 - 生产履历顶部固定投影“创建/导入、委派、制作、提交版本、审核、完成”六阶段，下方版本循环返回审核动作、来源问题、处理说明和确认结果。阶段投影不是审计事件；`sg_task.create_time` 只能证明任务记录建立，不能作为确认的委派、改派或开始事件，无法由正式记录证明的历史必须返回 `evidenceLevel='inferred'` 或缺省。

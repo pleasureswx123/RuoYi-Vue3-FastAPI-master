@@ -20,6 +20,11 @@ from module_shot_grid.entity.vo.storage_root_vo import (
     ShotGridStorageRootUpdateModel,
 )
 from module_shot_grid.exceptions import ShotGridDomainException, shot_grid_error
+from module_shot_grid.service.nas_mount_resolver import (
+    SHOT_GRID_NAS_MOUNT_RESOLVER,
+    NasMountResolutionError,
+    ShotGridNasMountResolver,
+)
 from module_shot_grid.service.project_path_service import ShotGridProjectPathService
 
 
@@ -236,14 +241,25 @@ class ShotGridStorageRootService:
         )
 
     @staticmethod
-    def _probe_path(root_path: str) -> _ProbeResult:
+    def _probe_path(
+        root_path: str,
+        nas_mount_resolver: ShotGridNasMountResolver | None = None,
+    ) -> _ProbeResult:
         """在根目录创建、回读并删除随机临时文件，验证真实读写权限。"""
 
-        if not os.path.isdir(root_path):
+        resolver = nas_mount_resolver or SHOT_GRID_NAS_MOUNT_RESOLVER
+        try:
+            resolved = resolver.resolve(root_path)
+            resolver.ensure_mount_ready(resolved.mapped_mount_root)
+        except NasMountResolutionError:
+            return _ProbeResult('unreachable', 'SG_STORAGE_ROOT_UNREACHABLE', '后端服务没有可用的 UNC/CIFS 根目录映射')
+
+        effective_root_path = resolved.path
+        if not os.path.isdir(effective_root_path):
             return _ProbeResult('unreachable', 'SG_STORAGE_ROOT_UNREACHABLE', '后端服务无法访问该 UNC 根目录')
 
         probe_name = f'.shotgrid-probe-{secrets.token_hex(12)}.tmp'
-        probe_path = os.path.join(root_path, probe_name)
+        probe_path = os.path.join(effective_root_path, probe_name)
         payload = secrets.token_bytes(32)
         created = False
         try:

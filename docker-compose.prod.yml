@@ -75,6 +75,10 @@ services:
       REDIS_PASSWORD: ${REDIS_PASSWORD}
     volumes:
       - backend_files:/app/vf_admin
+      - type: bind
+        source: ${SHOT_GRID_NAS_HOST_MOUNT:-/mnt/ruoyi-shot-grid/shotgrid-main}
+        target: ${SHOT_GRID_NAS_CONTAINER_MOUNT:-/mnt/ruoyi-shot-grid/shotgrid-main}
+        read_only: false
     depends_on:
       postgres:
         condition: service_healthy

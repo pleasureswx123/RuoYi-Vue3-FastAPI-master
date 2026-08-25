@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from config.env import UploadConfig
+from module_shot_grid.service.nas_mount_resolver import NasMountResolutionError, ShotGridNasMountResolver
 from module_shot_grid.service.storage_path_adapter import ShotGridStoragePathAdapter
 from utils.upload_util import FilePathUtil
 
@@ -82,6 +83,8 @@ class _VersionPublishPlan:
     temporary_path: Path
     expected_sha256: str
     expected_file_size: int
+    mapped_mount_root: Path | None
+    mount_resolver: ShotGridNasMountResolver
 
 
 class VersionPublishPathAdapterError(Exception):
@@ -102,8 +105,9 @@ class ShotGridVersionPublishPathAdapter(ShotGridStoragePathAdapter):
         *,
         source_root: str | os.PathLike[str] | None = None,
         allow_local_root: bool = False,
+        nas_mount_resolver: ShotGridNasMountResolver | None = None,
     ) -> None:
-        super().__init__(allow_local_root=allow_local_root)
+        super().__init__(allow_local_root=allow_local_root, nas_mount_resolver=nas_mount_resolver)
         self.source_root = Path(source_root or UploadConfig.PRIVATE_UPLOAD_PATH)
 
     async def inspect_source(
@@ -176,21 +180,29 @@ class ShotGridVersionPublishPathAdapter(ShotGridStoragePathAdapter):
     def _build_publish_plan(self, context: VersionPublishPathContext) -> _VersionPublishPlan:
         if context.protocol != 'smb_unc' or context.storage_status != 'ready' or context.root_del_flag != '0':
             raise self._invalid_path_error()
-        root_path, is_unc = self._validated_root_for_publish(context.configured_root_path)
-        snapshot_root, snapshot_is_unc = self._validated_root_for_publish(context.root_path_snapshot)
+        root_path, is_unc, mapped_mount_root = self._validated_root_for_publish(context.configured_root_path)
+        snapshot_root, snapshot_is_unc, snapshot_mount_root = self._validated_root_for_publish(
+            context.root_path_snapshot
+        )
         if is_unc != snapshot_is_unc or self._canonical_path(root_path, is_unc) != self._canonical_path(
             snapshot_root,
             snapshot_is_unc,
         ):
             raise self._invalid_path_error()
+        if self._canonical_optional_path(mapped_mount_root) != self._canonical_optional_path(snapshot_mount_root):
+            raise self._invalid_path_error()
 
         project_parts = self._relative_parts_for_publish(context.project_relative_path)
         recomposed_project = root_path.joinpath(*project_parts)
-        snapshot_project, project_is_unc = self._validated_absolute_path_for_publish(context.project_path_snapshot)
+        snapshot_project, project_is_unc, project_mount_root = self._validated_absolute_path_for_publish(
+            context.project_path_snapshot
+        )
         if project_is_unc != is_unc or self._canonical_path(recomposed_project, is_unc) != self._canonical_path(
             snapshot_project,
             project_is_unc,
         ):
+            raise self._invalid_path_error()
+        if self._canonical_optional_path(mapped_mount_root) != self._canonical_optional_path(project_mount_root):
             raise self._invalid_path_error()
 
         target_parts = self._relative_parts_for_publish(context.target_relative_path)
@@ -220,6 +232,8 @@ class ShotGridVersionPublishPathAdapter(ShotGridStoragePathAdapter):
             temporary_path=root_path.joinpath(*all_temporary_parts),
             expected_sha256=context.source_sha256.casefold(),
             expected_file_size=context.source_file_size,
+            mapped_mount_root=mapped_mount_root,
+            mount_resolver=self.nas_mount_resolver,
         )
 
     @classmethod
@@ -254,6 +268,14 @@ class ShotGridVersionPublishPathAdapter(ShotGridStoragePathAdapter):
     def _publish_sync(cls, plan: _VersionPublishPlan) -> VersionPublishResult:
         temporary_created = False
         try:
+            try:
+                plan.mount_resolver.ensure_mount_ready(plan.mapped_mount_root)
+            except NasMountResolutionError as exc:
+                raise VersionPublishPathAdapterError(
+                    error_key='SG_STORAGE_ROOT_UNAVAILABLE',
+                    safe_message='NAS 目标目录暂时不可访问或未正确挂载',
+                    retryable=True,
+                ) from exc
             cls._validate_filesystem_plan(plan)
             # 每次发布或提交重入都重新读取源文件，不能只信任数据库中的上传摘要。
             with plan.source_path.open('rb') as source_for_verification:
@@ -429,13 +451,13 @@ class ShotGridVersionPublishPathAdapter(ShotGridStoragePathAdapter):
         source_path = FilePathUtil.resolve_file_within_root(source_root, storage_key)
         return source_path, source_root, source_lexical_path
 
-    def _validated_root_for_publish(self, raw_path: str) -> tuple[Path, bool]:
+    def _validated_root_for_publish(self, raw_path: str) -> tuple[Path, bool, Path | None]:
         try:
             return super()._validated_root(raw_path)
         except Exception as exc:
             raise self._translate_path_error(exc) from exc
 
-    def _validated_absolute_path_for_publish(self, raw_path: str) -> tuple[Path, bool]:
+    def _validated_absolute_path_for_publish(self, raw_path: str) -> tuple[Path, bool, Path | None]:
         try:
             return super()._validated_absolute_path(raw_path)
         except Exception as exc:

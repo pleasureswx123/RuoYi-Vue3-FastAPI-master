@@ -17,7 +17,7 @@ fail() {
     exit 1
 }
 
-for command_name in docker git flock ss curl grep stat install; do
+for command_name in docker git flock ss curl findmnt grep stat install; do
     command -v "$command_name" >/dev/null 2>&1 || fail "缺少命令 $command_name"
 done
 
@@ -36,6 +36,18 @@ source "$ENV_FILE"
 set +a
 
 PROJECT_NAME="${COMPOSE_PROJECT_NAME:-$PROJECT_NAME}"
+nas_mount_map_compact="${SHOT_GRID_NAS_UNC_MOUNT_MAP:-}"
+nas_mount_map_compact="${nas_mount_map_compact//[[:space:]]/}"
+if [[ -n "$nas_mount_map_compact" && "$nas_mount_map_compact" != '{}' ]]; then
+    nas_host_mount="${SHOT_GRID_NAS_HOST_MOUNT:-/mnt/ruoyi-shot-grid/shotgrid-main}"
+    nas_container_mount="${SHOT_GRID_NAS_CONTAINER_MOUNT:-/mnt/ruoyi-shot-grid/shotgrid-main}"
+    [[ "$nas_host_mount" = /* ]] || fail 'SHOT_GRID_NAS_HOST_MOUNT 必须是宿主机绝对路径'
+    [[ "$nas_container_mount" = /* ]] || fail 'SHOT_GRID_NAS_CONTAINER_MOUNT 必须是容器内绝对路径'
+    nas_filesystem_type="$(findmnt -rn -T "$nas_host_mount" -o FSTYPE || true)"
+    [[ "$nas_filesystem_type" = cifs || "$nas_filesystem_type" = smb3 ]] \
+        || fail "NAS 目录未正确挂载为 cifs/smb3：$nas_host_mount；请先执行 bash deploy/setup-nas-mount.sh"
+fi
+
 RELEASE_ID="${APP_RELEASE_ID_OVERRIDE:-$(git -C "$ROOT_DIR" rev-parse --short=12 HEAD)}"
 export APP_RELEASE_ID="$RELEASE_ID"
 export COMPOSE_PROJECT_NAME="$PROJECT_NAME"

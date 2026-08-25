@@ -1,4 +1,6 @@
-from pydantic import Field, model_validator
+from pathlib import PurePosixPath, PureWindowsPath
+
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 SHOT_TEMPLATE_VERSION = 'shot-v2'
@@ -41,6 +43,40 @@ class ShotGridPlaybackConfig(BaseSettings):
 
 
 SHOT_GRID_PLAYBACK_CONFIG = ShotGridPlaybackConfig()
+
+
+class ShotGridNasMountConfig(BaseSettings):
+    """Windows UNC 与非 Windows 运行节点挂载目录的受控映射。"""
+
+    model_config = SettingsConfigDict(env_prefix='SHOT_GRID_NAS_', extra='ignore')
+
+    unc_mount_map: dict[str, str] = Field(
+        default_factory=dict,
+        description='UNC 根路径到容器内绝对挂载目录的 JSON 映射',
+    )
+    require_cifs_mount: bool = Field(
+        default=True,
+        description='Linux 生产映射是否必须位于真实 cifs/smb3 文件系统上',
+    )
+
+    @field_validator('unc_mount_map')
+    @classmethod
+    def validate_unc_mount_map(cls, value: dict[str, str]) -> dict[str, str]:
+        normalized: dict[str, str] = {}
+        for unc_root, mount_path in value.items():
+            if not isinstance(unc_root, str) or not unc_root.strip().startswith('\\\\'):
+                raise ValueError('NAS 挂载映射键必须是 Windows UNC 根路径')
+            normalized_mount_path = mount_path.strip() if isinstance(mount_path, str) else ''
+            if not normalized_mount_path or not (
+                PurePosixPath(normalized_mount_path).is_absolute()
+                or PureWindowsPath(normalized_mount_path).is_absolute()
+            ):
+                raise ValueError('NAS 挂载映射值必须是容器内绝对路径')
+            normalized[unc_root.strip()] = normalized_mount_path
+        return normalized
+
+
+SHOT_GRID_NAS_MOUNT_CONFIG = ShotGridNasMountConfig()
 
 
 class ShotGridStorageWorkerConfig(BaseSettings):

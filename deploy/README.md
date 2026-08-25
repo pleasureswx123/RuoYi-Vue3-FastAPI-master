@@ -434,16 +434,93 @@ grep -n 'CHANGE_ME_' /etc/ruoyi-shot-grid/production.env
 
 只有完成过克隆环境恢复演练的备份，才能作为正式恢复依据。
 
-## 13. Windows NAS Worker 边界
+## 13. NAS/CIFS 挂载与 Worker
 
-Ubuntu 容器不能承担真实 Windows UNC/NAS 目录创建和版本发布。生产环境必须保持：
+业务数据库继续保存规范化 Windows UNC，例如：
 
-```dotenv
-SHOT_GRID_STORAGE_WORKER_ENABLED=false
-SHOT_GRID_VERSION_WORKER_ENABLED=false
+```text
+\\192.168.10.64\web\ShotGridProd
 ```
 
-媒体派生可以在 Linux 容器中使用 FFmpeg。真实 NAS 能力需要另行部署 Windows Worker，并验收服务账号、共享 ACL、目录创建、版本发布和失败恢复。
+Windows 后端可以直接访问 UNC。公司 Ubuntu 生产节点通过显式映射访问同一目录：
+
+```text
+\\192.168.10.64\web\ShotGridProd
+  → Ubuntu /mnt/ruoyi-shot-grid/shotgrid-main
+  → 后端容器 /mnt/ruoyi-shot-grid/shotgrid-main
+```
+
+不能只创建一个普通目录或只增加 Docker bind mount。后端在每次探测、目录操作和版本发布前都会确认映射根实际位于 `cifs/smb3` 文件系统；NAS 没有挂载时必须失败关闭，防止把正式文件写进 Ubuntu 本地磁盘。
+
+### 13.1 首次配置 NAS 服务账号
+
+NAS 密码不写入 Git、镜像、Compose 或生产 `.env`。在服务器交互执行：
+
+```bash
+cd /opt/ruoyi-shot-grid
+bash deploy/setup-nas-mount.sh
+```
+
+脚本会：
+
+1. 提示输入 NAS 用户名、密码和可选域/工作组；
+2. 将凭据保存到 `/etc/ruoyi-shot-grid/nas-credentials`，权限固定为 `0600`；
+3. 在 `/etc/fstab` 中维护带边界标记的 CIFS 挂载项；
+4. 挂载到 `/mnt/ruoyi-shot-grid/shotgrid-main`；
+5. 创建随机临时文件、回读并删除，只有完整通过才报告成功。
+
+当前服务器必须已安装 `mount.cifs`。Ubuntu 软件源可用时执行：
+
+```bash
+apt-get update
+apt-get install -y cifs-utils
+```
+
+NAS 密码发生变化后重新运行 `setup-nas-mount.sh`，不得把密码写到命令行参数或聊天记录。
+
+### 13.2 生产环境变量
+
+真实挂载验证通过后，在 `/etc/ruoyi-shot-grid/production.env` 配置：
+
+```dotenv
+SHOT_GRID_NAS_HOST_MOUNT=/mnt/ruoyi-shot-grid/shotgrid-main
+SHOT_GRID_NAS_CONTAINER_MOUNT=/mnt/ruoyi-shot-grid/shotgrid-main
+SHOT_GRID_NAS_UNC_MOUNT_MAP='{"\\\\192.168.10.64\\web\\ShotGridProd":"/mnt/ruoyi-shot-grid/shotgrid-main"}'
+SHOT_GRID_NAS_REQUIRE_CIFS_MOUNT=true
+SHOT_GRID_STORAGE_WORKER_ENABLED=true
+SHOT_GRID_VERSION_WORKER_ENABLED=true
+```
+
+修改后保持文件权限并重新发布；单纯 `docker restart` 不会重新读取 Compose 环境：
+
+```bash
+chmod 600 /etc/ruoyi-shot-grid/production.env
+cd /opt/ruoyi-shot-grid
+bash deploy/deploy.sh
+```
+
+`deploy.sh` 会在构建和切换前确认宿主机挂载类型；`docker-compose.prod.yml` 再把同一路径映射到后端容器。两个 Worker 只有在 PostgreSQL、显式启用且当前进程持有 Application Leader 时才消费任务。
+
+### 13.3 验证与故障处理
+
+查看挂载、容器和后端状态：
+
+```bash
+cd /opt/ruoyi-shot-grid
+bash deploy/status.sh
+findmnt -T /mnt/ruoyi-shot-grid/shotgrid-main
+```
+
+然后由有权限的平台账号进入“系统管理 → NAS 根目录”，对目标执行“探测”。探测必须显示 `healthy`，它会真实执行随机文件的独占创建、回读和删除。只有 `enabled + healthy` 的根目录才会进入 Shot Grid 创建项目的下拉框。
+
+禁止：
+
+- 手工把数据库 `last_probe_status` 改成 `healthy`；
+- 关闭 `SHOT_GRID_NAS_REQUIRE_CIFS_MOUNT` 规避挂载错误；
+- 把 NAS 密码放进仓库、普通 `.env`、Compose 参数或日志；
+- NAS 未挂载时强行启动目录或版本 Worker。
+
+数据库备份和 `backend_files` 备份不包含 NAS 内容；NAS 文件仍需由存储设备自身快照/备份策略保护。
 
 ## 14. 当前验收与未覆盖范围
 
