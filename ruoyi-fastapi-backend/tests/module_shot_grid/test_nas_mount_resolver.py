@@ -13,12 +13,21 @@ from module_shot_grid.service.version_publish_path_adapter import (
 )
 
 UNC_ROOT = r'\\192.168.10.64\web\ShotGridProd'
+SECOND_UNC_ROOT = r'\\192.168.10.64\制片\test'
 PROJECT_RELATIVE_PATH = r'AI影视短片\罗刹夫人'
 
 
 def _resolver(mount_root: Path, *, require_cifs_mount: bool = False) -> ShotGridNasMountResolver:
     return ShotGridNasMountResolver(
         {UNC_ROOT: str(mount_root)},
+        require_cifs_mount=require_cifs_mount,
+    )
+
+
+def _dynamic_resolver(mount_root: Path, *, require_cifs_mount: bool = False) -> ShotGridNasMountResolver:
+    return ShotGridNasMountResolver(
+        {},
+        server_mount_map={'192.168.10.64': str(mount_root)},
         require_cifs_mount=require_cifs_mount,
     )
 
@@ -34,6 +43,17 @@ def test_mount_map_is_loaded_from_json_environment(monkeypatch: pytest.MonkeyPat
     assert config.unc_mount_map == {UNC_ROOT: '/mnt/ruoyi-shot-grid/shotgrid-main'}
 
 
+def test_server_mount_map_is_loaded_from_json_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(
+        'SHOT_GRID_NAS_SERVER_MOUNT_MAP',
+        '{"192.168.10.64":"/mnt/ruoyi-shot-grid/dynamic"}',
+    )
+
+    config = ShotGridNasMountConfig()
+
+    assert config.server_mount_map == {'192.168.10.64': '/mnt/ruoyi-shot-grid/dynamic'}
+
+
 def test_unc_root_and_child_are_mapped_with_longest_prefix(tmp_path: Path) -> None:
     resolver = _resolver(tmp_path)
 
@@ -44,6 +64,40 @@ def test_unc_root_and_child_are_mapped_with_longest_prefix(tmp_path: Path) -> No
     assert root.mapped_mount_root == tmp_path
     assert not root.windows_semantics
     assert child.path == tmp_path / 'AI影视短片' / '罗刹夫人' / 'VIDEO'
+
+
+def test_trusted_server_maps_arbitrary_shares_into_dynamic_namespace(tmp_path: Path) -> None:
+    resolver = _dynamic_resolver(tmp_path)
+
+    web = resolver.resolve(UNC_ROOT)
+    production = resolver.resolve(f'{SECOND_UNC_ROOT}\\项目甲')
+
+    assert web.path == tmp_path / 'web' / 'ShotGridProd'
+    assert web.mapped_mount_root == tmp_path / 'web'
+    assert production.path == tmp_path / '制片' / 'test' / '项目甲'
+    assert production.mapped_mount_root == tmp_path / '制片'
+
+
+def test_dynamic_mapping_rejects_unc_from_untrusted_server(tmp_path: Path) -> None:
+    resolver = _dynamic_resolver(tmp_path)
+
+    with pytest.raises(NasMountResolutionError):
+        resolver.resolve(r'\\192.168.10.65\制片\test')
+
+
+def test_explicit_root_mapping_takes_precedence_over_dynamic_server_mapping(tmp_path: Path) -> None:
+    explicit_root = tmp_path / 'explicit'
+    dynamic_root = tmp_path / 'dynamic'
+    resolver = ShotGridNasMountResolver(
+        {UNC_ROOT: str(explicit_root)},
+        server_mount_map={'192.168.10.64': str(dynamic_root)},
+        require_cifs_mount=False,
+    )
+
+    resolved = resolver.resolve(f'{UNC_ROOT}\\项目甲')
+
+    assert resolved.path == explicit_root / '项目甲'
+    assert resolved.mapped_mount_root == explicit_root
 
 
 def test_linux_mapping_fails_closed_when_target_is_not_cifs(

@@ -17,7 +17,7 @@ fail() {
     exit 1
 }
 
-for command_name in docker git flock ss curl findmnt grep stat install; do
+for command_name in docker git flock ss curl findmnt grep stat install setpriv systemctl; do
     command -v "$command_name" >/dev/null 2>&1 || fail "缺少命令 $command_name"
 done
 
@@ -36,9 +36,47 @@ source "$ENV_FILE"
 set +a
 
 PROJECT_NAME="${COMPOSE_PROJECT_NAME:-$PROJECT_NAME}"
+nas_server_mount_map_compact="${SHOT_GRID_NAS_SERVER_MOUNT_MAP:-}"
+nas_server_mount_map_compact="${nas_server_mount_map_compact//[[:space:]]/}"
 nas_mount_map_compact="${SHOT_GRID_NAS_UNC_MOUNT_MAP:-}"
 nas_mount_map_compact="${nas_mount_map_compact//[[:space:]]/}"
-if [[ -n "$nas_mount_map_compact" && "$nas_mount_map_compact" != '{}' ]]; then
+if [[ -n "$nas_server_mount_map_compact" && "$nas_server_mount_map_compact" != '{}' ]]; then
+    backend_app_uid="${BACKEND_APP_UID:-100}"
+    backend_app_gid="${BACKEND_APP_GID:-101}"
+    [[ "$backend_app_uid" =~ ^[0-9]+$ && "$backend_app_uid" -gt 0 ]] \
+        || fail 'BACKEND_APP_UID 必须是正整数'
+    [[ "$backend_app_gid" =~ ^[0-9]+$ && "$backend_app_gid" -gt 0 ]] \
+        || fail 'BACKEND_APP_GID 必须是正整数'
+    nas_dynamic_host_root="${SHOT_GRID_NAS_DYNAMIC_HOST_ROOT:-/mnt/ruoyi-shot-grid/dynamic}"
+    nas_dynamic_container_root="${SHOT_GRID_NAS_DYNAMIC_CONTAINER_ROOT:-/mnt/ruoyi-shot-grid/dynamic}"
+    nas_probe_share="${SHOT_GRID_NAS_PROBE_SHARE:-web}"
+    nas_probe_relative_path="${SHOT_GRID_NAS_PROBE_RELATIVE_PATH:-ShotGridProd}"
+    [[ "$nas_dynamic_host_root" = /* ]] || fail 'SHOT_GRID_NAS_DYNAMIC_HOST_ROOT 必须是宿主机绝对路径'
+    [[ "$nas_dynamic_container_root" = /* ]] || fail 'SHOT_GRID_NAS_DYNAMIC_CONTAINER_ROOT 必须是容器内绝对路径'
+    [[ -n "$nas_probe_share" && "$nas_probe_share" != */* && "$nas_probe_share" != *\\* ]] \
+        || fail 'SHOT_GRID_NAS_PROBE_SHARE 必须是单个共享名'
+    [[ -n "$nas_probe_relative_path" && "$nas_probe_relative_path" != /* ]] \
+        || fail 'SHOT_GRID_NAS_PROBE_RELATIVE_PATH 必须是共享内相对路径'
+    systemctl is-active --quiet autofs || fail 'autofs 未运行；请先执行 bash deploy/setup-nas-mount.sh'
+    [[ "$(findmnt -rn -T "$nas_dynamic_host_root" -o FSTYPE || true)" = autofs ]] \
+        || fail "NAS 动态根不是 autofs：$nas_dynamic_host_root"
+    nas_propagation="$(findmnt -rn -T "$nas_dynamic_host_root" -o PROPAGATION || true)"
+    [[ "$nas_propagation" = shared || "$nas_propagation" = rshared ]] \
+        || fail "NAS 动态根缺少共享子挂载传播：$nas_dynamic_host_root"
+    nas_probe_path="$nas_dynamic_host_root/$nas_probe_share/$nas_probe_relative_path"
+    setpriv --reuid="$backend_app_uid" --regid="$backend_app_gid" --clear-groups -- test -d "$nas_probe_path" \
+        || fail "后端应用身份无法访问 NAS 预检目录：$nas_probe_path"
+    nas_filesystem_type="$(findmnt -rn -T "$nas_probe_path" -o FSTYPE || true)"
+    [[ "$nas_filesystem_type" = cifs || "$nas_filesystem_type" = smb3 ]] \
+        || fail "NAS 预检目录未动态挂载为 cifs/smb3：$nas_probe_path"
+    nas_mount_options="$(findmnt -rn -T "$nas_probe_path" -o OPTIONS || true)"
+    for required_option in "uid=$backend_app_uid" "gid=$backend_app_gid" forceuid forcegid; do
+        case ",$nas_mount_options," in
+            *",$required_option,"*) ;;
+            *) fail "NAS 动态挂载缺少应用身份参数 $required_option；请重新执行 bash deploy/setup-nas-mount.sh" ;;
+        esac
+    done
+elif [[ -n "$nas_mount_map_compact" && "$nas_mount_map_compact" != '{}' ]]; then
     backend_app_uid="${BACKEND_APP_UID:-100}"
     backend_app_gid="${BACKEND_APP_GID:-101}"
     [[ "$backend_app_uid" =~ ^[0-9]+$ && "$backend_app_uid" -gt 0 ]] \

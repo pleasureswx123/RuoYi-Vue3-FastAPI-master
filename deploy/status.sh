@@ -27,9 +27,20 @@ COMPOSE=(docker compose --project-name "$PROJECT_NAME" --env-file "$ENV_FILE" -f
 echo "PostgreSQL（Navicat 只读）：${POSTGRES_BIND_ADDRESS:-127.0.0.1}:${POSTGRES_PORT:-12582} / ${POSTGRES_READER_ROLE:-ruoyi_navicat_reader}"
 echo
 
+nas_server_mount_map_compact="${SHOT_GRID_NAS_SERVER_MOUNT_MAP:-}"
+nas_server_mount_map_compact="${nas_server_mount_map_compact//[[:space:]]/}"
 nas_mount_map_compact="${SHOT_GRID_NAS_UNC_MOUNT_MAP:-}"
 nas_mount_map_compact="${nas_mount_map_compact//[[:space:]]/}"
-if [[ -n "$nas_mount_map_compact" && "$nas_mount_map_compact" != '{}' ]]; then
+if [[ -n "$nas_server_mount_map_compact" && "$nas_server_mount_map_compact" != '{}' ]]; then
+    nas_dynamic_host_root="${SHOT_GRID_NAS_DYNAMIC_HOST_ROOT:-/mnt/ruoyi-shot-grid/dynamic}"
+    nas_probe_path="$nas_dynamic_host_root/${SHOT_GRID_NAS_PROBE_SHARE:-web}/${SHOT_GRID_NAS_PROBE_RELATIVE_PATH:-ShotGridProd}"
+    echo "后端应用身份：UID ${BACKEND_APP_UID:-100} / GID ${BACKEND_APP_GID:-101}"
+    echo "NAS 动态挂载命名空间："
+    findmnt -T "$nas_dynamic_host_root" -o TARGET,SOURCE,FSTYPE,OPTIONS,PROPAGATION || true
+    echo "NAS 动态预检共享："
+    findmnt -T "$nas_probe_path" -o TARGET,SOURCE,FSTYPE,OPTIONS,PROPAGATION || true
+    echo
+elif [[ -n "$nas_mount_map_compact" && "$nas_mount_map_compact" != '{}' ]]; then
     nas_host_mount="${SHOT_GRID_NAS_HOST_MOUNT:-/mnt/ruoyi-shot-grid/shotgrid-main/ShotGridProd}"
     echo "后端应用身份：UID ${BACKEND_APP_UID:-100} / GID ${BACKEND_APP_GID:-101}"
     echo "NAS 挂载："

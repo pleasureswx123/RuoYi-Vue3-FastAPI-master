@@ -81,9 +81,11 @@ services:
     volumes:
       - backend_files:/app/vf_admin
       - type: bind
-        source: ${SHOT_GRID_NAS_HOST_MOUNT:-/mnt/ruoyi-shot-grid/shotgrid-main/ShotGridProd}
-        target: ${SHOT_GRID_NAS_CONTAINER_MOUNT:-/mnt/ruoyi-shot-grid/shotgrid-main}
+        source: ${SHOT_GRID_NAS_DYNAMIC_HOST_ROOT:-/mnt/ruoyi-shot-grid/dynamic}
+        target: ${SHOT_GRID_NAS_DYNAMIC_CONTAINER_ROOT:-/mnt/ruoyi-shot-grid/dynamic}
         read_only: false
+        bind:
+          propagation: rslave
     depends_on:
       postgres:
         condition: service_healthy

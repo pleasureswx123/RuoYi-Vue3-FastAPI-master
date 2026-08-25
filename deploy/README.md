@@ -503,24 +503,25 @@ grep -n 'CHANGE_ME_' /etc/ruoyi-shot-grid/production.env
 
 ## 13. NAS/CIFS 挂载与 Worker
 
-业务数据库继续保存规范化 Windows UNC，例如：
+业务数据库继续保存用户配置的规范化 Windows UNC，例如：
 
 ```text
 \\192.168.10.64\web\ShotGridProd
+\\192.168.10.64\制片\test
 ```
 
-Windows 后端可以直接访问 UNC。公司 Ubuntu 生产节点通过显式映射访问同一目录：
+允许的稳定边界是服务器 `192.168.10.64`，共享名和共享内子目录由平台用户按业务新增。Windows 后端可以直接访问 UNC；公司 Ubuntu 生产节点通过 autofs 按共享名动态挂载：
 
 ```text
-\\192.168.10.64\web\ShotGridProd
-  → Ubuntu 共享挂载 /mnt/ruoyi-shot-grid/shotgrid-main
-  → Ubuntu 业务根目录 /mnt/ruoyi-shot-grid/shotgrid-main/ShotGridProd
-  → 后端容器 /mnt/ruoyi-shot-grid/shotgrid-main
+\\192.168.10.64\<共享>\<子目录>
+  → Ubuntu autofs /mnt/ruoyi-shot-grid/dynamic/<共享>/<子目录>
+  → Docker rslave 子挂载传播
+  → 后端容器 /mnt/ruoyi-shot-grid/dynamic/<共享>/<子目录>
 ```
 
-宿主机挂载的是完整 `web` 共享，Compose 只把其中的 `ShotGridProd` 子目录绑定到后端容器。不要依赖 CIFS `prefixpath=ShotGridProd`：当前公司服务器的内核/挂载工具组合会忽略该参数，若把整个共享直接绑定进容器，Worker 会把项目误建到 `\\192.168.10.64\web` 根下。
+后端通过 `SHOT_GRID_NAS_SERVER_MOUNT_MAP` 只接受 `192.168.10.64`，其他 UNC 服务器失败关闭。autofs 只在访问 `/mnt/ruoyi-shot-grid/dynamic/<共享>` 时挂载对应 SMB 共享，无需为用户新增的每个业务根修改 Compose 或生产环境变量。数据库 `sg_storage_root` 仍是业务根目录白名单；NAS 服务账号 ACL 是共享访问的最终边界，平台不会绕过 NAS 权限。
 
-不能只创建一个普通目录或只增加 Docker bind mount。后端在每次探测、目录操作和版本发布前都会确认映射根实际位于 `cifs/smb3` 文件系统；NAS 没有挂载时必须失败关闭，防止把正式文件写进 Ubuntu 本地磁盘。
+不能只创建普通目录或只增加 Docker bind mount。后端在每次探测、目录操作和版本发布前都会确认目标共享根实际位于 `cifs/smb3` 文件系统；动态命名空间本身是 autofs，不作为 NAS 可写证据。NAS 没有挂载时必须失败关闭，防止把正式文件写进 Ubuntu 本地磁盘。
 
 生产镜像入口虽然由 root 完成卷目录初始化，但 FastAPI、Scheduler 和两个 NAS Worker 最终都以 `app` 用户运行。该身份固定为 UID `100`、GID `101`；CIFS 必须使用 `uid=100,gid=101,forceuid,forcegid`。只用 root 在宿主机或 `docker exec` 中验证成功是不完整的，平台页面探测使用的非 root 应用身份仍可能返回“不可写”。
 
@@ -535,18 +536,18 @@ bash deploy/setup-nas-mount.sh
 
 脚本会：
 
-1. 提示输入 NAS 用户名、密码和可选域/工作组；
+1. 首次运行时提示输入 NAS 用户名、密码和可选域/工作组；已有权限为 `0600` 的凭据文件时直接复用，不输出凭据；
 2. 将凭据保存到 `/etc/ruoyi-shot-grid/nas-credentials`，权限固定为 `0600`；
-3. 在 `/etc/fstab` 中维护带边界标记的 CIFS 挂载项；
-4. 把完整 `web` 共享挂载到 `/mnt/ruoyi-shot-grid/shotgrid-main`；
-5. 确认共享内的 `ShotGridProd` 业务根目录存在；
-6. 在 `/mnt/ruoyi-shot-grid/shotgrid-main/ShotGridProd` 中使用后端真实应用身份（默认 UID `100` / GID `101`）创建、回读、删除随机临时文件并验证硬链接；只有完整通过才报告成功。
+3. 在 `/etc/auto.master.d/ruoyi-shot-grid.autofs` 和 `/etc/auto.ruoyi-shot-grid` 配置 `192.168.10.64` 的共享名通配挂载；
+4. 启动 autofs，并把 `/mnt/ruoyi-shot-grid/dynamic` 标记为共享挂载传播根；
+5. 默认以 `web/ShotGridProd` 作为稳定预检路径触发真实 CIFS 挂载；
+6. 使用后端真实应用身份（默认 UID `100` / GID `101`）创建、回读、删除随机临时文件并验证硬链接；只有完整通过才报告成功。
 
-当前服务器必须已安装 `mount.cifs`。Ubuntu 软件源可用时执行：
+当前服务器必须已安装 `autofs` 和 `mount.cifs`。Ubuntu 软件源可用时执行：
 
 ```bash
 apt-get update
-apt-get install -y cifs-utils
+apt-get install -y autofs cifs-utils
 ```
 
 NAS 密码发生变化后重新运行 `setup-nas-mount.sh`，不得把密码写到命令行参数或聊天记录。如果交互输入的用户名需要明确固定，可执行下面的命令；密码仍由脚本隐藏输入：
@@ -563,10 +564,13 @@ NAS_USERNAME=quanhq NAS_DOMAIN='' bash deploy/setup-nas-mount.sh
 ```dotenv
 BACKEND_APP_UID=100
 BACKEND_APP_GID=101
-SHOT_GRID_NAS_HOST_MOUNT=/mnt/ruoyi-shot-grid/shotgrid-main/ShotGridProd
-SHOT_GRID_NAS_CONTAINER_MOUNT=/mnt/ruoyi-shot-grid/shotgrid-main
-SHOT_GRID_NAS_UNC_MOUNT_MAP='{"\\\\192.168.10.64\\web\\ShotGridProd":"/mnt/ruoyi-shot-grid/shotgrid-main"}'
+SHOT_GRID_NAS_DYNAMIC_HOST_ROOT=/mnt/ruoyi-shot-grid/dynamic
+SHOT_GRID_NAS_DYNAMIC_CONTAINER_ROOT=/mnt/ruoyi-shot-grid/dynamic
+SHOT_GRID_NAS_SERVER_MOUNT_MAP='{"192.168.10.64":"/mnt/ruoyi-shot-grid/dynamic"}'
+SHOT_GRID_NAS_UNC_MOUNT_MAP={}
 SHOT_GRID_NAS_REQUIRE_CIFS_MOUNT=true
+SHOT_GRID_NAS_PROBE_SHARE=web
+SHOT_GRID_NAS_PROBE_RELATIVE_PATH=ShotGridProd
 SHOT_GRID_STORAGE_WORKER_ENABLED=true
 SHOT_GRID_VERSION_WORKER_ENABLED=true
 ```
@@ -579,7 +583,7 @@ cd /opt/ruoyi-shot-grid
 bash deploy/deploy.sh
 ```
 
-`deploy.sh` 会在构建和切换前确认宿主机业务根目录实际位于 CIFS 挂载中，并强制检查 `uid=100,gid=101,forceuid,forcegid`；参数不一致时发布会在数据库迁移和应用切换前失败。`docker-compose.prod.yml` 只把宿主机的 `ShotGridProd` 子目录绑定到容器内映射根，因此容器看不到也不会误写 `web` 共享中的其他目录。两个 Worker 只有在 PostgreSQL、显式启用且当前进程持有 Application Leader 时才消费任务。
+`deploy.sh` 会在构建和切换前确认 autofs 正在运行、动态根具有共享子挂载传播、稳定预检路径已挂载为 CIFS，并强制检查 `uid=100,gid=101,forceuid,forcegid`；参数不一致时发布会在数据库迁移和应用切换前失败。`docker-compose.prod.yml` 以 `rslave` 把动态命名空间绑定到容器，容器没有 `CAP_SYS_ADMIN`，不能自行挂载其他网络文件系统。两个 Worker 只有在 PostgreSQL、显式启用且当前进程持有 Application Leader 时才消费任务。
 
 ### 13.3 验证与故障处理
 
@@ -588,8 +592,9 @@ bash deploy/deploy.sh
 ```bash
 cd /opt/ruoyi-shot-grid
 bash deploy/status.sh
-findmnt -T /mnt/ruoyi-shot-grid/shotgrid-main
-findmnt -T /mnt/ruoyi-shot-grid/shotgrid-main/ShotGridProd
+findmnt -T /mnt/ruoyi-shot-grid/dynamic
+findmnt -T /mnt/ruoyi-shot-grid/dynamic/web/ShotGridProd
+findmnt -T /mnt/ruoyi-shot-grid/dynamic/制片/test
 ```
 
 然后由有权限的平台账号进入“系统管理 → NAS 根目录”，对目标执行“探测”。探测必须显示 `healthy`，它会真实执行随机文件的独占创建、回读和删除。只有 `enabled + healthy` 的根目录才会进入 Shot Grid 创建项目的下拉框。
@@ -597,7 +602,7 @@ findmnt -T /mnt/ruoyi-shot-grid/shotgrid-main/ShotGridProd
 如果宿主机 root 可以写，但页面显示“后端服务账号没有该目录的读写删除权限”或“不可写”，先检查挂载身份参数：
 
 ```bash
-findmnt -T /mnt/ruoyi-shot-grid/shotgrid-main -o TARGET,SOURCE,FSTYPE,OPTIONS
+findmnt -T /mnt/ruoyi-shot-grid/dynamic/制片/test -o TARGET,SOURCE,FSTYPE,OPTIONS,PROPAGATION
 docker top ruoyi-shot-grid-prod-backend-1 -eo pid,user,group,comm,args
 ```
 
@@ -607,6 +612,8 @@ docker top ruoyi-shot-grid-prod-backend-1 -eo pid,user,group,comm,args
 
 - 手工把数据库 `last_probe_status` 改成 `healthy`；
 - 关闭 `SHOT_GRID_NAS_REQUIRE_CIFS_MOUNT` 规避挂载错误；
+- 为每个用户新增根目录手工增加 Compose bind 或环境变量；
+- 允许 `192.168.10.64` 之外的 UNC 服务器，或给后端容器授予网络挂载权限；
 - 把 NAS 密码放进仓库、普通 `.env`、Compose 参数或日志；
 - NAS 未挂载时强行启动目录或版本 Worker。
 

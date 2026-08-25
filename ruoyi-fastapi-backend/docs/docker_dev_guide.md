@@ -6,7 +6,7 @@
 
 前端仍在宿主机运行，通过 Vite 将 `/dev-api` 代理到 `127.0.0.1:9099`。
 
-Linux 后端容器不能把 Windows UNC 路径直接当成本地文件系统路径使用，因此本地开发 Compose 明确关闭目录 Worker 和版本发布 Worker，只启用读取平台私有文件的媒体派生 Worker。本拓扑不能作为真实 UNC/SMB/NAS 验收证据。生产 Linux 可按根目录 `deploy/README.md` 使用受保护凭据挂载 CIFS，并通过 `SHOT_GRID_NAS_UNC_MOUNT_MAP` 做显式路径映射；普通 bind 目录、未验证的挂载点或临时本地目录仍会失败关闭。
+Linux 后端容器不能把 Windows UNC 路径直接当成本地文件系统路径使用，因此本地开发 Compose 明确关闭目录 Worker 和版本发布 Worker，只启用读取平台私有文件的媒体派生 Worker。本拓扑不能作为真实 UNC/SMB/NAS 验收证据。公司生产 Linux 按根目录 `deploy/README.md` 使用宿主机 autofs 动态挂载 `192.168.10.64` 下的共享，并通过 `SHOT_GRID_NAS_SERVER_MOUNT_MAP` 做固定服务器级解析；普通 bind 目录、未验证的挂载点、其他 UNC 服务器或临时本地目录仍会失败关闭。
 
 ## 2. 启动
 

@@ -9,6 +9,8 @@ from pathlib import Path, PureWindowsPath
 from module_shot_grid.config import SHOT_GRID_NAS_MOUNT_CONFIG
 
 MOUNTINFO_MIN_FIELDS = 5
+UNC_ANCHOR_PART_COUNT = 2
+MIN_PRINTABLE_CODEPOINT = 32
 
 
 class NasMountResolutionError(ValueError):
@@ -25,7 +27,7 @@ class ResolvedNasPath:
 
 
 class ShotGridNasMountResolver:
-    """在 Windows 直接使用 UNC，在 Linux 只使用显式声明的 CIFS 映射。"""
+    """在 Windows 直接使用 UNC，在 Linux 使用显式根映射或受控服务器动态映射。"""
 
     SUPPORTED_LINUX_FILESYSTEMS = frozenset({'cifs', 'smb3'})
 
@@ -33,9 +35,13 @@ class ShotGridNasMountResolver:
         self,
         unc_mount_map: Mapping[str, str] | None = None,
         *,
+        server_mount_map: Mapping[str, str] | None = None,
         require_cifs_mount: bool | None = None,
     ) -> None:
         configured_map = SHOT_GRID_NAS_MOUNT_CONFIG.unc_mount_map if unc_mount_map is None else unc_mount_map
+        configured_server_map = (
+            SHOT_GRID_NAS_MOUNT_CONFIG.server_mount_map if server_mount_map is None else server_mount_map
+        )
         self.require_cifs_mount = (
             SHOT_GRID_NAS_MOUNT_CONFIG.require_cifs_mount if require_cifs_mount is None else require_cifs_mount
         )
@@ -52,6 +58,16 @@ class ShotGridNasMountResolver:
                 raise NasMountResolutionError('NAS 挂载目录必须是绝对路径')
             mappings.append((folded_parts, mount_root))
         self._mappings = tuple(sorted(mappings, key=lambda item: len(item[0]), reverse=True))
+        server_mappings: dict[str, Path] = {}
+        for raw_server, raw_mount_root in configured_server_map.items():
+            server = self._validated_server_key(raw_server)
+            if server in server_mappings:
+                raise NasMountResolutionError('NAS 动态服务器映射存在重复服务器')
+            mount_root = Path(raw_mount_root)
+            if not mount_root.is_absolute():
+                raise NasMountResolutionError('NAS 动态挂载命名空间必须是绝对路径')
+            server_mappings[server] = mount_root
+        self._server_mappings = server_mappings
 
     def resolve(self, raw_path: str) -> ResolvedNasPath:
         windows_path = self._validated_unc_path(raw_path)
@@ -65,6 +81,17 @@ class ShotGridNasMountResolver:
                 windows_semantics=False,
                 mapped_mount_root=mount_root,
             )
+        server, share = self._unc_server_and_share(windows_path)
+        server_mount_root = self._server_mappings.get(server)
+        if server_mount_root is not None:
+            share_mount_root = server_mount_root / share
+            return ResolvedNasPath(
+                path=share_mount_root.joinpath(*windows_path.parts[1:]),
+                windows_semantics=False,
+                mapped_mount_root=share_mount_root,
+            )
+        if self._server_mappings:
+            raise NasMountResolutionError('该 UNC 服务器不在当前运行节点允许的 NAS 服务器范围内')
         if os.name == 'nt':
             return ResolvedNasPath(path=Path(str(windows_path)), windows_semantics=True)
         raise NasMountResolutionError('当前运行节点没有配置该 UNC 根路径的 CIFS 映射')
@@ -95,6 +122,31 @@ class ShotGridNasMountResolver:
         if any(part in {'.', '..'} for part in PureWindowsPath(normalized).parts):
             raise NasMountResolutionError('NAS 路径不能包含相对目录片段')
         return windows_path
+
+    @staticmethod
+    def _validated_server_key(raw_server: str) -> str:
+        if not isinstance(raw_server, str):
+            raise NasMountResolutionError('NAS 动态服务器键无效')
+        server = raw_server.strip().casefold()
+        if (
+            not server
+            or any(character.isspace() for character in server)
+            or any(character in server for character in ('\\', '/', ':'))
+            or server in {'.', '..'}
+        ):
+            raise NasMountResolutionError('NAS 动态服务器键必须是不含路径和端口的主机名或 IPv4 地址')
+        return server
+
+    @classmethod
+    def _unc_server_and_share(cls, windows_path: PureWindowsPath) -> tuple[str, str]:
+        anchor_parts = windows_path.anchor.strip('\\').split('\\')
+        if len(anchor_parts) != UNC_ANCHOR_PART_COUNT or not anchor_parts[0] or not anchor_parts[1]:
+            raise NasMountResolutionError('NAS UNC 路径必须包含服务器和共享名')
+        server = cls._validated_server_key(anchor_parts[0])
+        share = anchor_parts[1]
+        if any(ord(character) < MIN_PRINTABLE_CODEPOINT or character in '<>:"|?*' for character in share):
+            raise NasMountResolutionError('NAS UNC 共享名包含不安全字符')
+        return server, share
 
     @classmethod
     def _linux_filesystem_type(cls, target: Path) -> str | None:

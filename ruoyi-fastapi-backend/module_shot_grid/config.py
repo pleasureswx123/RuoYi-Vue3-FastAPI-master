@@ -54,6 +54,10 @@ class ShotGridNasMountConfig(BaseSettings):
         default_factory=dict,
         description='UNC 根路径到容器内绝对挂载目录的 JSON 映射',
     )
+    server_mount_map: dict[str, str] = Field(
+        default_factory=dict,
+        description='受信任 UNC 服务器到动态 CIFS 共享挂载命名空间的 JSON 映射',
+    )
     require_cifs_mount: bool = Field(
         default=True,
         description='Linux 生产映射是否必须位于真实 cifs/smb3 文件系统上',
@@ -73,6 +77,30 @@ class ShotGridNasMountConfig(BaseSettings):
             ):
                 raise ValueError('NAS 挂载映射值必须是容器内绝对路径')
             normalized[unc_root.strip()] = normalized_mount_path
+        return normalized
+
+    @field_validator('server_mount_map')
+    @classmethod
+    def validate_server_mount_map(cls, value: dict[str, str]) -> dict[str, str]:
+        normalized: dict[str, str] = {}
+        for raw_server, mount_path in value.items():
+            server = raw_server.strip().casefold() if isinstance(raw_server, str) else ''
+            if (
+                not server
+                or any(character.isspace() for character in server)
+                or any(character in server for character in ('\\', '/', ':'))
+                or server in {'.', '..'}
+            ):
+                raise ValueError('NAS 动态服务器键必须是不含路径和端口的主机名或 IPv4 地址')
+            normalized_mount_path = mount_path.strip() if isinstance(mount_path, str) else ''
+            if not normalized_mount_path or not (
+                PurePosixPath(normalized_mount_path).is_absolute()
+                or PureWindowsPath(normalized_mount_path).is_absolute()
+            ):
+                raise ValueError('NAS 动态服务器映射值必须是容器内绝对路径')
+            if server in normalized:
+                raise ValueError('NAS 动态服务器映射存在重复服务器')
+            normalized[server] = normalized_mount_path
         return normalized
 
 
