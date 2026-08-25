@@ -153,6 +153,12 @@ cython_debug/
 .qoder/
 .trae/
 
+# 编辑器、合并及补丁工具生成的原文件备份
+*.orig
+
+# 后端本地运行日志及其轮转压缩包
+/ruoyi-fastapi-backend/logs/
+
 # 生产部署运行时文件
 /.deploy/
 /deploy/.env.production
