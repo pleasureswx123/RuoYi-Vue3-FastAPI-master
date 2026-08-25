@@ -42,6 +42,7 @@ import {
   updateProjectMember
 } from '@/api/shot-grid/projects'
 import { useSessionStore } from '@/store/modules/session'
+import { copyTextToClipboard } from '@/utils/clipboard'
 import ProjectDetailView from '@/views/project/ProjectDetailView.vue'
 import ProjectListView from '@/views/project/ProjectListView.vue'
 import ProjectArchiveDialog from '@/views/project/components/ProjectArchiveDialog.vue'
@@ -78,6 +79,7 @@ vi.mock('@/api/shot-grid/projects', () => ({
   updateProject: vi.fn(),
   updateProjectMember: vi.fn()
 }))
+vi.mock('@/utils/clipboard', () => ({ copyTextToClipboard: vi.fn() }))
 
 const formComponents = {
   ElAlert,
@@ -190,6 +192,7 @@ describe('项目管理页面', () => {
     })
     getStorageOperationPage.mockResolvedValue({ rows: [], total: 0 })
     retryProjectStorage.mockResolvedValue({ data: {} })
+    copyTextToClipboard.mockResolvedValue(true)
   })
 
   it('展示真实范围列表并按接口权限显示创建入口', async () => {
@@ -566,6 +569,20 @@ describe('项目管理页面', () => {
       { reason: 'NAS 权限已经恢复', lockVersion: 3 },
       expect.any(String)
     )
+    wrapper.unmount()
+  })
+
+  it('复制项目 NAS 路径时使用共享剪贴板兼容链路', async () => {
+    const wrapper = mount(ProjectStoragePanel, {
+      props: { projectId: 8 },
+      global: { components: formComponents, stubs: { ProjectModal: projectModalStub, ProjectStatePanel: true } }
+    })
+    await flushPromises()
+
+    await buttonByText(wrapper, '复制路径').trigger('click')
+    await flushPromises()
+
+    expect(copyTextToClipboard).toHaveBeenCalledWith('\\\\nas\\shot-grid\\罗刹夫人')
     wrapper.unmount()
   })
 

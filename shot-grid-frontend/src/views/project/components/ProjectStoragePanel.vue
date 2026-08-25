@@ -10,6 +10,7 @@ import {
   retryProjectStorage,
   retryStorageOperation
 } from '@/api/shot-grid/projects'
+import { copyTextToClipboard } from '@/utils/clipboard'
 import { createIdempotencyState } from '@/utils/idempotency'
 import { tagTypeFromTone } from '@/utils/tag'
 import {
@@ -103,12 +104,9 @@ async function refreshAll() {
 }
 
 async function copyPath() {
-  try {
-    await navigator.clipboard.writeText(storage.value.projectPathSnapshot)
-    ElMessage.success('NAS 路径已复制')
-  } catch {
-    ElMessage.error('复制未成功，请手动选择并复制路径')
-  }
+  const copied = await copyTextToClipboard(storage.value?.projectPathSnapshot)
+  if (copied) ElMessage.success('NAS 路径已复制')
+  else ElMessage.error('复制未成功，请手动选择并复制路径')
 }
 
 function openProjectRetry() {

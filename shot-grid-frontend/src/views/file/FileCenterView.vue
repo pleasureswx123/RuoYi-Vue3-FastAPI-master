@@ -7,6 +7,7 @@ import { getProjectFilePage } from '@/api/shot-grid/files'
 import { getProjectPage } from '@/api/shot-grid/projects'
 import { downloadProtectedVersionFile } from '@/api/shot-grid/versions'
 import { useSessionStore } from '@/store/modules/session'
+import { copyTextToClipboard } from '@/utils/clipboard'
 import { tagTypeFromTone } from '@/utils/tag'
 import ProjectStatePanel from '@/views/project/components/ProjectStatePanel.vue'
 import ProjectStoragePanel from '@/views/project/components/ProjectStoragePanel.vue'
@@ -162,12 +163,9 @@ async function refreshAll() {
 
 async function copyRelativePath(file) {
   if (!file.nasRelativePath) return
-  try {
-    await navigator.clipboard.writeText(file.nasRelativePath)
-    ElMessage.success('NAS 相对路径已复制')
-  } catch {
-    ElMessage.error('浏览器未允许复制，请手动选择路径文本')
-  }
+  const copied = await copyTextToClipboard(file.nasRelativePath)
+  if (copied) ElMessage.success('NAS 相对路径已复制')
+  else ElMessage.error('复制未成功，请手动选择并复制路径')
 }
 
 function safeDownloadName(value) {

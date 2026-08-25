@@ -7,6 +7,7 @@ import { getProjectFilePage } from '@/api/shot-grid/files'
 import { getProjectPage } from '@/api/shot-grid/projects'
 import { downloadProtectedVersionFile } from '@/api/shot-grid/versions'
 import { useSessionStore } from '@/store/modules/session'
+import { copyTextToClipboard } from '@/utils/clipboard'
 import FileCenterView from '@/views/file/FileCenterView.vue'
 import { setElSelectValue } from '../helpers/elementPlus'
 
@@ -16,6 +17,7 @@ vi.mock('@/api/shot-grid/projects', () => ({
   getProjectPage: vi.fn()
 }))
 vi.mock('@/api/shot-grid/versions', () => ({ downloadProtectedVersionFile: vi.fn() }))
+vi.mock('@/utils/clipboard', () => ({ copyTextToClipboard: vi.fn() }))
 
 const project = {
   projectId: 8,
@@ -74,6 +76,7 @@ describe('文件与 NAS 一级页', () => {
     getProjectPage.mockResolvedValue({ rows: [project], total: 1 })
     getProjectFilePage.mockResolvedValue({ rows: [file], total: 1 })
     downloadProtectedVersionFile.mockResolvedValue(new Blob(['file']))
+    copyTextToClipboard.mockResolvedValue(true)
   })
 
   it('按项目读取可追溯正式版本文件并展示 NAS 相对路径', async () => {
@@ -140,6 +143,16 @@ describe('文件与 NAS 一级页', () => {
     await wrapper.find('.file-pagination .btn-next').trigger('click')
     await flushPromises()
     expect(getProjectFilePage).toHaveBeenLastCalledWith('8', expect.objectContaining({ keyword: '动力舱', pageNum: 2 }), expect.anything())
+    wrapper.unmount()
+  })
+
+  it('复制文件 NAS 相对路径时使用共享剪贴板兼容链路', async () => {
+    const wrapper = await mountView()
+
+    await wrapper.findAllComponents(ElButton).find(button => button.text() === '复制路径').trigger('click')
+    await flushPromises()
+
+    expect(copyTextToClipboard).toHaveBeenCalledWith('EP01/SHOT/S001/LCFR_V003.mp4')
     wrapper.unmount()
   })
 
