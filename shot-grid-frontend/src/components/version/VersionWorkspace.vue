@@ -23,12 +23,21 @@ const historyRefreshKey = ref(0)
 const historyPanel = ref(null)
 const wildcard = computed(() => sessionStore.permissions.includes('*:*:*'))
 const hasPermission = permission => wildcard.value || sessionStore.permissions.includes(permission)
-const canAdd = computed(() => props.allowedActions.includes('version.add') && hasPermission('shotgrid:version:add'))
+const canUseSubmissionPanel = computed(() => ['in_progress', 'revision'].includes(props.taskStatus))
+const canAdd = computed(() => (
+  canUseSubmissionPanel.value &&
+  props.allowedActions.includes('version.add') &&
+  hasPermission('shotgrid:version:add')
+))
 const canQuery = computed(() => hasPermission('shotgrid:version:query'))
 const canRetry = computed(() => wildcard.value || sessionStore.permissions.includes('shotgrid:version:retry'))
 const canList = computed(() => hasPermission('shotgrid:version:list'))
 const canDownload = computed(() => hasPermission('shotgrid:file:download'))
 const canListNotes = computed(() => hasPermission('shotgrid:note:list'))
+const shouldShowSubmission = computed(() => (
+  canUseSubmissionPanel.value &&
+  (canAdd.value || props.hasUncommittedSubmission)
+))
 
 function contextMatches(context) {
   return Number(context?.taskId) === Number(props.taskId) &&
@@ -70,6 +79,7 @@ function focusIssue(issue) {
       @version-selected="handleVersionSelected"
     />
     <VersionSubmissionPanel
+      v-if="shouldShowSubmission"
       :task-id="taskId"
       :task-kind="taskKind"
       :task-status="taskStatus"

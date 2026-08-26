@@ -109,6 +109,27 @@ describe('版本上传与发布面板', () => {
     vi.clearAllMocks()
   })
 
+  it('使用 Element Plus 拖拽上传并保留文件类型限制', async () => {
+    const wrapper = mount(VersionSubmissionPanel, {
+      ...mountOptions,
+      props: { taskId: 31, taskKind: 'shot_video', taskStatus: 'in_progress', allowedActions: ['version.add'], hasAddPermission: true, canQuery: true }
+    })
+    await flushPromises()
+
+    const upload = wrapper.findComponent(ElUpload)
+    expect(upload.props('drag')).toBe(true)
+    expect(upload.props('accept')).toBe('.mp4,.mov')
+    expect(wrapper.text()).toContain('拖拽或选择')
+    const dropZone = wrapper.find('.el-upload-dragger')
+    const file = new File(['mov-data'], '拖拽结果.mov', { type: 'video/quicktime' })
+    await dropZone.trigger('drop', { dataTransfer: { files: [file] } })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('拖拽结果.mov')
+    expect(wrapper.text()).toContain('更换')
+    wrapper.unmount()
+  })
+
   it('严格按预检、私有上传、创建提交执行，pending 明确不是版本成功', async () => {
     const wrapper = mount(VersionSubmissionPanel, {
       ...mountOptions,

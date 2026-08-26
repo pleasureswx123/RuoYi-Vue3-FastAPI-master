@@ -639,13 +639,13 @@ onBeforeUnmount(() => {
 
     <el-form v-else-if="!submission" ref="submissionFormRef" :model="submissionFormModel" :rules="submissionFormRules" class="submission-form" label-position="top" label-width="auto" aria-label="提交新版本">
       <el-form-item class="submission-file-field" prop="selectedFile">
-        <el-upload ref="fileUploadRef" class="file-picker" :class="{ 'has-file': selectedFile }" action="#" :auto-upload="false" :show-file-list="false" :accept="acceptAttribute" :disabled="composerLocked || !canSubmit" :on-change="chooseFile">
+        <el-upload ref="fileUploadRef" class="file-picker" :class="{ 'has-file': selectedFile }" action="#" drag :auto-upload="false" :show-file-list="false" :accept="acceptAttribute" :disabled="composerLocked || !canSubmit" :on-change="chooseFile">
           <el-icon><UploadFilled /></el-icon>
           <span>
             <strong>{{ selectedFile?.name || '选择离线制作成果' }}</strong>
             <small>{{ selectedFile ? `${(selectedFile.size / 1024 / 1024).toFixed(2)} MiB` : `仅接受 ${acceptedExtensions.map(item => item.toUpperCase()).join('/')}，最大 100 MiB` }}</small>
           </span>
-          <b>{{ selectedFile ? '更换' : '选择文件' }}</b>
+          <b>{{ selectedFile ? '更换' : '拖拽或选择' }}</b>
         </el-upload>
       </el-form-item>
 
@@ -761,9 +761,11 @@ onBeforeUnmount(() => {
 .issue-handling-field :deep(.el-radio-button__inner) { width: 100%; }
 .issue-response-empty { padding: 18px; border: 1px dashed rgba(244, 92, 92, 0.3); border-radius: 9px; }
 .file-picker { width: 100%; }
-.file-picker :deep(.el-upload) { position: relative; display: grid; box-sizing: border-box; width: 100%; min-height: 84px; padding: 18px; cursor: pointer; background: rgba(255, 255, 255, 0.025); border: 1px dashed var(--sg-border-strong); border-radius: var(--sg-radius-md); grid-template-columns: auto minmax(0, 1fr) auto; gap: 14px; align-items: center; }
-.file-picker:hover :deep(.el-upload),
-.file-picker.has-file :deep(.el-upload) { border-color: rgba(255, 182, 87, 0.5); }
+.file-picker :deep(.el-upload) { display: block; width: 100%; }
+.file-picker :deep(.el-upload-dragger) { position: relative; display: grid; box-sizing: border-box; width: 100%; min-height: 84px; padding: 18px; cursor: pointer; text-align: left; background: rgba(255, 255, 255, 0.025); border: 1px dashed var(--sg-border-strong); border-radius: var(--sg-radius-md); grid-template-columns: auto minmax(0, 1fr) auto; gap: 14px; align-items: center; }
+.file-picker:hover :deep(.el-upload-dragger),
+.file-picker.has-file :deep(.el-upload-dragger),
+.file-picker :deep(.el-upload-dragger.is-dragover) { background: rgba(255, 182, 87, 0.055); border-color: rgba(255, 182, 87, 0.5); }
 .file-picker .el-icon { color: var(--sg-accent); font-size: 25px; }
 .file-picker strong,
 .file-picker small { display: block; }
