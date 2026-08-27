@@ -1,5 +1,6 @@
 import json
 import re
+import uuid
 from datetime import date, datetime
 from typing import Any, Literal
 
@@ -29,6 +30,7 @@ ReviewListStatus = Literal['draft', 'active', 'completed', 'archived']
 ReviewListMode = Literal['auto_single', 'manual_batch']
 NoteStatus = Literal['open', 'resolved']
 IssueVerificationResult = Literal['resolved', 'still_present']
+FinalDeliveryStatus = Literal['pending', 'publishing', 'published', 'failed']
 
 
 def _reject_embedded_payload(value: str, *, field_name: str) -> str:
@@ -128,6 +130,7 @@ class ShotGridVersionFileModel(ShotGridApiModel):
     """版本文件的安全读取模型。"""
 
     file_id: str
+    candidate_id: int
     original_name: str
     business_file_name: str
     role: str
@@ -136,6 +139,19 @@ class ShotGridVersionFileModel(ShotGridApiModel):
     content_type: str | None = None
     file_size: int
     url: str
+
+
+class ShotGridVersionCandidateModel(ShotGridApiModel):
+    """版本轮次中的一个可审核候选作品。"""
+
+    candidate_id: int
+    candidate_no: int
+    candidate_number: str
+    candidate_note: str | None = None
+    sort_order: int
+    is_selected: bool = False
+    files: list[ShotGridVersionFileModel] = Field(default_factory=list)
+    media_derivation_status: Literal['pending', 'processing', 'completed', 'failed'] | None = None
 
 
 class ShotGridAutoReviewListSummaryModel(ShotGridApiModel):
@@ -161,6 +177,8 @@ class ShotGridVersionListItemModel(ShotGridApiModel):
     submitter_name: str | None = None
     submitted_time: datetime
     generated_at_ms: int
+    candidate_count: int = 0
+    selected_candidate_id: int | None = None
     lock_version: int
 
 
@@ -195,14 +213,34 @@ class ShotGridVersionProductionTargetModel(ShotGridApiModel):
         return self
 
 
+class ShotGridFinalDeliveryModel(ShotGridApiModel):
+    """最终版本到 NAS FINAL 目录的可见发布状态。"""
+
+    final_delivery_id: int
+    version_id: int
+    candidate_id: int
+    business_file_name: str
+    final_nas_relative_path: str
+    manifest_nas_relative_path: str
+    delivery_status: FinalDeliveryStatus
+    attempt_count: int
+    last_error_key: str | None = None
+    last_error_message: str | None = None
+    publish_mode: Literal['hardlink', 'copied', 'reused'] | None = None
+    approved_time: datetime
+    published_time: datetime | None = None
+
+
 class ShotGridVersionDetailModel(ShotGridVersionListItemModel):
     """版本详情；内部存储路径不进入响应。"""
 
     production_target: ShotGridVersionProductionTargetModel
     ai_params: dict[str, Any] | list[Any] | None = None
     files: list[ShotGridVersionFileModel] = Field(default_factory=list)
+    candidates: list[ShotGridVersionCandidateModel] = Field(default_factory=list)
     media_derivation_status: Literal['pending', 'processing', 'completed', 'failed'] | None = None
     auto_review_list: ShotGridAutoReviewListSummaryModel | None = None
+    final_delivery: ShotGridFinalDeliveryModel | None = None
 
 
 class ShotGridReviewListQueryModel(ShotGridPageQueryModel):
@@ -329,6 +367,7 @@ class ShotGridNoteCreateModel(ShotGridApiModel):
     content: str | None = Field(default=None, max_length=10_000)
     media_time_ms: int | None = Field(default=None, ge=0, le=SQL_BIGINT_MAX)
     annotations: ShotGridAnnotationsModel | None = None
+    reference_file_ids: list[str] = Field(default_factory=list, max_length=5)
 
     @field_validator('content', mode='before')
     @classmethod
@@ -338,6 +377,17 @@ class ShotGridNoteCreateModel(ShotGridApiModel):
         if not isinstance(value, str):
             raise ValueError('审核意见必须是字符串')
         return value.strip() or None
+
+    @field_validator('reference_file_ids')
+    @classmethod
+    def validate_reference_file_ids(cls, value: list[str]) -> list[str]:
+        try:
+            normalized = [str(uuid.UUID(str(file_id))) for file_id in value]
+        except (AttributeError, TypeError, ValueError) as exc:
+            raise ValueError('参考文件ID格式错误') from exc
+        if len(normalized) != len(set(normalized)):
+            raise ValueError('参考文件不能重复')
+        return normalized
 
     @model_validator(mode='after')
     def require_content_or_annotations(self) -> 'ShotGridNoteCreateModel':
@@ -352,6 +402,16 @@ class ShotGridIssueDraftUpdateModel(ShotGridNoteCreateModel):
     lock_version: int = Field(ge=0, le=SQL_INTEGER_MAX)
 
 
+class ShotGridIssueReferenceFileModel(ShotGridApiModel):
+    """审核问题关联的受保护参考文件。"""
+
+    file_id: str
+    original_name: str
+    content_type: str | None = None
+    file_size: int = Field(ge=0)
+    download_url: str
+
+
 class ShotGridIssueDraftModel(ShotGridApiModel):
     """审核人可修改、制作人不可见的问题草稿。"""
 
@@ -359,11 +419,13 @@ class ShotGridIssueDraftModel(ShotGridApiModel):
     project_id: int
     review_list_id: int
     version_id: int
+    candidate_id: int
     reviewer_user_id: int
     reviewer_name: str | None = None
     content: str | None = None
     media_time_ms: int | None = None
     annotations: ShotGridAnnotationsModel | None = None
+    reference_files: list[ShotGridIssueReferenceFileModel] = Field(default_factory=list)
     lock_version: int
     create_time: datetime
     update_time: datetime
@@ -375,12 +437,14 @@ class ShotGridNoteModel(ShotGridApiModel):
     note_id: int
     project_id: int
     version_id: int
+    origin_candidate_id: int
     origin_version_number: str
     reviewer_user_id: int
     reviewer_name: str | None = None
     content: str | None = None
     media_time_ms: int | None = None
     annotations: ShotGridAnnotationsModel | None = None
+    reference_files: list[ShotGridIssueReferenceFileModel] = Field(default_factory=list)
     note_status: NoteStatus
     resolved_in_version_id: int | None = None
     resolved_in_version_number: str | None = None
@@ -406,6 +470,7 @@ class ShotGridIssueVerificationModel(ShotGridApiModel):
 
     verification_id: int
     checked_version_id: int
+    checked_candidate_id: int
     checked_version_number: str
     result: IssueVerificationResult
     comment: str | None = None
@@ -420,12 +485,14 @@ class ShotGridIssueDetailModel(ShotGridApiModel):
     issue_id: int
     project_id: int
     origin_version_id: int
+    origin_candidate_id: int
     origin_version_number: str
     reviewer_user_id: int
     reviewer_name: str | None = None
     content: str | None = None
     media_time_ms: int | None = None
     annotations: ShotGridAnnotationsModel | None = None
+    reference_files: list[ShotGridIssueReferenceFileModel] = Field(default_factory=list)
     status: NoteStatus
     resolved_in_version_id: int | None = None
     resolved_in_version_number: str | None = None
@@ -442,6 +509,8 @@ class ShotGridReviewVersionSummaryModel(ShotGridApiModel):
     version_no: int
     version_number: str
     version_status: VersionStatus
+    selected_candidate_id: int | None = None
+    final_delivery: ShotGridFinalDeliveryModel | None = None
     lock_version: int
 
 
@@ -453,6 +522,7 @@ class ShotGridReviewContextModel(ShotGridApiModel):
     """审核当前版本所需的历史问题与本版新问题。"""
 
     current_version: ShotGridReviewVersionSummaryModel
+    candidates: list[ShotGridVersionCandidateModel] = Field(default_factory=list)
     carried_issues: list[ShotGridCarriedIssueModel] = Field(default_factory=list)
     current_version_issues: list[ShotGridIssueDetailModel] = Field(default_factory=list)
     current_version_drafts: list[ShotGridIssueDraftModel] = Field(default_factory=list)
@@ -489,6 +559,7 @@ class ShotGridReviewActionCreateModel(ShotGridLockVersionModel):
     model_config = ConfigDict(extra='forbid')
 
     action_type: ReviewActionType
+    selected_candidate_id: int = Field(gt=0, le=SQL_BIGINT_MAX)
     reason: str | None = Field(default=None, max_length=1000)
     issue_verifications: list[ShotGridIssueVerificationInputModel] = Field(default_factory=list, max_length=200)
 
@@ -525,6 +596,7 @@ class ShotGridReviewActionModel(ShotGridApiModel):
     action_id: int
     project_id: int
     version_id: int
+    selected_candidate_id: int
     reviewer_user_id: int
     reviewer_name: str | None = None
     action_type: ReviewActionType
@@ -542,4 +614,13 @@ class ShotGridReviewActionResultModel(ShotGridReviewActionModel):
     auto_review_list_id: int
     review_status: ReviewListStatus
     lock_version: int
+    final_delivery: ShotGridFinalDeliveryModel | None = None
     replayed: bool = False
+
+
+class ShotGridVersionCandidateSelectModel(ShotGridLockVersionModel):
+    """在正式审核前选择本轮最佳候选。"""
+
+    model_config = ConfigDict(extra='forbid')
+
+    candidate_id: int = Field(gt=0, le=SQL_BIGINT_MAX)

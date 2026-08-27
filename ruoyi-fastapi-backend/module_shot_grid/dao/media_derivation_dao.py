@@ -20,6 +20,7 @@ class ShotGridMediaDerivationDao:
         cls,
         db: AsyncSession,
         *,
+        candidate_id: int,
         version_id: int,
         source_file_id: str,
         media_kind: str,
@@ -27,6 +28,7 @@ class ShotGridMediaDerivationDao:
     ) -> None:
         db.add(
             ShotGridMediaDerivation(
+                candidate_id=candidate_id,
                 version_id=version_id,
                 source_file_id=source_file_id,
                 media_kind=media_kind,
@@ -68,7 +70,7 @@ class ShotGridMediaDerivationDao:
         task = await db.scalar(
             select(ShotGridMediaDerivation)
             .where(due)
-            .order_by(ShotGridMediaDerivation.update_time, ShotGridMediaDerivation.version_id)
+            .order_by(ShotGridMediaDerivation.update_time, ShotGridMediaDerivation.candidate_id)
             .limit(1)
             .with_for_update(skip_locked=True)
         )
@@ -86,11 +88,12 @@ class ShotGridMediaDerivationDao:
         return task
 
     @classmethod
-    async def get_context(cls, db: AsyncSession, version_id: int) -> dict[str, Any] | None:
+    async def get_context(cls, db: AsyncSession, candidate_id: int) -> dict[str, Any] | None:
         row = (
             (
                 await db.execute(
                     select(
+                        ShotGridMediaDerivation.candidate_id,
                         ShotGridMediaDerivation.version_id,
                         ShotGridMediaDerivation.source_file_id,
                         ShotGridMediaDerivation.media_kind,
@@ -111,7 +114,7 @@ class ShotGridMediaDerivationDao:
                     )
                     .join(ShotGridVersion, ShotGridVersion.version_id == ShotGridMediaDerivation.version_id)
                     .join(SysFileInfo, SysFileInfo.file_id == ShotGridMediaDerivation.source_file_id)
-                    .where(ShotGridMediaDerivation.version_id == version_id)
+                    .where(ShotGridMediaDerivation.candidate_id == candidate_id)
                 )
             )
             .mappings()
@@ -124,14 +127,14 @@ class ShotGridMediaDerivationDao:
         cls,
         db: AsyncSession,
         *,
-        version_id: int,
+        candidate_id: int,
         worker_id: str,
         attempt_count: int,
     ) -> ShotGridMediaDerivation | None:
         return await db.scalar(
             select(ShotGridMediaDerivation)
             .where(
-                ShotGridMediaDerivation.version_id == version_id,
+                ShotGridMediaDerivation.candidate_id == candidate_id,
                 ShotGridMediaDerivation.derivation_status == 'processing',
                 ShotGridMediaDerivation.lease_owner == worker_id,
                 ShotGridMediaDerivation.attempt_count == attempt_count,
@@ -144,7 +147,7 @@ class ShotGridMediaDerivationDao:
         cls,
         db: AsyncSession,
         *,
-        version_id: int,
+        candidate_id: int,
         worker_id: str,
         attempt_count: int,
         lease_until: datetime,
@@ -152,7 +155,7 @@ class ShotGridMediaDerivationDao:
         result = await db.execute(
             update(ShotGridMediaDerivation)
             .where(
-                ShotGridMediaDerivation.version_id == version_id,
+                ShotGridMediaDerivation.candidate_id == candidate_id,
                 ShotGridMediaDerivation.derivation_status == 'processing',
                 ShotGridMediaDerivation.lease_owner == worker_id,
                 ShotGridMediaDerivation.attempt_count == attempt_count,

@@ -34,6 +34,7 @@ class ShotGridReviewIssueDraft(Base):
     project_id = Column(BigInteger, nullable=False, comment='项目ID')
     review_list_id = Column(BigInteger, nullable=False, comment='所属自动审核单ID')
     version_id = Column(BigInteger, nullable=False, comment='当前审核版本ID')
+    candidate_id = Column(BigInteger, nullable=False, comment='草稿绑定的版本候选ID')
     reviewer_user_id = Column(
         BigInteger,
         ForeignKey('sys_user.user_id', ondelete='RESTRICT'),
@@ -58,6 +59,12 @@ class ShotGridReviewIssueDraft(Base):
             ['review_list_id', 'project_id'],
             ['sg_review_list.review_list_id', 'sg_review_list.project_id'],
             name='fk_sg_review_issue_draft_review_list_project',
+            ondelete='RESTRICT',
+        ),
+        ForeignKeyConstraint(
+            ['candidate_id', 'version_id'],
+            ['sg_version_candidate.candidate_id', 'sg_version_candidate.version_id'],
+            name='fk_sg_review_issue_draft_candidate_version',
             ondelete='RESTRICT',
         ),
         ForeignKeyConstraint(
@@ -99,6 +106,7 @@ class ShotGridNote(Base):
     note_id = Column(BigInteger, primary_key=True, nullable=False, autoincrement=True, comment='审核意见ID')
     project_id = Column(BigInteger, nullable=False, comment='项目ID')
     version_id = Column(BigInteger, nullable=False, comment='版本ID')
+    origin_candidate_id = Column(BigInteger, nullable=False, comment='首次提出问题的候选ID')
     reviewer_user_id = Column(
         BigInteger,
         ForeignKey('sys_user.user_id', ondelete='RESTRICT'),
@@ -124,6 +132,12 @@ class ShotGridNote(Base):
             ['version_id', 'project_id'],
             ['sg_version.version_id', 'sg_version.project_id'],
             name='fk_sg_note_version_project',
+            ondelete='RESTRICT',
+        ),
+        ForeignKeyConstraint(
+            ['origin_candidate_id', 'version_id'],
+            ['sg_version_candidate.candidate_id', 'sg_version_candidate.version_id'],
+            name='fk_sg_note_origin_candidate_version',
             ondelete='RESTRICT',
         ),
         ForeignKeyConstraint(
@@ -192,6 +206,7 @@ class ShotGridIssueVerification(Base):
     project_id = Column(BigInteger, nullable=False, comment='项目ID')
     note_id = Column(BigInteger, nullable=False, comment='来源问题ID')
     checked_version_id = Column(BigInteger, nullable=False, comment='执行确认的版本ID')
+    checked_candidate_id = Column(BigInteger, nullable=False, comment='执行确认的候选ID')
     result = Column(String(20), nullable=False, comment='确认结果')
     comment = Column(String(1000), nullable=True, comment='本次确认补充说明')
     reviewer_user_id = Column(
@@ -207,6 +222,12 @@ class ShotGridIssueVerification(Base):
             ['note_id', 'project_id'],
             ['sg_note.note_id', 'sg_note.project_id'],
             name='fk_sg_issue_verification_note_project',
+            ondelete='RESTRICT',
+        ),
+        ForeignKeyConstraint(
+            ['checked_candidate_id', 'checked_version_id'],
+            ['sg_version_candidate.candidate_id', 'sg_version_candidate.version_id'],
+            name='fk_sg_issue_verification_candidate_version',
             ondelete='RESTRICT',
         ),
         ForeignKeyConstraint(
@@ -234,6 +255,7 @@ class ShotGridReviewAction(Base):
     action_id = Column(BigInteger, primary_key=True, nullable=False, autoincrement=True, comment='审核动作ID')
     project_id = Column(BigInteger, nullable=False, comment='项目ID')
     version_id = Column(BigInteger, nullable=False, comment='审核版本ID')
+    selected_candidate_id = Column(BigInteger, nullable=False, comment='执行审核动作的候选ID')
     reviewer_user_id = Column(
         BigInteger,
         ForeignKey('sys_user.user_id', ondelete='RESTRICT'),
@@ -254,6 +276,12 @@ class ShotGridReviewAction(Base):
             ['version_id', 'project_id'],
             ['sg_version.version_id', 'sg_version.project_id'],
             name='fk_sg_review_action_version_project',
+            ondelete='RESTRICT',
+        ),
+        ForeignKeyConstraint(
+            ['selected_candidate_id', 'version_id'],
+            ['sg_version_candidate.candidate_id', 'sg_version_candidate.version_id'],
+            name='fk_sg_review_action_candidate_version',
             ondelete='RESTRICT',
         ),
         CheckConstraint("action_type in ('approve', 'reject', 'defer')", name='ck_sg_review_action_type'),
@@ -284,6 +312,72 @@ class ShotGridReviewAction(Base):
         ),
         Index('idx_sg_review_action_version_time', 'version_id', 'create_time'),
         {'comment': 'Shot Grid审核动作不可变历史表'},
+    )
+
+
+class ShotGridVersionCandidateSelection(Base):
+    """审核人选择最佳候选的不可变历史。"""
+
+    __tablename__ = 'sg_version_candidate_selection'
+
+    selection_id = Column(BigInteger, primary_key=True, nullable=False, autoincrement=True, comment='候选选择记录ID')
+    project_id = Column(BigInteger, nullable=False, comment='项目ID')
+    review_list_id = Column(BigInteger, nullable=False, comment='自动审核单ID')
+    version_id = Column(BigInteger, nullable=False, comment='版本轮次ID')
+    candidate_id = Column(BigInteger, nullable=False, comment='本次选中的候选ID')
+    previous_candidate_id = Column(BigInteger, nullable=True, comment='上一次选中的候选ID')
+    selected_by = Column(
+        BigInteger,
+        ForeignKey('sys_user.user_id', ondelete='RESTRICT'),
+        nullable=False,
+        comment='审核用户ID',
+    )
+    idempotency_key = Column(String(100), nullable=False, comment='客户端幂等键')
+    request_hash = Column(CHAR(64), nullable=False, comment='规范化选择命令SHA-256')
+    create_time = Column(SHOT_GRID_DATETIME, nullable=False, default=datetime.now, comment='选择时间')
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ['review_list_id', 'project_id'],
+            ['sg_review_list.review_list_id', 'sg_review_list.project_id'],
+            name='fk_sg_candidate_selection_review_list_project',
+            ondelete='RESTRICT',
+        ),
+        ForeignKeyConstraint(
+            ['version_id', 'project_id'],
+            ['sg_version.version_id', 'sg_version.project_id'],
+            name='fk_sg_candidate_selection_version_project',
+            ondelete='RESTRICT',
+        ),
+        ForeignKeyConstraint(
+            ['candidate_id', 'version_id'],
+            ['sg_version_candidate.candidate_id', 'sg_version_candidate.version_id'],
+            name='fk_sg_candidate_selection_candidate_version',
+            ondelete='RESTRICT',
+        ),
+        ForeignKeyConstraint(
+            ['previous_candidate_id', 'version_id'],
+            ['sg_version_candidate.candidate_id', 'sg_version_candidate.version_id'],
+            name='fk_sg_candidate_selection_previous_version',
+            ondelete='RESTRICT',
+        ),
+        UniqueConstraint(
+            'version_id',
+            'selected_by',
+            'idempotency_key',
+            name='uk_sg_candidate_selection_idempotency',
+        ),
+        CheckConstraint("btrim(idempotency_key) <> ''", name='ck_sg_candidate_selection_idempotency'),
+        CheckConstraint(
+            "request_hash ~ '^[0-9a-f]{64}$'",
+            name='ck_sg_candidate_selection_request_hash',
+        ),
+        CheckConstraint(
+            'previous_candidate_id is null or previous_candidate_id <> candidate_id',
+            name='ck_sg_candidate_selection_changed',
+        ),
+        Index('idx_sg_candidate_selection_version_time', 'version_id', 'create_time', 'selection_id'),
+        {'comment': 'Shot Grid审核候选选择历史表'},
     )
 
 

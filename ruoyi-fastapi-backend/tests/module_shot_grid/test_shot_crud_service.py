@@ -36,6 +36,7 @@ MAX_AUDIT_METHOD_LENGTH = 100
 UNAUTHENTICATED_STATUS = 401
 RENUMBERED_SHOT_COUNT = 2
 BATCH_DELETE_COUNT = 2
+MANAGER_USER_ID = 3
 
 
 def _current_user() -> CurrentUserModel:
@@ -103,6 +104,7 @@ def _shot_projection_row(*, operation_status: str | None = 'succeeded') -> dict[
         'task_id': 7001,
         'task_kind': 'shot_video',
         'task_status': 'completed',
+        'has_uncommitted_submission': False,
         'priority': 'normal',
         'due_date': None,
         'task_lock_version': 3,
@@ -168,6 +170,17 @@ def test_read_projection_does_not_fall_back_when_latest_version_has_no_thumbnail
     assert item.thumbnail is None
 
 
+def test_pending_review_projection_can_display_candidate_before_best_selection() -> None:
+    projection = _latest_read_projection()
+    projection['latest_business_file_name'] = 'WGZR_EP001_001_S001_YJF_V004_01.mp4'
+
+    item = ShotGridShotCrudService._build_list_item(_shot_projection_row(), [], projection)
+
+    assert item.latest_version is not None
+    assert item.latest_version.status == 'pending_review'
+    assert item.latest_version.business_file_name.endswith('_01.mp4')
+
+
 def test_read_projection_missing_directory_operation_uses_frozen_not_found_error() -> None:
     with pytest.raises(ShotGridDomainException) as exc_info:
         ShotGridShotCrudService._build_list_item(
@@ -203,6 +216,78 @@ def test_completed_or_archived_project_hides_all_shot_actions(project_status: st
     actions = ShotGridShotCrudService._allowed_actions(row, _current_user(), _access())
 
     assert actions == []
+
+
+@pytest.mark.parametrize(
+    ('task_status', 'can_assign'),
+    [
+        (None, True),
+        ('not_started', True),
+        ('preparing', True),
+        ('in_progress', True),
+        ('pending_review', True),
+        ('revision', True),
+        ('completed', False),
+    ],
+)
+def test_shot_detail_exposes_assignment_only_for_unfinished_tasks(task_status: str | None, *, can_assign: bool) -> None:
+    row = _shot_projection_row()
+    row['task_status'] = task_status
+    if task_status is None:
+        row['task_id'] = None
+        row['assignee_user_id'] = None
+    current_user = _current_user()
+    current_user.permissions.append('shotgrid:task:assign')
+
+    detail = ShotGridShotCrudService._build_detail(row, [], None, current_user, _access())
+
+    assert ('task.assign' in detail.allowed_actions) is can_assign
+
+
+@pytest.mark.parametrize(
+    'blocked_state',
+    [
+        {'has_uncommitted_submission': True},
+        {'project_status': 'completed'},
+        {'project_status': 'archived'},
+        {'storage_status': 'failed'},
+        {'lifecycle_status': 'archived'},
+    ],
+)
+def test_shot_detail_hides_assignment_when_workflow_is_blocked(blocked_state: dict[str, Any]) -> None:
+    row = {**_shot_projection_row(), 'task_status': 'in_progress', **blocked_state}
+    current_user = _current_user()
+    current_user.permissions.append('shotgrid:task:assign')
+
+    detail = ShotGridShotCrudService._build_detail(row, [], None, current_user, _access())
+
+    assert 'task.assign' not in detail.allowed_actions
+
+
+@pytest.mark.parametrize(
+    ('project_role', 'has_all_scope', 'has_permission', 'can_assign'),
+    [
+        ('director', False, False, False),
+        ('creator', False, True, False),
+        ('creator', True, False, False),
+        ('creator', True, True, True),
+    ],
+)
+def test_shot_assignment_requires_platform_permission_and_project_management_access(
+    project_role: str, *, has_all_scope: bool, has_permission: bool, can_assign: bool
+) -> None:
+    row = {**_shot_projection_row(), 'task_status': 'in_progress'}
+    current_user = _current_user()
+    current_user.user = UserInfoModel(userId=MANAGER_USER_ID, userName='manager')
+    if has_permission:
+        current_user.permissions.append('shotgrid:task:assign')
+    access = _access().model_copy(
+        update={'user_id': MANAGER_USER_ID, 'project_role': project_role, 'has_all_scope': has_all_scope}
+    )
+
+    actions = ShotGridShotCrudService._allowed_actions(row, current_user, access)
+
+    assert ('task.assign' in actions) is can_assign
 
 
 def test_edit_and_delete_actions_are_only_exposed_before_task_starts() -> None:

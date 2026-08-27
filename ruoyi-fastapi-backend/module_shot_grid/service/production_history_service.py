@@ -385,7 +385,15 @@ class ShotGridProductionHistoryService:
                 (row for row in files if row['file_role'] == 'review_media' and row['is_primary'] == '1'),
                 None,
             )
-            thumbnail_file_row = next((row for row in files if row['file_role'] == 'thumbnail'), None)
+            selected_candidate_id = version.get('selected_candidate_id')
+            thumbnail_file_row = next(
+                (
+                    row
+                    for row in files
+                    if row['file_role'] == 'thumbnail' and row.get('candidate_id') == selected_candidate_id
+                ),
+                None,
+            )
             review_list_row = review_lists_by_version.get(version_id)
             cycles[version_id] = ShotGridProductionHistoryVersionCycleModel(
                 versionId=version_id,

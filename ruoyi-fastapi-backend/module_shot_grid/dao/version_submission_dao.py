@@ -25,8 +25,10 @@ from module_shot_grid.entity.do.storage_do import (
 from module_shot_grid.entity.do.task_do import ShotGridTask
 from module_shot_grid.entity.do.version_do import (
     ShotGridVersion,
+    ShotGridVersionCandidate,
     ShotGridVersionFile,
     ShotGridVersionSubmission,
+    ShotGridVersionSubmissionFile,
 )
 
 UNRESOLVED_SUBMISSION_STATUSES = ('pending', 'publishing', 'published', 'committing', 'failed')
@@ -268,17 +270,15 @@ class ShotGridVersionSubmissionDao:
         *,
         exclude_submission_id: int | None = None,
     ) -> bool:
-        submission_conditions = [ShotGridVersionSubmission.source_file_id == file_id]
+        submission_conditions = [ShotGridVersionSubmissionFile.source_file_id == file_id]
         if exclude_submission_id is not None:
-            submission_conditions.append(ShotGridVersionSubmission.submission_id != exclude_submission_id)
+            submission_conditions.append(ShotGridVersionSubmissionFile.submission_id != exclude_submission_id)
         statement = select(
             or_(
                 exists(select(1).where(*submission_conditions)),
                 exists(
                     select(1).where(
                         ShotGridVersionFile.file_id == file_id,
-                        ShotGridVersionFile.file_role == 'review_media',
-                        ShotGridVersionFile.is_primary == '1',
                     )
                 ),
             )
@@ -294,6 +294,32 @@ class ShotGridVersionSubmissionDao:
         db.add(submission)
         await db.flush()
         return submission
+
+    @staticmethod
+    async def add_submission_files(
+        db: AsyncSession,
+        submission_files: list[ShotGridVersionSubmissionFile],
+    ) -> list[ShotGridVersionSubmissionFile]:
+        db.add_all(submission_files)
+        await db.flush()
+        return submission_files
+
+    @classmethod
+    async def get_submission_files(
+        cls,
+        db: AsyncSession,
+        submission_id: int,
+        *,
+        for_update: bool = False,
+    ) -> list[ShotGridVersionSubmissionFile]:
+        statement = (
+            select(ShotGridVersionSubmissionFile)
+            .where(ShotGridVersionSubmissionFile.submission_id == submission_id)
+            .order_by(ShotGridVersionSubmissionFile.sort_order, ShotGridVersionSubmissionFile.candidate_no)
+        )
+        if for_update:
+            statement = statement.with_for_update()
+        return list((await db.scalars(statement)).all())
 
     @classmethod
     async def get_open_issue_identities(
@@ -317,10 +343,7 @@ class ShotGridVersionSubmissionDao:
         if for_update:
             statement = statement.with_for_update(of=ShotGridNote)
         rows = (await db.execute(statement)).mappings()
-        return [
-            {'issue_id': int(row['issue_id']), 'origin_version_id': int(row['origin_version_id'])}
-            for row in rows
-        ]
+        return [{'issue_id': int(row['issue_id']), 'origin_version_id': int(row['origin_version_id'])} for row in rows]
 
     @staticmethod
     async def add_issue_responses(
@@ -346,6 +369,31 @@ class ShotGridVersionSubmissionDao:
                 )
                 .where(ShotGridVersionIssueResponse.submission_id == submission_id)
                 .order_by(ShotGridVersionIssueResponse.note_id)
+            )
+        ).mappings()
+        return [dict(row) for row in rows]
+
+    @classmethod
+    async def get_submission_file_rows(
+        cls,
+        db: AsyncSession,
+        submission_id: int,
+    ) -> list[dict[str, Any]]:
+        rows = (
+            await db.execute(
+                select(
+                    ShotGridVersionSubmissionFile.client_file_key,
+                    ShotGridVersionSubmissionFile.candidate_no,
+                    ShotGridVersionSubmissionFile.source_file_id,
+                    ShotGridVersionSubmissionFile.business_file_name,
+                    ShotGridVersionSubmissionFile.candidate_note,
+                    ShotGridVersionSubmissionFile.sort_order,
+                    ShotGridVersionSubmissionFile.publish_status,
+                    ShotGridVersionSubmissionFile.last_error_key,
+                    ShotGridVersionSubmissionFile.last_error_message,
+                )
+                .where(ShotGridVersionSubmissionFile.submission_id == submission_id)
+                .order_by(ShotGridVersionSubmissionFile.sort_order, ShotGridVersionSubmissionFile.candidate_no)
             )
         ).mappings()
         return [dict(row) for row in rows]
@@ -495,7 +543,25 @@ class ShotGridVersionSubmissionDao:
             if previous_status in {'pending', 'publishing'}:
                 submission.submission_status = 'publishing'
                 submission.attempt_count += 1
-                submission.temporary_relative_path = cls._new_temporary_path(submission)
+                submission_files = await cls.get_submission_files(
+                    db,
+                    submission.submission_id,
+                    for_update=True,
+                )
+                for submission_file in submission_files:
+                    if submission_file.publish_status == 'published':
+                        continue
+                    submission_file.publish_status = 'publishing'
+                    submission_file.temporary_relative_path = cls._new_submission_file_temporary_path(
+                        submission_file,
+                        submission.attempt_count,
+                    )
+                    submission_file.published_time = None
+                    submission_file.last_error_key = None
+                    submission_file.last_error_message = None
+                    submission_file.update_time = now
+                if submission_files:
+                    submission.temporary_relative_path = submission_files[0].temporary_relative_path
             else:
                 submission.submission_status = 'committing'
                 if previous_status == 'committing':
@@ -512,56 +578,61 @@ class ShotGridVersionSubmissionDao:
         return None
 
     @classmethod
-    async def get_publish_context(cls, db: AsyncSession, submission_id: int) -> dict[str, Any] | None:
-        row = (
-            (
-                await db.execute(
-                    select(
-                        ShotGridVersionSubmission.submission_id,
-                        ShotGridVersionSubmission.project_id,
-                        ShotGridVersionSubmission.task_id,
-                        ShotGridVersionSubmission.source_file_id,
-                        ShotGridVersionSubmission.attempt_count,
-                        ShotGridVersionSubmission.lease_owner,
-                        ShotGridVersionSubmission.submission_status,
-                        ShotGridVersionSubmission.source_sha256,
-                        ShotGridVersionSubmission.source_file_size,
-                        ShotGridVersionSubmission.business_file_name,
-                        ShotGridVersionSubmission.target_relative_path,
-                        ShotGridVersionSubmission.temporary_relative_path,
-                        ShotGridTask.task_kind,
-                        SysFileInfo.storage_key.label('source_storage_key'),
-                        SysFileInfo.storage_type.label('source_storage_type'),
-                        SysFileInfo.access_type.label('source_access_type'),
-                        SysFileInfo.status.label('source_status'),
-                        SysFileInfo.del_flag.label('source_del_flag'),
-                        SysFileInfo.file_hash.label('current_source_sha256'),
-                        SysFileInfo.file_size.label('current_source_file_size'),
-                        ShotGridProjectStorage.storage_status,
-                        ShotGridProjectStorage.root_path_snapshot,
-                        ShotGridProjectStorage.project_relative_path,
-                        ShotGridProjectStorage.project_path_snapshot,
-                        ShotGridStorageRoot.protocol,
-                        ShotGridStorageRoot.unc_root_path.label('configured_root_path'),
-                        ShotGridStorageRoot.del_flag.label('root_del_flag'),
-                    )
-                    .join(ShotGridTask, ShotGridTask.task_id == ShotGridVersionSubmission.task_id)
-                    .join(SysFileInfo, SysFileInfo.file_id == ShotGridVersionSubmission.source_file_id)
-                    .join(
-                        ShotGridProjectStorage,
-                        ShotGridProjectStorage.project_id == ShotGridVersionSubmission.project_id,
-                    )
-                    .join(
-                        ShotGridStorageRoot,
-                        ShotGridStorageRoot.storage_root_id == ShotGridProjectStorage.storage_root_id,
-                    )
-                    .where(ShotGridVersionSubmission.submission_id == submission_id)
+    async def get_publish_contexts(cls, db: AsyncSession, submission_id: int) -> list[dict[str, Any]]:
+        rows = (
+            await db.execute(
+                select(
+                    ShotGridVersionSubmission.submission_id,
+                    ShotGridVersionSubmission.project_id,
+                    ShotGridVersionSubmission.task_id,
+                    ShotGridVersionSubmission.attempt_count,
+                    ShotGridVersionSubmission.lease_owner,
+                    ShotGridVersionSubmission.submission_status,
+                    ShotGridVersionSubmissionFile.submission_file_id,
+                    ShotGridVersionSubmissionFile.candidate_no,
+                    ShotGridVersionSubmissionFile.source_file_id,
+                    ShotGridVersionSubmissionFile.source_sha256,
+                    ShotGridVersionSubmissionFile.source_file_size,
+                    ShotGridVersionSubmissionFile.business_file_name,
+                    ShotGridVersionSubmissionFile.target_relative_path,
+                    ShotGridVersionSubmissionFile.temporary_relative_path,
+                    ShotGridVersionSubmissionFile.publish_status,
+                    ShotGridVersionSubmissionFile.sort_order,
+                    ShotGridTask.task_kind,
+                    SysFileInfo.storage_key.label('source_storage_key'),
+                    SysFileInfo.storage_type.label('source_storage_type'),
+                    SysFileInfo.access_type.label('source_access_type'),
+                    SysFileInfo.status.label('source_status'),
+                    SysFileInfo.del_flag.label('source_del_flag'),
+                    SysFileInfo.file_hash.label('current_source_sha256'),
+                    SysFileInfo.file_size.label('current_source_file_size'),
+                    ShotGridProjectStorage.storage_status,
+                    ShotGridProjectStorage.root_path_snapshot,
+                    ShotGridProjectStorage.project_relative_path,
+                    ShotGridProjectStorage.project_path_snapshot,
+                    ShotGridStorageRoot.protocol,
+                    ShotGridStorageRoot.unc_root_path.label('configured_root_path'),
+                    ShotGridStorageRoot.del_flag.label('root_del_flag'),
                 )
+                .join(ShotGridTask, ShotGridTask.task_id == ShotGridVersionSubmission.task_id)
+                .join(
+                    ShotGridVersionSubmissionFile,
+                    ShotGridVersionSubmissionFile.submission_id == ShotGridVersionSubmission.submission_id,
+                )
+                .join(SysFileInfo, SysFileInfo.file_id == ShotGridVersionSubmissionFile.source_file_id)
+                .join(
+                    ShotGridProjectStorage,
+                    ShotGridProjectStorage.project_id == ShotGridVersionSubmission.project_id,
+                )
+                .join(
+                    ShotGridStorageRoot,
+                    ShotGridStorageRoot.storage_root_id == ShotGridProjectStorage.storage_root_id,
+                )
+                .where(ShotGridVersionSubmission.submission_id == submission_id)
+                .order_by(ShotGridVersionSubmissionFile.sort_order, ShotGridVersionSubmissionFile.candidate_no)
             )
-            .mappings()
-            .first()
-        )
-        return dict(row) if row else None
+        ).mappings()
+        return [dict(row) for row in rows]
 
     @classmethod
     async def renew_lease(
@@ -604,6 +675,12 @@ class ShotGridVersionSubmissionDao:
                 ShotGridVersionSubmission.submission_status == 'publishing',
                 ShotGridVersionSubmission.lease_owner == worker_id,
                 ShotGridVersionSubmission.attempt_count == attempt_count,
+                ~exists(
+                    select(1).where(
+                        ShotGridVersionSubmissionFile.submission_id == submission_id,
+                        ShotGridVersionSubmissionFile.publish_status != 'published',
+                    )
+                ),
             )
             .values(
                 submission_status='published',
@@ -611,6 +688,82 @@ class ShotGridVersionSubmissionDao:
                 lease_until=None,
                 last_error_key=None,
                 last_error_message=None,
+                update_time=now,
+            )
+        )
+        return bool(result.rowcount)
+
+    @classmethod
+    async def mark_submission_file_published(
+        cls,
+        db: AsyncSession,
+        *,
+        submission_id: int,
+        submission_file_id: int,
+        worker_id: str,
+        attempt_count: int,
+        now: datetime,
+    ) -> bool:
+        fenced_parent = exists(
+            select(1).where(
+                ShotGridVersionSubmission.submission_id == submission_id,
+                ShotGridVersionSubmission.submission_status == 'publishing',
+                ShotGridVersionSubmission.lease_owner == worker_id,
+                ShotGridVersionSubmission.attempt_count == attempt_count,
+            )
+        )
+        result = await db.execute(
+            update(ShotGridVersionSubmissionFile)
+            .where(
+                ShotGridVersionSubmissionFile.submission_file_id == submission_file_id,
+                ShotGridVersionSubmissionFile.submission_id == submission_id,
+                ShotGridVersionSubmissionFile.publish_status == 'publishing',
+                fenced_parent,
+            )
+            .values(
+                publish_status='published',
+                published_time=now,
+                last_error_key=None,
+                last_error_message=None,
+                update_time=now,
+            )
+        )
+        return bool(result.rowcount)
+
+    @classmethod
+    async def mark_submission_file_failed(
+        cls,
+        db: AsyncSession,
+        *,
+        submission_id: int,
+        submission_file_id: int,
+        worker_id: str,
+        attempt_count: int,
+        error_key: str,
+        error_message: str,
+        now: datetime,
+    ) -> bool:
+        fenced_parent = exists(
+            select(1).where(
+                ShotGridVersionSubmission.submission_id == submission_id,
+                ShotGridVersionSubmission.submission_status == 'publishing',
+                ShotGridVersionSubmission.lease_owner == worker_id,
+                ShotGridVersionSubmission.attempt_count == attempt_count,
+            )
+        )
+        result = await db.execute(
+            update(ShotGridVersionSubmissionFile)
+            .where(
+                ShotGridVersionSubmissionFile.submission_file_id == submission_file_id,
+                ShotGridVersionSubmissionFile.submission_id == submission_id,
+                ShotGridVersionSubmissionFile.publish_status == 'publishing',
+                fenced_parent,
+            )
+            .values(
+                publish_status='failed',
+                published_time=None,
+                last_error_key=error_key[:100],
+                last_error_message=error_message[:500],
                 update_time=now,
             )
         )
@@ -644,6 +797,23 @@ class ShotGridVersionSubmissionDao:
             )
         )
         return bool(result.rowcount)
+
+    @classmethod
+    async def reset_failed_submission_files(cls, db: AsyncSession, submission_id: int, now: datetime) -> None:
+        await db.execute(
+            update(ShotGridVersionSubmissionFile)
+            .where(
+                ShotGridVersionSubmissionFile.submission_id == submission_id,
+                ShotGridVersionSubmissionFile.publish_status == 'failed',
+            )
+            .values(
+                publish_status='pending',
+                published_time=None,
+                last_error_key=None,
+                last_error_message=None,
+                update_time=now,
+            )
+        )
 
     @classmethod
     async def mark_failed(
@@ -754,6 +924,15 @@ class ShotGridVersionSubmissionDao:
         return version
 
     @staticmethod
+    async def add_version_candidates(
+        db: AsyncSession,
+        candidates: list[ShotGridVersionCandidate],
+    ) -> list[ShotGridVersionCandidate]:
+        db.add_all(candidates)
+        await db.flush()
+        return candidates
+
+    @staticmethod
     async def add_version_file(db: AsyncSession, version_file: ShotGridVersionFile) -> None:
         db.add(version_file)
         await db.flush()
@@ -762,4 +941,16 @@ class ShotGridVersionSubmissionDao:
     def _new_temporary_path(submission: ShotGridVersionSubmission) -> str:
         target = PureWindowsPath(submission.target_relative_path)
         temp_name = f'.sgtmp-{submission.submission_id}-a{submission.attempt_count}-{uuid.uuid4().hex}.part'
+        return str(target.parent / temp_name)
+
+    @staticmethod
+    def _new_submission_file_temporary_path(
+        submission_file: ShotGridVersionSubmissionFile,
+        attempt_count: int,
+    ) -> str:
+        target = PureWindowsPath(submission_file.target_relative_path)
+        temp_name = (
+            f'.sgtmp-{submission_file.submission_id}-{submission_file.candidate_no:02d}-'
+            f'a{attempt_count}-{uuid.uuid4().hex}.part'
+        )
         return str(target.parent / temp_name)

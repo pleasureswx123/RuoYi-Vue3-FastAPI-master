@@ -51,11 +51,19 @@ const stepsActive = computed(() => isCommitted.value ? submissionStatusOrder.len
     </el-steps>
 
     <el-descriptions class="status-facts" :column="4" border size="small">
-      <el-descriptions-item label="业务文件名">{{ submission.businessFileName || '—' }}</el-descriptions-item>
+      <el-descriptions-item label="候选文件">{{ submission.candidateCount || submission.candidates?.length || 1 }} 个</el-descriptions-item>
       <el-descriptions-item label="提交编号">#{{ submission.submissionId }}</el-descriptions-item>
       <el-descriptions-item label="处理次数">{{ submission.attemptCount ?? 0 }}</el-descriptions-item>
       <el-descriptions-item label="正式版本">{{ submission.versionId ? `#${submission.versionId}` : '尚未形成' }}</el-descriptions-item>
     </el-descriptions>
+
+    <div v-if="submission.candidates?.length" class="candidate-status-list">
+      <div v-for="candidate in submission.candidates" :key="candidate.sourceFileId">
+        <el-tag size="small" effect="plain" round>{{ candidate.candidateNumber }}</el-tag>
+        <span>{{ candidate.businessFileName }}</span>
+        <small>{{ submissionStatusMeta(candidate.publishStatus).label }}</small>
+      </div>
+    </div>
 
     <el-alert
       v-if="submission.submissionStatus === 'pending'"
@@ -128,6 +136,10 @@ const stepsActive = computed(() => isCommitted.value ? submissionStatusOrder.len
 .worker-boundary,
 .failure-detail,
 .poll-error { margin-top: 14px; }
+.candidate-status-list { display: grid; margin-top: 14px; gap: 6px; }
+.candidate-status-list > div { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 8px; align-items: center; font-size: 12px; }
+.candidate-status-list span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.candidate-status-list small { color: var(--sg-text-muted); }
 .failure-detail code,
 .poll-error code { color: inherit; }
 

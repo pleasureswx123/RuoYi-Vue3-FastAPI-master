@@ -1,5 +1,6 @@
 import os
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -106,7 +107,8 @@ class DatabaseAlembicCommandSupport:
         :return: Alembic 命令参数列表
         """
         alembic_ini_path = format_cli_path(Path(self.runtime_environment.get_backend_dir()) / 'alembic.ini')
-        return ['alembic', '-c', alembic_ini_path, command, *arguments]
+        # 固定使用当前 CLI 所属 Python，避免 PATH 中的全局 Alembic 串入其他虚拟环境。
+        return [sys.executable, '-m', 'alembic', '-c', alembic_ini_path, command, *arguments]
 
     def run_alembic_command(
         self,

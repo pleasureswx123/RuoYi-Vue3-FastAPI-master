@@ -80,6 +80,7 @@ async def test_version_wrapper_passes_worker_safety_configuration() -> None:
         heartbeat_seconds=HEARTBEAT_SECONDS,
     )
     run_scheduled_batch = AsyncMock(return_value=())
+    run_final_delivery_batch = AsyncMock(return_value=())
     module_map = {
         'config.get_scheduler': SimpleNamespace(SchedulerUtil=scheduler_util),
         'config.database': SimpleNamespace(
@@ -90,6 +91,9 @@ async def test_version_wrapper_passes_worker_safety_configuration() -> None:
         'module_shot_grid.service.version_publish_worker_service': SimpleNamespace(
             ShotGridVersionPublishWorkerService=SimpleNamespace(run_scheduled_batch=run_scheduled_batch),
         ),
+        'module_shot_grid.service.final_delivery_worker_service': SimpleNamespace(
+            ShotGridFinalDeliveryWorkerService=SimpleNamespace(run_scheduled_batch=run_final_delivery_batch),
+        ),
     }
 
     with patch(
@@ -99,6 +103,17 @@ async def test_version_wrapper_passes_worker_safety_configuration() -> None:
         await run_shot_grid_version_publisher()
 
     run_scheduled_batch.assert_awaited_once_with(
+        session,
+        worker_id='leader-owner-token',
+        max_operations=BATCH_SIZE,
+        leader_predicate=scheduler_util.is_application_leader,
+        lease_seconds=LEASE_SECONDS,
+        max_attempts=MAX_ATTEMPTS,
+        retry_delays_seconds=RETRY_DELAYS_SECONDS,
+        operation_timeout_seconds=OPERATION_TIMEOUT_SECONDS,
+        heartbeat_seconds=HEARTBEAT_SECONDS,
+    )
+    run_final_delivery_batch.assert_awaited_once_with(
         session,
         worker_id='leader-owner-token',
         max_operations=BATCH_SIZE,
@@ -144,6 +159,9 @@ async def test_version_shutdown_drain_waits_for_active_publish_job() -> None:
         'module_shot_grid.config': SimpleNamespace(SHOT_GRID_VERSION_WORKER_CONFIG=worker_config),
         'module_shot_grid.service.version_publish_worker_service': SimpleNamespace(
             ShotGridVersionPublishWorkerService=SimpleNamespace(run_scheduled_batch=controlled_batch),
+        ),
+        'module_shot_grid.service.final_delivery_worker_service': SimpleNamespace(
+            ShotGridFinalDeliveryWorkerService=SimpleNamespace(run_scheduled_batch=AsyncMock(return_value=())),
         ),
     }
 

@@ -36,6 +36,7 @@ class MediaDerivationError(Exception):
 @dataclass(frozen=True)
 class MediaWorkerRunResult:
     outcome: MediaWorkerOutcome
+    candidate_id: int | None = None
     version_id: int | None = None
     error_key: str | None = None
 
@@ -90,10 +91,11 @@ class ShotGridMediaDerivationService:
             if task is None:
                 await db.commit()
                 return MediaWorkerRunResult(outcome='idle')
+            candidate_id = int(task.candidate_id)
             version_id = int(task.version_id)
             attempt_count = int(task.attempt_count)
             claim_owner = str(task.lease_owner)
-            context = await ShotGridMediaDerivationDao.get_context(db, version_id)
+            context = await ShotGridMediaDerivationDao.get_context(db, candidate_id)
             await db.commit()
         except Exception:
             await db.rollback()
@@ -102,6 +104,7 @@ class ShotGridMediaDerivationService:
         if attempt_count > config.max_attempts:
             return await cls._fail(
                 db,
+                candidate_id=candidate_id,
                 version_id=version_id,
                 worker_id=claim_owner,
                 attempt_count=attempt_count,
@@ -135,6 +138,7 @@ class ShotGridMediaDerivationService:
             cls._cleanup_files(output_files)
             return await cls._fail(
                 db,
+                candidate_id=candidate_id,
                 version_id=version_id,
                 worker_id=claim_owner,
                 attempt_count=attempt_count,
@@ -160,7 +164,14 @@ class ShotGridMediaDerivationService:
                 retryable=False,
             )
         version_id = int(context['version_id'])
-        relative_dir = Path('derived', datetime.now().strftime('%Y'), datetime.now().strftime('%m'), str(version_id))
+        candidate_id = int(context['candidate_id'])
+        relative_dir = Path(
+            'derived',
+            datetime.now().strftime('%Y'),
+            datetime.now().strftime('%m'),
+            str(version_id),
+            str(candidate_id),
+        )
         target_dir = Path(UploadConfig.PRIVATE_UPLOAD_PATH, relative_dir)
         UploadUtil.ensure_directory(target_dir)
         if context['media_kind'] == 'image':
@@ -237,7 +248,7 @@ class ShotGridMediaDerivationService:
                 try:
                     renewed = await ShotGridMediaDerivationDao.renew_lease(
                         db,
-                        version_id=int(context['version_id']),
+                        candidate_id=int(context['candidate_id']),
                         worker_id=worker_id,
                         attempt_count=attempt_count,
                         lease_until=datetime.now().replace(microsecond=0) + timedelta(seconds=config.lease_seconds),
@@ -381,17 +392,18 @@ class ShotGridMediaDerivationService:
         attempt_count: int,
         output_files: list[DerivedFile],
     ) -> MediaWorkerRunResult:
+        candidate_id = int(context['candidate_id'])
         version_id = int(context['version_id'])
         claim = await ShotGridMediaDerivationDao.lock_claim(
             db,
-            version_id=version_id,
+            candidate_id=candidate_id,
             worker_id=worker_id,
             attempt_count=attempt_count,
         )
         if claim is None:
             await db.rollback()
             cls._cleanup_files(output_files)
-            return MediaWorkerRunResult(outcome='lease_lost', version_id=version_id)
+            return MediaWorkerRunResult(outcome='lease_lost', candidate_id=candidate_id, version_id=version_id)
         now = datetime.now().replace(microsecond=0)
         actor = 'shot-grid-media-worker'
         try:
@@ -422,6 +434,7 @@ class ShotGridMediaDerivationService:
                 db.add(
                     ShotGridVersionFile(
                         version_id=version_id,
+                        candidate_id=candidate_id,
                         file_id=file_id,
                         file_role=output.role,
                         business_file_name=output.original_name,
@@ -447,7 +460,7 @@ class ShotGridMediaDerivationService:
             claim.next_retry_time = None
             claim.update_time = now
             await db.commit()
-            return MediaWorkerRunResult(outcome='completed', version_id=version_id)
+            return MediaWorkerRunResult(outcome='completed', candidate_id=candidate_id, version_id=version_id)
         except Exception:
             await db.rollback()
             cls._cleanup_files(output_files)
@@ -458,6 +471,7 @@ class ShotGridMediaDerivationService:
         cls,
         db: AsyncSession,
         *,
+        candidate_id: int,
         version_id: int,
         worker_id: str,
         attempt_count: int,
@@ -466,13 +480,13 @@ class ShotGridMediaDerivationService:
     ) -> MediaWorkerRunResult:
         claim = await ShotGridMediaDerivationDao.lock_claim(
             db,
-            version_id=version_id,
+            candidate_id=candidate_id,
             worker_id=worker_id,
             attempt_count=attempt_count,
         )
         if claim is None:
             await db.rollback()
-            return MediaWorkerRunResult(outcome='lease_lost', version_id=version_id)
+            return MediaWorkerRunResult(outcome='lease_lost', candidate_id=candidate_id, version_id=version_id)
         error_key, safe_message, retryable = cls._safe_error(error)
         retryable = retryable and attempt_count < config.max_attempts
         claim.derivation_status = 'failed'
@@ -492,6 +506,7 @@ class ShotGridMediaDerivationService:
         await db.commit()
         return MediaWorkerRunResult(
             outcome='retry_wait' if retryable else 'failed',
+            candidate_id=candidate_id,
             version_id=version_id,
             error_key=error_key,
         )

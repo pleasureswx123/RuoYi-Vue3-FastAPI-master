@@ -25,6 +25,7 @@ async def run_shot_grid_version_publisher() -> None:
             return
 
         worker_module = importlib.import_module('module_shot_grid.service.version_publish_worker_service')
+        final_delivery_module = importlib.import_module('module_shot_grid.service.final_delivery_worker_service')
         async with database_module.AsyncSessionLocal() as query_db:
             await worker_module.ShotGridVersionPublishWorkerService.run_scheduled_batch(
                 query_db,
@@ -37,6 +38,18 @@ async def run_shot_grid_version_publisher() -> None:
                 operation_timeout_seconds=worker_config.operation_timeout_seconds,
                 heartbeat_seconds=worker_config.heartbeat_seconds,
             )
+            if scheduler_util.is_application_leader():
+                await final_delivery_module.ShotGridFinalDeliveryWorkerService.run_scheduled_batch(
+                    query_db,
+                    worker_id=scheduler_util.get_application_lock_owner_token(),
+                    max_operations=worker_config.batch_size,
+                    leader_predicate=scheduler_util.is_application_leader,
+                    lease_seconds=worker_config.lease_seconds,
+                    max_attempts=worker_config.max_attempts,
+                    retry_delays_seconds=worker_config.retry_delays_seconds,
+                    operation_timeout_seconds=worker_config.operation_timeout_seconds,
+                    heartbeat_seconds=worker_config.heartbeat_seconds,
+                )
     finally:
         if current_task is not None:
             _active_version_publish_tasks.discard(current_task)

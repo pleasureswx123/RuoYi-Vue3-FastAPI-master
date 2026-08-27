@@ -112,6 +112,8 @@ export function acceptedToSubmissionStatus(data) {
     taskId: data.taskId,
     submissionStatus: data.submissionStatus,
     reservedVersionNumber: data.reservedVersionNumber,
+    candidateCount: data.candidateCount ?? data.candidates?.length ?? 1,
+    candidates: data.candidates || [],
     businessFileName: data.businessFileName,
     taskStatus: data.taskStatus,
     replayed: Boolean(data.replayed),

@@ -138,7 +138,7 @@ class ShotGridVersionPublishWorkerService:
                 execution_status=submission.submission_status,
                 temporary_relative_path=submission.temporary_relative_path,
             )
-            context_row = await ShotGridVersionSubmissionDao.get_publish_context(db, claimed.submission_id)
+            context_rows = await ShotGridVersionSubmissionDao.get_publish_contexts(db, claimed.submission_id)
             await db.commit()
         except Exception:
             await db.rollback()
@@ -158,25 +158,67 @@ class ShotGridVersionPublishWorkerService:
                 retry_delays_seconds=retry_delays_seconds,
             )
 
-        path_adapter = adapter or ShotGridVersionPublishPathAdapter()
         soft_timeout_exceeded = False
+        if claimed.execution_status == 'committing':
+            try:
+                await ShotGridVersionSubmissionService.commit_published_submission(
+                    db,
+                    submission_id=claimed.submission_id,
+                    worker_id=claimed.lease_owner,
+                    attempt_count=claimed.attempt_count,
+                )
+            except Exception as exc:
+                return await cls._record_commit_failure(
+                    db,
+                    claimed=claimed,
+                    error=exc,
+                    now=cls._second_precision(datetime.now()),
+                    max_attempts=max_attempts,
+                    retry_delays_seconds=retry_delays_seconds,
+                )
+            return VersionWorkerRunResult(
+                outcome='committed',
+                submission_id=claimed.submission_id,
+                attempt_count=claimed.attempt_count,
+            )
+
+        path_adapter = adapter or ShotGridVersionPublishPathAdapter()
+        active_submission_file_id: int | None = None
         try:
-            if context_row is None:
+            if not context_rows:
                 raise VersionPublishPathAdapterError(
                     error_key='SG_VERSION_SUBMISSION_FAILED',
                     safe_message='版本提交缺少有效的源文件或项目存储绑定',
                     retryable=False,
                 )
-            context = cls._build_context(context_row, claimed)
-            publish_result, soft_timeout_exceeded = await cls._execute_with_heartbeat(
-                db,
-                adapter=path_adapter,
-                context=context,
-                claimed=claimed,
-                lease_seconds=lease_seconds,
-                heartbeat_seconds=heartbeat_seconds,
-                operation_timeout_seconds=operation_timeout_seconds,
-            )
+            for context_row in context_rows:
+                if context_row['publish_status'] == 'published':
+                    continue
+                active_submission_file_id = int(context_row['submission_file_id'])
+                context = cls._build_context(context_row, claimed)
+                _publish_result, candidate_soft_timeout = await cls._execute_with_heartbeat(
+                    db,
+                    adapter=path_adapter,
+                    context=context,
+                    claimed=claimed,
+                    lease_seconds=lease_seconds,
+                    heartbeat_seconds=heartbeat_seconds,
+                    operation_timeout_seconds=operation_timeout_seconds,
+                )
+                soft_timeout_exceeded = soft_timeout_exceeded or candidate_soft_timeout
+                marked = await ShotGridVersionSubmissionDao.mark_submission_file_published(
+                    db,
+                    submission_id=claimed.submission_id,
+                    submission_file_id=active_submission_file_id,
+                    worker_id=claimed.lease_owner,
+                    attempt_count=claimed.attempt_count,
+                    now=cls._second_precision(datetime.now()),
+                )
+                if not marked:
+                    await db.rollback()
+                    raise _LeaseLostDuringExecution
+                await db.commit()
+                active_submission_file_id = None
         except _LeaseLostDuringExecution:
             return VersionWorkerRunResult(
                 outcome='lease_lost',
@@ -190,6 +232,7 @@ class ShotGridVersionPublishWorkerService:
                     db,
                     claimed=claimed,
                     error=exc,
+                    submission_file_id=active_submission_file_id,
                     now=cls._second_precision(datetime.now()),
                     max_attempts=max_attempts,
                     retry_delays_seconds=retry_delays_seconds,
@@ -203,34 +246,9 @@ class ShotGridVersionPublishWorkerService:
                 retry_delays_seconds=retry_delays_seconds,
             )
 
-        if claimed.execution_status == 'publishing':
-            return await cls._mark_published(
-                db,
-                claimed=claimed,
-                soft_timeout_exceeded=soft_timeout_exceeded,
-            )
-        try:
-            await ShotGridVersionSubmissionService.commit_published_submission(
-                db,
-                submission_id=claimed.submission_id,
-                worker_id=claimed.lease_owner,
-                attempt_count=claimed.attempt_count,
-                published_sha256=publish_result.sha256,
-                published_file_size=publish_result.file_size,
-            )
-        except Exception as exc:
-            return await cls._record_commit_failure(
-                db,
-                claimed=claimed,
-                error=exc,
-                now=cls._second_precision(datetime.now()),
-                max_attempts=max_attempts,
-                retry_delays_seconds=retry_delays_seconds,
-            )
-        return VersionWorkerRunResult(
-            outcome='committed',
-            submission_id=claimed.submission_id,
-            attempt_count=claimed.attempt_count,
+        return await cls._mark_published(
+            db,
+            claimed=claimed,
             soft_timeout_exceeded=soft_timeout_exceeded,
         )
 
@@ -303,6 +321,7 @@ class ShotGridVersionPublishWorkerService:
         *,
         claimed: _ClaimedSubmission,
         error: Exception,
+        submission_file_id: int | None = None,
         now: datetime,
         max_attempts: int,
         retry_delays_seconds: tuple[int, ...],
@@ -310,6 +329,20 @@ class ShotGridVersionPublishWorkerService:
         error_key, safe_message, retryable = cls._safe_error(error)
         terminal = not retryable or claimed.attempt_count >= max_attempts
         try:
+            if submission_file_id is not None:
+                child_updated = await ShotGridVersionSubmissionDao.mark_submission_file_failed(
+                    db,
+                    submission_id=claimed.submission_id,
+                    submission_file_id=submission_file_id,
+                    worker_id=claimed.lease_owner,
+                    attempt_count=claimed.attempt_count,
+                    error_key=error_key,
+                    error_message=safe_message,
+                    now=now,
+                )
+                if not child_updated:
+                    await db.rollback()
+                    return cls._lease_lost_result(claimed, error_key=error_key)
             if terminal:
                 updated = await ShotGridVersionSubmissionDao.mark_failed(
                     db,
@@ -484,6 +517,7 @@ class ShotGridVersionPublishWorkerService:
     ) -> VersionPublishPathContext:
         valid_source = (
             row['submission_status'] == claimed.execution_status
+            and row['publish_status'] == 'publishing'
             and row['lease_owner'] == claimed.lease_owner
             and row['attempt_count'] == claimed.attempt_count
             and row['source_storage_type'] == 'local'
@@ -516,6 +550,7 @@ class ShotGridVersionPublishWorkerService:
             project_relative_path=str(row['project_relative_path']),
             project_path_snapshot=str(row['project_path_snapshot']),
             root_del_flag=str(row['root_del_flag']),
+            candidate_no=int(row['candidate_no']),
         )
 
     @staticmethod

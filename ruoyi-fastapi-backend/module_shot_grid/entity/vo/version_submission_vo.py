@@ -8,12 +8,105 @@ from pydantic import ConfigDict, Field, field_validator, model_validator
 from pydantic.alias_generators import to_camel
 
 from common.vo import ResponseBaseModel
-from config.env import UploadConfig
+from module_shot_grid.config import SHOT_GRID_VERSION_SUBMISSION_CONFIG
 from module_shot_grid.entity.vo.common_vo import ShotGridApiModel
 
 VersionSubmissionStatus = Literal['pending', 'publishing', 'published', 'committing', 'committed', 'failed']
 VersionSubmissionTaskKind = Literal['shot_video', 'asset_image']
 VersionSubmissionFileExtension = Literal['mp4', 'mov', 'jpg', 'png']
+MAX_CLIENT_FILE_KEY_LENGTH = 100
+
+
+def _normalize_client_file_key(value: Any) -> str:
+    if not isinstance(value, str):
+        raise ValueError('clientFileKey 必须是字符串')
+    normalized = value.strip()
+    if not normalized or len(normalized) > MAX_CLIENT_FILE_KEY_LENGTH or not normalized.isprintable():
+        raise ValueError('clientFileKey 长度必须为1到100个可打印字符')
+    return normalized
+
+
+def _normalize_candidate_note(value: Any) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError('candidateNote 必须是字符串')
+    normalized = value.strip()
+    if not normalized:
+        return None
+    if not normalized.isprintable():
+        raise ValueError('candidateNote 不能包含控制字符')
+    return normalized
+
+
+def _validate_candidate_order(candidates: list[Any]) -> None:
+    client_keys = [item.client_file_key for item in candidates]
+    sort_orders = [item.sort_order for item in candidates]
+    if len(client_keys) != len(set(client_keys)):
+        raise ValueError('candidates 不能包含重复 clientFileKey')
+    if sort_orders != list(range(len(candidates))):
+        raise ValueError('candidates 必须按 sortOrder 从0开始连续排列')
+
+
+class ShotGridVersionSubmissionPreflightCandidateModel(ShotGridApiModel):
+    """上传前候选文件的浏览器快照。"""
+
+    model_config = ConfigDict(extra='forbid')
+
+    client_file_key: str
+    file_name: str = Field(min_length=1, max_length=255)
+    file_size: int = Field(gt=0, le=SHOT_GRID_VERSION_SUBMISSION_CONFIG.max_file_size_bytes)
+    sort_order: int = Field(ge=0)
+    candidate_note: str | None = Field(default=None, max_length=500)
+
+    @field_validator('client_file_key', mode='before')
+    @classmethod
+    def normalize_client_file_key(cls, value: Any) -> str:
+        return _normalize_client_file_key(value)
+
+    @field_validator('file_name', mode='before')
+    @classmethod
+    def normalize_file_name(cls, value: Any) -> str:
+        if not isinstance(value, str):
+            raise ValueError('fileName 必须是字符串')
+        normalized = value.strip()
+        if not normalized or not normalized.isprintable() or '/' in normalized or '\\' in normalized:
+            raise ValueError('fileName 必须是安全的纯文件名')
+        return normalized
+
+    @field_validator('candidate_note', mode='before')
+    @classmethod
+    def normalize_candidate_note(cls, value: Any) -> str | None:
+        return _normalize_candidate_note(value)
+
+
+class ShotGridVersionSubmissionCandidateCreateModel(ShotGridApiModel):
+    """私有上传完成后的候选文件绑定。"""
+
+    model_config = ConfigDict(extra='forbid')
+
+    client_file_key: str
+    file_id: str = Field(description='平台受保护源文件ID')
+    sort_order: int = Field(ge=0)
+    candidate_note: str | None = Field(default=None, max_length=500)
+
+    @field_validator('client_file_key', mode='before')
+    @classmethod
+    def normalize_client_file_key(cls, value: Any) -> str:
+        return _normalize_client_file_key(value)
+
+    @field_validator('file_id', mode='before')
+    @classmethod
+    def normalize_file_id(cls, value: Any) -> str:
+        try:
+            return str(uuid.UUID(str(value)))
+        except (AttributeError, TypeError, ValueError) as exc:
+            raise ValueError('fileId 格式不正确') from exc
+
+    @field_validator('candidate_note', mode='before')
+    @classmethod
+    def normalize_candidate_note(cls, value: Any) -> str | None:
+        return _normalize_candidate_note(value)
 
 
 class ShotGridIssueResponseInputModel(ShotGridApiModel):
@@ -81,33 +174,45 @@ class ShotGridVersionSubmissionMetadataModel(ShotGridApiModel):
 class ShotGridVersionSubmissionPreflightModel(ShotGridVersionSubmissionMetadataModel):
     """私有文件上传前的无副作用版本提交预检。"""
 
-    file_name: str = Field(min_length=1, max_length=255, description='浏览器所选文件名，仅用于提前校验扩展名')
-    file_size: int = Field(gt=0, le=UploadConfig.MAX_FILE_SIZE, description='浏览器所选文件大小')
+    candidates: list[ShotGridVersionSubmissionPreflightCandidateModel] = Field(
+        min_length=1,
+        max_length=SHOT_GRID_VERSION_SUBMISSION_CONFIG.max_candidates,
+    )
 
-    @field_validator('file_name', mode='before')
-    @classmethod
-    def normalize_file_name(cls, value: Any) -> str:
-        if not isinstance(value, str):
-            raise ValueError('fileName 必须是字符串')
-        normalized = value.strip()
-        if not normalized or not normalized.isprintable() or '/' in normalized or '\\' in normalized:
-            raise ValueError('fileName 必须是安全的纯文件名')
-        return normalized
+    @model_validator(mode='after')
+    def validate_candidates(self) -> 'ShotGridVersionSubmissionPreflightModel':
+        _validate_candidate_order(self.candidates)
+        total_size = sum(item.file_size for item in self.candidates)
+        if total_size > SHOT_GRID_VERSION_SUBMISSION_CONFIG.max_batch_size_bytes:
+            raise ValueError('候选文件总大小超过批次上限')
+        return self
 
 
 class ShotGridVersionSubmissionCreateModel(ShotGridVersionSubmissionMetadataModel):
     """创建版本暂存请求。"""
 
-    file_id: str = Field(description='平台受保护源文件ID')
+    candidates: list[ShotGridVersionSubmissionCandidateCreateModel] = Field(
+        min_length=1,
+        max_length=SHOT_GRID_VERSION_SUBMISSION_CONFIG.max_candidates,
+    )
     open_issue_snapshot_hash: str = Field(pattern=r'^[0-9a-f]{64}$', description='预检返回的未关闭问题集合摘要')
 
-    @field_validator('file_id', mode='before')
-    @classmethod
-    def normalize_file_id(cls, value: Any) -> str:
-        try:
-            return str(uuid.UUID(str(value)))
-        except (AttributeError, TypeError, ValueError) as exc:
-            raise ValueError('fileId 格式不正确') from exc
+    @model_validator(mode='after')
+    def validate_candidates(self) -> 'ShotGridVersionSubmissionCreateModel':
+        _validate_candidate_order(self.candidates)
+        file_ids = [item.file_id for item in self.candidates]
+        if len(file_ids) != len(set(file_ids)):
+            raise ValueError('candidates 不能包含重复 fileId')
+        return self
+
+
+class ShotGridVersionSubmissionPreflightCandidateResultModel(ShotGridApiModel):
+    """预检后的候选编号与文件类型。"""
+
+    client_file_key: str
+    candidate_no: int = Field(gt=0)
+    candidate_number: str
+    file_extension: VersionSubmissionFileExtension
 
 
 class ShotGridVersionSubmissionPreflightResultModel(ShotGridApiModel):
@@ -117,9 +222,27 @@ class ShotGridVersionSubmissionPreflightResultModel(ShotGridApiModel):
     task_id: int
     task_kind: VersionSubmissionTaskKind
     task_status: Literal['in_progress', 'revision']
-    file_extension: VersionSubmissionFileExtension
+    candidates: list[ShotGridVersionSubmissionPreflightCandidateResultModel]
+    max_candidates: int = Field(gt=0)
+    max_file_size_bytes: int = Field(gt=0)
+    max_batch_size_bytes: int = Field(gt=0)
     open_issue_snapshot_hash: str = Field(pattern=r'^[0-9a-f]{64}$')
     allowed_actions: list[Literal['version.add']] = Field(default_factory=lambda: ['version.add'])
+
+
+class ShotGridVersionSubmissionCandidateStatusModel(ShotGridApiModel):
+    """候选文件在提交/发布流程中的外部安全状态。"""
+
+    client_file_key: str | None = None
+    candidate_no: int = Field(gt=0)
+    candidate_number: str
+    source_file_id: str
+    business_file_name: str
+    candidate_note: str | None = None
+    sort_order: int = Field(ge=0)
+    publish_status: Literal['pending', 'publishing', 'published', 'failed']
+    last_error_key: str | None = None
+    last_error_message: str | None = None
 
 
 class ShotGridVersionSubmissionAcceptedModel(ShotGridApiModel):
@@ -128,6 +251,9 @@ class ShotGridVersionSubmissionAcceptedModel(ShotGridApiModel):
     submission_id: int
     submission_status: VersionSubmissionStatus
     reserved_version_number: str
+    candidate_count: int = Field(gt=0)
+    candidates: list[ShotGridVersionSubmissionCandidateStatusModel]
+    # 扩容迁移期保留候选01镜像，旧客户端升级完成后再移除。
     business_file_name: str
     status_url: str
     task_status: Literal['not_started', 'preparing', 'in_progress', 'revision', 'pending_review', 'completed']
@@ -148,6 +274,9 @@ class ShotGridVersionSubmissionStatusModel(ShotGridApiModel):
     submission_id: int
     project_id: int
     task_id: int
+    candidate_count: int = Field(gt=0)
+    candidates: list[ShotGridVersionSubmissionCandidateStatusModel]
+    # 扩容迁移期保留候选01镜像，旧客户端升级完成后再移除。
     source_file_id: str
     submission_status: VersionSubmissionStatus
     reserved_version_no: int

@@ -31,6 +31,7 @@ class ShotGridFileCenterDao:
             .join(thumbnail_file_info, thumbnail_file_info.file_id == thumbnail_version_file.file_id)
             .where(
                 thumbnail_version_file.version_id == ShotGridVersion.version_id,
+                thumbnail_version_file.candidate_id == ShotGridVersionFile.candidate_id,
                 thumbnail_version_file.file_role == 'thumbnail',
                 thumbnail_file_info.status == 'active',
                 thumbnail_file_info.del_flag == '0',
@@ -45,6 +46,7 @@ class ShotGridFileCenterDao:
             .join(proxy_file_info, proxy_file_info.file_id == proxy_version_file.file_id)
             .where(
                 proxy_version_file.version_id == ShotGridVersion.version_id,
+                proxy_version_file.candidate_id == ShotGridVersionFile.candidate_id,
                 proxy_version_file.file_role == 'proxy_media',
                 proxy_file_info.status == 'active',
                 proxy_file_info.del_flag == '0',

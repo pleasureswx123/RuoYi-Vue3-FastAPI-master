@@ -45,10 +45,11 @@ def test_annotations_accept_extensible_safe_type_and_camel_case_payload() -> Non
     ('annotation_type', 'points', 'text'),
     [
         ('arrow', [{'x': 0.1, 'y': 0.2}, {'x': 0.8, 'y': 0.7}], None),
+        ('freehand', [{'x': 0.1, 'y': 0.2}, {'x': 0.25, 'y': 0.3}, {'x': 0.4, 'y': 0.35}], None),
         ('text', [{'x': 0.4, 'y': 0.3}], '降低这里的高光'),
     ],
 )
-def test_annotations_accept_arrow_and_text_payloads(
+def test_annotations_accept_arrow_freehand_and_text_payloads(
     annotation_type: str,
     points: list[dict[str, float]],
     text: str | None,
@@ -156,12 +157,31 @@ def test_annotations_reject_json_payload_over_64_kib() -> None:
 
 def test_note_and_review_action_normalize_text_and_forbid_unknown_fields() -> None:
     note = ShotGridNoteCreateModel(content='  调整人物起身动作  ')
-    action = ShotGridReviewActionCreateModel(actionType='reject', reason='  节奏仍然偏慢  ', lockVersion=2)
+    action = ShotGridReviewActionCreateModel(
+        actionType='reject', selectedCandidateId=9, reason='  节奏仍然偏慢  ', lockVersion=2
+    )
 
     assert note.content == '调整人物起身动作'
     assert action.reason == '节奏仍然偏慢'
     with pytest.raises(ValidationError):
         ShotGridReviewActionCreateModel.model_validate({'actionType': 'approve', 'lockVersion': 0, 'reviewListId': 1})
+
+
+def test_note_reference_files_normalize_uuid_and_reject_duplicates_or_excess() -> None:
+    file_ids = [
+        '11111111-1111-4111-8111-111111111111',
+        '22222222-2222-4222-8222-222222222222',
+    ]
+    note = ShotGridNoteCreateModel(content='补充参考内容', referenceFileIds=file_ids)
+
+    assert note.reference_file_ids == file_ids
+    with pytest.raises(ValidationError, match='参考文件不能重复'):
+        ShotGridNoteCreateModel(content='重复附件', referenceFileIds=[file_ids[0], file_ids[0]])
+    with pytest.raises(ValidationError):
+        ShotGridNoteCreateModel(
+            content='附件过多',
+            referenceFileIds=[f'00000000-0000-4000-8000-{index:012d}' for index in range(6)],
+        )
 
 
 def test_review_query_rejects_bigint_overflow() -> None:

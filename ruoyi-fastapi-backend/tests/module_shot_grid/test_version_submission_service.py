@@ -2,6 +2,7 @@ from types import SimpleNamespace
 from unittest.mock import ANY, AsyncMock
 
 import pytest
+from pydantic import ValidationError
 
 from module_admin.entity.vo.user_vo import CurrentUserModel, UserInfoModel
 from module_shot_grid.controller.version_submission_controller import version_submission_controller
@@ -23,7 +24,9 @@ VERSION_ID = 40
 REVIEW_LIST_ID = 50
 USER_ID = 60
 FILE_ID = '5ed39e04-2f29-45ab-a58c-4f8168f5131a'
+SECOND_FILE_ID = '6ed39e04-2f29-45ab-a58c-4f8168f5131b'
 FILE_HASH = 'a' * 64
+SECOND_FILE_HASH = 'b' * 64
 MAX_BUSINESS_FILENAME_LENGTH = 255
 MAX_PLATFORM_AUDIT_METHOD_LENGTH = 100
 PREFLIGHT_ROLLBACK_COUNT = 2
@@ -34,6 +37,34 @@ HTTP_CONFLICT = 409
 HTTP_UNPROCESSABLE_ENTITY = 422
 HTTP_SERVICE_UNAVAILABLE = 503
 EMPTY_ISSUE_SNAPSHOT_HASH = ShotGridVersionSubmissionService._issue_snapshot_hash([])
+FIRST_CANDIDATE_ID = 401
+
+
+def test_single_candidate_is_initialized_as_system_selected_without_reviewer_audit() -> None:
+    version = SimpleNamespace(selected_candidate_id=None, selected_by=None, selected_time=None)
+    candidate = SimpleNamespace(candidate_id=FIRST_CANDIDATE_ID)
+
+    selected_candidate_id = ShotGridVersionSubmissionService._initialize_single_candidate_selection(
+        version,
+        [candidate],
+    )
+
+    assert selected_candidate_id == FIRST_CANDIDATE_ID
+    assert version.selected_candidate_id == FIRST_CANDIDATE_ID
+    assert version.selected_by is None
+    assert version.selected_time is None
+
+
+def test_multiple_candidates_are_not_automatically_selected() -> None:
+    version = SimpleNamespace(selected_candidate_id=None)
+
+    selected_candidate_id = ShotGridVersionSubmissionService._initialize_single_candidate_selection(
+        version,
+        [SimpleNamespace(candidate_id=FIRST_CANDIDATE_ID), SimpleNamespace(candidate_id=402)],
+    )
+
+    assert selected_candidate_id is None
+    assert version.selected_candidate_id is None
 
 
 def _shot_context() -> dict[str, object]:
@@ -73,6 +104,89 @@ def _current_user() -> CurrentUserModel:
         roles=[],
         user=UserInfoModel(userId=USER_ID, userName='producer'),
     )
+
+
+def _preflight_command(file_name: str = 'result.mov', file_size: int = 8) -> ShotGridVersionSubmissionPreflightModel:
+    return ShotGridVersionSubmissionPreflightModel(
+        candidates=[
+            {
+                'clientFileKey': 'candidate-1',
+                'fileName': file_name,
+                'fileSize': file_size,
+                'sortOrder': 0,
+            }
+        ],
+        changelog='完成首版',
+    )
+
+
+def _create_command(**overrides: object) -> ShotGridVersionSubmissionCreateModel:
+    payload: dict[str, object] = {
+        'candidates': [
+            {
+                'clientFileKey': 'candidate-1',
+                'fileId': FILE_ID,
+                'sortOrder': 0,
+            }
+        ],
+        'changelog': '完成首版',
+        'openIssueSnapshotHash': EMPTY_ISSUE_SNAPSHOT_HASH,
+    }
+    payload.update(overrides)
+    return ShotGridVersionSubmissionCreateModel.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    'candidates, message',
+    [
+        (
+            [
+                {'clientFileKey': 'same-key', 'fileName': 'a.mov', 'fileSize': 1, 'sortOrder': 0},
+                {'clientFileKey': 'same-key', 'fileName': 'b.mov', 'fileSize': 1, 'sortOrder': 1},
+            ],
+            '重复 clientFileKey',
+        ),
+        (
+            [
+                {'clientFileKey': 'candidate-a', 'fileName': 'a.mov', 'fileSize': 1, 'sortOrder': 0},
+                {'clientFileKey': 'candidate-b', 'fileName': 'b.mov', 'fileSize': 1, 'sortOrder': 2},
+            ],
+            '从0开始连续排列',
+        ),
+    ],
+)
+def test_preflight_candidate_batch_rejects_ambiguous_order_or_identity(
+    candidates: list[dict[str, object]],
+    message: str,
+) -> None:
+    with pytest.raises(ValidationError) as exc_info:
+        ShotGridVersionSubmissionPreflightModel.model_validate(
+            {'candidates': candidates, 'changelog': '同轮候选'},
+        )
+
+    assert message in str(exc_info.value)
+
+
+def _submission_file(**overrides: object) -> SimpleNamespace:
+    values: dict[str, object] = {
+        'submission_file_id': 301,
+        'submission_id': SUBMISSION_ID,
+        'client_file_key': 'candidate-1',
+        'candidate_no': 1,
+        'source_file_id': FILE_ID,
+        'business_file_name': 'WGZR_EP001_001_S001_YJF_V001_01_1786094626499.mp4',
+        'target_relative_path': 'VIDEO\\EP01\\001_S001\\WGZR_EP001_001_S001_YJF_V001_01_1786094626499.mp4',
+        'temporary_relative_path': 'VIDEO\\EP01\\001_S001\\.sgtmp-30-01-a1-temp.part',
+        'source_sha256': FILE_HASH,
+        'source_file_size': 123,
+        'candidate_note': None,
+        'sort_order': 0,
+        'publish_status': 'published',
+        'last_error_key': None,
+        'last_error_message': None,
+    }
+    values.update(overrides)
+    return SimpleNamespace(**values)
 
 
 def _asset_context(*, production_item: str | None = '动力舱恐怖气氛主视角') -> dict[str, object]:
@@ -228,11 +342,7 @@ async def test_submit_preflight_returns_stable_ready_contract_without_writes(
     result = await ShotGridVersionSubmissionService.preflight_submission(
         db,
         TASK_ID,
-        ShotGridVersionSubmissionPreflightModel(
-            fileName='result.MOV',
-            fileSize=8,
-            changelog='完成首版',
-        ),
+        _preflight_command('result.MOV'),
         _current_user(),
     )
 
@@ -241,12 +351,50 @@ async def test_submit_preflight_returns_stable_ready_contract_without_writes(
         'taskId': TASK_ID,
         'taskKind': 'shot_video',
         'taskStatus': 'in_progress',
-        'fileExtension': 'mov',
+        'candidates': [
+            {
+                'clientFileKey': 'candidate-1',
+                'candidateNo': 1,
+                'candidateNumber': 'V002_01',
+                'fileExtension': 'mov',
+            }
+        ],
+        'maxCandidates': 10,
+        'maxFileSizeBytes': 100 * 1024 * 1024,
+        'maxBatchSizeBytes': 500 * 1024 * 1024,
         'openIssueSnapshotHash': EMPTY_ISSUE_SNAPSHOT_HASH,
         'allowedActions': ['version.add'],
     }
     db.commit.assert_not_awaited()
     db.rollback.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_submit_preflight_numbers_multiple_candidates_inside_one_version_round(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_submit_preflight(monkeypatch, context=_ready_shot_context())
+    command = ShotGridVersionSubmissionPreflightModel.model_validate(
+        {
+            'candidates': [
+                {'clientFileKey': 'candidate-a', 'fileName': 'take-a.mp4', 'fileSize': 8, 'sortOrder': 0},
+                {'clientFileKey': 'candidate-b', 'fileName': 'take-b.mov', 'fileSize': 9, 'sortOrder': 1},
+            ],
+            'changelog': '同轮两个备选',
+        }
+    )
+
+    result = await ShotGridVersionSubmissionService.preflight_submission(
+        AsyncMock(),
+        TASK_ID,
+        command,
+        _current_user(),
+    )
+
+    assert [(item.client_file_key, item.candidate_number) for item in result.candidates] == [
+        ('candidate-a', 'V002_01'),
+        ('candidate-b', 'V002_02'),
+    ]
 
 
 @pytest.mark.asyncio
@@ -265,7 +413,7 @@ async def test_submit_preflight_returns_404_before_access_resolution(monkeypatch
         await ShotGridVersionSubmissionService.preflight_submission(
             AsyncMock(),
             TASK_ID,
-            ShotGridVersionSubmissionPreflightModel(fileName='result.mov', fileSize=8, changelog='完成首版'),
+            _preflight_command(),
             _current_user(),
         )
 
@@ -283,7 +431,7 @@ async def test_submit_preflight_rejects_non_assignee_creator_with_403(monkeypatc
         await ShotGridVersionSubmissionService.preflight_submission(
             AsyncMock(),
             TASK_ID,
-            ShotGridVersionSubmissionPreflightModel(fileName='result.mov', fileSize=8, changelog='完成首版'),
+            _preflight_command(),
             _current_user(),
         )
 
@@ -299,7 +447,7 @@ async def test_submit_preflight_rejects_unresolved_submission_with_409(monkeypat
         await ShotGridVersionSubmissionService.preflight_submission(
             AsyncMock(),
             TASK_ID,
-            ShotGridVersionSubmissionPreflightModel(fileName='result.mov', fileSize=8, changelog='完成首版'),
+            _preflight_command(),
             _current_user(),
         )
 
@@ -317,7 +465,7 @@ async def test_submit_preflight_reuses_context_422_and_does_not_check_unresolved
         await ShotGridVersionSubmissionService.preflight_submission(
             AsyncMock(),
             TASK_ID,
-            ShotGridVersionSubmissionPreflightModel(fileName='result.png', fileSize=8, changelog='完成首版'),
+            _preflight_command('result.png'),
             _current_user(),
         )
 
@@ -347,7 +495,7 @@ async def test_submit_preflight_validates_declared_extension_and_target_snapshot
         await ShotGridVersionSubmissionService.preflight_submission(
             AsyncMock(),
             TASK_ID,
-            ShotGridVersionSubmissionPreflightModel(fileName=file_name, fileSize=8, changelog='完成首版'),
+            _preflight_command(file_name),
             _current_user(),
         )
 
@@ -363,7 +511,7 @@ def test_business_filename_uses_frozen_shot_rule() -> None:
         extension='mp4',
     )
 
-    assert result == 'WGZR_EP001_001_S001_YJF_V001_1786094626499.mp4'
+    assert result == 'WGZR_EP001_001_S001_YJF_V001_01_1786094626499.mp4'
 
 
 def test_asset_filename_contains_production_item_and_stably_shortens_long_values() -> None:
@@ -386,7 +534,7 @@ def test_asset_filename_contains_production_item_and_stably_shortens_long_values
     assert first == second
     assert len(first) <= MAX_BUSINESS_FILENAME_LENGTH
     assert first.startswith('WGZR_Asset_Environment_')
-    assert first.endswith('_YJF_V012_1786094626499.png')
+    assert first.endswith('_YJF_V012_01_1786094626499.png')
 
 
 def test_asset_filename_fails_closed_without_production_item() -> None:
@@ -598,11 +746,7 @@ async def test_create_freezes_source_storage_key_before_preflight_rollback(monke
         AsyncMock(return_value=True),
     )
 
-    command = ShotGridVersionSubmissionCreateModel(
-        fileId=FILE_ID,
-        changelog='完成首版',
-        openIssueSnapshotHash=EMPTY_ISSUE_SNAPSHOT_HASH,
-    )
+    command = _create_command()
     with pytest.raises(ShotGridDomainException) as exc_info:
         await ShotGridVersionSubmissionService.create_submission(
             db,
@@ -693,6 +837,10 @@ async def test_current_submission_status_restores_refreshable_unresolved_submiss
     monkeypatch.setattr(
         'module_shot_grid.service.version_submission_service.ShotGridVersionSubmissionDao.get_current_submission_status_row',
         AsyncMock(return_value=row),
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.version_submission_service.ShotGridVersionSubmissionDao.get_submission_files',
+        AsyncMock(return_value=[_submission_file(publish_status='failed')]),
     )
 
     result = await ShotGridVersionSubmissionService.get_current_submission_status(
@@ -844,15 +992,14 @@ async def test_concurrent_idempotency_unique_conflict_replays_same_command(
         reserved_version_no=1,
         business_file_name='WGZR_EP001_001_S001_YJF_V001_1786094626499.mp4',
     )
-    command = ShotGridVersionSubmissionCreateModel(
-        fileId=FILE_ID,
-        changelog='修改完成',
-        aiParams={'seed': 1},
-        openIssueSnapshotHash=EMPTY_ISSUE_SNAPSHOT_HASH,
-    )
+    command = _create_command(changelog='修改完成', aiParams={'seed': 1})
     monkeypatch.setattr(
         'module_shot_grid.service.version_submission_service.ShotGridVersionSubmissionDao.get_submission_issue_responses',
         AsyncMock(return_value=[]),
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.version_submission_service.ShotGridVersionSubmissionDao.get_submission_files',
+        AsyncMock(return_value=[_submission_file()]),
     )
     monkeypatch.setattr(
         'module_shot_grid.service.version_submission_service.ShotGridVersionSubmissionDao.lock_project',
@@ -900,7 +1047,7 @@ def test_unknown_integrity_constraint_is_not_disguised_as_version_conflict() -> 
 
 
 @pytest.mark.asyncio
-async def test_formal_commit_switches_temp_reference_and_commits_whole_review_chain(
+async def test_formal_commit_creates_all_candidates_and_commits_whole_review_chain(  # noqa: PLR0915
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     db = AsyncMock()
@@ -942,6 +1089,15 @@ async def test_formal_commit_switches_temp_reference_and_commits_whole_review_ch
         file_size=123,
         content_type='video/mp4',
     )
+    second_source_file = SimpleNamespace(
+        status='active',
+        del_flag='0',
+        storage_type='local',
+        access_type='private',
+        file_hash=SECOND_FILE_HASH,
+        file_size=456,
+        content_type='video/quicktime',
+    )
 
     monkeypatch.setattr(
         'module_shot_grid.service.version_submission_service.ShotGridVersionSubmissionDao.get_submission_status_row',
@@ -959,6 +1115,28 @@ async def test_formal_commit_switches_temp_reference_and_commits_whole_review_ch
         'module_shot_grid.service.version_submission_service.ShotGridVersionSubmissionDao.lock_submission',
         AsyncMock(return_value=submission),
     )
+    submission_file = _submission_file(
+        business_file_name=submission.business_file_name,
+        target_relative_path=submission.target_relative_path,
+        source_file_size=123,
+    )
+    second_submission_file = _submission_file(
+        submission_file_id=302,
+        client_file_key='candidate-2',
+        candidate_no=2,
+        source_file_id=SECOND_FILE_ID,
+        business_file_name='WGZR_EP001_001_S001_YJF_V003_02_1786094626499.mov',
+        target_relative_path='VIDEO\\EP01\\001_S001\\WGZR_EP001_001_S001_YJF_V003_02_1786094626499.mov',
+        temporary_relative_path='VIDEO\\EP01\\001_S001\\.sgtmp-30-02-a1-temp.part',
+        source_sha256=SECOND_FILE_HASH,
+        source_file_size=456,
+        candidate_note='动作节奏更快',
+        sort_order=1,
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.version_submission_service.ShotGridVersionSubmissionDao.get_submission_files',
+        AsyncMock(return_value=[submission_file, second_submission_file]),
+    )
     monkeypatch.setattr(
         ShotGridVersionSubmissionService,
         '_require_task_context',
@@ -967,7 +1145,7 @@ async def test_formal_commit_switches_temp_reference_and_commits_whole_review_ch
     monkeypatch.setattr(ShotGridVersionSubmissionService, '_require_context_ready', lambda _context: None)
     monkeypatch.setattr(
         'module_shot_grid.service.version_submission_service.FileInfoDao.get_file_info_by_id_for_update',
-        AsyncMock(return_value=source_file),
+        AsyncMock(side_effect=[source_file, second_source_file]),
     )
 
     async def add_version(_db: object, version: object) -> object:
@@ -977,6 +1155,16 @@ async def test_formal_commit_switches_temp_reference_and_commits_whole_review_ch
     monkeypatch.setattr(
         'module_shot_grid.service.version_submission_service.ShotGridVersionSubmissionDao.add_version',
         AsyncMock(side_effect=add_version),
+    )
+
+    async def add_candidates(_db: object, candidates: list[object]) -> list[object]:
+        for candidate_id, candidate in zip((401, 402), candidates, strict=True):
+            candidate.candidate_id = candidate_id
+        return candidates
+
+    monkeypatch.setattr(
+        'module_shot_grid.service.version_submission_service.ShotGridVersionSubmissionDao.add_version_candidates',
+        AsyncMock(side_effect=add_candidates),
     )
     add_version_file = AsyncMock()
     monkeypatch.setattr(
@@ -1024,20 +1212,39 @@ async def test_formal_commit_switches_temp_reference_and_commits_whole_review_ch
     assert task.task_status == 'pending_review'
     assert submission.submission_status == 'committed'
     replace_reference.assert_awaited_once()
-    assert replace_reference.await_args.args[1:4] == ('shotgrid_version', str(VERSION_ID), [FILE_ID])
+    assert replace_reference.await_args.args[1:4] == (
+        'shotgrid_version',
+        str(VERSION_ID),
+        [FILE_ID, SECOND_FILE_ID],
+    )
     remove_reference.assert_awaited_once_with(
         db,
         'shotgrid_version_submission',
         str(SUBMISSION_ID),
     )
-    add_version_file.assert_awaited_once()
-    add_media_task.assert_awaited_once_with(
-        db,
-        version_id=VERSION_ID,
-        source_file_id=FILE_ID,
-        media_kind='video',
-        now=ANY,
-    )
+    expected_candidate_count = 2
+    assert add_version_file.await_count == expected_candidate_count
+    assert [call.args[1].candidate_id for call in add_version_file.await_args_list] == [401, 402]
+    assert [call.args[1].is_primary for call in add_version_file.await_args_list] == ['0', '0']
+    assert add_media_task.await_count == expected_candidate_count
+    assert [item.kwargs | {'db': item.args[0]} for item in add_media_task.await_args_list] == [
+        {
+            'db': db,
+            'candidate_id': 401,
+            'version_id': VERSION_ID,
+            'source_file_id': FILE_ID,
+            'media_kind': 'video',
+            'now': ANY,
+        },
+        {
+            'db': db,
+            'candidate_id': 402,
+            'version_id': VERSION_ID,
+            'source_file_id': SECOND_FILE_ID,
+            'media_kind': 'video',
+            'now': ANY,
+        },
+    ]
     audit.assert_awaited_once()
     db.commit.assert_awaited_once()
     db.rollback.assert_not_awaited()

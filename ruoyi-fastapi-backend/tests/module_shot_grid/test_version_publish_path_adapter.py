@@ -154,6 +154,33 @@ async def test_publish_uses_unique_temp_and_never_overwrites_target(tmp_path: Pa
 
 
 @pytest.mark.asyncio
+async def test_multi_candidate_temp_name_must_match_candidate_number(tmp_path: Path) -> None:
+    content = _iso_bmff(b'mp42')
+    source_root, nas_root, storage_key = _prepare_roots(tmp_path, content, 'mp4')
+    adapter = ShotGridVersionPublishPathAdapter(source_root=source_root, allow_local_root=True)
+    context = replace(
+        _context(nas_root, storage_key, content),
+        candidate_no=2,
+        temporary_relative_path=(f'VIDEO\\EP01\\001_S001\\.sgtmp-{SUBMISSION_ID}-02-a{ATTEMPT_COUNT}-abc123.part'),
+    )
+
+    result = await adapter.publish(context)
+
+    assert not result.reused_target
+
+    with pytest.raises(VersionPublishPathAdapterError) as exc_info:
+        await adapter.publish(
+            replace(
+                context,
+                temporary_relative_path=(
+                    f'VIDEO\\EP01\\001_S001\\.sgtmp-{SUBMISSION_ID}-03-a{ATTEMPT_COUNT}-wrong.part'
+                ),
+            )
+        )
+    assert exc_info.value.error_key == 'SG_STORAGE_PATH_INVALID'
+
+
+@pytest.mark.asyncio
 async def test_intermediate_source_symlink_is_rejected(tmp_path: Path) -> None:
     content = _iso_bmff(b'isom')
     source_root = tmp_path / 'private'

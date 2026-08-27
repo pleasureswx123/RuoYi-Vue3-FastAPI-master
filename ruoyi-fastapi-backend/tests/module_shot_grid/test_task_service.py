@@ -28,6 +28,7 @@ ASSIGNEE_USER_ID = 2
 INITIAL_TASK_LOCK_VERSION = 3
 UPDATED_TASK_LOCK_VERSION = 4
 SHOT_DURATION_MS = 8000
+CONFLICT_STATUS = 409
 
 
 def _current_user(
@@ -681,9 +682,18 @@ async def test_assign_asset_item_rechecks_director_after_project_lock_and_rolls_
     db.rollback.assert_awaited_once()
 
 
+@pytest.mark.parametrize(
+    ('task_status', 'error_key'),
+    [
+        ('not_started', 'SG_TASK_REASSIGN_SUBMISSION_CONFLICT'),
+        ('completed', 'SG_INVALID_STATE_TRANSITION'),
+    ],
+)
 @pytest.mark.asyncio
-async def test_reassignment_is_blocked_by_any_uncommitted_submission(
+async def test_reassignment_is_blocked_by_completed_task_or_uncommitted_submission(
     monkeypatch: pytest.MonkeyPatch,
+    task_status: str,
+    error_key: str,
 ) -> None:
     uncommitted = AsyncMock(return_value=901)
     member = AsyncMock()
@@ -696,6 +706,8 @@ async def test_reassignment_is_blocked_by_any_uncommitted_submission(
         member,
     )
     db = AsyncMock()
+    task = _task()
+    task.task_status = task_status
 
     with pytest.raises(ShotGridDomainException) as exc_info:
         await ShotGridTaskService._assign_task(
@@ -705,7 +717,7 @@ async def test_reassignment_is_blocked_by_any_uncommitted_submission(
                 assigneeUserId=3,
                 taskLockVersion=INITIAL_TASK_LOCK_VERSION,
             ),
-            current_task=_task(),
+            current_task=task,
             task_kind='shot_video',
             task_name='镜头任务',
             shot_id=SHOT_ID,
@@ -713,8 +725,12 @@ async def test_reassignment_is_blocked_by_any_uncommitted_submission(
             actor_name='director',
         )
 
-    assert exc_info.value.error_key == 'SG_TASK_REASSIGN_SUBMISSION_CONFLICT'
-    uncommitted.assert_awaited_once_with(db, TASK_ID)
+    assert exc_info.value.error_key == error_key
+    assert exc_info.value.http_status == CONFLICT_STATUS
+    if task_status == 'completed':
+        uncommitted.assert_not_awaited()
+    else:
+        uncommitted.assert_awaited_once_with(db, TASK_ID)
     member.assert_not_awaited()
 
 

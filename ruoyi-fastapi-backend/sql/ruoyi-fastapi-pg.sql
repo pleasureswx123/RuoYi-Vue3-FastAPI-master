@@ -1,6 +1,9 @@
 -- ----------------------------
 -- 0、Shot Grid 业务表逆序清理（必须先于 sys_user、sys_file_info 等平台表）
 -- ----------------------------
+alter table if exists sg_version drop constraint if exists fk_sg_version_selected_candidate;
+drop table if exists sg_final_delivery;
+drop table if exists sg_version_candidate_selection;
 drop table if exists sg_review_list_version;
 drop table if exists sg_review_issue_draft;
 drop table if exists sg_issue_verification;
@@ -10,7 +13,9 @@ drop table if exists sg_version_file;
 drop table if exists sg_review_list;
 drop table if exists sg_review_action;
 drop table if exists sg_note;
+drop table if exists sg_version_candidate;
 drop table if exists sg_version;
+drop table if exists sg_version_submission_file;
 drop table if exists sg_version_submission;
 drop table if exists sg_task;
 drop table if exists sg_shot_asset_requirement;
@@ -2422,6 +2427,47 @@ COMMENT ON COLUMN sg_version_submission.last_error_message IS '已净化错误�
 COMMENT ON COLUMN sg_version_submission.create_time IS '创建时间';
 COMMENT ON COLUMN sg_version_submission.update_time IS '更新时间';
 
+-- sg_version_submission_file
+CREATE TABLE sg_version_submission_file (
+	submission_file_id BIGSERIAL NOT NULL,
+	submission_id BIGINT NOT NULL,
+	client_file_key VARCHAR(100) NOT NULL,
+	candidate_no INTEGER NOT NULL,
+	source_file_id VARCHAR(36) NOT NULL,
+	business_file_name VARCHAR(255) NOT NULL,
+	target_relative_path VARCHAR(1200) NOT NULL,
+	temporary_relative_path VARCHAR(1200) NOT NULL,
+	source_sha256 CHAR(64) NOT NULL,
+	source_file_size BIGINT NOT NULL,
+	candidate_note VARCHAR(500),
+	sort_order INTEGER NOT NULL,
+	publish_status VARCHAR(20) DEFAULT 'pending' NOT NULL,
+	published_time TIMESTAMP(0) WITHOUT TIME ZONE,
+	last_error_key VARCHAR(100),
+	last_error_message VARCHAR(500),
+	create_time TIMESTAMP(0) WITHOUT TIME ZONE NOT NULL,
+	update_time TIMESTAMP(0) WITHOUT TIME ZONE NOT NULL,
+	PRIMARY KEY (submission_file_id),
+	CONSTRAINT uk_sg_submission_file_candidate UNIQUE (submission_id, candidate_no),
+	CONSTRAINT uk_sg_submission_file_client_key UNIQUE (submission_id, client_file_key),
+	CONSTRAINT uk_sg_submission_file_id_submission UNIQUE (submission_file_id, submission_id),
+	CONSTRAINT ck_sg_submission_file_client_key CHECK (btrim(client_file_key) <> ''),
+	CONSTRAINT ck_sg_submission_file_candidate_no CHECK (candidate_no > 0),
+	CONSTRAINT ck_sg_submission_file_business_name CHECK (btrim(business_file_name) <> ''),
+	CONSTRAINT ck_sg_submission_file_target_path CHECK (btrim(target_relative_path) <> ''),
+	CONSTRAINT ck_sg_submission_file_temp_path CHECK (btrim(temporary_relative_path) <> ''),
+	CONSTRAINT ck_sg_submission_file_distinct_paths CHECK (temporary_relative_path <> target_relative_path),
+	CONSTRAINT ck_sg_submission_file_size CHECK (source_file_size > 0),
+	CONSTRAINT ck_sg_submission_file_sort_order CHECK (sort_order >= 0),
+	CONSTRAINT ck_sg_submission_file_publish_status CHECK (publish_status in ('pending', 'publishing', 'published', 'failed')),
+	CONSTRAINT ck_sg_submission_file_state CHECK ((publish_status = 'published' and published_time is not null and last_error_key is null and last_error_message is null) or (publish_status = 'failed' and published_time is null and last_error_key is not null and btrim(last_error_key) <> '' and last_error_message is not null and btrim(last_error_message) <> '') or (publish_status in ('pending', 'publishing') and published_time is null and last_error_key is null and last_error_message is null)),
+	FOREIGN KEY(submission_id) REFERENCES sg_version_submission (submission_id) ON DELETE RESTRICT,
+	FOREIGN KEY(source_file_id) REFERENCES sys_file_info (file_id) ON DELETE RESTRICT
+);
+CREATE UNIQUE INDEX uk_sg_submission_file_source ON sg_version_submission_file (source_file_id);
+CREATE INDEX idx_sg_submission_file_status_order ON sg_version_submission_file (submission_id, publish_status, sort_order);
+COMMENT ON TABLE sg_version_submission_file IS 'Shot Grid版本提交候选文件表';
+
 -- sg_version
 CREATE TABLE sg_version (
 	version_id BIGSERIAL NOT NULL,
@@ -2435,6 +2481,9 @@ CREATE TABLE sg_version (
 	submitted_by BIGINT NOT NULL,
 	submitted_time TIMESTAMP(0) WITHOUT TIME ZONE NOT NULL,
 	generated_at_ms BIGINT NOT NULL,
+	selected_candidate_id BIGINT,
+	selected_by BIGINT,
+	selected_time TIMESTAMP(0) WITHOUT TIME ZONE,
 	lock_version INTEGER DEFAULT '0' NOT NULL,
 	PRIMARY KEY (version_id),
 	CONSTRAINT fk_sg_version_submission_project_task FOREIGN KEY(submission_id, project_id, task_id) REFERENCES sg_version_submission (submission_id, project_id, task_id) ON DELETE RESTRICT,
@@ -2445,8 +2494,10 @@ CREATE TABLE sg_version (
 	CONSTRAINT ck_sg_version_status CHECK (version_status in ('pending_review', 'rejected', 'final')),
 	CONSTRAINT ck_sg_version_changelog CHECK (btrim(changelog) <> ''),
 	CONSTRAINT ck_sg_version_generated_at CHECK (generated_at_ms > 0),
+	CONSTRAINT ck_sg_version_selected_candidate_state CHECK ((selected_candidate_id is null and selected_by is null and selected_time is null) or (selected_candidate_id is not null and ((selected_by is null and selected_time is null) or (selected_by is not null and selected_time is not null)))),
 	CONSTRAINT ck_sg_version_lock_version CHECK (lock_version >= 0),
-	FOREIGN KEY(submitted_by) REFERENCES sys_user (user_id) ON DELETE RESTRICT
+	FOREIGN KEY(submitted_by) REFERENCES sys_user (user_id) ON DELETE RESTRICT,
+	FOREIGN KEY(selected_by) REFERENCES sys_user (user_id) ON DELETE RESTRICT
 );
 CREATE INDEX idx_sg_version_task_version_no ON sg_version (task_id, version_no);
 CREATE UNIQUE INDEX uk_sg_version_task_final ON sg_version (task_id) WHERE version_status = 'final';
@@ -2462,13 +2513,90 @@ COMMENT ON COLUMN sg_version.ai_params IS 'AI生成参数快照';
 COMMENT ON COLUMN sg_version.submitted_by IS '提交用户ID';
 COMMENT ON COLUMN sg_version.submitted_time IS '提交时间';
 COMMENT ON COLUMN sg_version.generated_at_ms IS '业务文件名服务端时间戳';
+COMMENT ON COLUMN sg_version.selected_candidate_id IS '本轮最佳候选ID，单候选由系统自动设置';
+COMMENT ON COLUMN sg_version.selected_by IS '最近选择候选的审核用户ID';
+COMMENT ON COLUMN sg_version.selected_time IS '最近选择候选时间';
 COMMENT ON COLUMN sg_version.lock_version IS '审核乐观锁版本';
+
+-- sg_version_candidate
+CREATE TABLE sg_version_candidate (
+	candidate_id BIGSERIAL NOT NULL,
+	project_id BIGINT NOT NULL,
+	version_id BIGINT NOT NULL,
+	submission_file_id BIGINT NOT NULL,
+	candidate_no INTEGER NOT NULL,
+	candidate_note VARCHAR(500),
+	sort_order INTEGER NOT NULL,
+	create_by VARCHAR(64) DEFAULT '' NOT NULL,
+	create_time TIMESTAMP(0) WITHOUT TIME ZONE NOT NULL,
+	PRIMARY KEY (candidate_id),
+	CONSTRAINT fk_sg_candidate_version_project FOREIGN KEY(version_id, project_id) REFERENCES sg_version (version_id, project_id) ON DELETE RESTRICT,
+	CONSTRAINT fk_sg_candidate_submission_file FOREIGN KEY(submission_file_id) REFERENCES sg_version_submission_file (submission_file_id) ON DELETE RESTRICT,
+	CONSTRAINT uk_sg_candidate_id_version UNIQUE(candidate_id, version_id),
+	CONSTRAINT uk_sg_candidate_id_project UNIQUE(candidate_id, project_id),
+	CONSTRAINT uk_sg_candidate_version_no UNIQUE(version_id, candidate_no),
+	CONSTRAINT uk_sg_candidate_submission_file UNIQUE(submission_file_id),
+	CONSTRAINT ck_sg_candidate_no CHECK(candidate_no > 0),
+	CONSTRAINT ck_sg_candidate_sort_order CHECK(sort_order >= 0)
+);
+CREATE INDEX idx_sg_candidate_version_order ON sg_version_candidate (version_id, sort_order, candidate_no);
+COMMENT ON TABLE sg_version_candidate IS 'Shot Grid版本候选作品表';
+ALTER TABLE sg_version ADD CONSTRAINT fk_sg_version_selected_candidate
+	FOREIGN KEY(selected_candidate_id, version_id) REFERENCES sg_version_candidate(candidate_id, version_id) ON DELETE RESTRICT;
+
+-- sg_final_delivery
+CREATE TABLE sg_final_delivery (
+	final_delivery_id BIGSERIAL PRIMARY KEY,
+	project_id BIGINT NOT NULL,
+	task_id BIGINT NOT NULL,
+	version_id BIGINT NOT NULL,
+	candidate_id BIGINT NOT NULL,
+	source_file_id VARCHAR(36) NOT NULL REFERENCES sys_file_info(file_id) ON DELETE RESTRICT,
+	business_file_name VARCHAR(255) NOT NULL,
+	source_nas_relative_path VARCHAR(1200) NOT NULL,
+	final_nas_relative_path VARCHAR(1200) NOT NULL,
+	manifest_nas_relative_path VARCHAR(1200) NOT NULL,
+	source_sha256 CHAR(64) NOT NULL,
+	source_file_size BIGINT NOT NULL,
+	delivery_status VARCHAR(20) DEFAULT 'pending' NOT NULL,
+	attempt_count INTEGER DEFAULT 0 NOT NULL,
+	lease_owner VARCHAR(100),
+	lease_until TIMESTAMP(0) WITHOUT TIME ZONE,
+	last_error_key VARCHAR(100),
+	last_error_message VARCHAR(500),
+	publish_mode VARCHAR(20),
+	approved_by BIGINT NOT NULL REFERENCES sys_user(user_id) ON DELETE RESTRICT,
+	approved_time TIMESTAMP(0) WITHOUT TIME ZONE NOT NULL,
+	published_time TIMESTAMP(0) WITHOUT TIME ZONE,
+	create_time TIMESTAMP(0) WITHOUT TIME ZONE NOT NULL,
+	update_time TIMESTAMP(0) WITHOUT TIME ZONE NOT NULL,
+	CONSTRAINT fk_sg_final_delivery_task_project FOREIGN KEY(task_id, project_id) REFERENCES sg_task(task_id, project_id) ON DELETE RESTRICT,
+	CONSTRAINT fk_sg_final_delivery_version_project FOREIGN KEY(version_id, project_id) REFERENCES sg_version(version_id, project_id) ON DELETE RESTRICT,
+	CONSTRAINT fk_sg_final_delivery_candidate_version FOREIGN KEY(candidate_id, version_id) REFERENCES sg_version_candidate(candidate_id, version_id) ON DELETE RESTRICT,
+	CONSTRAINT ck_sg_final_delivery_business_name CHECK (btrim(business_file_name) <> ''),
+	CONSTRAINT ck_sg_final_delivery_source_path CHECK (btrim(source_nas_relative_path) <> ''),
+	CONSTRAINT ck_sg_final_delivery_final_path CHECK (btrim(final_nas_relative_path) <> ''),
+	CONSTRAINT ck_sg_final_delivery_manifest_path CHECK (btrim(manifest_nas_relative_path) <> ''),
+	CONSTRAINT ck_sg_final_delivery_distinct_paths CHECK (source_nas_relative_path <> final_nas_relative_path AND final_nas_relative_path <> manifest_nas_relative_path),
+	CONSTRAINT ck_sg_final_delivery_sha256 CHECK (source_sha256 ~ '^[0-9a-f]{64}$'),
+	CONSTRAINT ck_sg_final_delivery_file_size CHECK (source_file_size > 0),
+	CONSTRAINT ck_sg_final_delivery_status CHECK (delivery_status IN ('pending', 'publishing', 'published', 'failed')),
+	CONSTRAINT ck_sg_final_delivery_attempt_count CHECK (attempt_count >= 0),
+	CONSTRAINT ck_sg_final_delivery_lease CHECK ((delivery_status = 'publishing' AND lease_owner IS NOT NULL AND btrim(lease_owner) <> '' AND lease_until IS NOT NULL) OR (delivery_status <> 'publishing' AND lease_owner IS NULL AND lease_until IS NULL)),
+	CONSTRAINT ck_sg_final_delivery_error CHECK ((delivery_status = 'failed' AND last_error_key IS NOT NULL AND btrim(last_error_key) <> '' AND last_error_message IS NOT NULL AND btrim(last_error_message) <> '') OR (delivery_status <> 'failed' AND last_error_key IS NULL AND last_error_message IS NULL)),
+	CONSTRAINT ck_sg_final_delivery_result CHECK ((delivery_status = 'published' AND published_time IS NOT NULL AND publish_mode IN ('hardlink', 'copied', 'reused')) OR (delivery_status <> 'published' AND published_time IS NULL AND publish_mode IS NULL))
+);
+CREATE UNIQUE INDEX uk_sg_final_delivery_version ON sg_final_delivery(version_id);
+CREATE INDEX idx_sg_final_delivery_status_lease_update ON sg_final_delivery(delivery_status, lease_until, update_time);
+CREATE INDEX idx_sg_final_delivery_project_task ON sg_final_delivery(project_id, task_id);
+COMMENT ON TABLE sg_final_delivery IS 'Shot Grid最终版本NAS交付Outbox与执行记录';
 
 -- sg_note
 CREATE TABLE sg_note (
 	note_id BIGSERIAL NOT NULL,
 	project_id BIGINT NOT NULL,
 	version_id BIGINT NOT NULL,
+	origin_candidate_id BIGINT NOT NULL,
 	reviewer_user_id BIGINT NOT NULL,
 	content TEXT,
 	media_time_ms BIGINT,
@@ -2479,6 +2607,7 @@ CREATE TABLE sg_note (
 	update_time TIMESTAMP(0) WITHOUT TIME ZONE NOT NULL,
 	PRIMARY KEY (note_id),
 	CONSTRAINT fk_sg_note_version_project FOREIGN KEY(version_id, project_id) REFERENCES sg_version (version_id, project_id) ON DELETE RESTRICT,
+	CONSTRAINT fk_sg_note_origin_candidate_version FOREIGN KEY(origin_candidate_id, version_id) REFERENCES sg_version_candidate (candidate_id, version_id) ON DELETE RESTRICT,
 	CONSTRAINT fk_sg_note_resolved_version_project FOREIGN KEY(resolved_in_version_id, project_id) REFERENCES sg_version (version_id, project_id) ON DELETE RESTRICT,
 	CONSTRAINT uk_sg_note_id_project UNIQUE (note_id, project_id),
 	CONSTRAINT ck_sg_note_content_or_annotations CHECK (btrim(coalesce(content, '')) <> '' or (annotations is not null and jsonb_typeof(annotations -> 'items') = 'array' and jsonb_array_length(annotations -> 'items') > 0)),
@@ -2491,6 +2620,7 @@ COMMENT ON TABLE sg_note IS 'Shot Grid版本级审核意见表';
 COMMENT ON COLUMN sg_note.note_id IS '审核意见ID';
 COMMENT ON COLUMN sg_note.project_id IS '项目ID';
 COMMENT ON COLUMN sg_note.version_id IS '版本ID';
+COMMENT ON COLUMN sg_note.origin_candidate_id IS '首次提出问题的候选ID';
 COMMENT ON COLUMN sg_note.reviewer_user_id IS '审核用户ID';
 COMMENT ON COLUMN sg_note.content IS '审核问题正文；与画面标注至少存在一项';
 COMMENT ON COLUMN sg_note.media_time_ms IS '视频时间点（毫秒）';
@@ -2524,12 +2654,14 @@ CREATE TABLE sg_issue_verification (
 	project_id BIGINT NOT NULL,
 	note_id BIGINT NOT NULL,
 	checked_version_id BIGINT NOT NULL,
+	checked_candidate_id BIGINT NOT NULL,
 	result VARCHAR(20) NOT NULL,
 	comment VARCHAR(1000),
 	reviewer_user_id BIGINT NOT NULL,
 	create_time TIMESTAMP(0) WITHOUT TIME ZONE NOT NULL,
 	CONSTRAINT fk_sg_issue_verification_note_project FOREIGN KEY(note_id, project_id) REFERENCES sg_note (note_id, project_id) ON DELETE RESTRICT,
 	CONSTRAINT fk_sg_issue_verification_version_project FOREIGN KEY(checked_version_id, project_id) REFERENCES sg_version (version_id, project_id) ON DELETE RESTRICT,
+	CONSTRAINT fk_sg_issue_verification_candidate_version FOREIGN KEY(checked_candidate_id, checked_version_id) REFERENCES sg_version_candidate (candidate_id, version_id) ON DELETE RESTRICT,
 	CONSTRAINT uk_sg_issue_verification_note_version UNIQUE (note_id, checked_version_id),
 	CONSTRAINT ck_sg_issue_verification_result CHECK (result in ('resolved', 'still_present')),
 	CONSTRAINT ck_sg_issue_verification_comment CHECK (comment is null or btrim(comment) <> ''),
@@ -2544,6 +2676,7 @@ CREATE TABLE sg_review_action (
 	action_id BIGSERIAL NOT NULL,
 	project_id BIGINT NOT NULL,
 	version_id BIGINT NOT NULL,
+	selected_candidate_id BIGINT NOT NULL,
 	reviewer_user_id BIGINT NOT NULL,
 	action_type VARCHAR(20) NOT NULL,
 	from_status VARCHAR(20) NOT NULL,
@@ -2555,6 +2688,7 @@ CREATE TABLE sg_review_action (
 	create_time TIMESTAMP(0) WITHOUT TIME ZONE NOT NULL,
 	PRIMARY KEY (action_id),
 	CONSTRAINT fk_sg_review_action_version_project FOREIGN KEY(version_id, project_id) REFERENCES sg_version (version_id, project_id) ON DELETE RESTRICT,
+	CONSTRAINT fk_sg_review_action_candidate_version FOREIGN KEY(selected_candidate_id, version_id) REFERENCES sg_version_candidate (candidate_id, version_id) ON DELETE RESTRICT,
 	CONSTRAINT ck_sg_review_action_type CHECK (action_type in ('approve', 'reject', 'defer')),
 	CONSTRAINT ck_sg_review_action_from_status CHECK (from_status in ('pending_review', 'rejected', 'final')),
 	CONSTRAINT ck_sg_review_action_to_status CHECK (to_status in ('pending_review', 'rejected', 'final')),
@@ -2569,6 +2703,7 @@ COMMENT ON TABLE sg_review_action IS 'Shot Grid审核动作不可变历史表';
 COMMENT ON COLUMN sg_review_action.action_id IS '审核动作ID';
 COMMENT ON COLUMN sg_review_action.project_id IS '项目ID';
 COMMENT ON COLUMN sg_review_action.version_id IS '审核版本ID';
+COMMENT ON COLUMN sg_review_action.selected_candidate_id IS '执行审核动作的候选ID';
 COMMENT ON COLUMN sg_review_action.reviewer_user_id IS '操作用户ID';
 COMMENT ON COLUMN sg_review_action.action_type IS '审核动作';
 COMMENT ON COLUMN sg_review_action.from_status IS '操作前版本状态';
@@ -2633,6 +2768,7 @@ CREATE TABLE sg_review_issue_draft (
 	project_id BIGINT NOT NULL,
 	review_list_id BIGINT NOT NULL,
 	version_id BIGINT NOT NULL,
+	candidate_id BIGINT NOT NULL,
 	reviewer_user_id BIGINT NOT NULL,
 	content TEXT,
 	media_time_ms BIGINT,
@@ -2643,6 +2779,7 @@ CREATE TABLE sg_review_issue_draft (
 	PRIMARY KEY (draft_id),
 	CONSTRAINT fk_sg_review_issue_draft_review_list_project FOREIGN KEY(review_list_id, project_id) REFERENCES sg_review_list (review_list_id, project_id) ON DELETE RESTRICT,
 	CONSTRAINT fk_sg_review_issue_draft_version_project FOREIGN KEY(version_id, project_id) REFERENCES sg_version (version_id, project_id) ON DELETE RESTRICT,
+	CONSTRAINT fk_sg_review_issue_draft_candidate_version FOREIGN KEY(candidate_id, version_id) REFERENCES sg_version_candidate (candidate_id, version_id) ON DELETE RESTRICT,
 	CONSTRAINT uk_sg_review_issue_draft_id_project UNIQUE (draft_id, project_id),
 	CONSTRAINT ck_sg_review_issue_draft_content_or_annotations CHECK (btrim(coalesce(content, '')) <> '' or (annotations is not null and jsonb_typeof(annotations -> 'items') = 'array' and jsonb_array_length(annotations -> 'items') > 0)),
 	CONSTRAINT ck_sg_review_issue_draft_media_time CHECK (media_time_ms is null or media_time_ms >= 0),
@@ -2655,6 +2792,7 @@ COMMENT ON COLUMN sg_review_issue_draft.draft_id IS '问题草稿ID';
 COMMENT ON COLUMN sg_review_issue_draft.project_id IS '项目ID';
 COMMENT ON COLUMN sg_review_issue_draft.review_list_id IS '所属自动审核单ID';
 COMMENT ON COLUMN sg_review_issue_draft.version_id IS '当前审核版本ID';
+COMMENT ON COLUMN sg_review_issue_draft.candidate_id IS '草稿绑定的版本候选ID';
 COMMENT ON COLUMN sg_review_issue_draft.reviewer_user_id IS '最初记录问题的审核用户ID';
 COMMENT ON COLUMN sg_review_issue_draft.content IS '问题草稿正文；与画面标注至少存在一项';
 COMMENT ON COLUMN sg_review_issue_draft.media_time_ms IS '视频时间点（毫秒）';
@@ -2663,9 +2801,36 @@ COMMENT ON COLUMN sg_review_issue_draft.lock_version IS '乐观锁版本';
 COMMENT ON COLUMN sg_review_issue_draft.create_time IS '创建时间';
 COMMENT ON COLUMN sg_review_issue_draft.update_time IS '更新时间';
 
+-- sg_version_candidate_selection
+CREATE TABLE sg_version_candidate_selection (
+	selection_id BIGSERIAL NOT NULL,
+	project_id BIGINT NOT NULL,
+	review_list_id BIGINT NOT NULL,
+	version_id BIGINT NOT NULL,
+	candidate_id BIGINT NOT NULL,
+	previous_candidate_id BIGINT,
+	selected_by BIGINT NOT NULL,
+	idempotency_key VARCHAR(100) NOT NULL,
+	request_hash CHAR(64) NOT NULL,
+	create_time TIMESTAMP(0) WITHOUT TIME ZONE NOT NULL,
+	PRIMARY KEY (selection_id),
+	CONSTRAINT fk_sg_candidate_selection_review_list_project FOREIGN KEY(review_list_id, project_id) REFERENCES sg_review_list (review_list_id, project_id) ON DELETE RESTRICT,
+	CONSTRAINT fk_sg_candidate_selection_version_project FOREIGN KEY(version_id, project_id) REFERENCES sg_version (version_id, project_id) ON DELETE RESTRICT,
+	CONSTRAINT fk_sg_candidate_selection_candidate_version FOREIGN KEY(candidate_id, version_id) REFERENCES sg_version_candidate (candidate_id, version_id) ON DELETE RESTRICT,
+	CONSTRAINT fk_sg_candidate_selection_previous_version FOREIGN KEY(previous_candidate_id, version_id) REFERENCES sg_version_candidate (candidate_id, version_id) ON DELETE RESTRICT,
+	CONSTRAINT uk_sg_candidate_selection_idempotency UNIQUE(version_id, selected_by, idempotency_key),
+	CONSTRAINT ck_sg_candidate_selection_idempotency CHECK(btrim(idempotency_key) <> ''),
+	CONSTRAINT ck_sg_candidate_selection_request_hash CHECK(request_hash ~ '^[0-9a-f]{64}$'),
+	CONSTRAINT ck_sg_candidate_selection_changed CHECK(previous_candidate_id is null or previous_candidate_id <> candidate_id),
+	FOREIGN KEY(selected_by) REFERENCES sys_user (user_id) ON DELETE RESTRICT
+);
+CREATE INDEX idx_sg_candidate_selection_version_time ON sg_version_candidate_selection (version_id, create_time, selection_id);
+COMMENT ON TABLE sg_version_candidate_selection IS 'Shot Grid审核候选选择历史表';
+
 -- sg_version_file
 CREATE TABLE sg_version_file (
 	version_id BIGINT NOT NULL,
+	candidate_id BIGINT NOT NULL,
 	file_id VARCHAR(36) NOT NULL,
 	file_role VARCHAR(30) NOT NULL,
 	business_file_name VARCHAR(255) NOT NULL,
@@ -2685,16 +2850,19 @@ CREATE TABLE sg_version_file (
 	CONSTRAINT ck_sg_version_file_primary_role CHECK (is_primary = '0' or file_role = 'review_media'),
 	CONSTRAINT ck_sg_version_file_sort_order CHECK (sort_order >= 0),
 	CONSTRAINT ck_sg_version_file_review_nas CHECK (not (file_role = 'review_media' and is_primary = '1') or (nas_relative_path is not null and nas_sha256 is not null and nas_file_size is not null and published_time is not null)),
+	CONSTRAINT fk_sg_version_file_candidate_version FOREIGN KEY(candidate_id, version_id) REFERENCES sg_version_candidate (candidate_id, version_id) ON DELETE RESTRICT,
 	FOREIGN KEY(version_id) REFERENCES sg_version (version_id) ON DELETE RESTRICT,
 	FOREIGN KEY(file_id) REFERENCES sys_file_info (file_id) ON DELETE RESTRICT
 );
 CREATE INDEX idx_sg_version_file_file ON sg_version_file (file_id);
+CREATE INDEX idx_sg_version_file_version_candidate ON sg_version_file (version_id, candidate_id, sort_order);
 CREATE UNIQUE INDEX uk_sg_version_file_business_name ON sg_version_file (business_file_name) WHERE file_role = 'review_media' AND is_primary = '1';
-CREATE UNIQUE INDEX uk_sg_version_file_primary_review ON sg_version_file (version_id) WHERE file_role = 'review_media' AND is_primary = '1';
-CREATE UNIQUE INDEX uk_sg_version_file_thumbnail ON sg_version_file (version_id) WHERE file_role = 'thumbnail';
-CREATE UNIQUE INDEX uk_sg_version_file_proxy_media ON sg_version_file (version_id) WHERE file_role = 'proxy_media';
+CREATE UNIQUE INDEX uk_sg_version_file_primary_review ON sg_version_file (candidate_id) WHERE file_role = 'review_media' AND is_primary = '1';
+CREATE UNIQUE INDEX uk_sg_version_file_thumbnail ON sg_version_file (candidate_id) WHERE file_role = 'thumbnail';
+CREATE UNIQUE INDEX uk_sg_version_file_proxy_media ON sg_version_file (candidate_id) WHERE file_role = 'proxy_media';
 COMMENT ON TABLE sg_version_file IS 'Shot Grid版本文件用途关系表';
 COMMENT ON COLUMN sg_version_file.version_id IS '版本ID';
+COMMENT ON COLUMN sg_version_file.candidate_id IS '所属版本候选ID';
 COMMENT ON COLUMN sg_version_file.file_id IS '平台文件ID';
 COMMENT ON COLUMN sg_version_file.file_role IS '文件用途';
 COMMENT ON COLUMN sg_version_file.business_file_name IS '业务展示和下载文件名';
@@ -2709,7 +2877,8 @@ COMMENT ON COLUMN sg_version_file.create_time IS '创建时间';
 
 -- sg_media_derivation
 CREATE TABLE sg_media_derivation (
-	version_id BIGINT NOT NULL PRIMARY KEY,
+	candidate_id BIGINT NOT NULL PRIMARY KEY,
+	version_id BIGINT NOT NULL,
 	source_file_id VARCHAR(36) NOT NULL,
 	media_kind VARCHAR(10) NOT NULL,
 	derivation_status VARCHAR(20) DEFAULT 'pending' NOT NULL,
@@ -2726,11 +2895,13 @@ CREATE TABLE sg_media_derivation (
 	CONSTRAINT ck_sg_media_derivation_attempt_count CHECK (attempt_count >= 0),
 	CONSTRAINT ck_sg_media_derivation_lease CHECK ((derivation_status = 'processing' and lease_owner is not null and lease_until is not null) or (derivation_status <> 'processing' and lease_owner is null and lease_until is null)),
 	CONSTRAINT ck_sg_media_derivation_error CHECK ((derivation_status = 'failed' and last_error_key is not null and last_error_message is not null) or (derivation_status <> 'failed' and last_error_key is null and last_error_message is null)),
-	FOREIGN KEY(version_id) REFERENCES sg_version (version_id) ON DELETE RESTRICT,
+	CONSTRAINT fk_sg_media_derivation_candidate_version FOREIGN KEY(candidate_id, version_id) REFERENCES sg_version_candidate (candidate_id, version_id) ON DELETE RESTRICT,
 	FOREIGN KEY(source_file_id) REFERENCES sys_file_info (file_id) ON DELETE RESTRICT
 );
 CREATE INDEX idx_sg_media_derivation_due ON sg_media_derivation (derivation_status, next_retry_time, update_time);
+CREATE INDEX idx_sg_media_derivation_version ON sg_media_derivation (version_id);
 COMMENT ON TABLE sg_media_derivation IS 'Shot Grid媒体派生任务';
+COMMENT ON COLUMN sg_media_derivation.candidate_id IS '版本候选ID';
 
 -- sg_review_list_version
 CREATE TABLE sg_review_list_version (
@@ -3017,7 +3188,7 @@ create table if not exists alembic_version (
     constraint alembic_version_pkc primary key (version_num)
 );
 delete from alembic_version;
-insert into alembic_version(version_num) values ('20260825_19');
+insert into alembic_version(version_num) values ('20260826_22');
 
 
 CREATE OR REPLACE FUNCTION "find_in_set"(int8, varchar)

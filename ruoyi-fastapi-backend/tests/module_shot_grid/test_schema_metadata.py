@@ -6,7 +6,7 @@ from module_admin.entity.do.file_do import SysFileInfo  # noqa: F401
 from module_admin.entity.do.user_do import SysUser  # noqa: F401
 from module_shot_grid.schema import SHOT_GRID_TABLE_NAMES
 
-EXPECTED_TABLE_COUNT = 27
+EXPECTED_TABLE_COUNT = 31
 
 
 def _primary_key_columns(table_name: str) -> tuple[str, ...]:
@@ -99,6 +99,40 @@ def test_primary_version_file_can_only_be_review_media() -> None:
     }
 
     assert checks['ck_sg_version_file_primary_role'] == "is_primary = '0' or file_role = 'review_media'"
+
+
+def test_version_round_uses_candidate_level_file_and_derivation_guards() -> None:
+    candidate = Base.metadata.tables['sg_version_candidate']
+    version_file = Base.metadata.tables['sg_version_file']
+    derivation = Base.metadata.tables['sg_media_derivation']
+    submission_file = Base.metadata.tables['sg_version_submission_file']
+
+    assert {'candidate_id', 'version_id', 'candidate_no', 'submission_file_id'} <= set(candidate.c.keys())
+    assert {'candidate_id', 'version_id'} <= set(version_file.c.keys())
+    assert _primary_key_columns('sg_media_derivation') == ('candidate_id',)
+    assert {'candidate_id', 'version_id'} <= set(derivation.c.keys())
+    assert {'submission_id', 'client_file_key', 'candidate_no', 'source_file_id', 'publish_status'} <= set(
+        submission_file.c.keys()
+    )
+
+    primary_review = next(index for index in version_file.indexes if index.name == 'uk_sg_version_file_primary_review')
+    assert [column.name for column in primary_review.columns] == ['candidate_id']
+    assert primary_review.unique is True
+
+
+def test_final_delivery_has_unique_version_and_fenced_execution_state() -> None:
+    delivery = Base.metadata.tables['sg_final_delivery']
+    checks = {
+        constraint.name: str(constraint.sqltext)
+        for constraint in delivery.constraints
+        if isinstance(constraint, CheckConstraint)
+    }
+    version_index = next(index for index in delivery.indexes if index.name == 'uk_sg_final_delivery_version')
+
+    assert version_index.unique is True
+    assert [column.name for column in version_index.columns] == ['version_id']
+    assert "delivery_status = 'publishing'" in checks['ck_sg_final_delivery_lease']
+    assert "publish_mode in ('hardlink', 'copied', 'reused')" in checks['ck_sg_final_delivery_result']
 
 
 def test_json_columns_compile_to_jsonb_on_postgresql() -> None:

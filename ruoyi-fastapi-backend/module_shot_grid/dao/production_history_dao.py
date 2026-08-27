@@ -201,6 +201,7 @@ class ShotGridProductionHistoryDao:
                     SysUser.user_name.label('submitter_user_name'),
                     SysUser.nick_name.label('submitter_nick_name'),
                     ShotGridVersion.submitted_time,
+                    ShotGridVersion.selected_candidate_id,
                 )
                 .outerjoin(SysUser, SysUser.user_id == ShotGridVersion.submitted_by)
                 .where(
@@ -221,6 +222,7 @@ class ShotGridProductionHistoryDao:
             await db.execute(
                 select(
                     ShotGridVersionFile.version_id,
+                    ShotGridVersionFile.candidate_id,
                     ShotGridVersionFile.file_id,
                     ShotGridVersionFile.business_file_name,
                     ShotGridVersionFile.file_role,

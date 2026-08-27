@@ -7,6 +7,7 @@ from config.database import Base
 from module_shot_grid.schema import (
     SHOT_GRID_DEFERRED_ASSET_DIRECTORY_SCHEMA_REVISION,
     SHOT_GRID_DEFERRED_SHOT_DIRECTORY_SCHEMA_REVISION,
+    SHOT_GRID_FINAL_DELIVERY_SCHEMA_REVISION,
     SHOT_GRID_IMPORT_SCHEMA_REVISION,
     SHOT_GRID_INITIAL_SCHEMA_REVISION,
     SHOT_GRID_MANAGED_USER_ROLE_SCHEMA_REVISION,
@@ -18,9 +19,11 @@ from module_shot_grid.schema import (
     SHOT_GRID_SCENE_SEQUENCE_GUARD_SCHEMA_REVISION,
     SHOT_GRID_SCHEMA_REVISION,
     SHOT_GRID_SHOT_DELETE_SCHEMA_REVISION,
+    SHOT_GRID_SINGLE_CANDIDATE_DEFAULT_SCHEMA_REVISION,
     SHOT_GRID_STORAGE_WORKER_SCHEMA_REVISION,
     SHOT_GRID_TABLE_NAMES,
     SHOT_GRID_TASK_VERSION_REVIEW_SCHEMA_REVISION,
+    SHOT_GRID_VERSION_CANDIDATE_SCHEMA_REVISION,
 )
 
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
@@ -113,7 +116,8 @@ def test_schema_repair_migration_extends_member_lifecycle_and_covers_metadata() 
     assert migration['revision'] == SHOT_GRID_REPAIR_SCHEMA_REVISION
     assert migration['down_revision'] == SHOT_GRID_MEMBER_SCHEMA_REVISION
     assert {item for item in repaired_timestamp_columns if item[0] in surviving_initial_tables} == timestamp_columns - {
-        ('sg_project_member', 'removed_time')
+        ('sg_project_member', 'removed_time'),
+        ('sg_version', 'selected_time'),
     }
     assert repaired_timestamp_columns - {
         item for item in repaired_timestamp_columns if item[0] in surviving_initial_tables
@@ -376,6 +380,74 @@ def test_deferred_asset_directory_migration_extends_project_purge_and_allows_ass
 def test_deferred_asset_directory_migration_is_an_explicit_non_postgresql_noop() -> None:
     migration = _migration_namespace(SHOT_GRID_DEFERRED_ASSET_DIRECTORY_SCHEMA_REVISION)
 
+    for action_name in ('upgrade', 'downgrade'):
+        action = migration[action_name]
+        action.__globals__['_is_postgresql'] = lambda: False
+        action()
+
+
+def test_version_candidate_migration_extends_asset_directory_and_backfills_candidate_one() -> None:
+    migration = _migration_namespace(SHOT_GRID_VERSION_CANDIDATE_SCHEMA_REVISION)
+    source = Path(migration['__file__']).read_text(encoding='utf-8')
+
+    assert migration['revision'] == SHOT_GRID_VERSION_CANDIDATE_SCHEMA_REVISION
+    assert migration['down_revision'] == SHOT_GRID_DEFERRED_ASSET_DIRECTORY_SCHEMA_REVISION
+    assert 'CREATE TABLE sg_version_submission_file' in source
+    assert 'CREATE TABLE sg_version_candidate' in source
+    assert 'CREATE TABLE sg_version_candidate_selection' in source
+    assert 'candidate.candidate_no = 1' in source
+    assert 'multiple candidate files exist' in source
+    assert 'restore from a pre-upgrade backup' in source
+
+
+def test_version_candidate_migration_is_an_explicit_non_postgresql_noop() -> None:
+    migration = _migration_namespace(SHOT_GRID_VERSION_CANDIDATE_SCHEMA_REVISION)
+    for action_name in ('upgrade', 'downgrade'):
+        action = migration[action_name]
+        action.__globals__['_is_postgresql'] = lambda: False
+        action()
+
+
+def test_final_delivery_migration_extends_candidate_schema_and_adds_fenced_outbox() -> None:
+    migration = _migration_namespace(SHOT_GRID_FINAL_DELIVERY_SCHEMA_REVISION)
+    source = Path(migration['__file__']).read_text(encoding='utf-8')
+
+    assert migration['revision'] == SHOT_GRID_FINAL_DELIVERY_SCHEMA_REVISION
+    assert migration['down_revision'] == SHOT_GRID_VERSION_CANDIDATE_SCHEMA_REVISION
+    assert 'CREATE TABLE sg_final_delivery' in source
+    assert 'uk_sg_final_delivery_version' in source
+    assert "delivery_status = 'publishing'" in source
+    assert "publish_mode IN ('hardlink', 'copied', 'reused')" in source
+    assert 'cannot downgrade while sg_final_delivery contains final delivery audit rows' in source
+    expected_execute_count = 6
+    assert source.count('op.execute(') == expected_execute_count
+    assert ');\n        CREATE UNIQUE INDEX' not in source
+    assert '_use_compatible_existing_table' in source
+    assert 'already exists but is incompatible with migration 20260826_21' in source
+
+
+def test_final_delivery_migration_is_an_explicit_non_postgresql_noop() -> None:
+    migration = _migration_namespace(SHOT_GRID_FINAL_DELIVERY_SCHEMA_REVISION)
+    for action_name in ('upgrade', 'downgrade'):
+        action = migration[action_name]
+        action.__globals__['_is_postgresql'] = lambda: False
+        action()
+
+
+def test_single_candidate_default_migration_backfills_selection_and_primary_media() -> None:
+    migration = _migration_namespace(SHOT_GRID_SINGLE_CANDIDATE_DEFAULT_SCHEMA_REVISION)
+    source = Path(migration['__file__']).read_text(encoding='utf-8')
+
+    assert migration['revision'] == SHOT_GRID_SINGLE_CANDIDATE_DEFAULT_SCHEMA_REVISION
+    assert migration['down_revision'] == SHOT_GRID_FINAL_DELIVERY_SCHEMA_REVISION
+    assert 'HAVING count(*) = 1' in source
+    assert 'SET selected_candidate_id = single_candidate.candidate_id' in source
+    assert "version_file.file_role = 'review_media' THEN '1'" in source
+    assert '降级代码时保留已确定的本轮最佳' in source
+
+
+def test_single_candidate_default_migration_is_an_explicit_non_postgresql_noop() -> None:
+    migration = _migration_namespace(SHOT_GRID_SINGLE_CANDIDATE_DEFAULT_SCHEMA_REVISION)
     for action_name in ('upgrade', 'downgrade'):
         action = migration[action_name]
         action.__globals__['_is_postgresql'] = lambda: False

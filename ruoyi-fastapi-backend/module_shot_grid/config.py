@@ -45,6 +45,25 @@ class ShotGridPlaybackConfig(BaseSettings):
 SHOT_GRID_PLAYBACK_CONFIG = ShotGridPlaybackConfig()
 
 
+class ShotGridVersionSubmissionConfig(BaseSettings):
+    """制作版本候选批次的服务端强制边界。"""
+
+    model_config = SettingsConfigDict(env_prefix='SHOT_GRID_VERSION_SUBMISSION_', extra='ignore')
+
+    max_candidates: int = Field(default=10, ge=1, le=50)
+    max_file_size_bytes: int = Field(default=100 * 1024 * 1024, gt=0)
+    max_batch_size_bytes: int = Field(default=500 * 1024 * 1024, gt=0)
+
+    @model_validator(mode='after')
+    def validate_size_boundaries(self) -> 'ShotGridVersionSubmissionConfig':
+        if self.max_batch_size_bytes < self.max_file_size_bytes:
+            raise ValueError('候选批次大小上限不能小于单文件大小上限')
+        return self
+
+
+SHOT_GRID_VERSION_SUBMISSION_CONFIG = ShotGridVersionSubmissionConfig()
+
+
 class ShotGridNasMountConfig(BaseSettings):
     """Windows UNC 与非 Windows 运行节点挂载目录的受控映射。"""
 

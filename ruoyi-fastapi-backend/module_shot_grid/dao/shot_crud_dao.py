@@ -19,7 +19,12 @@ from module_shot_grid.entity.do.project_do import (
 from module_shot_grid.entity.do.review_do import ShotGridNote
 from module_shot_grid.entity.do.storage_do import ShotGridProjectStorage, ShotGridStorageOperation
 from module_shot_grid.entity.do.task_do import ShotGridTask
-from module_shot_grid.entity.do.version_do import ShotGridVersion, ShotGridVersionFile, ShotGridVersionSubmission
+from module_shot_grid.entity.do.version_do import (
+    ShotGridVersion,
+    ShotGridVersionCandidate,
+    ShotGridVersionFile,
+    ShotGridVersionSubmission,
+)
 from module_shot_grid.entity.vo.shot_crud_vo import ShotGridShotListQueryModel
 
 
@@ -40,6 +45,12 @@ class ShotGridShotCrudDao:
         assignee = aliased(SysUser, name='shot_list_assignee')
         status_expression = cls._status_expression(task)
         latest_operation_status = cls._latest_operation_status()
+        has_uncommitted_submission = exists(
+            select(1).where(
+                ShotGridVersionSubmission.task_id == task.task_id,
+                ShotGridVersionSubmission.submission_status != 'committed',
+            )
+        )
 
         statement = (
             select(
@@ -72,6 +83,7 @@ class ShotGridShotCrudDao:
                 task.task_id,
                 task.task_kind,
                 task.task_status,
+                has_uncommitted_submission.label('has_uncommitted_submission'),
                 task.priority,
                 task.due_date,
                 task.lock_version.label('task_lock_version'),
@@ -266,6 +278,7 @@ class ShotGridShotCrudDao:
                 ShotGridVersion.version_id,
                 ShotGridVersion.version_no,
                 ShotGridVersion.version_status,
+                ShotGridVersion.selected_candidate_id,
             )
             .where(
                 ShotGridVersion.project_id == project_id,
@@ -275,18 +288,34 @@ class ShotGridShotCrudDao:
             .limit(1)
             .lateral('shot_latest_version')
         )
-        primary_review_media = (
+        display_candidate = (
+            select(ShotGridVersionCandidate.candidate_id)
+            .where(ShotGridVersionCandidate.version_id == latest_version.c.version_id)
+            .order_by(
+                case(
+                    (ShotGridVersionCandidate.candidate_id == latest_version.c.selected_candidate_id, 0),
+                    else_=1,
+                ),
+                ShotGridVersionCandidate.sort_order,
+                ShotGridVersionCandidate.candidate_no,
+                ShotGridVersionCandidate.candidate_id,
+            )
+            .limit(1)
+            .lateral('shot_display_candidate')
+        )
+        display_review_media = (
             select(
                 ShotGridVersionFile.file_id,
                 ShotGridVersionFile.business_file_name,
             )
             .where(
                 ShotGridVersionFile.version_id == latest_version.c.version_id,
+                ShotGridVersionFile.candidate_id == display_candidate.c.candidate_id,
                 ShotGridVersionFile.file_role == 'review_media',
-                ShotGridVersionFile.is_primary == '1',
             )
+            .order_by(ShotGridVersionFile.sort_order, ShotGridVersionFile.file_id)
             .limit(1)
-            .lateral('shot_primary_review_media')
+            .lateral('shot_display_review_media')
         )
         thumbnail = (
             select(
@@ -295,6 +324,7 @@ class ShotGridShotCrudDao:
             )
             .where(
                 ShotGridVersionFile.version_id == latest_version.c.version_id,
+                ShotGridVersionFile.candidate_id == display_candidate.c.candidate_id,
                 ShotGridVersionFile.file_role == 'thumbnail',
             )
             .order_by(ShotGridVersionFile.sort_order, ShotGridVersionFile.file_id)
@@ -308,6 +338,7 @@ class ShotGridShotCrudDao:
             )
             .where(
                 ShotGridVersionFile.version_id == latest_version.c.version_id,
+                ShotGridVersionFile.candidate_id == display_candidate.c.candidate_id,
                 ShotGridVersionFile.file_role == 'proxy_media',
             )
             .order_by(ShotGridVersionFile.sort_order, ShotGridVersionFile.file_id)
@@ -340,7 +371,7 @@ class ShotGridShotCrudDao:
                 latest_version.c.version_id.label('latest_version_id'),
                 latest_version.c.version_no.label('latest_version_no'),
                 latest_version.c.version_status.label('latest_version_status'),
-                primary_review_media.c.business_file_name.label('latest_business_file_name'),
+                display_review_media.c.business_file_name.label('latest_business_file_name'),
                 thumbnail.c.file_id.label('thumbnail_file_id'),
                 thumbnail.c.business_file_name.label('thumbnail_business_file_name'),
                 proxy_media.c.file_id.label('proxy_media_file_id'),
@@ -361,7 +392,8 @@ class ShotGridShotCrudDao:
                 ),
             )
             .outerjoin(latest_version, true())
-            .outerjoin(primary_review_media, true())
+            .outerjoin(display_candidate, true())
+            .outerjoin(display_review_media, true())
             .outerjoin(thumbnail, true())
             .outerjoin(proxy_media, true())
             .outerjoin(latest_feedback, true())

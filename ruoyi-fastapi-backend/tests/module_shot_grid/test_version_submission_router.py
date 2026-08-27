@@ -107,14 +107,18 @@ async def test_preflight_route_returns_stable_ready_contract(monkeypatch: pytest
         taskId=7,
         taskKind='shot_video',
         taskStatus='in_progress',
-        fileExtension='mov',
+        candidates=[
+            {'clientFileKey': 'candidate-1', 'candidateNo': 1, 'candidateNumber': 'V001_01', 'fileExtension': 'mov'}
+        ],
+        maxCandidates=10,
+        maxFileSizeBytes=100 * 1024 * 1024,
+        maxBatchSizeBytes=500 * 1024 * 1024,
         openIssueSnapshotHash='0' * 64,
     )
     preflight = AsyncMock(return_value=result)
     monkeypatch.setattr(ShotGridVersionSubmissionService, 'preflight_submission', preflight)
     command = ShotGridVersionSubmissionPreflightModel(
-        fileName='result.mov',
-        fileSize=8,
+        candidates=[{'clientFileKey': 'candidate-1', 'fileName': 'result.mov', 'fileSize': 8, 'sortOrder': 0}],
         changelog='完成首版',
     )
     current_user = CurrentUserModel(
@@ -136,7 +140,12 @@ async def test_preflight_route_returns_stable_ready_contract(monkeypatch: pytest
         'taskId': 7,
         'taskKind': 'shot_video',
         'taskStatus': 'in_progress',
-        'fileExtension': 'mov',
+        'candidates': [
+            {'clientFileKey': 'candidate-1', 'candidateNo': 1, 'candidateNumber': 'V001_01', 'fileExtension': 'mov'}
+        ],
+        'maxCandidates': 10,
+        'maxFileSizeBytes': 100 * 1024 * 1024,
+        'maxBatchSizeBytes': 500 * 1024 * 1024,
         'openIssueSnapshotHash': '0' * 64,
         'allowedActions': ['version.add'],
     }

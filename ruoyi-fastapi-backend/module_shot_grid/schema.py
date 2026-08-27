@@ -19,7 +19,10 @@ SHOT_GRID_SCENE_SEQUENCE_GUARD_SCHEMA_REVISION = '20260821_16'
 SHOT_GRID_REVIEW_ISSUE_DRAFT_SCHEMA_REVISION = '20260821_17'
 SHOT_GRID_PROJECT_PURGE_SCHEMA_REVISION = '20260825_18'
 SHOT_GRID_DEFERRED_ASSET_DIRECTORY_SCHEMA_REVISION = '20260825_19'
-SHOT_GRID_SCHEMA_REVISION = SHOT_GRID_DEFERRED_ASSET_DIRECTORY_SCHEMA_REVISION
+SHOT_GRID_VERSION_CANDIDATE_SCHEMA_REVISION = '20260826_20'
+SHOT_GRID_FINAL_DELIVERY_SCHEMA_REVISION = '20260826_21'
+SHOT_GRID_SINGLE_CANDIDATE_DEFAULT_SCHEMA_REVISION = '20260826_22'
+SHOT_GRID_SCHEMA_REVISION = SHOT_GRID_SINGLE_CANDIDATE_DEFAULT_SCHEMA_REVISION
 
 SHOT_GRID_NAVIGATION_ROUTE_KEYS = ('workbench', 'projects', 'shots', 'assets', 'reviews', 'files')
 
@@ -37,6 +40,9 @@ SHOT_GRID_TABLE_NAMES = frozenset(
         'sg_shot_asset',
         'sg_task',
         'sg_version',
+        'sg_version_candidate',
+        'sg_version_candidate_selection',
+        'sg_final_delivery',
         'sg_version_file',
         'sg_media_derivation',
         'sg_note',
@@ -50,6 +56,7 @@ SHOT_GRID_TABLE_NAMES = frozenset(
         'sg_project_storage',
         'sg_storage_operation',
         'sg_version_submission',
+        'sg_version_submission_file',
         'sg_import_batch',
         'sg_shot_asset_requirement',
     }

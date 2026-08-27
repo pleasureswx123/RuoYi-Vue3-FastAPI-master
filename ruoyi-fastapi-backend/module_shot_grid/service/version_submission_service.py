@@ -21,7 +21,7 @@ from module_admin.entity.do.user_do import SysUser
 from module_admin.entity.vo.user_vo import CurrentUserModel
 from module_admin.service.common_service import CommonService
 from module_admin.service.file_business_service import FileReferenceService
-from module_shot_grid.config import SHOT_GRID_PLAYBACK_CONFIG
+from module_shot_grid.config import SHOT_GRID_PLAYBACK_CONFIG, SHOT_GRID_VERSION_SUBMISSION_CONFIG
 from module_shot_grid.dao.media_derivation_dao import ShotGridMediaDerivationDao
 from module_shot_grid.dao.project_audit_dao import ShotGridProjectAuditDao
 from module_shot_grid.dao.review_dao import ShotGridReviewDao
@@ -34,14 +34,18 @@ from module_shot_grid.entity.do.review_do import (
 from module_shot_grid.entity.do.task_do import ShotGridTask
 from module_shot_grid.entity.do.version_do import (
     ShotGridVersion,
+    ShotGridVersionCandidate,
     ShotGridVersionFile,
     ShotGridVersionSubmission,
+    ShotGridVersionSubmissionFile,
 )
 from module_shot_grid.entity.vo.access_vo import ShotGridProjectAccessModel
 from module_shot_grid.entity.vo.version_submission_vo import (
     ShotGridPlaybackTicketModel,
     ShotGridVersionSubmissionAcceptedModel,
+    ShotGridVersionSubmissionCandidateStatusModel,
     ShotGridVersionSubmissionCreateModel,
+    ShotGridVersionSubmissionPreflightCandidateResultModel,
     ShotGridVersionSubmissionPreflightModel,
     ShotGridVersionSubmissionPreflightResultModel,
     ShotGridVersionSubmissionStatusModel,
@@ -67,6 +71,7 @@ WINDOWS_RESERVED_NAMES = {
 MAX_BUSINESS_FILENAME_LENGTH = 255
 MIN_SHORTENED_VARIABLE_LENGTH = 16
 MAX_IDEMPOTENCY_KEY_LENGTH = 100
+MAX_CANDIDATE_NUMBER = 99
 
 
 class ShotGridVersionSubmissionService:
@@ -106,21 +111,36 @@ class ShotGridVersionSubmissionService:
                 '任务已有正在处理或待处理失败的版本提交',
             )
 
-        extension = cls._preflight_file_extension(task_context['task_kind'], command.file_name)
         version_no = await ShotGridVersionSubmissionDao.next_reserved_version_no(db, task_id)
-        business_file_name = cls.build_business_file_name(
-            task_context,
-            version_no=version_no,
-            generated_at_ms=int(time.time_ns() // 1_000_000),
-            extension=extension,
-        )
-        cls.build_target_relative_path(task_context, business_file_name)
+        generated_at_ms = int(time.time_ns() // 1_000_000)
+        candidate_results: list[ShotGridVersionSubmissionPreflightCandidateResultModel] = []
+        for candidate_no, candidate in enumerate(command.candidates, start=1):
+            extension = cls._preflight_file_extension(task_context['task_kind'], candidate.file_name)
+            business_file_name = cls.build_business_file_name(
+                task_context,
+                version_no=version_no,
+                candidate_no=candidate_no,
+                generated_at_ms=generated_at_ms,
+                extension=extension,
+            )
+            cls.build_target_relative_path(task_context, business_file_name)
+            candidate_results.append(
+                ShotGridVersionSubmissionPreflightCandidateResultModel(
+                    clientFileKey=candidate.client_file_key,
+                    candidateNo=candidate_no,
+                    candidateNumber=f'V{version_no:03d}_{candidate_no:02d}',
+                    fileExtension=extension,
+                )
+            )
         return ShotGridVersionSubmissionPreflightResultModel(
             ready=True,
             taskId=task_id,
             taskKind=task_context['task_kind'],
             taskStatus=task_context['task_status'],
-            fileExtension=extension,
+            candidates=candidate_results,
+            maxCandidates=SHOT_GRID_VERSION_SUBMISSION_CONFIG.max_candidates,
+            maxFileSizeBytes=SHOT_GRID_VERSION_SUBMISSION_CONFIG.max_file_size_bytes,
+            maxBatchSizeBytes=SHOT_GRID_VERSION_SUBMISSION_CONFIG.max_batch_size_bytes,
             openIssueSnapshotHash=issue_snapshot_hash,
             allowedActions=['version.add'],
         )
@@ -161,7 +181,11 @@ class ShotGridVersionSubmissionService:
             )
             if existing is not None:
                 await cls._require_same_command(db, existing, command)
-                result = cls._accepted(existing, task.task_status, replayed=True)
+                submission_files = await ShotGridVersionSubmissionDao.get_submission_files(
+                    db,
+                    existing.submission_id,
+                )
+                result = cls._accepted(existing, submission_files, task.task_status, replayed=True)
                 await db.rollback()
                 return result
             cls._require_mutable_project_task(project, task)
@@ -174,11 +198,22 @@ class ShotGridVersionSubmissionService:
             task_context = await cls._require_task_context(db, task_id)
             cls._require_context_ready(task_context)
             cls._require_submit_access(access, cls._task_access_view(task_context), actor_id)
-            source_file = await FileInfoDao.get_file_info_by_id(db, command.file_id)
-            await cls._require_source_file_access(db, current_user, source_file, command.file_id)
             adapter = path_adapter or ShotGridVersionPublishPathAdapter()
-            inspection = await cls._inspect_source(adapter, source_file, task_context['task_kind'])
-            source_storage_key_snapshot = str(source_file.storage_key)
+            source_snapshots: dict[str, dict[str, Any]] = {}
+            for candidate in command.candidates:
+                source_file = await FileInfoDao.get_file_info_by_id(db, candidate.file_id)
+                await cls._require_source_file_access(db, current_user, source_file, candidate.file_id)
+                inspection = await cls._inspect_source(adapter, source_file, task_context['task_kind'])
+                source_snapshots[candidate.file_id] = {
+                    'inspection': inspection,
+                    'storage_key': str(source_file.storage_key),
+                }
+            total_file_size = sum(int(snapshot['inspection'].file_size) for snapshot in source_snapshots.values())
+            if total_file_size > SHOT_GRID_VERSION_SUBMISSION_CONFIG.max_batch_size_bytes:
+                raise shot_grid_error(422, 'SG_VERSION_BATCH_TOO_LARGE', '候选文件总大小超过批次上限')
+            source_hashes = [str(snapshot['inspection'].sha256).casefold() for snapshot in source_snapshots.values()]
+            if len(source_hashes) != len(set(source_hashes)):
+                raise shot_grid_error(422, 'SG_VERSION_CANDIDATE_DUPLICATE', '同一批次不能重复提交相同内容')
             await db.rollback()
         except Exception:
             await db.rollback()
@@ -199,7 +234,11 @@ class ShotGridVersionSubmissionService:
             )
             if existing is not None:
                 await cls._require_same_command(db, existing, command)
-                result = cls._accepted(existing, task.task_status, replayed=True)
+                submission_files = await ShotGridVersionSubmissionDao.get_submission_files(
+                    db,
+                    existing.submission_id,
+                )
+                result = cls._accepted(existing, submission_files, task.task_status, replayed=True)
                 await db.commit()
                 return result
             cls._require_mutable_project_task(project, task)
@@ -230,43 +269,62 @@ class ShotGridVersionSubmissionService:
                 issue_responses=command.issue_responses,
             )
 
-            locked_file = await FileInfoDao.get_file_info_by_id_for_update(db, command.file_id, true())
-            await cls._require_locked_source_matches(
-                db,
-                current_user,
-                locked_file,
-                source_storage_key_snapshot,
-                inspection,
-            )
-            if await ShotGridVersionSubmissionDao.source_file_is_bound(db, command.file_id):
-                raise shot_grid_error(409, 'SG_VERSION_FILE_ALREADY_BOUND', '文件已经绑定到其他版本提交')
+            for file_id in sorted(source_snapshots):
+                snapshot = source_snapshots[file_id]
+                locked_file = await FileInfoDao.get_file_info_by_id_for_update(db, file_id, true())
+                await cls._require_locked_source_matches(
+                    db,
+                    current_user,
+                    locked_file,
+                    str(snapshot['storage_key']),
+                    snapshot['inspection'],
+                )
+                if await ShotGridVersionSubmissionDao.source_file_is_bound(db, file_id):
+                    raise shot_grid_error(409, 'SG_VERSION_FILE_ALREADY_BOUND', '文件已经绑定到其他版本提交')
 
             version_no = await ShotGridVersionSubmissionDao.next_reserved_version_no(db, task_id)
             generated_at_ms = int(time.time_ns() // 1_000_000)
-            business_file_name = cls.build_business_file_name(
-                task_context,
-                version_no=version_no,
-                generated_at_ms=generated_at_ms,
-                extension=inspection.extension,
-            )
-            target_relative_path = cls.build_target_relative_path(task_context, business_file_name)
-            placeholder_temp = str(
-                PureWindowsPath(target_relative_path).parent / f'.sgtmp-pending-{uuid.uuid4().hex}.part'
-            )
+            candidate_specs: list[dict[str, Any]] = []
+            for candidate_no, candidate in enumerate(command.candidates, start=1):
+                inspection = source_snapshots[candidate.file_id]['inspection']
+                if inspection.file_size > SHOT_GRID_VERSION_SUBMISSION_CONFIG.max_file_size_bytes:
+                    raise shot_grid_error(422, 'SG_VERSION_FILE_TOO_LARGE', '候选文件超过单文件大小上限')
+                business_file_name = cls.build_business_file_name(
+                    task_context,
+                    version_no=version_no,
+                    candidate_no=candidate_no,
+                    generated_at_ms=generated_at_ms,
+                    extension=inspection.extension,
+                )
+                target_relative_path = cls.build_target_relative_path(task_context, business_file_name)
+                candidate_specs.append(
+                    {
+                        'candidate': candidate,
+                        'candidate_no': candidate_no,
+                        'inspection': inspection,
+                        'business_file_name': business_file_name,
+                        'target_relative_path': target_relative_path,
+                        'temporary_relative_path': str(
+                            PureWindowsPath(target_relative_path).parent
+                            / f'.sgtmp-pending-{candidate_no:02d}-{uuid.uuid4().hex}.part'
+                        ),
+                    }
+                )
+            primary_spec = candidate_specs[0]
             now = cls._now()
             submission = await ShotGridVersionSubmissionDao.add_submission(
                 db,
                 ShotGridVersionSubmission(
                     project_id=project_id,
                     task_id=task_id,
-                    source_file_id=command.file_id,
+                    source_file_id=primary_spec['candidate'].file_id,
                     reserved_version_no=version_no,
                     generated_at_ms=generated_at_ms,
-                    business_file_name=business_file_name,
-                    target_relative_path=target_relative_path,
-                    temporary_relative_path=placeholder_temp,
-                    source_sha256=inspection.sha256,
-                    source_file_size=inspection.file_size,
+                    business_file_name=primary_spec['business_file_name'],
+                    target_relative_path=primary_spec['target_relative_path'],
+                    temporary_relative_path=primary_spec['temporary_relative_path'],
+                    source_sha256=primary_spec['inspection'].sha256,
+                    source_file_size=primary_spec['inspection'].file_size,
                     changelog=command.changelog,
                     ai_params=command.ai_params,
                     open_issue_snapshot_hash=issue_snapshot_hash,
@@ -281,6 +339,31 @@ class ShotGridVersionSubmissionService:
                     create_time=now,
                     update_time=now,
                 ),
+            )
+            submission_files = await ShotGridVersionSubmissionDao.add_submission_files(
+                db,
+                [
+                    ShotGridVersionSubmissionFile(
+                        submission_id=submission.submission_id,
+                        client_file_key=spec['candidate'].client_file_key,
+                        candidate_no=spec['candidate_no'],
+                        source_file_id=spec['candidate'].file_id,
+                        business_file_name=spec['business_file_name'],
+                        target_relative_path=spec['target_relative_path'],
+                        temporary_relative_path=spec['temporary_relative_path'],
+                        source_sha256=spec['inspection'].sha256,
+                        source_file_size=spec['inspection'].file_size,
+                        candidate_note=spec['candidate'].candidate_note,
+                        sort_order=spec['candidate'].sort_order,
+                        publish_status='pending',
+                        published_time=None,
+                        last_error_key=None,
+                        last_error_message=None,
+                        create_time=now,
+                        update_time=now,
+                    )
+                    for spec in candidate_specs
+                ],
             )
             now = cls._now()
             await ShotGridVersionSubmissionDao.add_issue_responses(
@@ -301,10 +384,10 @@ class ShotGridVersionSubmissionService:
                 db,
                 cls.TEMP_REFERENCE_TYPE,
                 str(submission.submission_id),
-                [command.file_id],
+                [candidate.file_id for candidate in command.candidates],
                 actor_name,
                 true(),
-                business_name=business_file_name,
+                business_name=f'V{version_no:03d} 候选文件',
             )
             await cls._audit(
                 db,
@@ -314,14 +397,14 @@ class ShotGridVersionSubmissionService:
                 actor_name=actor_name,
                 current_user=current_user,
                 oper_url=f'/shot-grid/tasks/{task_id}/version-submissions',
-                payload={'taskId': task_id, 'fileId': command.file_id},
+                payload={'taskId': task_id, 'candidateCount': len(command.candidates)},
                 result={
                     'submissionId': submission.submission_id,
                     'reservedVersionNo': version_no,
                     'submissionStatus': 'pending',
                 },
             )
-            result = cls._accepted(submission, task.task_status, replayed=False)
+            result = cls._accepted(submission, submission_files, task.task_status, replayed=False)
             await db.commit()
             return result
         except IntegrityError as exc:
@@ -358,7 +441,8 @@ class ShotGridVersionSubmissionService:
             raise shot_grid_error(404, 'SG_VERSION_SUBMISSION_NOT_FOUND', '版本提交不存在或不可见')
         access = await ShotGridProjectAccessService.resolve_access(db, current_user, row['project_id'])
         cls._require_submission_access(access, row, actor_id)
-        return cls._status_model(row)
+        submission_files = await ShotGridVersionSubmissionDao.get_submission_files(db, submission_id)
+        return cls._status_model(row, submission_files)
 
     @classmethod
     async def get_current_submission_status(
@@ -378,7 +462,8 @@ class ShotGridVersionSubmissionService:
         if row is None:
             return None
         cls._require_submission_access(access, row, actor_id)
-        return cls._status_model(row)
+        submission_files = await ShotGridVersionSubmissionDao.get_submission_files(db, row['submission_id'])
+        return cls._status_model(row, submission_files)
 
     @classmethod
     async def retry_submission(  # noqa: PLR0915
@@ -403,11 +488,22 @@ class ShotGridVersionSubmissionService:
         try:
             task_context = await cls._require_task_context(db, row['task_id'])
             cls._require_context_ready(task_context)
-            source_file = await FileInfoDao.get_file_info_by_id(db, row['source_file_id'])
-            await cls._require_source_file_access(db, current_user, source_file, row['source_file_id'])
             adapter = path_adapter or ShotGridVersionPublishPathAdapter()
-            inspection = await cls._inspect_source(adapter, source_file, task_context['task_kind'])
-            source_storage_key_snapshot = str(source_file.storage_key)
+            submission_files = await ShotGridVersionSubmissionDao.get_submission_files(db, submission_id)
+            source_snapshots: dict[str, dict[str, Any]] = {}
+            for submission_file in submission_files:
+                source_file = await FileInfoDao.get_file_info_by_id(db, submission_file.source_file_id)
+                await cls._require_source_file_access(
+                    db,
+                    current_user,
+                    source_file,
+                    submission_file.source_file_id,
+                )
+                inspection = await cls._inspect_source(adapter, source_file, task_context['task_kind'])
+                source_snapshots[submission_file.source_file_id] = {
+                    'inspection': inspection,
+                    'storage_key': str(source_file.storage_key),
+                }
             await db.rollback()
         except Exception:
             await db.rollback()
@@ -431,23 +527,39 @@ class ShotGridVersionSubmissionService:
                 raise shot_grid_error(409, 'SG_VERSION_SUBMISSION_NOT_RETRYABLE', '当前版本提交状态不可重试')
             task_context = await cls._require_task_context(db, row['task_id'])
             cls._require_context_ready(task_context)
-            locked_file = await FileInfoDao.get_file_info_by_id_for_update(db, row['source_file_id'], true())
-            await cls._require_locked_source_matches(
+            submission_files = await ShotGridVersionSubmissionDao.get_submission_files(
                 db,
-                current_user,
-                locked_file,
-                source_storage_key_snapshot,
-                inspection,
+                submission_id,
+                for_update=True,
             )
-            if inspection.sha256 != submission.source_sha256 or inspection.file_size != submission.source_file_size:
-                raise shot_grid_error(409, 'SG_VERSION_SOURCE_FILE_CHANGED', '平台源文件摘要或大小已发生变化')
-            expected_target = cls.build_target_relative_path(task_context, submission.business_file_name)
-            if expected_target != submission.target_relative_path:
-                raise shot_grid_error(
-                    409,
-                    'SG_VERSION_TARGET_PATH_CONFLICT',
-                    '版本发布路径快照与当前任务不一致',
+            for file_id in sorted(source_snapshots):
+                snapshot = source_snapshots[file_id]
+                locked_file = await FileInfoDao.get_file_info_by_id_for_update(db, file_id, true())
+                await cls._require_locked_source_matches(
+                    db,
+                    current_user,
+                    locked_file,
+                    str(snapshot['storage_key']),
+                    snapshot['inspection'],
                 )
+            for submission_file in submission_files:
+                inspection = source_snapshots[submission_file.source_file_id]['inspection']
+                if (
+                    inspection.sha256.casefold() != submission_file.source_sha256.casefold()
+                    or inspection.file_size != submission_file.source_file_size
+                ):
+                    raise shot_grid_error(
+                        409,
+                        'SG_VERSION_SOURCE_FILE_CHANGED',
+                        '平台源文件摘要或大小已发生变化',
+                    )
+                expected_target = cls.build_target_relative_path(task_context, submission_file.business_file_name)
+                if expected_target != submission_file.target_relative_path:
+                    raise shot_grid_error(
+                        409,
+                        'SG_VERSION_TARGET_PATH_CONFLICT',
+                        '版本发布路径快照与当前任务不一致',
+                    )
 
             submission.submission_status = 'pending'
             submission.attempt_count = 0
@@ -455,7 +567,9 @@ class ShotGridVersionSubmissionService:
             submission.lease_until = None
             submission.last_error_key = None
             submission.last_error_message = None
-            submission.update_time = cls._now()
+            now = cls._now()
+            submission.update_time = now
+            await ShotGridVersionSubmissionDao.reset_failed_submission_files(db, submission_id, now)
             await cls._audit(
                 db,
                 method='retry_submission',
@@ -467,7 +581,11 @@ class ShotGridVersionSubmissionService:
                 payload={'submissionId': submission_id},
                 result={'submissionStatus': 'pending'},
             )
-            result = cls._accepted(submission, task.task_status, replayed=False)
+            submission_files = await ShotGridVersionSubmissionDao.get_submission_files(
+                db,
+                submission.submission_id,
+            )
+            result = cls._accepted(submission, submission_files, task.task_status, replayed=False)
             await db.commit()
             return result
         except Exception:
@@ -475,15 +593,15 @@ class ShotGridVersionSubmissionService:
             raise
 
     @classmethod
-    async def commit_published_submission(
+    async def commit_published_submission(  # noqa: PLR0915
         cls,
         db: AsyncSession,
         *,
         submission_id: int,
         worker_id: str,
         attempt_count: int,
-        published_sha256: str,
-        published_file_size: int,
+        published_sha256: str | None = None,
+        published_file_size: int | None = None,
     ) -> tuple[int, int]:
         """带 fencing 的正式短事务；返回版本ID和自动审核单ID。"""
 
@@ -515,22 +633,33 @@ class ShotGridVersionSubmissionService:
                 raise shot_grid_error(409, 'SG_INVALID_STATE_TRANSITION', '任务当前状态不能提交新版本')
             task_context = await cls._require_task_context(db, submission.task_id)
             cls._require_context_ready(task_context)
-            if cls.build_target_relative_path(task_context, submission.business_file_name) != (
-                submission.target_relative_path
-            ):
-                raise shot_grid_error(
-                    409,
-                    'SG_VERSION_TARGET_PATH_CONFLICT',
-                    '版本发布路径快照与当前任务不一致',
-                )
+            submission_files = await ShotGridVersionSubmissionDao.get_submission_files(
+                db,
+                submission_id,
+                for_update=True,
+            )
+            if not submission_files or any(item.publish_status != 'published' for item in submission_files):
+                raise shot_grid_error(409, 'SG_VERSION_CANDIDATES_NOT_PUBLISHED', '候选文件尚未全部发布完成')
+            primary_submission_file = submission_files[0]
             if (
-                published_sha256.casefold() != submission.source_sha256.casefold()
-                or published_file_size != submission.source_file_size
-            ):
+                published_sha256 is not None
+                and published_sha256.casefold() != primary_submission_file.source_sha256.casefold()
+            ) or (published_file_size is not None and published_file_size != primary_submission_file.source_file_size):
                 raise shot_grid_error(409, 'SG_VERSION_SOURCE_FILE_CHANGED', '发布文件摘要或大小校验失败')
-
-            source_file = await FileInfoDao.get_file_info_by_id_for_update(db, submission.source_file_id, true())
-            cls._require_formal_source_file(source_file, submission)
+            source_files: dict[str, SysFileInfo] = {}
+            for file_id in sorted(item.source_file_id for item in submission_files):
+                source_file = await FileInfoDao.get_file_info_by_id_for_update(db, file_id, true())
+                source_files[file_id] = source_file
+            for submission_file in submission_files:
+                if cls.build_target_relative_path(task_context, submission_file.business_file_name) != (
+                    submission_file.target_relative_path
+                ):
+                    raise shot_grid_error(
+                        409,
+                        'SG_VERSION_TARGET_PATH_CONFLICT',
+                        '版本发布路径快照与当前任务不一致',
+                    )
+                cls._require_formal_source_file(source_files[submission_file.source_file_id], submission_file)
             actor_name = await cls._get_submitter_name(db, submission.submitted_by)
             now = cls._now()
             version = await ShotGridVersionSubmissionDao.add_version(
@@ -546,43 +675,66 @@ class ShotGridVersionSubmissionService:
                     submitted_by=submission.submitted_by,
                     submitted_time=now,
                     generated_at_ms=submission.generated_at_ms,
+                    selected_candidate_id=None,
+                    selected_by=None,
+                    selected_time=None,
                     lock_version=0,
                 ),
             )
-            await ShotGridVersionSubmissionDao.add_version_file(
+            candidates = await ShotGridVersionSubmissionDao.add_version_candidates(
                 db,
-                ShotGridVersionFile(
-                    version_id=version.version_id,
-                    file_id=submission.source_file_id,
-                    file_role='review_media',
-                    business_file_name=submission.business_file_name,
-                    nas_relative_path=submission.target_relative_path,
-                    nas_sha256=published_sha256,
-                    nas_file_size=published_file_size,
-                    published_time=now,
-                    is_primary='1',
-                    sort_order=0,
-                    create_by=actor_name,
-                    create_time=now,
-                ),
+                [
+                    ShotGridVersionCandidate(
+                        project_id=submission.project_id,
+                        version_id=version.version_id,
+                        submission_file_id=submission_file.submission_file_id,
+                        candidate_no=submission_file.candidate_no,
+                        candidate_note=submission_file.candidate_note,
+                        sort_order=submission_file.sort_order,
+                        create_by=actor_name,
+                        create_time=now,
+                    )
+                    for submission_file in submission_files
+                ],
             )
+            selected_candidate_id = cls._initialize_single_candidate_selection(version, candidates)
             media_kind = {'shot_video': 'video', 'asset_image': 'image'}.get(str(task_context['task_kind']))
-            if media_kind is not None:
-                await ShotGridMediaDerivationDao.add_task(
+            for candidate, submission_file in zip(candidates, submission_files, strict=True):
+                await ShotGridVersionSubmissionDao.add_version_file(
                     db,
-                    version_id=version.version_id,
-                    source_file_id=submission.source_file_id,
-                    media_kind=media_kind,
-                    now=now,
+                    ShotGridVersionFile(
+                        version_id=version.version_id,
+                        candidate_id=candidate.candidate_id,
+                        file_id=submission_file.source_file_id,
+                        file_role='review_media',
+                        business_file_name=submission_file.business_file_name,
+                        nas_relative_path=submission_file.target_relative_path,
+                        nas_sha256=submission_file.source_sha256,
+                        nas_file_size=submission_file.source_file_size,
+                        published_time=now,
+                        is_primary='1' if candidate.candidate_id == selected_candidate_id else '0',
+                        sort_order=submission_file.sort_order,
+                        create_by=actor_name,
+                        create_time=now,
+                    ),
                 )
+                if media_kind is not None:
+                    await ShotGridMediaDerivationDao.add_task(
+                        db,
+                        candidate_id=candidate.candidate_id,
+                        version_id=version.version_id,
+                        source_file_id=submission_file.source_file_id,
+                        media_kind=media_kind,
+                        now=now,
+                    )
             await FileReferenceService.replace_business_file_references_services(
                 db,
                 cls.VERSION_REFERENCE_TYPE,
                 str(version.version_id),
-                [submission.source_file_id],
+                [submission_file.source_file_id for submission_file in submission_files],
                 actor_name,
                 true(),
-                business_name=submission.business_file_name,
+                business_name=f'V{submission.reserved_version_no:03d} 候选文件',
             )
             await FileReferenceService.remove_business_file_references_services(
                 db,
@@ -638,6 +790,19 @@ class ShotGridVersionSubmissionService:
         except Exception:
             await db.rollback()
             raise
+
+    @staticmethod
+    def _initialize_single_candidate_selection(
+        version: ShotGridVersion,
+        candidates: list[ShotGridVersionCandidate],
+    ) -> int | None:
+        """单候选无需人工比较，系统直接将其设为本轮最佳。"""
+
+        if len(candidates) != 1:
+            return None
+        candidate_id = int(candidates[0].candidate_id)
+        version.selected_candidate_id = candidate_id
+        return candidate_id
 
     @classmethod
     async def download_version_file(
@@ -719,6 +884,7 @@ class ShotGridVersionSubmissionService:
         context: dict[str, Any],
         *,
         version_no: int,
+        candidate_no: int = 1,
         generated_at_ms: int,
         extension: str,
     ) -> str:
@@ -728,7 +894,9 @@ class ShotGridVersionSubmissionService:
         producer_code = context.get('producer_code')
         if not producer_code:
             raise shot_grid_error(422, 'SG_PRODUCER_CODE_REQUIRED', '任务制作人尚未设置用户昵称')
-        version_segment = f'V{version_no:03d}'
+        if candidate_no <= 0 or candidate_no > MAX_CANDIDATE_NUMBER:
+            raise shot_grid_error(422, 'SG_VERSION_CANDIDATE_NUMBER_INVALID', '候选小编号超出允许范围')
+        version_segment = f'V{version_no:03d}_{candidate_no:02d}'
         if context['task_kind'] == 'shot_video':
             if extension not in {'mp4', 'mov'}:
                 raise shot_grid_error(422, 'SG_TASK_FILE_TYPE_INVALID', '镜头任务只允许MP4或MOV')
@@ -962,7 +1130,7 @@ class ShotGridVersionSubmissionService:
     @staticmethod
     def _require_formal_source_file(
         source_file: SysFileInfo | None,
-        submission: ShotGridVersionSubmission,
+        submission: ShotGridVersionSubmission | ShotGridVersionSubmissionFile,
     ) -> None:
         if (
             source_file is None
@@ -996,12 +1164,34 @@ class ShotGridVersionSubmissionService:
             db,
             int(submission.submission_id),
         )
+        stored_files = await ShotGridVersionSubmissionDao.get_submission_files(
+            db,
+            int(submission.submission_id),
+        )
+        stored_candidates = [
+            {
+                'client_file_key': item.client_file_key,
+                'file_id': item.source_file_id,
+                'sort_order': item.sort_order,
+                'candidate_note': item.candidate_note,
+            }
+            for item in stored_files
+        ]
+        requested_candidates = [
+            {
+                'client_file_key': item.client_file_key,
+                'file_id': item.file_id,
+                'sort_order': item.sort_order,
+                'candidate_note': item.candidate_note,
+            }
+            for item in command.candidates
+        ]
         requested_responses = sorted(
             ({'issue_id': item.issue_id, 'response_text': item.response_text} for item in command.issue_responses),
             key=lambda item: item['issue_id'],
         )
         if (
-            submission.source_file_id != command.file_id
+            stored_candidates != requested_candidates
             or submission.changelog != command.changelog
             or submission.ai_params != command.ai_params
             or submission.open_issue_snapshot_hash != command.open_issue_snapshot_hash
@@ -1056,6 +1246,7 @@ class ShotGridVersionSubmissionService:
     @staticmethod
     def _accepted(
         submission: ShotGridVersionSubmission,
+        submission_files: list[ShotGridVersionSubmissionFile],
         task_status: str,
         *,
         replayed: bool,
@@ -1064,6 +1255,14 @@ class ShotGridVersionSubmissionService:
             submissionId=submission.submission_id,
             submissionStatus=submission.submission_status,
             reservedVersionNumber=f'V{submission.reserved_version_no:03d}',
+            candidateCount=len(submission_files),
+            candidates=[
+                ShotGridVersionSubmissionService._candidate_status_model(
+                    submission.reserved_version_no,
+                    submission_file,
+                )
+                for submission_file in submission_files
+            ],
             businessFileName=submission.business_file_name,
             statusUrl=f'/shot-grid/version-submissions/{submission.submission_id}',
             taskStatus=task_status,
@@ -1071,11 +1270,22 @@ class ShotGridVersionSubmissionService:
         )
 
     @staticmethod
-    def _status_model(row: dict[str, Any]) -> ShotGridVersionSubmissionStatusModel:
+    def _status_model(
+        row: dict[str, Any],
+        submission_files: list[ShotGridVersionSubmissionFile],
+    ) -> ShotGridVersionSubmissionStatusModel:
         return ShotGridVersionSubmissionStatusModel(
             submissionId=row['submission_id'],
             projectId=row['project_id'],
             taskId=row['task_id'],
+            candidateCount=len(submission_files),
+            candidates=[
+                ShotGridVersionSubmissionService._candidate_status_model(
+                    row['reserved_version_no'],
+                    submission_file,
+                )
+                for submission_file in submission_files
+            ],
             sourceFileId=row['source_file_id'],
             submissionStatus=row['submission_status'],
             reservedVersionNo=row['reserved_version_no'],
@@ -1090,6 +1300,24 @@ class ShotGridVersionSubmissionService:
             taskStatus=row['task_status'],
             createTime=row['create_time'],
             updateTime=row['update_time'],
+        )
+
+    @staticmethod
+    def _candidate_status_model(
+        version_no: int,
+        submission_file: ShotGridVersionSubmissionFile,
+    ) -> ShotGridVersionSubmissionCandidateStatusModel:
+        return ShotGridVersionSubmissionCandidateStatusModel(
+            clientFileKey=submission_file.client_file_key,
+            candidateNo=submission_file.candidate_no,
+            candidateNumber=f'V{version_no:03d}_{submission_file.candidate_no:02d}',
+            sourceFileId=submission_file.source_file_id,
+            businessFileName=submission_file.business_file_name,
+            candidateNote=submission_file.candidate_note,
+            sortOrder=submission_file.sort_order,
+            publishStatus=submission_file.publish_status,
+            lastErrorKey=submission_file.last_error_key,
+            lastErrorMessage=submission_file.last_error_message,
         )
 
     @staticmethod
@@ -1242,7 +1470,11 @@ class ShotGridVersionSubmissionService:
             if existing is None:
                 raise shot_grid_error(409, 'SG_IDEMPOTENCY_CONFLICT', '版本提交并发写入发生冲突')
             await cls._require_same_command(db, existing, command)
-            result = cls._accepted(existing, task.task_status, replayed=True)
+            submission_files = await ShotGridVersionSubmissionDao.get_submission_files(
+                db,
+                existing.submission_id,
+            )
+            result = cls._accepted(existing, submission_files, task.task_status, replayed=True)
             await db.commit()
             return result
         except Exception:

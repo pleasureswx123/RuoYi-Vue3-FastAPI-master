@@ -1,3 +1,4 @@
+import sys
 from pathlib import Path
 
 import pytest
@@ -69,7 +70,15 @@ def test_database_runtime_service_upgrade_dry_run_returns_command_payload() -> N
     assert payload['ok'] is True
     assert payload['dryRun'] is True
     assert payload['cwd'] == '/tmp/ruoyi-backend'
-    assert payload['command'] == ['alembic', '-c', '/tmp/ruoyi-backend/alembic.ini', 'upgrade', 'head']
+    assert payload['command'] == [
+        sys.executable,
+        '-m',
+        'alembic',
+        '-c',
+        '/tmp/ruoyi-backend/alembic.ini',
+        'upgrade',
+        'head',
+    ]
 
 
 @pytest.mark.asyncio

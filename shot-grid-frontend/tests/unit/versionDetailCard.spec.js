@@ -1,4 +1,4 @@
-import { ElButton, ElIcon, ElTag } from 'element-plus'
+import { ElButton, ElIcon, ElRadioButton, ElRadioGroup, ElTag } from 'element-plus'
 import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -10,8 +10,19 @@ vi.mock('@/api/shot-grid/versions', () => ({ downloadProtectedVersionFile: vi.fn
 const fileId = '550e8400-e29b-41d4-a716-446655440000'
 const mountOptions = {
   global: {
-    components: { ElButton, ElIcon, ElTag },
-    stubs: { ProtectedVersionPreview: true }
+    components: { ElButton, ElIcon, ElRadioButton, ElRadioGroup, ElTag },
+    stubs: {
+      ElDialog: {
+        name: 'ElDialog',
+        props: ['modelValue', 'title'],
+        template: '<section v-if="modelValue" data-testid="file-preview-dialog"><h2>{{ title }}</h2><slot /><slot name="footer" /></section>'
+      },
+      ProtectedVersionPreview: {
+        name: 'ProtectedVersionPreview',
+        props: ['version', 'canPreview'],
+        template: '<div data-testid="protected-version-preview" />'
+      }
+    }
   }
 }
 
@@ -88,6 +99,93 @@ describe('版本详情与受保护下载', () => {
     expect(wrapper.text()).toContain('WGZR_EP001_001_S001_YJF_V001_1.mov')
     expect(wrapper.text()).not.toContain('thumbnail.jpg')
     expect(wrapper.text()).not.toContain('proxy_media.mp4')
+    wrapper.unmount()
+  })
+
+  it('多候选版本可逐个切换预览，并在文件列表标明候选归属', async () => {
+    const secondFileId = '550e8400-e29b-41d4-a716-446655440001'
+    const firstFile = { ...version().files[0], candidateId: 701 }
+    const secondFile = {
+      ...firstFile,
+      fileId: secondFileId,
+      candidateId: 702,
+      originalName: '候选乙.mp4',
+      businessFileName: 'WGZR_EP001_001_S001_YJF_V007_02.mp4',
+      isPrimary: false,
+      contentType: 'video/mp4'
+    }
+    const wrapper = mount(VersionDetailCard, {
+      ...mountOptions,
+      props: {
+        version: version(7, {
+          candidateCount: 2,
+          selectedCandidateId: null,
+          files: [firstFile, secondFile],
+          candidates: [
+            { candidateId: 701, candidateNo: 1, candidateNumber: 'V007_01', candidateNote: '光影更稳', sortOrder: 0, isSelected: false, files: [firstFile] },
+            { candidateId: 702, candidateNo: 2, candidateNumber: 'V007_02', candidateNote: '动作更顺', sortOrder: 1, isSelected: false, files: [secondFile] }
+          ]
+        }),
+        canDownload: true
+      }
+    })
+
+    const radioGroup = wrapper.getComponent(ElRadioGroup)
+    const preview = wrapper.getComponent({ name: 'ProtectedVersionPreview' })
+    expect(wrapper.findAllComponents(ElRadioButton).map(item => item.text())).toEqual([
+      expect.stringContaining('V007_01'),
+      expect.stringContaining('V007_02')
+    ])
+    expect(preview.props('version').files).toEqual([firstFile])
+    expect(wrapper.findAll('.file-row')[0].classes()).toContain('is-previewing')
+    expect(wrapper.findAllComponents(ElTag).map(tag => tag.text())).toEqual(expect.arrayContaining(['V007_01', 'V007_02']))
+
+    radioGroup.vm.$emit('update:modelValue', 702)
+    await flushPromises()
+
+    expect(preview.props('version').files).toEqual([secondFile])
+    expect(wrapper.text()).toContain('当前预览 V007_02')
+    expect(wrapper.text()).toContain('动作更顺')
+    expect(wrapper.findAll('.file-row')[1].classes()).toContain('is-previewing')
+    expect(wrapper.findAll('.file-row')[0].classes()).not.toContain('is-previewing')
+    wrapper.unmount()
+  })
+
+  it('任务历史关闭整块预览时可从每个文件打开对应候选预览', async () => {
+    const firstFile = { ...version().files[0], candidateId: 701 }
+    const secondFile = {
+      ...firstFile,
+      fileId: '550e8400-e29b-41d4-a716-446655440001',
+      candidateId: 702,
+      businessFileName: 'WGZR_EP001_001_S001_YJF_V007_02.mp4',
+      contentType: 'video/mp4'
+    }
+    const wrapper = mount(VersionDetailCard, {
+      ...mountOptions,
+      props: {
+        version: version(7, {
+          files: [firstFile, secondFile],
+          candidates: [
+            { candidateId: 701, candidateNo: 1, candidateNumber: 'V007_01', sortOrder: 0, files: [firstFile] },
+            { candidateId: 702, candidateNo: 2, candidateNumber: 'V007_02', sortOrder: 1, files: [secondFile] }
+          ]
+        }),
+        canDownload: true,
+        showPreview: false,
+        showFilePreviewAction: true
+      }
+    })
+
+    const previewButtons = wrapper.findAll('.file-actions button').filter(button => button.text().includes('预览'))
+    expect(previewButtons).toHaveLength(2)
+    expect(wrapper.find('[data-testid="file-preview-dialog"]').exists()).toBe(false)
+
+    await previewButtons[1].trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="file-preview-dialog"]').text()).toContain('预览 V007_02')
+    expect(wrapper.getComponent({ name: 'ProtectedVersionPreview' }).props('version').files).toEqual([secondFile])
+    expect(wrapper.getComponent({ name: 'ProtectedVersionPreview' }).props('canPreview')).toBe(true)
     wrapper.unmount()
   })
 

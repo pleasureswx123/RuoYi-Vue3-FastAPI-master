@@ -24,6 +24,9 @@ import {
   taskVersionStatusMeta
 } from '@/views/task/taskPresentation'
 
+const PREPARATION_POLL_INTERVAL_MS = 1500
+const PREPARATION_POLL_MAX_ATTEMPTS = 80
+
 const route = useRoute()
 const router = useRouter()
 const sessionStore = useSessionStore()
@@ -37,6 +40,9 @@ const editContext = ref(null)
 const routeContext = ref(null)
 const startingOperation = ref(null)
 let controller = null
+let preparationController = null
+let preparationTimer = null
+let preparationGeneration = 0
 let loadGeneration = 0
 let operationGeneration = 0
 let disposed = false
@@ -91,6 +97,81 @@ function nextOperationGeneration() {
   return operationGeneration
 }
 
+function stopPreparationPolling() {
+  preparationGeneration += 1
+  if (preparationTimer !== null) {
+    clearTimeout(preparationTimer)
+    preparationTimer = null
+  }
+  preparationController?.abort()
+  preparationController = null
+}
+
+function isCurrentPreparationContext(context, generation) {
+  return Boolean(
+    !disposed &&
+    context &&
+    preparationGeneration === generation &&
+    routeContext.value === context &&
+    taskId.value === context.taskId
+  )
+}
+
+function preparationTimeoutState() {
+  return {
+    title: '制作目录准备时间较长',
+    message: '页面未能及时确认目录准备结果，请点击刷新查看最新状态；如果任务持续停留在目录准备中，请联系管理员检查目录任务。',
+    retryable: true
+  }
+}
+
+function schedulePreparationPoll(context, generation, attempt) {
+  if (
+    !isCurrentPreparationContext(context, generation) ||
+    task.value?.taskStatus !== 'preparing'
+  ) return
+  if (attempt >= PREPARATION_POLL_MAX_ATTEMPTS) {
+    actionError.value = preparationTimeoutState()
+    return
+  }
+  preparationTimer = setTimeout(() => {
+    preparationTimer = null
+    void pollPreparationStatus(context, generation, attempt + 1)
+  }, PREPARATION_POLL_INTERVAL_MS)
+}
+
+async function pollPreparationStatus(context, generation, attempt) {
+  if (!isCurrentPreparationContext(context, generation)) return
+  const requestController = new AbortController()
+  preparationController = requestController
+  try {
+    const response = await getTaskDetail(context.taskId, { signal: requestController.signal })
+    if (!isCurrentPreparationContext(context, generation) || requestController.signal.aborted) return
+    task.value = response.data
+    if (response.data?.taskStatus === 'preparing') {
+      schedulePreparationPoll(context, generation, attempt)
+      return
+    }
+    stopPreparationPolling()
+    actionError.value = null
+    if (response.data?.taskStatus === 'in_progress') {
+      ElMessage.success(`制作目录已准备完成，可以${Number(response.data?.versionCount || 0) > 0 ? '提交修改成果' : '提交首版成果'}`)
+    }
+  } catch (error) {
+    if (error?.code === 'ERR_CANCELED' || !isCurrentPreparationContext(context, generation)) return
+    schedulePreparationPoll(context, generation, attempt)
+  } finally {
+    if (preparationController === requestController) preparationController = null
+  }
+}
+
+function startPreparationPolling(context = routeContext.value) {
+  stopPreparationPolling()
+  if (!context || task.value?.taskStatus !== 'preparing') return
+  const generation = preparationGeneration
+  schedulePreparationPoll(context, generation, 0)
+}
+
 function closeEditDialog() {
   showEdit.value = false
   editContext.value = null
@@ -119,6 +200,7 @@ function isActiveEdit(operationContext) {
 async function loadDetail() {
   const generation = ++loadGeneration
   controller?.abort()
+  stopPreparationPolling()
   closeEditDialog()
   task.value = null
   openIssues.value = []
@@ -162,6 +244,7 @@ async function loadDetail() {
     if (!isCurrent()) return
     task.value = response.data
     openIssues.value = issueResponse.data || []
+    startPreparationPolling(activeContext)
   } catch (error) {
     if (error?.code !== 'ERR_CANCELED' && isCurrent()) {
       errorState.value = taskErrorState(error, '任务详情加载失败')
@@ -198,9 +281,10 @@ async function beginTask() {
       return
     }
     task.value = response.data
+    startPreparationPolling(routeContext.value)
     ElMessage.success(
       response.data?.taskStatus === 'preparing'
-        ? '任务已开始，正在创建镜头目录'
+        ? '任务已开始，正在准备制作目录'
         : '任务已进入制作中'
     )
   } catch (error) {
@@ -248,6 +332,7 @@ onBeforeUnmount(() => {
   loadGeneration += 1
   routeContext.value = null
   controller?.abort()
+  stopPreparationPolling()
   closeEditDialog()
 })
 </script>
@@ -391,6 +476,7 @@ onBeforeUnmount(() => {
 .task-detail-page{display:grid;gap:18px}.back-link{display:inline-flex;width:max-content;gap:7px;align-items:center;padding:0;color:var(--sg-text-muted);cursor:pointer;background:transparent;border:0}.back-link:hover{color:var(--sg-text)}.task-detail-loading{display:grid;min-height:360px;color:var(--sg-text-muted);background:var(--sg-surface);border:1px solid var(--sg-border);border-radius:var(--sg-radius-lg);place-items:center}.task-hero{display:flex;gap:24px;align-items:center;justify-content:space-between;padding:26px;background:linear-gradient(135deg,rgba(255,182,87,.075),transparent 42%),var(--sg-surface);border:1px solid var(--sg-border);border-radius:var(--sg-radius-lg)}.task-hero__main{min-width:0}.task-hero__title{display:flex;gap:12px;align-items:center}.task-hero h2,.task-hero p{margin:0}.task-hero h2{font-size:clamp(23px,3vw,31px);letter-spacing:-.025em}.task-hero__main>p:not(.sg-eyebrow){margin-top:9px;color:var(--sg-text-secondary);font-size:13px}.task-hero small{display:block;margin-top:8px;color:var(--sg-text-muted)}.task-hero__actions{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap}.task-detail-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.task-card{padding:21px;background:var(--sg-surface);border:1px solid var(--sg-border);border-radius:var(--sg-radius-md)}.task-card--wide{grid-column:1/-1}.task-card header{display:flex;gap:12px;align-items:flex-start;justify-content:space-between}.task-card h3,.task-card p{margin:0}.task-card h3{margin-bottom:16px;font-size:17px}.task-card>strong{display:block;font-size:16px}.task-card>strong+p{margin-top:7px;color:var(--sg-text-secondary);font-size:12px;line-height:1.7}.task-requirements,.task-remark,.version-workspace-anchor>p:not(.sg-eyebrow){color:var(--sg-text-secondary);font-size:13px;line-height:1.8;white-space:pre-wrap}.task-additional-requirements{display:grid;gap:6px;margin-top:12px;padding:12px 14px;background:var(--sg-accent-soft);border-radius:9px}.task-additional-requirements strong{color:var(--sg-accent);font-size:11px}.task-additional-requirements p{color:var(--sg-text-secondary);font-size:12px;line-height:1.7;white-space:pre-wrap}.version-workspace-anchor{background:linear-gradient(135deg,rgba(93,176,255,.055),transparent 46%),var(--sg-surface)}.version-workspace-anchor code{color:var(--sg-accent)}.task-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1px;margin:16px 0 0;overflow:hidden;background:var(--sg-border);border-radius:9px}.task-fields--four{grid-template-columns:repeat(4,minmax(0,1fr))}.task-fields div{padding:13px;background:rgba(13,16,21,.92)}dt{color:var(--sg-text-muted);font-size:10px}dd{margin:5px 0 0;color:var(--sg-text-secondary);font-size:12px;overflow-wrap:anywhere}.text-action{margin-top:15px;padding:0;color:var(--sg-accent);cursor:pointer;background:transparent;border:0}.version-number{display:inline!important;margin-right:9px;color:var(--sg-accent);font-size:25px!important}.task-empty{padding:20px;color:var(--sg-text-muted);font-size:12px;text-align:center;background:rgba(255,255,255,.02);border:1px dashed var(--sg-border);border-radius:9px}.final-version-tag{margin-top:14px}@media(max-width:820px){.task-hero{align-items:flex-start;flex-direction:column}.task-hero__actions{justify-content:flex-start}.task-fields--four{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:620px){.task-detail-grid{grid-template-columns:1fr}.task-card--wide{grid-column:auto}.task-fields,.task-fields--four{grid-template-columns:1fr}.task-hero__title{align-items:flex-start;flex-direction:column}}
 .task-card.el-card{padding:0;overflow:visible;background:var(--sg-surface);border-color:var(--sg-border)}
 .task-card:deep(.el-card__body){padding:21px}
+.version-workspace-anchor > :deep(.el-card__body) { overflow: visible; }
 .task-card:deep(.el-card__body)>strong{display:block;font-size:16px}
 .task-card:deep(.el-card__body)>strong+p{margin-top:7px;color:var(--sg-text-secondary);font-size:12px;line-height:1.7}
 .version-workspace-anchor:deep(.el-card__body)>p:not(.sg-eyebrow){color:var(--sg-text-secondary);font-size:13px;line-height:1.8;white-space:pre-wrap}

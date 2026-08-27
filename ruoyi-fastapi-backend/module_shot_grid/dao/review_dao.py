@@ -1,11 +1,11 @@
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import asc, delete, desc, exists, func, select, update
+from sqlalchemy import String, asc, delete, desc, exists, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
-from module_admin.entity.do.file_do import SysFileInfo
+from module_admin.entity.do.file_do import SysFileInfo, SysFileReference
 from module_admin.entity.do.user_do import SysUser
 from module_shot_grid.entity.do.asset_do import ShotGridAsset, ShotGridAssetItem
 from module_shot_grid.entity.do.project_do import ShotGridProject, ShotGridProjectMember, ShotGridShot
@@ -16,12 +16,14 @@ from module_shot_grid.entity.do.review_do import (
     ShotGridReviewIssueDraft,
     ShotGridReviewList,
     ShotGridReviewListVersion,
+    ShotGridVersionCandidateSelection,
     ShotGridVersionIssueResponse,
 )
 from module_shot_grid.entity.do.task_do import ShotGridTask
 from module_shot_grid.entity.do.version_do import (
     ShotGridMediaDerivation,
     ShotGridVersion,
+    ShotGridVersionCandidate,
     ShotGridVersionFile,
     ShotGridVersionSubmission,
 )
@@ -41,6 +43,7 @@ class ShotGridReviewDao:
             select(ShotGridVersionFile.file_id)
             .where(
                 ShotGridVersionFile.version_id == ShotGridVersion.version_id,
+                ShotGridVersionFile.candidate_id == ShotGridVersion.selected_candidate_id,
                 ShotGridVersionFile.file_role == 'thumbnail',
             )
             .order_by(ShotGridVersionFile.sort_order, ShotGridVersionFile.file_id)
@@ -50,11 +53,23 @@ class ShotGridReviewDao:
         )
         derivation_status = (
             select(ShotGridMediaDerivation.derivation_status)
-            .where(ShotGridMediaDerivation.version_id == ShotGridVersion.version_id)
+            .where(
+                ShotGridMediaDerivation.version_id == ShotGridVersion.version_id,
+                ShotGridMediaDerivation.candidate_id == ShotGridVersion.selected_candidate_id,
+            )
             .correlate(ShotGridVersion)
             .scalar_subquery()
         )
         return thumbnail_file_id, derivation_status
+
+    @staticmethod
+    def _candidate_count_projection() -> Any:
+        return (
+            select(func.count(ShotGridVersionCandidate.candidate_id))
+            .where(ShotGridVersionCandidate.version_id == ShotGridVersion.version_id)
+            .correlate(ShotGridVersion)
+            .scalar_subquery()
+        )
 
     @classmethod
     async def get_task_context(cls, db: AsyncSession, task_id: int) -> dict[str, Any] | None:
@@ -144,6 +159,7 @@ class ShotGridReviewDao:
     async def get_recent_mine_versions(
         cls, db: AsyncSession, user_id: int, query: ShotGridVersionListQueryModel
     ) -> tuple[list[dict[str, Any]], int]:
+        candidate_count = cls._candidate_count_projection()
         statement = (
             select(
                 ShotGridVersion.version_id,
@@ -156,6 +172,8 @@ class ShotGridReviewDao:
                 SysUser.user_name.label('submitter_name'),
                 ShotGridVersion.submitted_time,
                 ShotGridVersion.generated_at_ms,
+                candidate_count.label('candidate_count'),
+                ShotGridVersion.selected_candidate_id,
                 ShotGridVersion.lock_version,
             )
             .join(ShotGridProject, ShotGridProject.project_id == ShotGridVersion.project_id)
@@ -195,6 +213,7 @@ class ShotGridReviewDao:
                         ShotGridVersion.submission_id,
                         ShotGridVersion.version_no,
                         ShotGridVersion.version_status,
+                        ShotGridVersion.selected_candidate_id,
                         ShotGridVersion.lock_version,
                         ShotGridTask.task_kind,
                         ShotGridTask.task_status,
@@ -272,6 +291,7 @@ class ShotGridReviewDao:
         task_id: int,
         query: ShotGridVersionListQueryModel,
     ) -> tuple[list[dict[str, Any]], int]:
+        candidate_count = cls._candidate_count_projection()
         statement = (
             select(
                 ShotGridVersion.version_id,
@@ -284,6 +304,8 @@ class ShotGridReviewDao:
                 SysUser.user_name.label('submitter_name'),
                 ShotGridVersion.submitted_time,
                 ShotGridVersion.generated_at_ms,
+                candidate_count.label('candidate_count'),
+                ShotGridVersion.selected_candidate_id,
                 ShotGridVersion.lock_version,
             )
             .outerjoin(SysUser, SysUser.user_id == ShotGridVersion.submitted_by)
@@ -310,7 +332,16 @@ class ShotGridReviewDao:
     async def get_version_row(cls, db: AsyncSession, project_id: int, version_id: int) -> dict[str, Any] | None:
         media_derivation_status = (
             select(ShotGridMediaDerivation.derivation_status)
-            .where(ShotGridMediaDerivation.version_id == ShotGridVersion.version_id)
+            .where(
+                ShotGridMediaDerivation.version_id == ShotGridVersion.version_id,
+                ShotGridMediaDerivation.candidate_id == ShotGridVersion.selected_candidate_id,
+            )
+            .correlate(ShotGridVersion)
+            .scalar_subquery()
+        )
+        candidate_count = (
+            select(func.count(ShotGridVersionCandidate.candidate_id))
+            .where(ShotGridVersionCandidate.version_id == ShotGridVersion.version_id)
             .correlate(ShotGridVersion)
             .scalar_subquery()
         )
@@ -329,6 +360,8 @@ class ShotGridReviewDao:
                         SysUser.user_name.label('submitter_name'),
                         ShotGridVersion.submitted_time,
                         ShotGridVersion.generated_at_ms,
+                        ShotGridVersion.selected_candidate_id,
+                        candidate_count.label('candidate_count'),
                         ShotGridVersion.lock_version,
                         ShotGridTask.task_kind,
                         ShotGridTask.requirements.label('task_requirements'),
@@ -371,6 +404,7 @@ class ShotGridReviewDao:
         rows = (
             await db.execute(
                 select(
+                    ShotGridVersionFile.candidate_id,
                     ShotGridVersionFile.file_id,
                     SysFileInfo.original_name,
                     ShotGridVersionFile.business_file_name,
@@ -387,6 +421,28 @@ class ShotGridReviewDao:
                     SysFileInfo.del_flag == '0',
                 )
                 .order_by(ShotGridVersionFile.sort_order, ShotGridVersionFile.file_id, ShotGridVersionFile.file_role)
+            )
+        ).mappings()
+        return [dict(row) for row in rows]
+
+    @classmethod
+    async def get_version_candidates(cls, db: AsyncSession, version_id: int) -> list[dict[str, Any]]:
+        rows = (
+            await db.execute(
+                select(
+                    ShotGridVersionCandidate.candidate_id,
+                    ShotGridVersionCandidate.version_id,
+                    ShotGridVersionCandidate.candidate_no,
+                    ShotGridVersionCandidate.candidate_note,
+                    ShotGridVersionCandidate.sort_order,
+                    ShotGridMediaDerivation.derivation_status.label('media_derivation_status'),
+                )
+                .outerjoin(
+                    ShotGridMediaDerivation,
+                    ShotGridMediaDerivation.candidate_id == ShotGridVersionCandidate.candidate_id,
+                )
+                .where(ShotGridVersionCandidate.version_id == version_id)
+                .order_by(ShotGridVersionCandidate.sort_order, ShotGridVersionCandidate.candidate_no)
             )
         ).mappings()
         return [dict(row) for row in rows]
@@ -582,6 +638,7 @@ class ShotGridReviewDao:
     async def get_manual_review_versions(
         cls, db: AsyncSession, project_id: int, review_list_id: int
     ) -> list[dict[str, Any]]:
+        candidate_count = cls._candidate_count_projection()
         rows = (
             await db.execute(
                 select(
@@ -595,6 +652,8 @@ class ShotGridReviewDao:
                     SysUser.user_name.label('submitter_name'),
                     ShotGridVersion.submitted_time,
                     ShotGridVersion.generated_at_ms,
+                    candidate_count.label('candidate_count'),
+                    ShotGridVersion.selected_candidate_id,
                     ShotGridVersion.lock_version,
                 )
                 .join(ShotGridReviewListVersion, ShotGridReviewListVersion.version_id == ShotGridVersion.version_id)
@@ -747,6 +806,7 @@ class ShotGridReviewDao:
                 ShotGridNote.note_id.label('issue_id'),
                 ShotGridNote.project_id,
                 ShotGridNote.version_id.label('origin_version_id'),
+                ShotGridNote.origin_candidate_id,
                 origin_version.version_no.label('origin_version_no'),
                 ShotGridNote.reviewer_user_id,
                 SysUser.user_name.label('reviewer_name'),
@@ -829,6 +889,7 @@ class ShotGridReviewDao:
                     ShotGridIssueVerification.note_id.label('issue_id'),
                     ShotGridIssueVerification.verification_id,
                     ShotGridIssueVerification.checked_version_id,
+                    ShotGridIssueVerification.checked_candidate_id,
                     ShotGridVersion.version_no.label('checked_version_no'),
                     ShotGridIssueVerification.result,
                     ShotGridIssueVerification.comment,
@@ -849,6 +910,94 @@ class ShotGridReviewDao:
         return [dict(row) for row in rows]
 
     @classmethod
+    async def get_issue_reference_files(
+        cls,
+        db: AsyncSession,
+        *,
+        business_type: str,
+        business_ids: list[int],
+    ) -> list[dict[str, Any]]:
+        """批量读取审核问题或草稿关联的有效参考文件。"""
+
+        if not business_ids:
+            return []
+        normalized_ids = [str(business_id) for business_id in business_ids]
+        rows = (
+            await db.execute(
+                select(
+                    SysFileReference.business_id,
+                    SysFileInfo.file_id,
+                    SysFileInfo.original_name,
+                    SysFileInfo.content_type,
+                    SysFileInfo.file_size,
+                )
+                .join(SysFileInfo, SysFileInfo.file_id == SysFileReference.file_id)
+                .where(
+                    SysFileReference.business_type == business_type,
+                    SysFileReference.business_id.in_(normalized_ids),
+                    SysFileInfo.status == 'active',
+                    SysFileInfo.del_flag == '0',
+                )
+                .order_by(SysFileReference.business_id, SysFileReference.reference_id)
+            )
+        ).mappings()
+        return [dict(row) for row in rows]
+
+    @classmethod
+    async def get_issue_reference_file_access(
+        cls,
+        db: AsyncSession,
+        *,
+        business_type: str,
+        business_id: int,
+        file_id: str,
+    ) -> dict[str, Any] | None:
+        """读取参考文件与草稿/正式问题的项目归属，用于业务授权下载。"""
+
+        if business_type == 'shot_grid_review_issue_draft':
+            statement = (
+                select(
+                    ShotGridReviewIssueDraft.project_id,
+                    ShotGridReviewIssueDraft.reviewer_user_id,
+                    SysFileInfo.original_name,
+                )
+                .join(
+                    SysFileReference,
+                    (SysFileReference.business_type == business_type)
+                    & (SysFileReference.business_id == func.cast(ShotGridReviewIssueDraft.draft_id, String)),
+                )
+                .join(SysFileInfo, SysFileInfo.file_id == SysFileReference.file_id)
+                .where(
+                    ShotGridReviewIssueDraft.draft_id == business_id,
+                    SysFileReference.file_id == file_id,
+                    SysFileInfo.status == 'active',
+                    SysFileInfo.del_flag == '0',
+                )
+            )
+        else:
+            statement = (
+                select(
+                    ShotGridNote.project_id,
+                    ShotGridNote.reviewer_user_id,
+                    SysFileInfo.original_name,
+                )
+                .join(
+                    SysFileReference,
+                    (SysFileReference.business_type == business_type)
+                    & (SysFileReference.business_id == func.cast(ShotGridNote.note_id, String)),
+                )
+                .join(SysFileInfo, SysFileInfo.file_id == SysFileReference.file_id)
+                .where(
+                    ShotGridNote.note_id == business_id,
+                    SysFileReference.file_id == file_id,
+                    SysFileInfo.status == 'active',
+                    SysFileInfo.del_flag == '0',
+                )
+            )
+        row = (await db.execute(statement)).mappings().one_or_none()
+        return dict(row) if row is not None else None
+
+    @classmethod
     async def get_review_actions(
         cls,
         db: AsyncSession,
@@ -861,6 +1010,7 @@ class ShotGridReviewDao:
                 ShotGridReviewAction.action_id,
                 ShotGridReviewAction.project_id,
                 ShotGridReviewAction.version_id,
+                ShotGridReviewAction.selected_candidate_id,
                 ShotGridReviewAction.reviewer_user_id,
                 SysUser.user_name.label('reviewer_name'),
                 ShotGridReviewAction.action_type,
@@ -933,6 +1083,77 @@ class ShotGridReviewDao:
         ).scalar_one_or_none()
 
     @classmethod
+    async def get_candidate_for_update(
+        cls,
+        db: AsyncSession,
+        *,
+        project_id: int,
+        version_id: int,
+        candidate_id: int,
+    ) -> ShotGridVersionCandidate | None:
+        return await db.scalar(
+            select(ShotGridVersionCandidate)
+            .where(
+                ShotGridVersionCandidate.project_id == project_id,
+                ShotGridVersionCandidate.version_id == version_id,
+                ShotGridVersionCandidate.candidate_id == candidate_id,
+            )
+            .with_for_update()
+        )
+
+    @classmethod
+    async def has_version_issue_drafts(cls, db: AsyncSession, version_id: int) -> bool:
+        return bool(await db.scalar(select(exists().where(ShotGridReviewIssueDraft.version_id == version_id))))
+
+    @classmethod
+    async def find_candidate_selection_by_idempotency(
+        cls,
+        db: AsyncSession,
+        *,
+        version_id: int,
+        selected_by: int,
+        idempotency_key: str,
+    ) -> ShotGridVersionCandidateSelection | None:
+        return await db.scalar(
+            select(ShotGridVersionCandidateSelection).where(
+                ShotGridVersionCandidateSelection.version_id == version_id,
+                ShotGridVersionCandidateSelection.selected_by == selected_by,
+                ShotGridVersionCandidateSelection.idempotency_key == idempotency_key,
+            )
+        )
+
+    @classmethod
+    async def add_candidate_selection(
+        cls,
+        db: AsyncSession,
+        selection: ShotGridVersionCandidateSelection,
+    ) -> ShotGridVersionCandidateSelection:
+        db.add(selection)
+        await db.flush()
+        return selection
+
+    @classmethod
+    async def set_primary_candidate_file(
+        cls,
+        db: AsyncSession,
+        *,
+        version_id: int,
+        candidate_id: int,
+    ) -> None:
+        await db.execute(
+            update(ShotGridVersionFile).where(ShotGridVersionFile.version_id == version_id).values(is_primary='0')
+        )
+        await db.execute(
+            update(ShotGridVersionFile)
+            .where(
+                ShotGridVersionFile.version_id == version_id,
+                ShotGridVersionFile.candidate_id == candidate_id,
+                ShotGridVersionFile.file_role == 'review_media',
+            )
+            .values(is_primary='1')
+        )
+
+    @classmethod
     async def get_auto_review_list_for_update(
         cls,
         db: AsyncSession,
@@ -996,10 +1217,7 @@ class ShotGridReviewDao:
         ).all()
         return [
             {
-                **{
-                    column.name: getattr(draft, column.name)
-                    for column in ShotGridReviewIssueDraft.__table__.columns
-                },
+                **{column.name: getattr(draft, column.name) for column in ShotGridReviewIssueDraft.__table__.columns},
                 'reviewer_name': reviewer_name,
             }
             for draft, reviewer_name in rows
@@ -1211,6 +1429,7 @@ class ShotGridReviewDao:
             ShotGridNote(
                 project_id=draft.project_id,
                 version_id=draft.version_id,
+                origin_candidate_id=draft.candidate_id,
                 reviewer_user_id=draft.reviewer_user_id,
                 content=draft.content,
                 media_time_ms=draft.media_time_ms,

@@ -3,7 +3,7 @@ from sqlalchemy.dialects import postgresql
 from module_shot_grid.dao.shot_crud_dao import ShotGridShotCrudDao
 from module_shot_grid.entity.vo.shot_crud_vo import ShotGridShotListQueryModel
 
-EXPECTED_LATERAL_JOIN_COUNT = 5
+EXPECTED_LATERAL_JOIN_COUNT = 6
 
 
 def test_list_statement_uses_status_asset_filters_and_latest_directory_operation() -> None:
@@ -25,6 +25,9 @@ def test_list_statement_uses_status_asset_filters_and_latest_directory_operation
         )
     )
 
+    assert 'has_uncommitted_submission' in sql
+    assert 'sg_version_submission.task_id = shot_list_task.task_id' in sql
+    assert "sg_version_submission.submission_status != 'committed'" in sql
     assert 'sg_storage_operation.operation_status' in sql
     assert "sg_storage_operation.aggregate_type = 'shot'" in sql
     assert 'ORDER BY sg_storage_operation.operation_id DESC' in sql
@@ -64,8 +67,11 @@ def test_read_projection_statement_uses_one_postgresql_lateral_query_for_latest_
     assert sql.count('LEFT OUTER JOIN LATERAL') == EXPECTED_LATERAL_JOIN_COUNT
     assert 'sg_shot.shot_id IN (3001, 3002)' in sql
     assert 'ORDER BY sg_version.version_no DESC, sg_version.version_id DESC' in sql
+    assert 'shot_display_candidate' in sql
+    assert 'sg_version_candidate.candidate_no' in sql
     assert "sg_version_file.file_role = 'review_media'" in sql
-    assert "sg_version_file.is_primary = '1'" in sql
+    assert 'sg_version_file.candidate_id = shot_display_candidate.candidate_id' in sql
+    assert "sg_version_file.is_primary = '1'" not in sql
     assert "sg_version_file.file_role = 'thumbnail'" in sql
     assert "sg_version_file.file_role = 'proxy_media'" in sql
     assert 'sg_version_file.version_id = shot_latest_version.version_id' in sql

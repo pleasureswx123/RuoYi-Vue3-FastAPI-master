@@ -41,7 +41,7 @@
 - PostgreSQL 初始基线中的审计时间使用 `timestamp(0)`；Shot Grid SQLAlchemy DO 使用 PostgreSQL 方言下编译为 `TIMESTAMP(0) WITHOUT TIME ZONE` 的统一类型。
 - 常规业务异常默认由统一响应工具以 HTTP 200 返回；Shot Grid 的真实 HTTP 409 等语义属于本模块需要显式实现的扩展契约。
 - RuoYi 平台基座本身没有通用 NAS 根目录配置、项目目录初始化、版本文件发布到 UNC 路径或跨数据库与文件系统补偿能力。Shot Grid 已新增项目目录 Outbox Worker、目录诊断/人工重试和独立版本发布 Worker，但两个 Worker 均默认关闭，物理补偿仍未实现；不得把 Shot Grid 领域扩展描述为平台通用能力，也不得以本地临时目录测试冒充真实 UNC 验收。
-- 独立业务前端已实现 Vue 3/Vite/Pinia/Vue Router/Axios/Element Plus 应用基座、自有登录页、六项本地路由白名单、统一请求与错误分流；项目、镜头和资产页已接入真实 API，并分别完成生产 Nginx 形态下的隔离子集旅程。真实工作台使用 `/shot-grid/tasks/mine`，任务详情深链 `/tasks/:taskId` 支持详情、开始、编辑和版本工作区；版本工作区接入 private preflight → 私有上传 → create 202、`current` 恢复、失败重试、版本历史/详情和受保护下载，版本深链 `/versions/:versionId` 归属 `reviews` 路由范围。任务工作台/版本上传也已在 fresh PostgreSQL、Redis DB 15、真实平台登录和生产前端形态下完成隔离子集浏览器旅程，版本发布阶段使用显式 `allow_local_root=True` 的本地 TEMP 适配器。资产模板与资产需求人工处理均已交付；审核详情已接鉴权 Blob 图片/视频预览、视频时间点、点/矩形批注、同任务版本 A/B 对比和退回后版本工作区入口，文件与 NAS 页面也已接真实业务 API，但二者尚无隔离浏览器旅程。真实版本缩略图文件未造夹具，任何子集都不等于真实 UNC/NAS、Range 真分段或完整系统 E2E。
+- 独立业务前端已实现 Vue 3/Vite/Pinia/Vue Router/Axios/Element Plus 应用基座、自有登录页、六项本地路由白名单、统一请求与错误分流；项目、镜头和资产页已接入真实 API，并分别完成生产 Nginx 形态下的隔离子集旅程。真实工作台使用 `/shot-grid/tasks/mine`，任务详情深链 `/tasks/:taskId` 支持详情、开始、编辑和版本工作区；版本工作区接入 private preflight → 私有上传 → create 202、`current` 恢复、失败重试、版本历史/详情和受保护下载，版本深链 `/versions/:versionId` 归属 `reviews` 路由范围。任务工作台/版本上传也已在 fresh PostgreSQL、Redis DB 15、真实平台登录和生产前端形态下完成隔离子集浏览器旅程，版本发布阶段使用显式 `allow_local_root=True` 的本地 TEMP 适配器。资产模板与资产需求人工处理均已交付；审核详情已接鉴权 Blob 图片/视频预览、视频时间点、点/矩形/箭头/涂抹/文字批注、同任务版本 A/B 对比和退回后版本工作区入口，文件与 NAS 页面也已接真实业务 API，但二者尚无隔离浏览器旅程。真实版本缩略图文件未造夹具，任何子集都不等于真实 UNC/NAS、Range 真分段或完整系统 E2E。
 
 ## 3. 领域边界
 
@@ -103,14 +103,16 @@ sys_user ──< sg_project_member >── sg_project ── sg_project_storage 
                                       │
                                       └──< sg_task（镜头任务）
                                              │
-                                             ├──< sg_version_submission
+                                             ├──< sg_version_submission ──< sg_version_submission_file
                                              └──< sg_version
                                                     │
-                                                    ├──< sg_version_file >── sys_file_info
-                                                    ├──< sg_note（问题来源版本）
+                                                    ├──< sg_version_candidate ──< sg_version_file >── sys_file_info
+                                                    │        └──< sg_media_derivation
+                                                    ├──< sg_note（问题来源版本与候选）
                                                     │       ├──< sg_version_issue_response >── sg_version_submission ── sg_version
-                                                    │       └──< sg_issue_verification >── sg_version（确认版本）
-                                                    ├──< sg_review_action
+                                                    │       └──< sg_issue_verification >── sg_version_candidate（确认候选）
+                                                    ├──< sg_review_action（含执行动作的候选）
+                                                    ├──< sg_version_candidate_selection
                                                     └──< sg_review_list_version >── sg_review_list
 
 sg_project / sg_shot / sg_asset / sg_version / sg_note
@@ -203,7 +205,7 @@ sg_project / sg_shot / sg_asset / sg_version / sg_note
 
 只新增 DO、只修改初始化 SQL 或只写设计文档，都不算数据库交付完成。JSONB、部分唯一索引等 PostgreSQL 专用实现必须明确限制在 PostgreSQL 路径，不得无意影响仓库保留的 MySQL 兼容模块。
 
-当前 Shot Grid Alembic head 为 `20260825_19`。06 增加任务/版本/审核完整性约束；07 增加 `sg_media_derivation`、领取租约/重试状态，以及每版本唯一 `thumbnail`/`proxy_media` 部分索引；08 增加平台 NAS 根目录管理菜单；09 将可安全释放编号的历史误删镜头统一为归档加逻辑删除；10 切换到跨版本修改问题闭环；11 修复媒体派生文件的版本引用类型；12 以 PostgreSQL-only 迁移增加 `sg_managed_user_role` 来源标记；13 调整 `sg_shot.sort_order` 数据字典语义；14 将活动镜头唯一约束切换为 `(scene_id, shot_no)` 并增加兼容重编号 Outbox；15 允许 `storage_dir_name` 为空，将镜头目录冻结延迟到任务开始并增加 `preparing`；16 在修改任何排序键前失败关闭地校验每场活动镜头已形成 `S001..Snnn`；17 增加仅审核方可见的 `sg_review_issue_draft`；18 增加项目永久删除审计与清理队列；19 删除“preparing 仅限镜头”的旧约束，将资产目录物理创建延迟到资产制作任务开始。媒体 Worker 默认关闭：图片使用 Pillow 生成 JPEG 缩略图和网页代理，视频使用显式配置的 FFmpeg 生成 JPEG 缩略图和 H.264/AAC faststart MP4；工具缺失或解码失败必须持久化安全错误并让前端降级原媒体，不得将原文件登记为代理。生成物继续进入 `sys_file_info`、`sys_file_reference` 和 `sg_version_file`，成功提交前清理半成品。该增量链仍不是完整 RuoYi 空库 Alembic baseline。
+当前 Shot Grid Alembic head 为 `20260826_22`。06 增加任务/版本/审核完整性约束；07 增加媒体派生；08 至 19 依次补齐 NAS 管理、镜头号治理、跨版本问题、媒体引用、受管角色、排序、延迟目录、审核草稿和项目永久删除；20 增加版本轮次内多候选文件、候选级媒体派生与审核选择审计，并把既有每个版本回填为候选 01，历史 NAS 路径和业务文件名不改名；21 增加审核通过后的最终版本 NAS 交付 Outbox，由 Leader Worker 异步发布 `FINAL/` 文件和 `FINAL.json`；22 将单候选版本自动设为本轮最佳并回填历史数据。媒体 Worker 默认关闭：图片使用 Pillow 生成 JPEG 缩略图和网页代理，视频使用显式配置的 FFmpeg 生成 JPEG 缩略图和 H.264/AAC faststart MP4；工具缺失或解码失败必须持久化安全错误并让前端降级原媒体，不得将原文件登记为代理。生成物继续进入 `sys_file_info`、`sys_file_reference` 和候选级 `sg_version_file`，成功提交前清理半成品。该增量链仍不是完整 RuoYi 空库 Alembic baseline。
 
 媒体派生配置使用 `SHOT_GRID_MEDIA_WORKER_` 前缀；至少需要显式设置 `ENABLED=true` 才注册 Application Leader 内部任务，视频环境还需通过 `FFMPEG_PATH` 提供可执行文件。默认缩略图最长边 480、图片代理最长边 1920、视频代理最大宽度 1280；转换期间按 `HEARTBEAT_SECONDS` 续租，数据库回写继续使用 version + owner + attempt fencing。审核列表返回 `thumbnail` 和 `mediaDerivationStatus`，版本详情返回完整派生文件角色及同名状态；前端只能优先使用真实 `proxy_media`，代理加载失败时回退主 `review_media`。
 
@@ -645,6 +647,9 @@ WHERE asset_item_id IS NOT NULL AND del_flag = '0';
 | `submitted_by` | bigint | 是 | 提交用户 |
 | `submitted_time` | timestamp(0) | 是 | 提交时间 |
 | `generated_at_ms` | bigint | 是 | 服务端生成版本业务文件名时的 Unix 毫秒时间戳 |
+| `selected_candidate_id` | bigint | 否 | 本轮最佳候选；单候选由系统设置，多候选由审核人选择 |
+| `selected_by` | bigint | 否 | 最近选择候选的审核用户；历史候选 01 回填可为空 |
+| `selected_time` | timestamp(0) | 否 | 最近选择候选时间 |
 | `lock_version` | integer | 是 | 审核并发控制 |
 
 返回时派生：
@@ -672,6 +677,10 @@ versionNumber = "V" + versionNo 左侧补零至至少 3 位
 - AI 参数是提交时快照，不随系统模型配置变化。
 - 新版本号由后端在事务和行锁下分配，前端不计算。
 - `generated_at_ms` 由后端生成，客户端不得传入或覆盖。
+- 一个 `sg_version` 表示一个 V001/V002 审核与返修轮次，不表示单个候选文件；候选数量不参与版本计数。
+- 单候选新提交轮次在正式版本事务内直接设置 `selected_candidate_id` 和主审核文件，`selected_by/selected_time` 保持为空且不写选择历史；多候选新轮次初始为空，审核人必须通过候选选择命令设置后，才能保存问题草稿、确认通过或退回。
+- `selected_candidate_id` 必须引用同一 `version_id` 的候选。候选切换和版本 `lock_version + 1` 在同一事务完成。
+- 镜头与资产只读投影使用统一“展示候选”：`selected_candidate_id` 非空时取该候选，否则按 `sort_order,candidate_no,candidate_id` 取首个候选。审核媒体业务文件名、缩略图和代理媒体都绑定该展示候选；多候选 `pending_review` 且尚未选择最佳候选是合法状态，不得返回 `SG_INVALID_STATE_TRANSITION`，也不得让资产缩略图退化为空。
 
 建议索引：
 
@@ -681,6 +690,53 @@ ON sg_version(task_id)
 WHERE version_status = 'final';
 ```
 
+#### 6.9.1 `sg_version_candidate`
+
+版本轮次内不可变的候选作品。候选展示号由 `version_no + candidate_no` 组成，例如 `V001_02`。
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `candidate_id` | bigint | 是 | 主键 |
+| `project_id` | bigint | 是 | 所属项目 |
+| `version_id` | bigint | 是 | 所属版本轮次 |
+| `submission_file_id` | bigint | 是 | 来源候选提交文件，一对一 |
+| `candidate_no` | integer | 是 | 轮次内从 1 连续递增的小编号 |
+| `candidate_note` | varchar(500) | 否 | 制作人对该候选的简短说明 |
+| `sort_order` | integer | 是 | 冻结展示顺序 |
+| `create_by` / `create_time` |  | 是 | 创建审计 |
+
+约束：`UNIQUE(version_id,candidate_no)`、`UNIQUE(submission_file_id)`、`candidate_no>0`。一个轮次至少一个候选；正式版本事务必须按提交命令稳定顺序一次性创建全部候选，不允许后补候选或删除候选。历史版本统一回填候选 01，但不重命名既有 NAS 文件。
+
+#### 6.9.2 `sg_final_delivery`
+
+审核通过后的数据库真相和 NAS 异步交付 Outbox。每个最终版本最多一行；候选源文件保持原位，不改名、不覆盖。
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `final_delivery_id` | bigint | 是 | 主键 |
+| `project_id/task_id/version_id/candidate_id` | bigint | 是 | 最终版本及其最佳候选；项目、任务、版本必须一致 |
+| `source_file_id` | varchar(36) | 是 | 最佳候选的平台文件身份 |
+| `business_file_name` | varchar(255) | 是 | 最终文件沿用的不可变业务文件名 |
+| `source_nas_relative_path` | varchar(1200) | 是 | 已发布候选源文件相对项目根路径 |
+| `final_nas_relative_path` | varchar(1200) | 是 | `{源文件父目录}/FINAL/{businessFileName}` |
+| `manifest_nas_relative_path` | varchar(1200) | 是 | `{源文件父目录}/FINAL/FINAL.json` |
+| `source_sha256/source_file_size` | char(64)/bigint | 是 | 审核事务冻结的源内容身份 |
+| `delivery_status` | varchar(20) | 是 | `pending/publishing/published/failed` |
+| `attempt_count/lease_owner/lease_until` |  | 是/否 | Worker 租约与 owner + attempt fencing |
+| `last_error_key/last_error_message` | varchar | 否 | 仅失败态保存的安全错误 |
+| `publish_mode` | varchar(20) | 否 | 成功时为 `hardlink/copied/reused` |
+| `approved_by/approved_time` |  | 是 | 审核通过身份和时间 |
+| `published_time` | timestamp(0) | 否 | NAS 文件和清单均完成后的时间 |
+
+约束与执行语义：
+
+- `UNIQUE(version_id)`，并通过候选复合外键保证候选属于该版本；同一任务最终版本唯一性继续由 `sg_version` 的部分唯一索引保证。
+- `approve` 在审核事务中冻结上述字段并写入 `pending`；审核接口不访问 NAS。
+- Worker 按 `project → task → version → final_delivery` 锁序领取，使用有期限租约、`FOR UPDATE SKIP LOCKED` 和 owner + attempt fencing；领取、NAS I/O、结果回写必须是短事务、事务外 I/O、短事务。
+- 目标固定是源文件同级 `FINAL/`，优先建立硬链接；文件系统不支持时复制到 attempt 唯一临时文件，重新校验摘要和大小后无覆盖原子发布。
+- `FINAL.json` 至少记录版本、候选、业务文件名、源/最终相对路径、摘要、大小、审核人和审核时间，不记录 UNC 绝对路径、凭据或密钥。
+- 文件与清单全部成功后才可写 `published`。同路径已有相同内容可重用，不同内容或不同清单返回不可重试冲突；源文件内容变化失败关闭。
+
 ### 6.10 `sg_version_file`
 
 版本文件用途关系。它补充 `sys_file_reference` 无法表达的“文件用途、主文件和顺序”，但不能替代平台文件业务引用。
@@ -688,6 +744,7 @@ WHERE version_status = 'final';
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
 | `version_id` | bigint | 是 | 所属版本 |
+| `candidate_id` | bigint | 是 | 所属版本候选，且必须与 `version_id` 一致 |
 | `file_id` | varchar(36) | 是 | 关联 `sys_file_info.file_id` |
 | `file_role` | varchar(30) | 是 | 文件用途 |
 | `business_file_name` | varchar(255) | 是 | 按 Shot Grid 规则生成的展示和下载文件名 |
@@ -722,20 +779,20 @@ WHERE version_status = 'final';
 规则：
 
 - `is_primary` 只允许 `0` 或 `1`。
-- 每个版本最多一个 `is_primary='1' AND file_role='review_media'`，由 PostgreSQL 部分唯一索引保证。
+- 每个候选恰好一个 `is_primary='1' AND file_role='review_media'`；部分唯一索引以 `candidate_id` 为边界。
 - `is_primary='1'` 时 `file_role` 必须为 `review_media`，且 `nas_relative_path`、`nas_sha256`、`nas_file_size`、`published_time` 全部必填；`nas_file_size >= 0`。
-- 每个版本的主 `review_media` 必须具有唯一且不可变的 `business_file_name`。
+- 每个候选的主 `review_media` 必须具有唯一且不可变的 `business_file_name`。
 - 主 `review_media` 只有在 NAS 临时写入、摘要校验和原子改名完成后才能写入本表，因此本表不存在 `publishing` 半成品状态。
 - 创建版本和 `sg_version_file`、`sys_file_reference` 必须处于同一事务。
 - 对应业务引用使用：
 
 ```text
-businessType = shotgrid_version
-businessId   = versionId 的字符串形式
+businessType = shotgrid_version_candidate
+businessId   = candidateId 的字符串形式
 ```
 
 - `sys_file_info.original_name` 保留用户上传时的原始名称，`stored_name` 和 `storage_key` 继续由平台文件服务管理；不得改写平台受保护文件。NAS 发布是以业务文件名生成的一份受控副本或同内容存储映射，不得反向修改平台 `storage_key`。
-- 版本接口返回 `{ fileId, originalName, businessFileName, url, role, isPrimary }`，不返回 `storageKey`。
+- 版本接口按候选分组返回文件；文件项至少包含 `{ candidateId, fileId, originalName, businessFileName, url, role, isPrimary }`，不返回 `storageKey`。
 - 通用文件下载当前使用 `sys_file_info.original_name` 作为下载名。需要按 `business_file_name` 下载时，必须由 Shot Grid 授权下载接口复用底层流式能力并设置业务文件名，不能假设通用下载接口已经支持。
 
 #### 6.10.1 主产出物业务文件命名
@@ -743,27 +800,27 @@ businessId   = versionId 的字符串形式
 镜头视频：
 
 ```text
-{projectCode}_EP{episodeNo:至少3位}_{sceneNo:至少3位}_S{shotNo:至少3位}_{producerNickName}_V{versionNo:至少3位}_{generatedAtMs}.{extension}
+{projectCode}_EP{episodeNo:至少3位}_{sceneNo:至少3位}_S{shotNo:至少3位}_{producerNickName}_V{versionNo:至少3位}_{candidateNo:至少2位}_{generatedAtMs}.{extension}
 ```
 
 示例：
 
 ```text
-WGZR_EP001_001_S001_YJF_V001_1786094626499.mp4
+WGZR_EP001_001_S001_YJF_V001_01_1786094626499.mp4
 ```
 
-镜头业务文件名包含 `versionNo`，必须与 `sg_version.version_no`、`sg_version_submission.reserved_version_no`、页面 `V001/V002` 和审核单使用同一个服务端分配值。
+镜头业务文件名同时包含 `versionNo` 与 `candidateNo`；前者必须与 `sg_version.version_no`、`sg_version_submission.reserved_version_no` 和审核轮次一致，后者必须与 `sg_version_candidate.candidate_no` 一致。
 
 资产图片：
 
 ```text
-{projectCode}_Asset_{assetType}_{safeAssetName}_{safeProductionItem}_{producerNickName}_V{versionNo:至少3位}_{generatedAtMs}.{extension}
+{projectCode}_Asset_{assetType}_{safeAssetName}_{safeProductionItem}_{producerNickName}_V{versionNo:至少3位}_{candidateNo:至少2位}_{generatedAtMs}.{extension}
 ```
 
 示例：
 
 ```text
-WGZR_Asset_Environment_动力舱室内_动力舱恐怖气氛主视角_YJF_V001_1786094626499.jpg
+WGZR_Asset_Environment_动力舱室内_动力舱恐怖气氛主视角_YJF_V001_01_1786094626499.jpg
 ```
 
 生成规则：
@@ -771,13 +828,13 @@ WGZR_Asset_Environment_动力舱室内_动力舱恐怖气氛主视角_YJF_V001_1
 1. `projectCode` 取版本提交暂存时项目已保存的 `sg_project.project_code`。
 2. `producerNickName` 取任务负责人当前平台用户的 `sys_user.nick_name`；任务分配、Excel 匹配和版本文件名生成均使用该昵称，Shot Grid 不再采集项目级制作人缩写。兼容响应中的 `producerCode` 也由该昵称派生。
 3. 镜头文件只允许 `.mp4`、`.mov`；资产文件只允许 `.jpg`、`.png`。扩展名根据服务端校验后的真实文件类型确定并转为小写，不能只相信客户端文件名。
-4. 镜头文件名中的 `episodeNo`、`sceneNo`、`shotNo` 和 `versionNo` 左侧补零至至少 3 位，超过 999 时保留全部数字；集增加 `EP` 前缀，镜头增加 `S` 前缀，版本增加 `V` 前缀。资产文件名中的 `versionNo` 同样左侧补零至至少 3 位。
-5. `generatedAtMs` 是服务端 Unix 毫秒时间戳，与 `sg_version.generated_at_ms` 一致。
+4. 镜头文件名中的 `episodeNo`、`sceneNo`、`shotNo` 和 `versionNo` 左侧补零至至少 3 位，超过 999 时保留全部数字；候选号 `candidateNo` 左侧补零至至少 2 位。资产文件名使用相同的版本号和候选号规则。
+5. `generatedAtMs` 是服务端 Unix 毫秒批次时间戳，与 `sg_version.generated_at_ms` 一致；同一轮全部候选共享该值。
 6. `safeAssetName` 和 `safeProductionItem` 都使用 Unicode NFC 规范化，去除首尾空白，把控制字符和 `<>:"/\|?*` 替换为 `_`，合并连续空白或下划线；制作分项允许在导入时为空，但版本提交时规范化后为空必须拒绝。
 7. `safeProductionItem` 取版本提交时任务所属 `sg_asset_item.production_item`，不允许上传者临时输入另一个值。
-8. 文件名超过平台或文件系统安全长度时，在保留可辨识前缀的前提下按确定性规则缩短 `safeAssetName` 和 `safeProductionItem`，并追加资产 ID 的短哈希；不得截断项目、类型、制作人昵称、版本或时间戳部分。
-9. 业务文件名在版本事务内只生成一次并保持不可变。项目名、成员名、资产名或制作分项后续修改不追改历史版本文件名。
-10. 同一 `X-Idempotency-Key` 重试必须返回第一次创建的版本和业务文件名，不得生成新版本号或新时间戳。
+8. 文件名超过平台或文件系统安全长度时，在保留可辨识前缀的前提下按确定性规则缩短 `safeAssetName` 和 `safeProductionItem`，并追加资产 ID 的短哈希；不得截断项目、类型、制作人昵称、版本、候选或时间戳部分。
+9. 各候选业务文件名在提交暂存事务内只生成一次并保持不可变。项目名、成员名、资产名或制作分项后续修改不追改历史版本文件名。
+10. 同一 `X-Idempotency-Key` 重试必须返回第一次创建的版本轮次、候选小编号和业务文件名，不得生成新版本号、新候选号或新时间戳。
 
 #### 6.10.2 NAS 目标路径
 
@@ -794,7 +851,7 @@ ASSET\{asset.asset_type}\{asset.storage_dir_name}\{business_file_name}
 ```
 
 - 数据库保存相对项目根目录的 `nas_relative_path`，完整 UNC 路径由 `sg_project_storage.project_path_snapshot` 安全拼接；不接受客户端传入完整目标路径。
-- `sg_version_submission.temporary_relative_path` 位于目标文件同一目录，每次领取 attempt 使用服务端生成的唯一保留名称，例如 `.sgtmp-{submissionId}-a{attempt}-{random}.part`，保证最终原子发布不跨卷且迟到 Worker 不复用同一临时文件。
+- 每个 `sg_version_submission_file.temporary_relative_path` 位于自身目标文件同一目录，每次领取 attempt 使用包含 `submissionId/submissionFileId/attempt/random` 的唯一保留名称，保证最终原子发布不跨卷且不同候选、迟到 Worker 不复用同一临时文件。
 - 正式和临时路径每次使用前都要重新解析并验证仍位于项目根目录内。
 - NAS 目标已存在且摘要、大小均一致时视为幂等发布成功；任一不一致都禁止覆盖并返回 `SG_NAS_TARGET_CONTENT_CONFLICT`。
 
@@ -912,7 +969,7 @@ ASSET\{asset.asset_type}\{asset.storage_dir_name}\{business_file_name}
 
 规则：
 
-- 每次审核动作与版本、自动审核单、问题确认、问题状态和任务状态更新处于同一事务，并按 `project → task → version → auto_single review list → note → issue verification` 顺序加锁。
+- 每次审核动作与版本、自动审核单、问题确认、问题状态和任务状态更新处于同一事务，并按 `project → task → version → auto_single review list → note → issue verification` 顺序加锁；`approve` 在同一事务追加唯一 `sg_final_delivery(pending)`，但不得执行 NAS I/O。
 - 请求必须携带 `X-Idempotency-Key` 和版本 `lockVersion`；规范命令哈希必须包含按 `issueId` 稳定排序的完整 `issueVerifications`。`UNIQUE(version_id, reviewer_user_id, idempotency_key)` 防止重复动作。同键同一规范命令返回 `result_snapshot`，同键不同审核动作或不同逐条确认集合返回 `SG_IDEMPOTENCY_CONFLICT`。
 - `approve` 必须确认所有带入当前版本的问题都已有 `resolved` 确认，并拒绝任务范围内任何 open 问题；不再按 `is_mandatory` 筛选。
 - `reject` 必须确认所有带入当前版本的问题都已有 `resolved` 或 `still_present` 结果，并且至少存在一条 `still_present` 问题或绑定当前版本的新 open 问题。`reason` 只能作总述，不能替代结构化问题。
@@ -1119,14 +1176,14 @@ failed ──人工重试──→ 新建 reconcile_directory(pending)
 | `submission_id` | bigint | 是 | 主键 |
 | `project_id` | bigint | 是 | 所属项目 |
 | `task_id` | bigint | 是 | 所属任务 |
-| `source_file_id` | varchar(36) | 是 | 平台受保护上传文件 |
+| `source_file_id` | varchar(36) | 迁移兼容 | 候选 01 的平台源文件镜像；新业务读取 `sg_version_submission_file` |
 | `reserved_version_no` | integer | 是 | 为本次提交保留的任务内版本号 |
 | `generated_at_ms` | bigint | 是 | 业务文件名时间戳，只生成一次 |
-| `business_file_name` | varchar(255) | 是 | 不可变业务文件名 |
-| `target_relative_path` | varchar(1200) | 是 | NAS 目标相对路径 |
-| `temporary_relative_path` | varchar(1200) | 是 | `pending` 占位或当前 attempt 的同目录唯一临时文件路径；不作为客户端契约返回 |
-| `source_sha256` | char(64) | 是 | 源文件摘要快照 |
-| `source_file_size` | bigint | 是 | 源文件大小快照 |
+| `business_file_name` | varchar(255) | 迁移兼容 | 候选 01 业务文件名镜像 |
+| `target_relative_path` | varchar(1200) | 迁移兼容 | 候选 01 NAS 目标路径镜像 |
+| `temporary_relative_path` | varchar(1200) | 迁移兼容 | 候选 01 临时路径镜像 |
+| `source_sha256` | char(64) | 迁移兼容 | 候选 01 摘要镜像 |
+| `source_file_size` | bigint | 迁移兼容 | 候选 01 文件大小镜像 |
 | `changelog` | text | 是 | 本轮修改说明 |
 | `ai_params` | jsonb | 否 | 可选生成参数快照 |
 | `submission_status` | varchar(20) | 是 | 提交编排状态 |
@@ -1149,17 +1206,40 @@ pending → publishing → published → committing → committed
 
 - `UNIQUE(task_id, reserved_version_no)`。
 - `UNIQUE(task_id, submitted_by, idempotency_key)`；相同请求重试返回同一提交记录、版本号、时间戳和业务文件名。
-- `UNIQUE(source_file_id)`；同一平台源文件不能被多个版本提交占用。
+- 每个提交至少有 1 个且不超过后端能力响应上限的 `sg_version_submission_file`；源文件唯一性和候选顺序由子表约束。
 - 每个任务同时最多一个 `pending/publishing/published/committing/failed` 未解决提交，使用 PostgreSQL 部分唯一索引保证；失败后必须重试原提交，不能通过新建提交跳过保留版本号。
 - `publishing/committing` 必须同时具有非空租约 owner 和到期时间，其余状态必须同时为空；`failed` 必须同时具有非空安全错误键和摘要，其余状态必须同时为空，由两个 `CHECK` 保证。
 - 暂存创建时锁定任务并保留版本号；任务仍保持 `in_progress` 或 `revision`，直到正式版本提交成功。
 - 首版任务不存在 open 问题；修订任务暂存时必须在同一事务为锁内重查的每条 open 问题创建一条 `sg_version_issue_response`，不得缺少或多出。问题集合或处理说明属于幂等命令哈希的一部分。
-- 暂存事务同时为源文件创建 `businessType=shotgrid_version_submission` 临时平台文件引用；失败提交仍受引用保护，不作为无引用文件清理。正式版本事务把引用切换为 `businessType=shotgrid_version` 并绑定版本。
+- 暂存事务同时为全部候选源文件创建 `businessType=shotgrid_version_submission` 临时平台文件引用；失败提交仍受引用保护，不作为无引用文件清理。正式版本事务把全部引用切换为 `businessType=shotgrid_version_candidate` 并分别绑定候选。
 - 暂存和正式版本事务在锁任务、提交与版本资源前，必须先锁定所属项目行并复核项目未归档；统一锁序为 `project → task/submission → version`。这是防止首个版本与项目类型/画幅修改并发穿透冻结规则的上线门禁。
-- 每次领取 `publishing` attempt 都生成含 `submissionId`、attempt 和随机值的同目录唯一临时名，例如 `.sgtmp-8004-a2-{random}.part`；以独占创建写入，校验真实大小和 SHA-256 后执行无覆盖原子发布。目标已存在且真实大小、摘要均一致才视为幂等成功，不一致返回冲突，禁止覆盖。
-- `committing` 在一个短数据库事务中创建 `sg_version`、`sg_version_file`、`sys_file_reference`、自动审核单和关系，并把任务改为 `pending_review`。
+- 每次领取 `publishing` attempt 为尚未成功的每个候选生成含 `submissionId/submissionFileId/attempt/random` 的同目录唯一临时名；逐文件独占写入、校验真实大小和 SHA-256 后无覆盖原子发布。已发布候选在重试时只复核目标摘要和大小，不重复覆盖。
+- 只有全部 `sg_version_submission_file.publish_status='published'`，父提交才能进入 `published/committing`。任一候选失败时不创建或暴露半个正式版本。
+- `committing` 在一个短数据库事务中创建一个 `sg_version`、全部 `sg_version_candidate`、候选级 `sg_version_file`/`sys_file_reference`、一个自动审核单和关系，并把任务改为 `pending_review`。
 - 只有 `committed` 产生通过 `sg_version.submission_id` 关联的正式版本并对业务列表可见；`sg_version_submission` 不保存重复的 `version_id`，状态响应通过该关系反查 `versionId/reviewListId`。`failed` 只在提交状态页和管理员诊断页可见。
 - 数据库提交失败时保留已校验的 NAS 文件并重试 `committing`；不得重新分配版本号或覆盖目标文件。
+
+#### 6.18.1 `sg_version_submission_file`
+
+一次版本提交中的有序候选源文件和逐文件 NAS 发布状态。
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `submission_file_id` | bigint | 是 | 主键 |
+| `submission_id` | bigint | 是 | 所属提交批次 |
+| `candidate_no` | integer | 是 | 轮次内连续候选号 |
+| `source_file_id` | varchar(36) | 是 | 平台私有源文件 |
+| `business_file_name` | varchar(255) | 是 | 含版本号与候选号的不可变业务文件名 |
+| `target_relative_path` / `temporary_relative_path` | varchar(1200) | 是 | NAS 正式/临时相对路径 |
+| `source_sha256` / `source_file_size` |  | 是 | 源文件摘要与大小快照 |
+| `candidate_note` | varchar(500) | 否 | 制作人候选说明 |
+| `sort_order` | integer | 是 | 创建命令冻结的展示顺序 |
+| `publish_status` | varchar(20) | 是 | `pending/publishing/published/failed` |
+| `published_time` | timestamp(0) | 条件必填 | 已发布时必填 |
+| `last_error_key` / `last_error_message` |  | 条件必填 | 失败时必填 |
+| `create_time` / `update_time` |  | 是 | 时间审计 |
+
+约束：`UNIQUE(submission_id,candidate_no)`、`UNIQUE(source_file_id)`、`candidate_no>0`、`source_file_size>0`。候选号按 create 中 `sortOrder/clientFileKey` 的稳定有序列表分配，不按网络上传完成顺序分配；同一批次内容摘要重复必须在创建事务中拒绝。
 
 ### 6.19 `sg_import_batch`
 
@@ -1299,9 +1379,13 @@ CREATE UNIQUE INDEX uk_sg_asset_item_import_row
 ON sg_asset_item (project_id, import_row_key)
 WHERE import_row_key IS NOT NULL AND del_flag = '0';
 
--- 同一平台源文件只能预留给一个版本提交
-CREATE UNIQUE INDEX uk_sg_version_submission_source_file
-ON sg_version_submission (source_file_id);
+-- 同一平台源文件只能作为一个提交候选
+CREATE UNIQUE INDEX uk_sg_submission_file_source
+ON sg_version_submission_file (source_file_id);
+
+-- 一个版本轮次内候选号唯一
+ALTER TABLE sg_version_candidate
+ADD CONSTRAINT uk_sg_candidate_version_no UNIQUE (version_id, candidate_no);
 
 -- 每任务最多一个未解决版本提交；failed 必须重试原记录
 CREATE UNIQUE INDEX uk_sg_version_submission_active
@@ -1425,7 +1509,7 @@ pending
   └─Worker 取得租约────────→ publishing
 
 publishing
-  ├─临时写入、摘要校验、原子改名成功→ published
+  ├─全部候选逐个临时写入、摘要校验、原子改名成功→ published
   └─可恢复或最终失败────────────→ failed
 
 published
@@ -1442,8 +1526,8 @@ failed
 规则：
 
 - `pending` 到 `published` 只处理 NAS 文件，不修改任务为待审核。
-- `published` 文件必须已经以最终业务文件名存在，且摘要和大小与平台源文件一致。
-- `committed` 是唯一会生成正式版本并把任务改为 `pending_review` 的终态。
+- `published` 要求本批全部候选文件均已按各自最终业务文件名存在，且摘要和大小与平台源文件一致；部分候选成功只能保留为可恢复发布证据，不能把父提交标为 `published`。
+- `committed` 是唯一会生成一个正式版本轮次、全部候选并把任务改为 `pending_review` 的终态。
 - 前端只能在 `committed` 显示提交成功；`pending/publishing/published/committing` 均为处理中，`failed` 仍占用该任务且只能重试原提交记录。
 - MVP 不提供放弃失败提交并跳过保留版本号的普通入口；必须先重试成功或由管理员完成明确对账和清理。
 - 用户页面将 `pending/publishing/published/committing` 统一显示为“正在提交”，将 `failed` 显示为“提交失败”，不能显示成版本待审核。
@@ -3074,6 +3158,7 @@ Permission: shotgrid:task:assign
 - 目标尚无任务时创建 `not_started` 任务，此时 `taskLockVersion` 必须为空；已有未完成任务时必须携带当前 `taskLockVersion`，执行受控改派并记录审计，不创建第二个任务。
 - 已有任务存在任何非 `committed` 版本提交时禁止改派，`failed` 也属于未解决提交；必须重试原提交或使用后续明确治理动作。
 - 已完成任务默认禁止改派；如需返工，必须新增明确的重新开启动作。
+- 镜头详情的 `allowedActions` 必须与改派写入门禁一致：未分配时可返回首次分配；已有 `not_started/preparing/in_progress/pending_review/revision` 任务且不存在非 `committed` 提交时，才可返回 `task.assign`。已完成任务不得返回该动作；所有状态仍同时要求平台分配权限、项目管理范围、项目可写、NAS 就绪和镜头未归档。前端按唯一任务是否存在区分“分配任务”和“改派任务”，不能仅凭已存在任务就展示入口。
 
 ### 15.2 开始任务
 
@@ -3088,9 +3173,9 @@ Permission: shotgrid:task:start
 
 用户界面中的“上传并提交版本”是一个业务动作，基于现有文件基座严格按三步执行：
 
-1. 完成本地文件类型、大小、任务身份和当前动作校验，再调用私有 preflight；
-2. preflight 成功且任务/权限/文件 generation 仍一致时，调用 `POST /common/files/upload` 上传受保护文件并取得 `fileId`；
-3. 调用版本提交创建接口并处理 HTTP 202，等待 NAS 发布和正式版本事务完成；只有状态变为 `committed` 才向用户显示“版本提交成功”。
+1. 完成本地候选数量、每文件类型/大小、整批大小、任务身份和当前动作校验，再调用私有 preflight；
+2. preflight 成功且任务/权限/候选 generation 仍一致时，对每个候选调用 `POST /common/files/upload` 上传受保护文件并取得各自 `fileId`；
+3. 按 preflight 的同一稳定顺序调用版本提交创建接口并处理 HTTP 202，等待 NAS 发布和正式版本事务完成；只有状态变为 `committed` 才向用户显示整个轮次提交成功。
 
 私有预检接口：
 
@@ -3103,8 +3188,22 @@ Permission: shotgrid:version:add
 
 ```json
 {
-  "fileName": "shot-final-v4.mp4",
-  "fileSize": 10485760,
+  "candidates": [
+    {
+      "clientFileKey": "local-01",
+      "fileName": "shot-final-a.mp4",
+      "fileSize": 10485760,
+      "sortOrder": 0,
+      "candidateNote": "动作节奏更快"
+    },
+    {
+      "clientFileKey": "local-02",
+      "fileName": "shot-final-b.mov",
+      "fileSize": 12582912,
+      "sortOrder": 1,
+      "candidateNote": "表演更自然"
+    }
+  ],
   "changelog": "根据上一轮意见加快人物起身动作",
   "aiParams": null,
   "issueResponses": [
@@ -3116,7 +3215,7 @@ Permission: shotgrid:version:add
 }
 ```
 
-`fileSize` 必须大于 0 且不超过平台上传上限。首版 `issueResponses=[]`；修订版必须恰好覆盖当前任务全部 open 问题，每项 `issueId` 唯一且 `responseText` 非空。成功响应至少返回 `ready=true`、`taskId`、`taskKind`、`taskStatus`、`fileExtension`、`openIssueSnapshotHash` 和 `allowedActions=["version.add"]`。预检是无锁、无写库、无文件副作用的尽早拒绝，只读取并验证当前用户就是任务当前委派的活动 `creator`、完整任务上下文、项目/目录就绪、open 问题集合与逐条处理说明、未解决提交、扩展名、业务文件名、目标相对路径可生成和目录快照字段完整；`director`、管理员、超级管理员和全项目数据范围不能绕过本人门禁。预检不访问 NAS、不检查实际目标文件、不保留版本号、不创建提交或文件引用，也不承诺后续 create 必然成功。实际目标文件已存在的摘要冲突只由 Worker 无覆盖发布阶段处理。
+`candidates` 初始配置为 `1..10` 项；每项 `fileSize` 大于 0 且不超过单文件上限，合计不超过批次上限，`clientFileKey` 与 `sortOrder` 均唯一且顺序连续。首版 `issueResponses=[]`；修订版必须恰好覆盖当前任务全部 open 问题。成功响应至少返回 `ready=true`、`taskId`、`taskKind`、`taskStatus`、规范化候选摘要、`maxCandidates/maxFileSize/maxBatchSize`、`openIssueSnapshotHash` 和 `allowedActions=["version.add"]`。预检是无锁、无写库、无文件副作用的尽早拒绝，只读取并验证当前用户就是任务当前委派的活动 `creator`、完整任务上下文、项目/目录就绪、open 问题集合与逐条处理说明、未解决提交、候选数量/顺序/扩展名/大小、业务文件名和目录快照可生成；预检不访问 NAS、不检查实际目标文件、不保留版本号、不创建提交或文件引用，也不承诺后续 create 必然成功。
 
 预检失败、权限撤销、任务上下文切换或用户换文件时不得执行上传。预检只能校验文件名和声明大小；真实字节签名、容器品牌和摘要仍只能在上传后校验。上传已经成功但业务提交尚未建立引用即失败时，孤儿私有文件由平台保留、对账和回收机制治理，前端不得盲删。
 
@@ -3130,7 +3229,20 @@ Header: X-Idempotency-Key
 
 ```json
 {
-  "fileId": "5ed39e04-2f29-45ab-a58c-4f8168f5131a",
+  "candidates": [
+    {
+      "clientFileKey": "local-01",
+      "fileId": "5ed39e04-2f29-45ab-a58c-4f8168f5131a",
+      "sortOrder": 0,
+      "candidateNote": "动作节奏更快"
+    },
+    {
+      "clientFileKey": "local-02",
+      "fileId": "7bc27aa5-e61d-40a8-86fb-b3494fac65b0",
+      "sortOrder": 1,
+      "candidateNote": "表演更自然"
+    }
+  ],
   "changelog": "根据上一轮意见加快人物起身动作",
   "aiParams": null,
   "openIssueSnapshotHash": "8d5c...省略...e41a",
@@ -3150,8 +3262,8 @@ Header: X-Idempotency-Key
 - 任务状态是 `in_progress` 或 `revision`；
 - `in_progress` 首版不得携带问题处理说明；`revision` 必须存在 open 问题，且 `issueResponses` 与锁内重查的 open 问题集合完全一致；
 - create 必须回传 preflight 返回的 `openIssueSnapshotHash`；后端按稳定 `issueId + originVersionId` 集合重新计算并比较，不一致返回 `SG_ISSUE_SNAPSHOT_CONFLICT`，随后仍逐项校验处理说明，不能只相信哈希；
-- `fileId` 对应受保护、有效且当前用户有权使用的文件；
-- 文件尚未被其他版本作为主产出物引用；
+- 每个 `fileId` 对应受保护、有效且当前用户有权使用的文件；候选 ID、文件 ID、排序均不得重复；
+- 每个文件尚未被其他提交候选或正式候选引用，同一批次 SHA-256 重复内容拒绝；
 - 项目存储、所属集/镜头目录或资产目录已经 `ready`；
 - 任务必须具有完整稳定目录绑定；Worker/重试时重新计算的目标路径必须与暂存快照一致，否则以 `SG_VERSION_TARGET_PATH_CONFLICT`/409 失败，不能复用仅表示非法路径输入的 `SG_STORAGE_PATH_INVALID`；
 - 当前任务不存在活动或待处理失败的版本提交；
@@ -3164,11 +3276,11 @@ create 不能信任预检结果。后端必须在上传后重新锁定项目与�
 锁定任务行后，在一个短数据库事务中：
 
 1. 分配任务范围内下一个保留版本号；
-2. 生成 `generated_at_ms` 和不可变 `business_file_name`；
-3. 计算并保存 NAS 正式相对路径和同目录临时路径；
-4. 创建 `sg_version_submission(status=pending)`；
+2. 生成一次 `generated_at_ms`，按稳定顺序分配连续候选号并生成每个候选不可变 `business_file_name`；
+3. 计算并保存每个候选的 NAS 正式相对路径和同目录临时路径；
+4. 创建一个 `sg_version_submission(status=pending)` 和全部 `sg_version_submission_file`；
 5. 为每条 open 问题创建不可变 `sg_version_issue_response`；
-6. 为源文件创建 `businessType=shotgrid_version_submission` 临时平台文件引用；
+6. 为全部源文件创建 `businessType=shotgrid_version_submission` 临时平台文件引用；
 7. 提交事务并返回 HTTP 202。
 
 初始响应至少返回：
@@ -3180,7 +3292,17 @@ create 不能信任预检结果。后端必须在上传后重新锁定项目与�
     "submissionId": 8004,
     "submissionStatus": "pending",
     "reservedVersionNumber": "V004",
-    "businessFileName": "WGZR_EP001_001_S001_YJF_V004_1786094626499.mp4",
+    "candidateCount": 2,
+    "candidates": [
+      {
+        "candidateNumber": "V004_01",
+        "businessFileName": "WGZR_EP001_001_S001_YJF_V004_01_1786094626499.mp4"
+      },
+      {
+        "candidateNumber": "V004_02",
+        "businessFileName": "WGZR_EP001_001_S001_YJF_V004_02_1786094626499.mov"
+      }
+    ],
     "statusUrl": "/shot-grid/version-submissions/8004",
     "taskStatus": "revision"
   }
@@ -3189,9 +3311,9 @@ create 不能信任预检结果。后端必须在上传后重新锁定项目与�
 
 Worker 按第 7.4 节完成 NAS 发布后，在一个短数据库事务中：
 
-1. 创建 `sg_version`；
-2. 创建主 `sg_version_file` 并写入 NAS 相对路径、摘要、大小和发布时间；
-3. 将源文件引用从 `shotgrid_version_submission` 切换为正式 `shotgrid_version` 引用；
+1. 创建一个 `sg_version`；
+2. 按冻结顺序创建全部 `sg_version_candidate` 和各候选主 `sg_version_file`；
+3. 将全部源文件引用从 `shotgrid_version_submission` 切换为正式 `shotgrid_version_candidate` 引用；
 4. 通过 `submission_id` 将本次逐条问题处理说明关联到新版本；
 5. 创建 `review_mode=auto_single`、`review_status=active` 的审核单和版本关系；
 6. 把任务改为 `pending_review`；
@@ -3212,10 +3334,10 @@ Permissions:
 - `current` 使用 `shotgrid:version:query`，用于详情刷新后恢复当前未解决提交；没有未解决提交时返回 `data=null`。
 - 只有任务当前委派的活动 `creator` 本人可以重试由本人创建的失败提交；项目管理人和管理员可以查询其数据范围内的提交，但不得代重试。
 - `retry` 仅允许 `failed`，重新验证任务负责人、源文件、NAS 路径和项目状态，并复用原版本号、时间戳和业务文件名。
-- `committed` 响应返回 `versionId`、`reviewListId`、`versionStatus=pending_review` 和 `taskStatus=pending_review`。
+- `committed` 响应返回 `versionId`、`candidateCount`、候选摘要、`reviewListId`、`versionStatus=pending_review` 和 `taskStatus=pending_review`；单候选轮次返回系统自动设置的 `selectedCandidateId`，多候选轮次初始返回 `null`。
 - 第一阶段文件上传已由基座独立提交，当前平台单文件上限为 100 MiB，`mov` 已加入上传白名单。暂存或发布失败不得谎报版本成功；已建立临时引用的源文件继续受删除保护，最终无引用文件才进入平台保留、对账和回收机制。
 - 前端自动轮询单轮最多 30 次，连续错误 3 次暂停，并使用上限 30 秒的指数退避；401/403/404 立即停止自动轮询，终态允许手工刷新。`failed` 必须重试原行，不能新建第二条提交。
-- create 返回结果未知时，前端复用内存中的原 `fileId` 和 `X-Idempotency-Key` 重放 create，并跳过 preflight 与上传；同键异请求仍返回 `SG_IDEMPOTENCY_CONFLICT`。任务、文件或操作 generation 已变化时，迟到响应不得刷新当前详情。
+- create 返回结果未知时，前端复用内存中的原有序 `fileId` 列表和 `X-Idempotency-Key` 重放 create，并跳过 preflight 与上传；同键但候选文件、顺序、说明或问题响应不同仍返回 `SG_IDEMPOTENCY_CONFLICT`。任务、候选或操作 generation 已变化时，迟到响应不得刷新当前详情。
 
 ### 15.4 审核与循环修改
 
@@ -3226,7 +3348,7 @@ GET /shot-grid/tasks/{taskId}/issues?status=open
 Permission: shotgrid:note:list
 ```
 
-响应按来源版本号、问题创建时间稳定排序，返回每条问题的 `issueId/originVersionId/originVersionNumber/content/mediaTimeMs/annotations/status/resolvedInVersionId`，以及已提交版本上的 `responses[]` 和 `verifications[]`。制作人员只能读取有权访问任务的数据，不能在该接口回复、解决或确认问题。
+响应按来源版本号、问题创建时间稳定排序，返回每条问题的 `issueId/originVersionId/originVersionNumber/originCandidateId/originCandidateNumber/content/mediaTimeMs/annotations/status/resolvedInVersionId`，以及已提交版本上的 `responses[]` 和包含 `checkedCandidateId` 的 `verifications[]`。制作人员只能读取有权访问任务的数据，不能在该接口回复、解决或确认问题。
 
 审核页读取当前版本上下文：
 
@@ -3239,7 +3361,15 @@ Permission: shotgrid:version:review
 
 ```json
 {
-  "currentVersion": { "versionId": 5002, "versionNumber": "V002" },
+  "currentVersion": {
+    "versionId": 5002,
+    "versionNumber": "V002",
+    "selectedCandidateId": 6202,
+    "candidates": [
+      { "candidateId": 6201, "candidateNumber": "V002_01", "sortOrder": 0 },
+      { "candidateId": 6202, "candidateNumber": "V002_02", "sortOrder": 1 }
+    ]
+  },
   "carriedIssues": [
     {
       "issueId": 7101,
@@ -3258,6 +3388,16 @@ Permission: shotgrid:version:review
 
 `carriedIssues` 只包含来源版本早于当前版本、提交当前版本时仍 open 且具有本版处理说明的问题；`currentVersionIssues` 是审核人在当前版本新建的问题。接口必须同时验证同任务、同项目和当前版本状态，不能由前端拼接多个版本列表推断审核上下文。
 
+审核人选择本轮最佳候选：
+
+```http
+PUT /shot-grid/review-lists/{reviewListId}/versions/{versionId}/selection
+Permission: shotgrid:version:review
+Header: X-Idempotency-Key
+```
+
+请求体为 `{ "candidateId": 6202, "lockVersion": 0 }`。后端锁定项目、自动审核单、版本与候选后，校验候选属于路径版本、版本仍为 `pending_review`、审核单仍为 `active`，写入 `sg_version_candidate_selection`、更新 `sg_version.selected_candidate_id/selected_by/selected_time` 并递增版本锁。当前版本存在任何问题草稿时禁止切换到其他候选，返回 `SG_CANDIDATE_SELECTION_LOCKED`。同一幂等键、同一请求直接重放首次结果；使用新幂等键再次选择当前候选会留下不改变版本锁的幂等记录，操作审计结果标记 `changed=false`，不会伪造一次候选切换。人工批量审核单只负责组织轮次，候选选择仍写回该轮次对应的 `auto_single` 审核上下文。
+
 审核人在当前版本保存私有问题草稿：
 
 ```http
@@ -3265,7 +3405,9 @@ POST /shot-grid/versions/{versionId}/issues
 Permission: shotgrid:note:add
 ```
 
-该兼容路径不再直接创建正式 `sg_note`，而是写入当前活动 `auto_single` 审核单的 `sg_review_issue_draft`。请求可携带 `content`、`mediaTimeMs` 和 `annotations`，但 `content` 规范化后非空或 `annotations.items` 至少一项有效，二者必须满足其一。草稿固定绑定路径版本、当前审核单和创建审核人，仅通过受 `shotgrid:version:review + shotgrid:note:list` 保护的 `review-context.currentVersionDrafts` 返回；制作人任务问题列表、版本正式问题列表和生产履历不得返回草稿。
+该兼容路径不再直接创建正式 `sg_note`，而是写入当前活动 `auto_single` 审核单的 `sg_review_issue_draft`。请求必须携带当前 `candidateId`，且该值等于锁内 `sg_version.selected_candidate_id`；尚未选择候选或请求候选已过期时拒绝。请求可携带 `content`、`mediaTimeMs`、`annotations` 和 `referenceFileIds[]`，但 `content` 规范化后非空或 `annotations.items` 至少一项有效，二者必须满足其一；参考文件不能单独代替问题描述或画面标注。草稿固定绑定路径版本、当前最佳候选、当前审核单和创建审核人，仅通过审核上下文返回；制作人任务问题列表、版本正式问题列表和生产履历不得返回草稿。
+
+`referenceFileIds[]` 最多 5 项且不可重复，每项必须是当前审核人上传、仍有效的本地受保护文件，单个不超过 20 MiB，扩展名限 BMP/GIF/JPG/PNG、PDF、Office、TXT、MP4/MOV。草稿引用使用 `sys_file_reference(businessType=shot_grid_review_issue_draft,businessId=draftId)`；`reject` 与问题发布处于同一事务，把引用迁移到 `businessType=shot_grid_review_issue,businessId=noteId` 后删除草稿引用。该能力复用平台引用表，不新增附件 JSON 列或平行文件表。
 
 草稿编辑与删除：
 
@@ -3290,6 +3432,7 @@ V002 及后续版本请求体示例：
 ```json
 {
   "actionType": "reject",
+  "selectedCandidateId": 6202,
   "reason": "仍有一项需要继续修改",
   "lockVersion": 0,
   "issueVerifications": [
@@ -3303,10 +3446,11 @@ V002 及后续版本请求体示例：
 ```
 
 - 审核动作必须使用持久幂等键；同一审核人、版本和幂等键的同一规范请求重放首次结果，同键异请求返回 `SG_IDEMPOTENCY_CONFLICT`。
+- `approve/reject/defer` 都必须回传锁内当前 `selectedCandidateId` 并纳入命令哈希；未选择、候选不属于版本、候选已被他人切换或版本锁过期均返回 409。审核动作、问题发布和历史问题确认都绑定该候选。
 - 对 V002 及后续版本，`approve/reject` 的 `issueVerifications` 必须恰好覆盖 `review-context.carriedIssues`，不得遗漏、重复、夹带当前版本新问题或其他任务问题；V001 没有带入问题时必须为空。
 - `reject`：逐条确认结果与审核动作在同一事务保存；`still_present` 必须填写未解决原因；至少一条结果为 `still_present`、当前版本已存在正式 open 问题或存在问题草稿。事务在状态转换前把当前审核单全部草稿批量写为绑定当前版本的不可变 `sg_note` 并删除草稿；随后版本变为 `rejected`，自动审核单完成，任务变为 `revision`，制作人此时首次看到本轮问题，全部未关闭问题在任务页归属当前被退回版本。任一步失败必须整体回滚。总述 `reason` 可空，不能替代修改问题。
 - 制作人员收到全部 open 问题后在线下修改，再按 15.3 逐条填写 `issueResponses` 并提交；系统创建下一版本号和新的自动审核单。
-- `approve`：所有带入问题的结果必须都是 `resolved`，并且当前版本不存在新建 open 问题或问题草稿；存在草稿时返回 `SG_REVIEW_DRAFTS_EXIST`，不允许静默丢弃草稿。同一事务关闭这些问题、记录 `resolvedInVersionId`、把版本改为 `final`、完成自动审核单和任务。
+- `approve`：所有带入问题的结果必须都是 `resolved`，并且当前版本不存在新建 open 问题或问题草稿；存在草稿时返回 `SG_REVIEW_DRAFTS_EXIST`，不允许静默丢弃草稿。同一事务关闭这些问题、记录 `resolvedInVersionId`、把版本改为 `final`、完成自动审核单和任务，并创建唯一 `sg_final_delivery(pending)`。响应的 `finalDelivery` 返回交付 ID、状态和 `FINAL/` 相对路径；它表示已入队，不表示 NAS 已发布。版本详情和 `review-context.currentVersion` 持续返回最新 `finalDelivery`，页面仅在 `deliveryStatus=published` 时显示最终文件已落 NAS。
 - `defer`：保留待审核状态，只记录动作，私有问题草稿保持原状且仍不对制作人公开。
 - 每个问题永久绑定来源版本并可跨多版保持 open；后续版本通过处理说明和确认记录与问题关联，不能迁移问题、复制问题或覆盖旧版本文件。任务页通过派生 `pendingVersion` 把当前待处理工作展示在最近被退回版本下，来源版本只展示历史结果。
 - 旧的 `/notes/{noteId}/replies|reply|resolve` 已移除；问题只能通过后续版本审核动作中的逐条确认解决。
@@ -3337,6 +3481,7 @@ V002 及后续版本请求体示例：
 /shot-grid/versions/{versionId}/issues
 /shot-grid/versions/{versionId}/issue-drafts/{draftId}
 /shot-grid/versions/{versionId}/review-actions
+/shot-grid/versions/{versionId}/final-delivery/retry
 /shot-grid/review-lists/{reviewListId}
 ```
 
@@ -3347,6 +3492,7 @@ POST /shot-grid/tasks/{taskId}/start
 POST /shot-grid/tasks/{taskId}/version-submissions/preflight
 POST /shot-grid/tasks/{taskId}/version-submissions
 POST /shot-grid/version-submissions/{submissionId}/retry
+POST /shot-grid/versions/{versionId}/final-delivery/retry
 POST /shot-grid/versions/{versionId}/issues
 PUT  /shot-grid/versions/{versionId}/issue-drafts/{draftId}
 DELETE /shot-grid/versions/{versionId}/issue-drafts/{draftId}
@@ -3370,6 +3516,7 @@ GET  /shot-grid/projects/{projectId}/assets/{assetId}/items
 POST /shot-grid/projects/{projectId}/assets/{assetId}/items
 PUT  /shot-grid/projects/{projectId}/asset-items/{assetItemId}
 POST /shot-grid/projects/{projectId}/asset-items/{assetItemId}/archive
+POST /shot-grid/projects/{projectId}/asset-items/{assetItemId}/delete
 Permissions:
   shotgrid:asset:list|add|query|edit|archive
 ```
@@ -3379,10 +3526,15 @@ Permissions:
 列表支持 `assetType`、`assetStatus`、`assigneeUserId`、`keyword`、分页和白名单排序。资产列表、详情和制作分项响应分别包含：
 
 - 资产 `allowedActions`：可选 `asset.edit`、`assetItem.add`、`asset.archive`；资产归档只在不存在活动制作分项和活动任务时返回。
-- 制作分项 `allowedActions`：可选 `assetItem.edit`、`assetItem.archive`、`task.assign`；已有正式版本后不返回普通编辑，活动任务阻止归档，任务已完成或存在任何非 `committed` 版本提交时不返回分配/改派。
+- 制作分项 `allowedActions`：可选 `assetItem.edit`、`assetItem.archive`、`assetItem.delete`、`task.assign`；已有正式版本后不返回普通编辑，活动任务阻止归档，任务已完成或存在任何非 `committed` 版本提交时不返回分配/改派。
+
+- `assetItem.delete` 仅在任务未分配或仍为 `not_started`、没有正式版本且没有非 `committed` 版本提交时返回；`failed` 提交同样阻止删除。项目可写、NAS 就绪、父资产/分项活动状态、平台 `shotgrid:asset:archive` 权限及项目管理范围仍是共同前提。
+
 - 制作分项 `thumbnail`：只来自当前最新版本首个缩略图文件；无缩略图返回 `null`，不回退旧版本。
 - 父资产 `thumbnail`：按活动制作分项 `(sortOrder, assetItemId)` 升序选择第一张可用缩略图；前端不得根据视图或加载顺序重新计算。
 - 缩略图 URL 只使用受保护相对路径 `/shot-grid/versions/{versionId}/files/{fileId}/download`，必须经统一鉴权请求层获取 Blob。
+
+`POST /asset-items/{assetItemId}/delete` 使用上述完整项目路径，请求为 `{ "reason": "新增后不再需要", "lockVersion": 0 }`，原因去除首尾空白后必须为 1–500 字。成功返回 `{ projectId, assetId, deletedAssetItemId }`。Service 在锁内重新校验并将目标分项标记为 `lifecycle_status=archived, del_flag=2`，存在未开始任务时一并逻辑删除该任务；任务已开始返回 `SG_ASSET_TASK_ALREADY_STARTED`，已有版本返回 `SG_ASSET_HAS_VERSION`，未完成提交返回 `SG_ASSET_ITEM_SUBMISSION_IN_PROGRESS`，锁冲突返回 `SG_OPTIMISTIC_LOCK_CONFLICT`，均为 HTTP 409。删除原因与结果必须同事务写审计，任何失败整体回滚。父资产和其他分项不变，不删除 NAS 文件，也不创建清理任务；可以删掉最后一个未开始分项并保留空资产，后续重新新增。归档接口保持原语义，归档的历史分项继续展示。删除成功后前端刷新详情、资产列表、缩略图与履历，已删分项不再出现在标签和卡片中。
 
 创建请求示例：
 
@@ -3455,7 +3607,8 @@ Permissions:
 - `GET /shot-grid/versions/{versionId}` 额外返回非空只读 `productionTarget`，它与版本、任务、镜头或资产制作分项在同一次受保护查询中投影，不新增审核单重复事实。`targetType=shot` 时返回 `requirements + shot{durationMs,description,shotSize,cameraPosition,cameraMovement,focalLength,dialogue,soundEffect,colorReference,remark}`；`targetType=asset_item` 时返回 `requirements + asset{assetId,assetItemId,assetType,assetName,assetDescription,assetRemark,productionItem,itemDescription,itemRemark}`。两种目标只能返回对应的一个子对象；接口继续只要求 `shotgrid:version:query` 与项目访问，不额外要求 `shotgrid:task:query`。
 - 任务详情内的版本历史和版本详情使用真实查询 API；`/versions/:versionId` 归属 `reviews` 路由范围。下载必须调用第 15.10 节专用授权接口，不得拼接平台存储地址。
 - 所属项目成员可以只读访问版本、问题、处理说明和确认历史；制作人员只能随本人任务版本提交写入逐条处理说明，不能创建或确认问题。
-- 保存问题草稿只接受 `content/mediaTimeMs/annotations`，不接受 `isMandatory`；文字或标注必须至少一项有效，并按第 16 节校验。审核上下文额外返回 `currentVersionDrafts[]`，每项包含 `draftId/projectId/reviewListId/versionId/reviewerUserId/reviewerName/content/mediaTimeMs/annotations/lockVersion/createTime/updateTime`。
+- 保存问题草稿接受 `content/mediaTimeMs/annotations/referenceFileIds`，不接受 `isMandatory`；文字或标注必须至少一项有效，并按第 16 节校验。审核上下文额外返回 `currentVersionDrafts[]`，每项包含 `draftId/projectId/reviewListId/versionId/reviewerUserId/reviewerName/content/mediaTimeMs/annotations/referenceFiles/lockVersion/createTime/updateTime`。正式问题的 `referenceFiles[]` 同样返回 `fileId/originalName/contentType/fileSize/downloadUrl`。
+- 草稿参考文件下载：`GET /shot-grid/issue-drafts/{draftId}/reference-files/{fileId}/download`；仅审核方在实时项目权限校验通过后访问。正式问题参考文件下载：`GET /shot-grid/issues/{issueId}/reference-files/{fileId}/download`；制作人与其他授权项目成员必须同时通过项目关系、问题引用和平台显式 deny 校验。
 - 镜头视频草稿的 `mediaTimeMs` 不能超过媒体允许范围；资产图片草稿禁止携带 `mediaTimeMs`。草稿在审核待决期间可携带乐观锁编辑或删除；经 `reject` 发布为正式问题后不可覆盖，状态只由后续版本审核动作改变。
 - 旧 `/versions/{versionId}/notes` 与 `/notes/{noteId}/replies|reply|resolve` 全部移除。
 
@@ -3688,7 +3841,7 @@ reviewActions[], sourceIssues[], issueResponses[], issueVerifications[]
 - 视频批注时间使用非负整数 `mediaTimeMs`，并且不能超过镜头时长；资产图片意见禁止携带该字段。
 - 文本经过长度限制和安全转义。
 - 不接受图片 Data URL、Blob URL 或任意 HTML。
-- 当前前端工具约定：`point` 使用 1 个坐标，`rectangle` 和 `arrow` 使用 2 个起止坐标，`text` 使用 1 个锚点和非空 `text`；箭头渲染按媒体画幅换算线段角度，文字只通过 Vue 文本插值渲染。
+- 当前前端工具约定：`point` 使用 1 个坐标，`rectangle` 和 `arrow` 使用 2 个起止坐标，`freehand` 使用 1 至 512 个连续坐标及归一化 `strokeWidth`，`text` 使用 1 个锚点和非空 `text`；自由曲线在拖动中实时预览，并按最小距离采样控制载荷，箭头渲染按媒体画幅换算线段角度，文字只通过 Vue 文本插值渲染。
 
 ## 17. 文件访问与媒体设计
 
@@ -3722,6 +3875,8 @@ reviewActions[], sourceIssues[], issueResponses[], issueVerifications[]
 - 能覆盖访问审计。
 
 `sys_file_reference` 本身仍不授予下载权限；只有专用接口完整通过上述决策才允许访问。通用 `/common/files/...` 不因为 Shot Grid 业务引用自动放行项目成员。
+
+审核参考内容遵循相同原则：草稿和正式问题分别使用独立业务引用类型；页面返回的 `downloadUrl` 必须指向上述 Shot Grid 专用接口，不得返回通用私有文件下载 URL 冒充业务授权。
 
 NAS/SMB 直接访问不经过上述接口。部署必须使用 NAS、Windows/AD 或等价共享 ACL 单独控制；若部门共享对全部项目开放，应在上线安全评审中明确接受该平台外访问边界。
 
@@ -3771,11 +3926,11 @@ failed
 | 正式提交版本 | 版本、版本文件及 NAS 摘要、切换为 `shotgrid_version` 主文件引用、自动审核单、任务状态、提交状态；版本通过 `submission_id` 反向关联 |
 | 保存/修改/删除问题草稿 | 当前待审核版本与活动自动审核单、草稿乐观锁、文字/标注至少一项门禁、操作审计；草稿不进入制作人问题查询 |
 | 审核退回 | 带入问题逐条确认、草稿批量发布为正式问题并删除草稿、问题状态与解决版本、审核动作幂等记录/请求哈希/结果快照、版本状态、自动审核单状态、任务修改状态；全部同事务 |
-| 审核通过 | 带入问题全部 `resolved` 且任务无 open 问题门禁、问题状态与解决版本、最终唯一性、审核动作幂等记录/请求哈希/结果快照、版本状态、自动审核单状态、任务完成状态 |
+| 审核通过 | 带入问题全部 `resolved` 且任务无 open 问题门禁、问题状态与解决版本、最终唯一性、审核动作幂等记录/请求哈希/结果快照、版本状态、自动审核单状态、任务完成状态、唯一最终交付 Outbox |
 | 创建人工审核单 | 审核单、有序版本关系 |
 | 修改业务附件 | 领域文件关系、平台业务引用 |
 
-NAS I/O 不得在数据库事务内执行。`sg_storage_operation` 和 `sg_version_submission` 负责跨资源编排：目录 Worker 已按“领取短事务 → 事务外路径校验/幂等建目录/写探针 → 结果短事务”实现；版本 Worker 已按“领取短事务 → 事务外唯一临时写入/真实摘要校验/无覆盖原子发布 → 正式版本或失败回写短事务”实现。数据库事务失败时保留可校验的 NAS 文件并重试提交，不能重新分配版本号或盲目覆盖文件。两个 Worker 都默认关闭，真实 UNC E2E 是生产启用门禁。
+NAS I/O 不得在数据库事务内执行。`sg_storage_operation`、`sg_version_submission` 和 `sg_final_delivery` 负责跨资源编排：目录 Worker 已按“领取短事务 → 事务外路径校验/幂等建目录/写探针 → 结果短事务”实现；版本 Worker 已按“领取短事务 → 事务外唯一临时写入/真实摘要校验/无覆盖原子发布 → 正式版本或失败回写短事务”实现，并继续消费最终交付 Outbox，以硬链接或校验复制发布 `FINAL/` 文件和 `FINAL.json`。数据库事务失败时保留可校验的 NAS 文件并重试提交，不能重新分配版本号或盲目覆盖文件。目录 Worker 和版本 Worker 都默认关闭，真实 UNC E2E 是生产启用门禁。
 
 平台权限缓存不属于数据库事务。项目创建在业务响应码 202、成员新增/恢复/改角/移除在业务成功码 200 后，由控制器统一清理 `ApiGroup.USER_PERMISSION_MUTATION`；失败响应和回滚事务不得清缓存。缓存失效不等于浏览器状态推送，目标用户已打开的 SPA 仍需刷新或重新登录。项目归档不调用平台角色同步，也不清理由角色变化触发的权限缓存。
 
@@ -3919,6 +4074,10 @@ NAS I/O 不得在数据库事务内执行。`sg_storage_operation` 和 `sg_versi
 | `SG_ISSUE_CONTENT_REQUIRED` | 422 | 修改问题的文字和画面标注同时为空 |
 | `SG_REVIEW_ISSUE_DRAFT_NOT_FOUND` | 404 | 问题草稿不存在、已删除、已发布或不属于当前审核单 |
 | `SG_REVIEW_DRAFTS_EXIST` | 409 | 当前审核单仍有未发布问题草稿，不能确认通过 |
+| `SG_REVIEW_REFERENCE_FILE_LIMIT_EXCEEDED` | 400 | 单条问题引用超过 5 个参考文件 |
+| `SG_REVIEW_REFERENCE_FILE_INVALID` | 400 | 参考文件不存在、已失效、不属于当前审核人或引用关系无效 |
+| `SG_REVIEW_REFERENCE_FILE_TYPE_INVALID` | 400 | 参考文件扩展名不在业务白名单 |
+| `SG_REVIEW_REFERENCE_FILE_TOO_LARGE` | 400 | 单个参考文件超过 20 MiB |
 | `SG_ISSUE_RESPONSE_COVERAGE_INVALID` | 422 | 修订提交没有逐条覆盖全部 open 问题，或包含重复、已关闭、跨任务问题 |
 | `SG_ISSUE_SNAPSHOT_CONFLICT` | 409 | preflight 后 open 问题集合变化，必须重新确认逐条处理说明 |
 | `SG_ISSUE_VERIFICATION_COVERAGE_INVALID` | 422 | 审核动作没有逐条确认全部带入问题，或确认项重复、越界 |

@@ -4,15 +4,17 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, MissingGreenlet
 
 from module_admin.entity.vo.user_vo import CurrentUserModel, UserInfoModel
 from module_shot_grid.entity.do.review_do import ShotGridReviewAction
 from module_shot_grid.entity.vo.access_vo import ShotGridProjectAccessModel
 from module_shot_grid.entity.vo.review_vo import (
+    ShotGridIssueDraftUpdateModel,
     ShotGridNoteCreateModel,
     ShotGridReviewActionCreateModel,
     ShotGridReviewActionResultModel,
+    ShotGridVersionCandidateSelectModel,
 )
 from module_shot_grid.exceptions import ShotGridDomainException
 from module_shot_grid.service.review_service import ShotGridReviewService
@@ -20,6 +22,8 @@ from module_shot_grid.service.review_service import ShotGridReviewService
 PROJECT_ID = 1001
 TASK_ID = 7001
 VERSION_ID = 9001
+CANDIDATE_ID = 9101
+SECOND_CANDIDATE_ID = 9102
 REVIEW_LIST_ID = 8001
 DIRECTOR_ID = 1
 CONFLICT_STATUS = 409
@@ -30,6 +34,8 @@ UPDATED_TASK_LOCK_VERSION = 4
 IDEMPOTENCY_RACE_QUERY_COUNT = 2
 ISSUE_ID = 3001
 ACTUAL_MEDIA_TIME_MS = 2000
+FINAL_DELIVERY_ID = 7002
+FINAL_BUSINESS_NAME = 'TSXK_EP001_000_S001_QZF_V001_01_1787731393547.mov'
 
 
 def _current_user(user_id: int = DIRECTOR_ID) -> CurrentUserModel:
@@ -55,6 +61,7 @@ def _version_context(task_kind: str = 'shot_video') -> dict[str, Any]:
         'task_id': TASK_ID,
         'version_no': 1,
         'version_status': 'pending_review',
+        'selected_candidate_id': CANDIDATE_ID,
         'lock_version': 0,
         'task_kind': task_kind,
         'task_status': 'pending_review',
@@ -79,6 +86,7 @@ def _locked_graph() -> tuple[SimpleNamespace, SimpleNamespace, SimpleNamespace]:
         version_no=1,
         submission_id=5001,
         version_status='pending_review',
+        selected_candidate_id=CANDIDATE_ID,
         lock_version=0,
     )
     review_list = SimpleNamespace(
@@ -96,6 +104,7 @@ def _persisted_approve_action(command: ShotGridReviewActionCreateModel) -> ShotG
         actionId=6001,
         projectId=PROJECT_ID,
         versionId=VERSION_ID,
+        selectedCandidateId=CANDIDATE_ID,
         reviewerUserId=DIRECTOR_ID,
         reviewerName='项目总监',
         actionType='approve',
@@ -110,6 +119,7 @@ def _persisted_approve_action(command: ShotGridReviewActionCreateModel) -> ShotG
     )
     return ShotGridReviewAction(
         version_id=VERSION_ID,
+        selected_candidate_id=CANDIDATE_ID,
         reviewer_user_id=DIRECTOR_ID,
         request_hash=ShotGridReviewService._review_action_request_hash(command),
         result_snapshot=snapshot.model_dump(mode='json'),
@@ -169,6 +179,18 @@ async def _patch_review_action_graph(
         AsyncMock(return_value=[]),
     )
     monkeypatch.setattr(
+        'module_shot_grid.service.review_service.ShotGridReviewDao.get_issue_reference_files',
+        AsyncMock(return_value=[]),
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.review_service.FileReferenceService.replace_business_file_references_services',
+        AsyncMock(),
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.review_service.FileReferenceService.remove_business_file_references_services',
+        AsyncMock(),
+    )
+    monkeypatch.setattr(
         'module_shot_grid.service.review_service.ShotGridReviewDao.add_issue_verifications',
         AsyncMock(),
     )
@@ -179,6 +201,29 @@ async def _patch_review_action_graph(
     monkeypatch.setattr(
         'module_shot_grid.service.review_service.ShotGridReviewDao.has_other_final_version',
         AsyncMock(return_value=False),
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.review_service.ShotGridFinalDeliveryDao.get_selected_source',
+        AsyncMock(
+            return_value={
+                'candidate_no': 1,
+                'file_id': 'file-final-source',
+                'business_file_name': FINAL_BUSINESS_NAME,
+                'nas_relative_path': f'VIDEO\\EP01\\000_S001\\{FINAL_BUSINESS_NAME}',
+                'nas_sha256': 'a' * 64,
+                'nas_file_size': 1024,
+            }
+        ),
+    )
+
+    async def add_final_delivery(_db: Any, delivery: Any) -> Any:
+        delivery.final_delivery_id = FINAL_DELIVERY_ID
+        delivery.attempt_count = 0
+        return delivery
+
+    monkeypatch.setattr(
+        'module_shot_grid.service.review_service.ShotGridFinalDeliveryDao.add',
+        AsyncMock(side_effect=add_final_delivery),
     )
 
     async def add_action(_db: Any, action: ShotGridReviewAction) -> ShotGridReviewAction:
@@ -202,6 +247,143 @@ async def _patch_review_action_graph(
     return db, task, version, review_list, events
 
 
+async def _patch_candidate_selection_graph(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    selected_candidate_id: int | None = None,
+    has_drafts: bool = False,
+) -> tuple[AsyncMock, SimpleNamespace, AsyncMock, AsyncMock, SimpleNamespace]:
+    db = AsyncMock()
+    task, version, review_list = _locked_graph()
+    version.selected_candidate_id = selected_candidate_id
+    version.selected_by = None
+    version.selected_time = None
+    version.lock_version = 0
+    result_context = SimpleNamespace(current_version=SimpleNamespace(selected_candidate_id=SECOND_CANDIDATE_ID))
+    add_selection = AsyncMock()
+    set_primary = AsyncMock()
+    monkeypatch.setattr(
+        ShotGridReviewService,
+        '_resolve_version_access',
+        AsyncMock(return_value=(_version_context(), _access())),
+    )
+    monkeypatch.setattr(
+        ShotGridReviewService,
+        '_lock_version_graph',
+        AsyncMock(return_value=(PROJECT_ID, task, version, _access())),
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.review_service.ShotGridReviewDao.find_candidate_selection_by_idempotency',
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.review_service.ShotGridReviewDao.get_auto_review_list_for_update',
+        AsyncMock(return_value=review_list),
+    )
+    monkeypatch.setattr(ShotGridReviewService, '_ensure_auto_review_relation', AsyncMock())
+    monkeypatch.setattr(
+        'module_shot_grid.service.review_service.ShotGridReviewDao.get_candidate_for_update',
+        AsyncMock(return_value=SimpleNamespace(candidate_id=SECOND_CANDIDATE_ID)),
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.review_service.ShotGridReviewDao.has_version_issue_drafts',
+        AsyncMock(return_value=has_drafts),
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.review_service.ShotGridReviewDao.add_candidate_selection',
+        add_selection,
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.review_service.ShotGridReviewDao.set_primary_candidate_file',
+        set_primary,
+    )
+    monkeypatch.setattr(ShotGridReviewService, '_audit', AsyncMock())
+    monkeypatch.setattr(ShotGridReviewService, 'get_review_context', AsyncMock(return_value=result_context))
+    return db, version, add_selection, set_primary, result_context
+
+
+@pytest.mark.asyncio
+async def test_select_candidate_updates_version_primary_file_and_audit_lock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db, version, add_selection, set_primary, expected_context = await _patch_candidate_selection_graph(
+        monkeypatch,
+        selected_candidate_id=None,
+    )
+
+    result = await ShotGridReviewService.select_version_candidate(
+        db,
+        VERSION_ID,
+        ShotGridVersionCandidateSelectModel(candidateId=SECOND_CANDIDATE_ID, lockVersion=0),
+        'select-candidate-1',
+        _current_user(),
+    )
+
+    assert result is expected_context
+    assert version.selected_candidate_id == SECOND_CANDIDATE_ID
+    assert version.selected_by == DIRECTOR_ID
+    assert version.selected_time is not None
+    assert version.lock_version == 1
+    selection = add_selection.await_args.args[1]
+    assert selection.candidate_id == SECOND_CANDIDATE_ID
+    assert selection.previous_candidate_id is None
+    assert selection.idempotency_key == 'select-candidate-1'
+    set_primary.assert_awaited_once_with(db, version_id=VERSION_ID, candidate_id=SECOND_CANDIDATE_ID)
+    db.commit.assert_awaited_once()
+    db.rollback.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_switch_candidate_is_blocked_when_current_candidate_has_private_drafts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db, version, add_selection, set_primary, _ = await _patch_candidate_selection_graph(
+        monkeypatch,
+        selected_candidate_id=CANDIDATE_ID,
+        has_drafts=True,
+    )
+
+    with pytest.raises(ShotGridDomainException) as exc_info:
+        await ShotGridReviewService.select_version_candidate(
+            db,
+            VERSION_ID,
+            ShotGridVersionCandidateSelectModel(candidateId=SECOND_CANDIDATE_ID, lockVersion=0),
+            'switch-candidate-with-drafts',
+            _current_user(),
+        )
+
+    assert exc_info.value.error_key == 'SG_CANDIDATE_SELECTION_LOCKED'
+    assert version.selected_candidate_id == CANDIDATE_ID
+    add_selection.assert_not_awaited()
+    set_primary.assert_not_awaited()
+    db.rollback.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_reselect_current_candidate_persists_idempotency_without_advancing_lock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db, version, add_selection, set_primary, _ = await _patch_candidate_selection_graph(
+        monkeypatch,
+        selected_candidate_id=SECOND_CANDIDATE_ID,
+        has_drafts=True,
+    )
+
+    await ShotGridReviewService.select_version_candidate(
+        db,
+        VERSION_ID,
+        ShotGridVersionCandidateSelectModel(candidateId=SECOND_CANDIDATE_ID, lockVersion=0),
+        'reselect-current-candidate',
+        _current_user(),
+    )
+
+    selection = add_selection.await_args.args[1]
+    assert selection.previous_candidate_id is None
+    assert version.lock_version == 0
+    set_primary.assert_not_awaited()
+    db.commit.assert_awaited_once()
+
+
 @pytest.mark.asyncio
 async def test_approve_atomically_completes_version_task_and_auto_review_list(
     monkeypatch: pytest.MonkeyPatch,
@@ -211,7 +393,7 @@ async def test_approve_atomically_completes_version_task_and_auto_review_list(
     result = await ShotGridReviewService.create_review_action(
         db,
         VERSION_ID,
-        ShotGridReviewActionCreateModel(actionType='approve', lockVersion=0),
+        ShotGridReviewActionCreateModel(actionType='approve', selectedCandidateId=CANDIDATE_ID, lockVersion=0),
         'approve-1',
         _current_user(),
     )
@@ -221,12 +403,66 @@ async def test_approve_atomically_completes_version_task_and_auto_review_list(
     assert result.task_status == 'completed'
     assert result.review_status == 'completed'
     assert result.lock_version == 1
+    assert result.final_delivery is not None
+    assert result.final_delivery.final_delivery_id == FINAL_DELIVERY_ID
+    assert result.final_delivery.delivery_status == 'pending'
+    assert result.final_delivery.final_nas_relative_path.endswith(f'FINAL\\{FINAL_BUSINESS_NAME}')
     assert version.version_status == 'final'
     assert task.task_status == 'completed'
     assert task.lock_version == UPDATED_TASK_LOCK_VERSION
     assert review_list.review_status == 'completed'
     assert review_list.lock_version == 1
     assert events == ['action', 'audit', 'commit']
+    db.rollback.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_failed_final_delivery_can_be_reset_to_pending_by_director(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db = AsyncMock()
+    task, version, _review_list = _locked_graph()
+    task.task_status = 'completed'
+    version.version_status = 'final'
+    delivery = SimpleNamespace(
+        final_delivery_id=FINAL_DELIVERY_ID,
+        version_id=VERSION_ID,
+        candidate_id=CANDIDATE_ID,
+        business_file_name=FINAL_BUSINESS_NAME,
+        final_nas_relative_path=f'VIDEO\\EP01\\000_S001\\FINAL\\{FINAL_BUSINESS_NAME}',
+        manifest_nas_relative_path='VIDEO\\EP01\\000_S001\\FINAL\\FINAL.json',
+        delivery_status='failed',
+        attempt_count=5,
+        lease_owner=None,
+        lease_until=None,
+        last_error_key='SG_STORAGE_ROOT_UNAVAILABLE',
+        last_error_message='NAS 暂时不可用',
+        publish_mode=None,
+        approved_time=datetime(2026, 8, 26, 18, 30),
+        published_time=None,
+    )
+    monkeypatch.setattr(
+        ShotGridReviewService,
+        '_resolve_version_access',
+        AsyncMock(return_value=(_version_context(), _access())),
+    )
+    monkeypatch.setattr(
+        ShotGridReviewService,
+        '_lock_version_graph',
+        AsyncMock(return_value=(PROJECT_ID, task, version, _access())),
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.review_service.ShotGridFinalDeliveryDao.get_for_update',
+        AsyncMock(return_value=delivery),
+    )
+    monkeypatch.setattr(ShotGridReviewService, '_audit', AsyncMock())
+
+    result = await ShotGridReviewService.retry_final_delivery(db, VERSION_ID, _current_user())
+
+    assert result.delivery_status == 'pending'
+    assert result.attempt_count == 0
+    assert result.last_error_key is None
+    db.commit.assert_awaited_once()
     db.rollback.assert_not_awaited()
 
 
@@ -243,7 +479,7 @@ async def test_approve_with_current_version_issue_fails_without_partial_write(
         await ShotGridReviewService.create_review_action(
             db,
             VERSION_ID,
-            ShotGridReviewActionCreateModel(actionType='approve', lockVersion=0),
+            ShotGridReviewActionCreateModel(actionType='approve', selectedCandidateId=CANDIDATE_ID, lockVersion=0),
             'approve-blocked',
             _current_user(),
         )
@@ -258,10 +494,37 @@ async def test_approve_with_current_version_issue_fails_without_partial_write(
 
 
 @pytest.mark.asyncio
+async def test_review_action_rejects_stale_selected_candidate_before_writes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db, task, version, review_list, events = await _patch_review_action_graph(monkeypatch)
+
+    with pytest.raises(ShotGridDomainException) as exc_info:
+        await ShotGridReviewService.create_review_action(
+            db,
+            VERSION_ID,
+            ShotGridReviewActionCreateModel(
+                actionType='approve',
+                selectedCandidateId=SECOND_CANDIDATE_ID,
+                lockVersion=0,
+            ),
+            'approve-stale-candidate',
+            _current_user(),
+        )
+
+    assert exc_info.value.error_key == 'SG_REVIEW_CANDIDATE_CONFLICT'
+    assert version.version_status == 'pending_review'
+    assert task.task_status == 'pending_review'
+    assert review_list.review_status == 'active'
+    assert events == []
+    db.rollback.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_approve_with_private_issue_draft_fails_without_publishing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    draft = SimpleNamespace(draft_id=4101)
+    draft = SimpleNamespace(draft_id=4101, candidate_id=CANDIDATE_ID)
     db, task, version, review_list, events = await _patch_review_action_graph(
         monkeypatch,
         issue_drafts=[draft],
@@ -271,7 +534,7 @@ async def test_approve_with_private_issue_draft_fails_without_publishing(
         await ShotGridReviewService.create_review_action(
             db,
             VERSION_ID,
-            ShotGridReviewActionCreateModel(actionType='approve', lockVersion=0),
+            ShotGridReviewActionCreateModel(actionType='approve', selectedCandidateId=CANDIDATE_ID, lockVersion=0),
             'approve-with-draft',
             _current_user(),
         )
@@ -288,7 +551,7 @@ async def test_approve_with_private_issue_draft_fails_without_publishing(
 async def test_reject_publishes_private_drafts_before_committing_review_action(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    draft = SimpleNamespace(draft_id=4101)
+    draft = SimpleNamespace(draft_id=4101, candidate_id=CANDIDATE_ID)
     db, task, version, review_list, events = await _patch_review_action_graph(
         monkeypatch,
         issue_drafts=[draft],
@@ -303,11 +566,36 @@ async def test_reject_publishes_private_drafts_before_committing_review_action(
         'module_shot_grid.service.review_service.ShotGridReviewDao.publish_issue_drafts',
         AsyncMock(side_effect=publish),
     )
+    get_reference_files = AsyncMock(
+        return_value=[
+            {
+                'business_id': str(draft.draft_id),
+                'file_id': '11111111-1111-4111-8111-111111111111',
+                'original_name': '效果参考.png',
+                'content_type': 'image/png',
+                'file_size': 1024,
+            }
+        ]
+    )
+    replace_references = AsyncMock()
+    remove_references = AsyncMock()
+    monkeypatch.setattr(
+        'module_shot_grid.service.review_service.ShotGridReviewDao.get_issue_reference_files',
+        get_reference_files,
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.review_service.FileReferenceService.replace_business_file_references_services',
+        replace_references,
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.review_service.FileReferenceService.remove_business_file_references_services',
+        remove_references,
+    )
 
     result = await ShotGridReviewService.create_review_action(
         db,
         VERSION_ID,
-        ShotGridReviewActionCreateModel(actionType='reject', lockVersion=0),
+        ShotGridReviewActionCreateModel(actionType='reject', selectedCandidateId=CANDIDATE_ID, lockVersion=0),
         'reject-with-draft',
         _current_user(),
     )
@@ -317,6 +605,17 @@ async def test_reject_publishes_private_drafts_before_committing_review_action(
     assert task.task_status == 'revision'
     assert review_list.review_status == 'completed'
     assert events == ['publish', 'action', 'audit', 'commit']
+    replace_references.assert_awaited_once()
+    assert replace_references.await_args.args[1:4] == (
+        'shot_grid_review_issue',
+        '5101',
+        ['11111111-1111-4111-8111-111111111111'],
+    )
+    remove_references.assert_awaited_once_with(
+        db,
+        'shot_grid_review_issue_draft',
+        str(draft.draft_id),
+    )
 
 
 @pytest.mark.asyncio
@@ -327,7 +626,7 @@ async def test_reject_requires_an_open_issue(monkeypatch: pytest.MonkeyPatch) ->
         await ShotGridReviewService.create_review_action(
             db,
             VERSION_ID,
-            ShotGridReviewActionCreateModel(actionType='reject', lockVersion=0),
+            ShotGridReviewActionCreateModel(actionType='reject', selectedCandidateId=CANDIDATE_ID, lockVersion=0),
             'reject-no-reason',
             _current_user(),
         )
@@ -338,13 +637,186 @@ async def test_reject_requires_an_open_issue(monkeypatch: pytest.MonkeyPatch) ->
 
 
 @pytest.mark.asyncio
+async def test_published_issue_reference_download_uses_project_relation_and_business_file_grant(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db = AsyncMock()
+    request = SimpleNamespace(headers={})
+    file_id = '11111111-1111-4111-8111-111111111111'
+    download_result = SimpleNamespace(filename='灯光参考.pdf')
+    access_query = AsyncMock(
+        return_value={
+            'project_id': PROJECT_ID,
+            'reviewer_user_id': DIRECTOR_ID,
+            'original_name': '灯光参考.pdf',
+        }
+    )
+    resolve_access = AsyncMock(return_value=_access('creator'))
+    download_file = AsyncMock(return_value=download_result)
+    monkeypatch.setattr(
+        'module_shot_grid.service.review_service.ShotGridReviewDao.get_issue_reference_file_access',
+        access_query,
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.review_service.ShotGridProjectAccessService.resolve_access',
+        resolve_access,
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.review_service.CommonService.download_managed_file_services',
+        download_file,
+    )
+
+    result = await ShotGridReviewService.download_issue_reference_file(
+        request,
+        db,
+        _current_user(),
+        business_type='shot_grid_review_issue',
+        business_id=5101,
+        file_id=file_id,
+        range_header='bytes=0-99',
+    )
+
+    assert result is download_result
+    resolve_access.assert_awaited_once_with(db, _current_user(), PROJECT_ID)
+    download_file.assert_awaited_once_with(
+        request,
+        db,
+        _current_user(),
+        file_id,
+        business_access_granted=True,
+        download_filename='灯光参考.pdf',
+        range_header='bytes=0-99',
+    )
+
+
+@pytest.mark.asyncio
+async def test_private_draft_reference_download_rejects_non_director(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db = AsyncMock()
+    file_id = '11111111-1111-4111-8111-111111111111'
+    monkeypatch.setattr(
+        'module_shot_grid.service.review_service.ShotGridReviewDao.get_issue_reference_file_access',
+        AsyncMock(
+            return_value={
+                'project_id': PROJECT_ID,
+                'reviewer_user_id': DIRECTOR_ID,
+                'original_name': '内部草稿.png',
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.review_service.ShotGridProjectAccessService.resolve_access',
+        AsyncMock(return_value=_access('creator')),
+    )
+    download_file = AsyncMock()
+    monkeypatch.setattr(
+        'module_shot_grid.service.review_service.CommonService.download_managed_file_services',
+        download_file,
+    )
+
+    with pytest.raises(ShotGridDomainException) as exc_info:
+        await ShotGridReviewService.download_issue_reference_file(
+            SimpleNamespace(headers={}),
+            db,
+            _current_user(),
+            business_type='shot_grid_review_issue_draft',
+            business_id=4101,
+            file_id=file_id,
+            range_header=None,
+        )
+
+    assert exc_info.value.http_status == FORBIDDEN_STATUS
+    download_file.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_replace_issue_reference_files_validates_private_owned_file_and_returns_draft_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db = AsyncMock()
+    file_id = '11111111-1111-4111-8111-111111111111'
+    file_info = SimpleNamespace(
+        file_id=file_id,
+        original_name='效果参考.png',
+        content_type='image/png',
+        file_size=2048,
+        extension='png',
+    )
+    get_files = AsyncMock(return_value=[file_info])
+    replace_references = AsyncMock()
+    monkeypatch.setattr(
+        'module_shot_grid.service.review_service.FileInfoDao.get_file_infos_by_ids_for_update',
+        get_files,
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.review_service.FileReferenceService.replace_business_file_references_services',
+        replace_references,
+    )
+
+    result = await ShotGridReviewService._replace_issue_reference_files(
+        db,
+        business_type='shot_grid_review_issue_draft',
+        business_id=4101,
+        file_ids=[file_id],
+        user_id=DIRECTOR_ID,
+        actor_name='director',
+    )
+
+    assert result[0].file_id == file_id
+    assert result[0].download_url == (f'/shot-grid/issue-drafts/4101/reference-files/{file_id}/download')
+    replace_references.assert_awaited_once()
+    assert replace_references.await_args.args[1:4] == (
+        'shot_grid_review_issue_draft',
+        '4101',
+        [file_id],
+    )
+
+
+@pytest.mark.asyncio
+async def test_replace_issue_reference_files_rejects_type_outside_business_allowlist(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db = AsyncMock()
+    file_id = '11111111-1111-4111-8111-111111111111'
+    monkeypatch.setattr(
+        'module_shot_grid.service.review_service.FileInfoDao.get_file_infos_by_ids_for_update',
+        AsyncMock(
+            return_value=[
+                SimpleNamespace(
+                    file_id=file_id,
+                    original_name='脚本.exe',
+                    content_type='application/octet-stream',
+                    file_size=1024,
+                    extension='exe',
+                )
+            ]
+        ),
+    )
+
+    with pytest.raises(ShotGridDomainException) as exc_info:
+        await ShotGridReviewService._replace_issue_reference_files(
+            db,
+            business_type='shot_grid_review_issue_draft',
+            business_id=4101,
+            file_ids=[file_id],
+            user_id=DIRECTOR_ID,
+            actor_name='director',
+        )
+
+    assert exc_info.value.error_key == 'SG_REVIEW_REFERENCE_FILE_TYPE_INVALID'
+
+
+@pytest.mark.asyncio
 async def test_defer_only_records_action_and_advances_version_lock(monkeypatch: pytest.MonkeyPatch) -> None:
     db, task, version, review_list, _ = await _patch_review_action_graph(monkeypatch)
 
     result = await ShotGridReviewService.create_review_action(
         db,
         VERSION_ID,
-        ShotGridReviewActionCreateModel(actionType='defer', reason='稍后复核', lockVersion=0),
+        ShotGridReviewActionCreateModel(
+            actionType='defer', selectedCandidateId=CANDIDATE_ID, reason='稍后复核', lockVersion=0
+        ),
         'defer-1',
         _current_user(),
     )
@@ -361,7 +833,7 @@ async def test_defer_only_records_action_and_advances_version_lock(monkeypatch: 
 async def test_review_action_same_idempotency_replays_persisted_result_before_state_validation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    command = ShotGridReviewActionCreateModel(actionType='approve', lockVersion=0)
+    command = ShotGridReviewActionCreateModel(actionType='approve', selectedCandidateId=CANDIDATE_ID, lockVersion=0)
     existing = _persisted_approve_action(command)
     db, _, _, _, events = await _patch_review_action_graph(monkeypatch, existing=existing)
 
@@ -383,7 +855,7 @@ async def test_review_action_same_idempotency_replays_persisted_result_before_st
 async def test_idempotency_unique_race_rolls_back_requeries_and_replays_first_result(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    command = ShotGridReviewActionCreateModel(actionType='approve', lockVersion=0)
+    command = ShotGridReviewActionCreateModel(actionType='approve', selectedCandidateId=CANDIDATE_ID, lockVersion=0)
     existing = _persisted_approve_action(command)
     db, _, _, _, events = await _patch_review_action_graph(monkeypatch)
     find_existing = AsyncMock(side_effect=[None, existing])
@@ -420,8 +892,10 @@ async def test_idempotency_unique_race_rolls_back_requeries_and_replays_first_re
 async def test_idempotency_unique_race_with_different_hash_returns_conflict_and_closes_query_transaction(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    command = ShotGridReviewActionCreateModel(actionType='approve', lockVersion=0)
-    existing = _persisted_approve_action(ShotGridReviewActionCreateModel(actionType='reject', lockVersion=0))
+    command = ShotGridReviewActionCreateModel(actionType='approve', selectedCandidateId=CANDIDATE_ID, lockVersion=0)
+    existing = _persisted_approve_action(
+        ShotGridReviewActionCreateModel(actionType='reject', selectedCandidateId=CANDIDATE_ID, lockVersion=0)
+    )
     db, _, _, _, _ = await _patch_review_action_graph(monkeypatch)
     monkeypatch.setattr(
         'module_shot_grid.service.review_service.ShotGridReviewDao.find_review_action_by_idempotency',
@@ -468,7 +942,7 @@ async def test_unknown_integrity_error_is_not_disguised_as_state_transition(
         await ShotGridReviewService.create_review_action(
             db,
             VERSION_ID,
-            ShotGridReviewActionCreateModel(actionType='approve', lockVersion=0),
+            ShotGridReviewActionCreateModel(actionType='approve', selectedCandidateId=CANDIDATE_ID, lockVersion=0),
             'approve-unknown-db-error',
             _current_user(),
         )
@@ -516,6 +990,7 @@ async def test_add_issue_draft_does_not_use_planned_shot_duration_as_media_bound
         project_id=PROJECT_ID,
         review_list_id=REVIEW_LIST_ID,
         version_id=VERSION_ID,
+        candidate_id=CANDIDATE_ID,
         reviewer_user_id=DIRECTOR_ID,
         content='实际成片中的问题',
         media_time_ms=ACTUAL_MEDIA_TIME_MS,
@@ -561,6 +1036,105 @@ async def test_add_issue_draft_does_not_use_planned_shot_duration_as_media_bound
     db.rollback.assert_not_awaited()
 
 
+@pytest.mark.asyncio
+async def test_update_issue_draft_snapshots_response_before_commit_to_avoid_missing_greenlet(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ExpiringDraft:
+        _orm_fields = {
+            'draft_id',
+            'project_id',
+            'review_list_id',
+            'version_id',
+            'candidate_id',
+            'reviewer_user_id',
+            'content',
+            'media_time_ms',
+            'annotations',
+            'lock_version',
+            'create_time',
+            'update_time',
+        }
+
+        def __init__(self) -> None:
+            self.expired = False
+            self.draft_id = ISSUE_ID
+            self.project_id = PROJECT_ID
+            self.review_list_id = REVIEW_LIST_ID
+            self.version_id = VERSION_ID
+            self.candidate_id = CANDIDATE_ID
+            self.reviewer_user_id = DIRECTOR_ID
+            self.content = '旧问题'
+            self.media_time_ms = 1000
+            self.annotations = None
+            self.lock_version = 0
+            self.create_time = datetime(2026, 8, 11, 10, 0, 0)
+            self.update_time = datetime(2026, 8, 11, 10, 0, 0)
+
+        def __getattribute__(self, name: str) -> Any:
+            if name in object.__getattribute__(self, '_orm_fields') and object.__getattribute__(self, 'expired'):
+                raise MissingGreenlet('提交后读取已过期 ORM 属性会触发隐式异步 I/O')
+            return object.__getattribute__(self, name)
+
+    db = AsyncMock()
+    task, version, _ = _locked_graph()
+    draft = ExpiringDraft()
+
+    async def expire_draft_on_commit() -> None:
+        draft.expired = True
+
+    db.commit = AsyncMock(side_effect=expire_draft_on_commit)
+    monkeypatch.setattr(
+        ShotGridReviewService,
+        '_resolve_version_access',
+        AsyncMock(return_value=(_version_context(), _access())),
+    )
+    monkeypatch.setattr(
+        ShotGridReviewService,
+        '_lock_version_graph',
+        AsyncMock(return_value=(PROJECT_ID, task, version, _access())),
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.review_service.ShotGridReviewDao.get_auto_review_list_for_update',
+        AsyncMock(return_value=SimpleNamespace(review_list_id=REVIEW_LIST_ID, review_status='active')),
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.review_service.ShotGridReviewDao.get_issue_draft_for_update',
+        AsyncMock(return_value=draft),
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.review_service.ShotGridReviewDao.get_version_context',
+        AsyncMock(return_value=_version_context()),
+    )
+    reference_files = []
+    monkeypatch.setattr(
+        ShotGridReviewService,
+        '_replace_issue_reference_files',
+        AsyncMock(return_value=reference_files),
+    )
+    monkeypatch.setattr(ShotGridReviewService, '_audit', AsyncMock())
+
+    result = await ShotGridReviewService.update_issue_draft(
+        db,
+        VERSION_ID,
+        ISSUE_ID,
+        ShotGridIssueDraftUpdateModel(
+            content='更新后的问题',
+            mediaTimeMs=ACTUAL_MEDIA_TIME_MS,
+            lockVersion=0,
+        ),
+        _current_user(),
+    )
+
+    assert result.draft_id == ISSUE_ID
+    assert result.content == '更新后的问题'
+    assert result.media_time_ms == ACTUAL_MEDIA_TIME_MS
+    assert result.lock_version == 1
+    assert draft.expired is True
+    db.commit.assert_awaited_once()
+    db.rollback.assert_not_awaited()
+
+
 def test_creator_cannot_execute_director_review_action() -> None:
     with pytest.raises(ShotGridDomainException) as exc_info:
         ShotGridReviewService._require_director(_access('creator'))
@@ -594,6 +1168,8 @@ async def test_version_detail_returns_only_safe_file_fields_and_redacts_ai_param
         'submitter_name': '制作人员',
         'submitted_time': datetime(2026, 8, 11, 9, 0, 0),
         'generated_at_ms': 1786094626499,
+        'candidate_count': 1,
+        'selected_candidate_id': CANDIDATE_ID,
         'lock_version': 0,
         'task_kind': 'shot_video',
         'task_requirements': '保持舱体压迫感',
@@ -622,6 +1198,7 @@ async def test_version_detail_returns_only_safe_file_fields_and_redacts_ai_param
         AsyncMock(
             return_value=[
                 {
+                    'candidate_id': CANDIDATE_ID,
                     'file_id': '5ed39e04-2f29-45ab-a58c-4f8168f5131a',
                     'original_name': 'upload.mp4',
                     'business_file_name': 'WGZR_EP001_001_S001_YJF_V001_1786094626499.mp4',
@@ -636,7 +1213,25 @@ async def test_version_detail_returns_only_safe_file_fields_and_redacts_ai_param
         ),
     )
     monkeypatch.setattr(
+        'module_shot_grid.service.review_service.ShotGridReviewDao.get_version_candidates',
+        AsyncMock(
+            return_value=[
+                {
+                    'candidate_id': CANDIDATE_ID,
+                    'candidate_no': 1,
+                    'candidate_note': None,
+                    'sort_order': 0,
+                    'media_derivation_status': None,
+                }
+            ]
+        ),
+    )
+    monkeypatch.setattr(
         'module_shot_grid.service.review_service.ShotGridReviewDao.get_auto_review_summary',
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.review_service.ShotGridFinalDeliveryDao.get_by_version',
         AsyncMock(return_value=None),
     )
 

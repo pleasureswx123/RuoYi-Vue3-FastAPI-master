@@ -62,6 +62,7 @@ class VersionPublishPathContext:
     project_relative_path: str
     project_path_snapshot: str
     root_del_flag: str
+    candidate_no: int | None = None
 
 
 @dataclass(frozen=True)
@@ -247,7 +248,11 @@ class ShotGridVersionPublishPathAdapter(ShotGridStoragePathAdapter):
             raise cls._invalid_path_error()
         if target_parts[-1] != context.business_file_name or target_parts[:-1] != temporary_parts[:-1]:
             raise cls._invalid_path_error()
-        temp_prefix = f'.sgtmp-{context.submission_id}-a{context.attempt_count}-'
+        temp_prefix = (
+            f'.sgtmp-{context.submission_id}-{context.candidate_no:02d}-a{context.attempt_count}-'
+            if context.candidate_no is not None
+            else f'.sgtmp-{context.submission_id}-a{context.attempt_count}-'
+        )
         if not temporary_parts[-1].startswith(temp_prefix) or not temporary_parts[-1].endswith('.part'):
             raise cls._invalid_path_error()
         folded = tuple(part.casefold() for part in target_parts)

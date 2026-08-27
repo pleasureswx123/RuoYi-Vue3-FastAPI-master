@@ -1,4 +1,4 @@
-import { ElButton, ElForm, ElFormItem, ElIcon, ElInput, ElRadioButton, ElRadioGroup, ElTag, ElUpload } from 'element-plus'
+import { ElButton, ElForm, ElFormItem, ElIcon, ElImage, ElInput, ElRadioButton, ElRadioGroup, ElTag, ElUpload } from 'element-plus'
 import { flushPromises, mount } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -23,7 +23,7 @@ vi.mock('@/api/shot-grid/versions', () => ({
 
 const fileId = '550e8400-e29b-41d4-a716-446655440000'
 const mountOptions = {
-  global: { components: { ElButton, ElForm, ElFormItem, ElIcon, ElInput, ElRadioButton, ElRadioGroup, ElTag, ElUpload } }
+  global: { components: { ElButton, ElForm, ElFormItem, ElIcon, ElImage, ElInput, ElRadioButton, ElRadioGroup, ElTag, ElUpload } }
 }
 const revisionIssue = {
   issueId: 51,
@@ -34,6 +34,13 @@ const revisionIssue = {
   status: 'open',
   content: '这里有点模糊',
   annotations: { items: [{ type: 'rectangle' }] },
+  referenceFiles: [{
+    fileId: '11111111-1111-4111-8111-111111111111',
+    originalName: '灯光效果参考.pdf',
+    contentType: 'application/pdf',
+    fileSize: 2048,
+    downloadUrl: '/shot-grid/issues/51/reference-files/11111111-1111-4111-8111-111111111111/download'
+  }],
   responses: [],
   verifications: []
 }
@@ -44,7 +51,14 @@ function accepted(overrides = {}) {
       submissionId: 91,
       submissionStatus: 'pending',
       reservedVersionNumber: 'V001',
-      businessFileName: 'WGZR_EP001_001_S001_YJF_V001_1.mov',
+      candidateCount: 1,
+      candidates: [{
+        candidateNumber: 'V001_01',
+        sourceFileId: fileId,
+        businessFileName: 'WGZR_EP001_001_S001_YJF_V001_01_1.mov',
+        publishStatus: 'pending'
+      }],
+      businessFileName: 'WGZR_EP001_001_S001_YJF_V001_01_1.mov',
       taskStatus: 'in_progress',
       replayed: false,
       ...overrides
@@ -59,7 +73,14 @@ function status(submissionStatus, overrides = {}) {
       taskId: 31,
       submissionStatus,
       reservedVersionNumber: 'V001',
-      businessFileName: 'WGZR_EP001_001_S001_YJF_V001_1.mov',
+      candidateCount: 1,
+      candidates: [{
+        candidateNumber: 'V001_01',
+        sourceFileId: fileId,
+        businessFileName: 'WGZR_EP001_001_S001_YJF_V001_01_1.mov',
+        publishStatus: submissionStatus === 'committed' ? 'published' : submissionStatus
+      }],
+      businessFileName: 'WGZR_EP001_001_S001_YJF_V001_01_1.mov',
       attemptCount: 1,
       taskStatus: submissionStatus === 'committed' ? 'pending_review' : 'in_progress',
       ...overrides
@@ -73,25 +94,38 @@ async function chooseValidFileAndSubmit(wrapper) {
   Object.defineProperty(input.element, 'files', { configurable: true, value: [file] })
   await input.trigger('change')
   await wrapper.find('.changelog-field textarea').setValue('调整镜头节奏')
-  await wrapper.findAllComponents(ElButton).find(button => button.text().includes('上传并提交版本')).trigger('click')
+  await clickSubmissionButton(wrapper)
   await flushPromises()
   return file
+}
+
+async function clickSubmissionButton(wrapper) {
+  await wrapper.get('.submission-form footer .el-button--primary').trigger('click')
 }
 
 describe('版本上传与发布面板', () => {
   beforeEach(() => {
     vi.useFakeTimers()
+    let previewIndex = 0
+    Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: vi.fn(() => `blob:candidate-${++previewIndex}`) })
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: vi.fn() })
     getCurrentTaskVersionSubmission.mockResolvedValue({ data: null })
-    preflightVersionSubmission.mockResolvedValue({
+    preflightVersionSubmission.mockImplementation((taskId, payload) => Promise.resolve({
       data: {
         ready: true,
-        taskId: 31,
+        taskId,
         taskKind: 'shot_video',
         taskStatus: 'in_progress',
-        fileExtension: 'mov',
+        candidates: payload.candidates.map((candidate, index) => ({
+          clientFileKey: candidate.clientFileKey,
+          candidateNo: index + 1,
+          candidateNumber: `V001_${String(index + 1).padStart(2, '0')}`,
+          fileExtension: candidate.fileName.split('.').pop().toLowerCase()
+        })),
+        openIssueSnapshotHash: 'a'.repeat(64),
         allowedActions: ['version.add']
       }
-    })
+    }))
     uploadProtectedVersionFile.mockResolvedValue({
       code: 200,
       fileId,
@@ -107,6 +141,46 @@ describe('版本上传与发布面板', () => {
   afterEach(() => {
     vi.useRealTimers()
     vi.clearAllMocks()
+    delete URL.createObjectURL
+    delete URL.revokeObjectURL
+  })
+
+  it('首次交付与返修送审使用不同的行动文案并提示下一版本号', async () => {
+    const wrapper = mount(VersionSubmissionPanel, {
+      ...mountOptions,
+      props: {
+        taskId: 31,
+        taskKind: 'shot_video',
+        taskStatus: 'in_progress',
+        versionCount: 0,
+        allowedActions: ['version.add'],
+        hasAddPermission: true,
+        canQuery: true
+      }
+    })
+    await flushPromises()
+
+    expect(wrapper.get('.panel-heading').text()).toContain('提交首版成果')
+    expect(wrapper.get('.panel-heading').text()).toContain('将生成 V001 并进入审核')
+    expect(wrapper.get('.submission-form').attributes('aria-label')).toBe('提交首版成果')
+    expect(wrapper.text()).toContain('选择首版候选成果')
+    expect(wrapper.text()).toContain('首版交付说明')
+    expect(wrapper.get('.submission-form footer').text()).toContain('提交首版并进入审核')
+
+    await wrapper.setProps({ taskStatus: 'revision', versionCount: 1, openIssues: [revisionIssue] })
+    await flushPromises()
+
+    expect(wrapper.get('.panel-heading').text()).toContain('提交修改成果')
+    expect(wrapper.get('.panel-heading').text()).toContain('将生成 V002 并重新进入审核')
+    expect(wrapper.get('.submission-form').attributes('aria-label')).toBe('提交修改成果')
+    expect(wrapper.text()).toContain('选择修改后的候选成果')
+    expect(wrapper.text()).toContain('逐条说明修改情况')
+    expect(wrapper.find('.review-reference-files').exists()).toBe(false)
+    await wrapper.get('.issue-source-link').trigger('click')
+    expect(wrapper.emitted('focus-issue').at(-1)).toEqual([revisionIssue])
+    expect(wrapper.text()).toContain('说明会随 V002 永久保存')
+    expect(wrapper.get('.submission-form footer').text()).toContain('提交修改成果并重新送审')
+    wrapper.unmount()
   })
 
   it('使用 Element Plus 拖拽上传并保留文件类型限制', async () => {
@@ -126,27 +200,135 @@ describe('版本上传与发布面板', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('拖拽结果.mov')
-    expect(wrapper.text()).toContain('更换')
+    expect(wrapper.text()).toContain('继续添加')
+    expect(wrapper.text()).toContain('移除')
+    const preview = wrapper.get('video.candidate-local-preview__media')
+    expect(preview.attributes()).toMatchObject({
+      src: 'blob:candidate-1',
+      controls: '',
+      playsinline: '',
+      preload: 'metadata'
+    })
+    expect(URL.createObjectURL).toHaveBeenCalledWith(file)
+    wrapper.unmount()
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:candidate-1')
+  })
+
+  it('资产候选文件使用可放大的图片预览，并在移除时释放临时地址', async () => {
+    const wrapper = mount(VersionSubmissionPanel, {
+      ...mountOptions,
+      props: { taskId: 32, taskKind: 'asset_image', taskStatus: 'in_progress', allowedActions: ['version.add'], hasAddPermission: true, canQuery: true }
+    })
+    await flushPromises()
+
+    const input = wrapper.find('input[type="file"]')
+    const file = new File(['png-data'], '角色方案.png', { type: 'image/png' })
+    Object.defineProperty(input.element, 'files', { configurable: true, value: [file] })
+    await input.trigger('change')
+
+    const preview = wrapper.getComponent(ElImage)
+    expect(preview.props()).toMatchObject({
+      src: 'blob:candidate-1',
+      previewSrcList: ['blob:candidate-1'],
+      fit: 'contain'
+    })
+    await wrapper.findAllComponents(ElButton).find(button => button.text() === '移除').trigger('click')
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:candidate-1')
+    expect(wrapper.find('.candidate-upload-item').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('一次提交多个候选文件并保持批次内顺序与稳定文件键', async () => {
+    const secondFileId = '550e8400-e29b-41d4-a716-446655440001'
+    uploadProtectedVersionFile
+      .mockResolvedValueOnce({
+        code: 200,
+        fileId,
+        accessType: 'private',
+        originalFilename: '候选甲.mov'
+      })
+      .mockResolvedValueOnce({
+        code: 200,
+        fileId: secondFileId,
+        accessType: 'private',
+        originalFilename: '候选乙.mov'
+      })
+    createVersionSubmission.mockResolvedValueOnce(accepted({
+      candidateCount: 2,
+      candidates: [
+        { candidateNumber: 'V001_01', sourceFileId: fileId, businessFileName: 'V001_01.mov', publishStatus: 'pending' },
+        { candidateNumber: 'V001_02', sourceFileId: secondFileId, businessFileName: 'V001_02.mov', publishStatus: 'pending' }
+      ]
+    }))
+    const wrapper = mount(VersionSubmissionPanel, {
+      ...mountOptions,
+      props: { taskId: 31, taskKind: 'shot_video', taskStatus: 'in_progress', allowedActions: ['version.add'], hasAddPermission: true, canQuery: true }
+    })
+    await flushPromises()
+
+    const input = wrapper.find('input[type="file"]')
+    const files = [
+      new File(['candidate-a'], '候选甲.mov', { type: 'video/quicktime' }),
+      new File(['candidate-b'], '候选乙.mov', { type: 'video/quicktime' })
+    ]
+    Object.defineProperty(input.element, 'files', { configurable: true, value: files })
+    await input.trigger('change')
+    await wrapper.find('.changelog-field textarea').setValue('同时提交两个备选效果')
+    await clickSubmissionButton(wrapper)
+    await flushPromises()
+
+    expect(uploadProtectedVersionFile.mock.calls.map(call => call[0])).toEqual(files)
+    const preflightCandidates = preflightVersionSubmission.mock.calls[0][1].candidates
+    expect(preflightCandidates).toMatchObject([
+      { fileName: '候选甲.mov', sortOrder: 0 },
+      { fileName: '候选乙.mov', sortOrder: 1 }
+    ])
+    expect(preflightCandidates[0].clientFileKey).not.toBe(preflightCandidates[1].clientFileKey)
+    expect(createVersionSubmission.mock.calls[0][1].candidates).toEqual([
+      { clientFileKey: preflightCandidates[0].clientFileKey, fileId, sortOrder: 0, candidateNote: null },
+      { clientFileKey: preflightCandidates[1].clientFileKey, fileId: secondFileId, sortOrder: 1, candidateNote: null }
+    ])
+    expect(wrapper.text()).toContain('候选文件2 个')
     wrapper.unmount()
   })
 
   it('严格按预检、私有上传、创建提交执行，pending 明确不是版本成功', async () => {
     const wrapper = mount(VersionSubmissionPanel, {
       ...mountOptions,
-      props: { taskId: 31, taskKind: 'shot_video', allowedActions: ['version.add'], hasAddPermission: true, canQuery: true, operationGeneration: 4 }
+      props: { taskId: 31, taskKind: 'shot_video', taskStatus: 'in_progress', allowedActions: ['version.add'], hasAddPermission: true, canQuery: true, operationGeneration: 4 }
     })
     await flushPromises()
     const file = await chooseValidFileAndSubmit(wrapper)
 
     expect(preflightVersionSubmission).toHaveBeenCalledWith(
       31,
-      { fileName: '结果.mov', fileSize: file.size, changelog: '调整镜头节奏', issueResponses: [] },
+      {
+        candidates: [{
+          clientFileKey: expect.any(String),
+          fileName: '结果.mov',
+          fileSize: file.size,
+          sortOrder: 0,
+          candidateNote: null
+        }],
+        changelog: '调整镜头节奏',
+        issueResponses: []
+      },
       expect.objectContaining({ signal: expect.any(AbortSignal) })
     )
     expect(uploadProtectedVersionFile).toHaveBeenCalledWith(file, expect.objectContaining({ signal: expect.any(AbortSignal), onUploadProgress: expect.any(Function) }))
     expect(createVersionSubmission).toHaveBeenCalledWith(
       31,
-      { fileId, changelog: '调整镜头节奏', openIssueSnapshotHash: undefined, issueResponses: [] },
+      {
+        candidates: [{
+          clientFileKey: expect.any(String),
+          fileId,
+          sortOrder: 0,
+          candidateNote: null
+        }],
+        changelog: '调整镜头节奏',
+        openIssueSnapshotHash: 'a'.repeat(64),
+        issueResponses: []
+      },
       expect.stringContaining('version-31:'),
       expect.objectContaining({ signal: expect.any(AbortSignal) })
     )
@@ -189,8 +371,7 @@ describe('版本上传与发布面板', () => {
     expect(preflightVersionSubmission).toHaveBeenCalledWith(
       31,
       {
-        fileName: '结果.mov',
-        fileSize: file.size,
+        candidates: [expect.objectContaining({ fileName: '结果.mov', fileSize: file.size })],
         changelog: '调整镜头节奏',
         issueResponses: [{ issueId: 51, responseText: '已处理' }]
       },
@@ -223,12 +404,12 @@ describe('版本上传与发布面板', () => {
     expect(wrapper.text()).toContain('请说明该问题本轮未处理的原因')
 
     await wrapper.find('.issue-unhandled-reason textarea').setValue('等待外部素材确认后再修改')
-    await wrapper.findAllComponents(ElButton).find(button => button.text().includes('上传并提交版本')).trigger('click')
+    await clickSubmissionButton(wrapper)
     await flushPromises()
     expect(preflightVersionSubmission).toHaveBeenCalledWith(
       31,
       expect.objectContaining({
-        fileSize: file.size,
+        candidates: [expect.objectContaining({ fileSize: file.size })],
         issueResponses: [{ issueId: 51, responseText: '未处理：等待外部素材确认后再修改' }]
       }),
       expect.objectContaining({ signal: expect.any(AbortSignal) })
@@ -236,7 +417,7 @@ describe('版本上传与发布面板', () => {
     wrapper.unmount()
   })
 
-  it('首次提交使用制作内容作为占位提示，后续版本恢复为修改说明提示', async () => {
+  it('首次提交使用制作内容作为占位提示，后续版本切换为返修改动提示', async () => {
     const wrapper = mount(VersionSubmissionPanel, {
       ...mountOptions,
       props: {
@@ -257,7 +438,7 @@ describe('版本上传与发布面板', () => {
     expect(changelogInput.element.value).toBe('')
 
     await wrapper.setProps({ versionCount: 1 })
-    expect(changelogInput.attributes('placeholder')).toBe('说明本版本完成内容、修改点或需要审核人关注的部分。')
+    expect(changelogInput.attributes('placeholder')).toBe('概括本轮针对审核意见完成的修改，以及仍需审核人关注的内容。')
     wrapper.unmount()
   })
 
@@ -266,7 +447,7 @@ describe('版本上传与发布面板', () => {
       .mockResolvedValueOnce(accepted({ replayed: true }))
     const wrapper = mount(VersionSubmissionPanel, {
       ...mountOptions,
-      props: { taskId: 31, taskKind: 'shot_video', allowedActions: ['version.add'], hasAddPermission: true, canQuery: true }
+      props: { taskId: 31, taskKind: 'shot_video', taskStatus: 'in_progress', allowedActions: ['version.add'], hasAddPermission: true, canQuery: true }
     })
     await flushPromises()
     await chooseValidFileAndSubmit(wrapper)
@@ -275,12 +456,12 @@ describe('版本上传与发布面板', () => {
     expect(wrapper.find('input[type="file"]').attributes('disabled')).toBeDefined()
     expect(wrapper.find('.field-label textarea').attributes('disabled')).toBeDefined()
 
-    await wrapper.findAllComponents(ElButton).find(button => button.text().includes('重试创建版本提交')).trigger('click')
+    await clickSubmissionButton(wrapper)
     await flushPromises()
     expect(uploadProtectedVersionFile).toHaveBeenCalledTimes(1)
     expect(preflightVersionSubmission).toHaveBeenCalledTimes(1)
     expect(createVersionSubmission).toHaveBeenCalledTimes(2)
-    expect(createVersionSubmission.mock.calls[1][1].fileId).toBe(fileId)
+    expect(createVersionSubmission.mock.calls[1][1].candidates[0].fileId).toBe(fileId)
     expect(createVersionSubmission.mock.calls[1][2]).toBe(createVersionSubmission.mock.calls[0][2])
     expect(wrapper.text()).toContain('已恢复原提交')
     wrapper.unmount()
@@ -298,7 +479,7 @@ describe('版本上传与发布面板', () => {
     })
     const wrapper = mount(VersionSubmissionPanel, {
       ...mountOptions,
-      props: { taskId: 31, taskKind: 'shot_video', allowedActions: ['version.add'], hasAddPermission: true, canQuery: true }
+      props: { taskId: 31, taskKind: 'shot_video', taskStatus: 'in_progress', allowedActions: ['version.add'], hasAddPermission: true, canQuery: true }
     })
     await flushPromises()
     await chooseValidFileAndSubmit(wrapper)
@@ -320,6 +501,7 @@ describe('版本上传与发布面板', () => {
       props: {
         taskId: 31,
         taskKind: 'shot_video',
+        taskStatus: 'in_progress',
         allowedActions: ['version.add'],
         hasAddPermission: true,
         canQuery: true
@@ -357,6 +539,7 @@ describe('版本上传与发布面板', () => {
       props: {
         taskId: 31,
         taskKind: 'shot_video',
+        taskStatus: 'in_progress',
         allowedActions: ['version.add'],
         hasAddPermission: true,
         canQuery: true,
@@ -395,11 +578,11 @@ describe('版本上传与发布面板', () => {
       .mockResolvedValueOnce(accepted({ submissionStatus: 'committed', replayed: true }))
     const wrapper = mount(VersionSubmissionPanel, {
       ...mountOptions,
-      props: { taskId: 31, taskKind: 'shot_video', allowedActions: ['version.add'], hasAddPermission: true, canQuery: true, operationGeneration: 9 }
+      props: { taskId: 31, taskKind: 'shot_video', taskStatus: 'in_progress', allowedActions: ['version.add'], hasAddPermission: true, canQuery: true, operationGeneration: 9 }
     })
     await flushPromises()
     await chooseValidFileAndSubmit(wrapper)
-    await wrapper.findAllComponents(ElButton).find(button => button.text().includes('重试创建版本提交')).trigger('click')
+    await clickSubmissionButton(wrapper)
     await flushPromises()
 
     expect(wrapper.emitted('committed')).toHaveLength(1)
@@ -416,7 +599,7 @@ describe('版本上传与发布面板', () => {
       .mockResolvedValueOnce(status('committed', { versionId: 71, reviewListId: 81 }))
     const wrapper = mount(VersionSubmissionPanel, {
       ...mountOptions,
-      props: { taskId: 31, taskKind: 'shot_video', allowedActions: ['version.add'], hasAddPermission: true, canQuery: true, operationGeneration: 8, pollInterval: 250 }
+      props: { taskId: 31, taskKind: 'shot_video', taskStatus: 'in_progress', allowedActions: ['version.add'], hasAddPermission: true, canQuery: true, operationGeneration: 8, pollInterval: 250 }
     })
     await flushPromises()
     await chooseValidFileAndSubmit(wrapper)
@@ -443,7 +626,7 @@ describe('版本上传与发布面板', () => {
     }))
     const wrapper = mount(VersionSubmissionPanel, {
       ...mountOptions,
-      props: { taskId: 31, taskKind: 'shot_video', allowedActions: [], canQuery: true, canRetry: true }
+      props: { taskId: 31, taskKind: 'shot_video', taskStatus: 'in_progress', allowedActions: [], canQuery: true, canRetry: true }
     })
     await flushPromises()
     expect(wrapper.text()).toContain('发布失败')
@@ -469,7 +652,7 @@ describe('版本上传与发布面板', () => {
     }))
     const wrapper = mount(VersionSubmissionPanel, {
       ...mountOptions,
-      props: { taskId: 31, taskKind: 'shot_video', allowedActions: [], canQuery: true }
+      props: { taskId: 31, taskKind: 'shot_video', taskStatus: 'in_progress', allowedActions: [], canQuery: true }
     })
     await flushPromises()
 
@@ -494,7 +677,7 @@ describe('版本上传与发布面板', () => {
     uploadProtectedVersionFile.mockRejectedValueOnce({ httpStatus, message: `服务错误 ${httpStatus}`, errorKey: `E_${httpStatus}` })
     const wrapper = mount(VersionSubmissionPanel, {
       ...mountOptions,
-      props: { taskId: 31, taskKind: 'shot_video', allowedActions: ['version.add'], hasAddPermission: true, canQuery: true }
+      props: { taskId: 31, taskKind: 'shot_video', taskStatus: 'in_progress', allowedActions: ['version.add'], hasAddPermission: true, canQuery: true }
     })
     await flushPromises()
     await chooseValidFileAndSubmit(wrapper)
@@ -506,7 +689,7 @@ describe('版本上传与发布面板', () => {
   it('平台缺少 version:add 时即使后端动作镜像存在也不上传', async () => {
     const wrapper = mount(VersionSubmissionPanel, {
       ...mountOptions,
-      props: { taskId: 31, taskKind: 'shot_video', allowedActions: ['version.add'], hasAddPermission: false, canQuery: false }
+      props: { taskId: 31, taskKind: 'shot_video', taskStatus: 'in_progress', allowedActions: ['version.add'], hasAddPermission: false, canQuery: false }
     })
     await flushPromises()
 
@@ -522,6 +705,7 @@ describe('版本上传与发布面板', () => {
       props: {
         taskId: 31,
         taskKind: 'shot_video',
+        taskStatus: 'in_progress',
         allowedActions: ['version.add'],
         hasUncommittedSubmission: true,
         hasAddPermission: true,
@@ -546,6 +730,7 @@ describe('版本上传与发布面板', () => {
       props: {
         taskId: 31,
         taskKind: 'shot_video',
+        taskStatus: 'in_progress',
         allowedActions: ['version.add'],
         hasUncommittedSubmission: true,
         hasAddPermission: true,
@@ -566,7 +751,7 @@ describe('版本上传与发布面板', () => {
   it('修改说明含换行或控制字符时在私有文件上传前拒绝', async () => {
     const wrapper = mount(VersionSubmissionPanel, {
       ...mountOptions,
-      props: { taskId: 31, taskKind: 'shot_video', allowedActions: ['version.add'], hasAddPermission: true, canQuery: true }
+      props: { taskId: 31, taskKind: 'shot_video', taskStatus: 'in_progress', allowedActions: ['version.add'], hasAddPermission: true, canQuery: true }
     })
     await flushPromises()
     const input = wrapper.find('input[type="file"]')
@@ -574,7 +759,7 @@ describe('版本上传与发布面板', () => {
     Object.defineProperty(input.element, 'files', { configurable: true, value: [file] })
     await input.trigger('change')
     await wrapper.find('.field-label textarea').setValue('第一行\n第二行')
-    await wrapper.findAllComponents(ElButton).find(button => button.text().includes('上传并提交版本')).trigger('click')
+    await clickSubmissionButton(wrapper)
     await flushPromises()
 
     expect(wrapper.text()).toContain('修改说明不能换行或包含不可见字符')
@@ -586,7 +771,7 @@ describe('版本上传与发布面板', () => {
     getVersionSubmissionStatus.mockRejectedValue({ httpStatus: 503, message: '状态服务不可用' })
     const wrapper = mount(VersionSubmissionPanel, {
       ...mountOptions,
-      props: { taskId: 31, taskKind: 'shot_video', allowedActions: ['version.add'], hasAddPermission: true, canQuery: true, pollInterval: 250 }
+      props: { taskId: 31, taskKind: 'shot_video', taskStatus: 'in_progress', allowedActions: ['version.add'], hasAddPermission: true, canQuery: true, pollInterval: 250 }
     })
     await flushPromises()
     await chooseValidFileAndSubmit(wrapper)
@@ -613,7 +798,7 @@ describe('版本上传与发布面板', () => {
 
     const wrapper = mount(VersionSubmissionPanel, {
       ...mountOptions,
-      props: { taskId: 31, taskKind: 'shot_video', allowedActions: ['version.add'], hasAddPermission: true, canQuery: true, operationGeneration: 1, pollInterval: 250 }
+      props: { taskId: 31, taskKind: 'shot_video', taskStatus: 'in_progress', allowedActions: ['version.add'], hasAddPermission: true, canQuery: true, operationGeneration: 1, pollInterval: 250 }
     })
     await flushPromises()
     const firstSignal = getCurrentTaskVersionSubmission.mock.calls[0][1].signal

@@ -19,6 +19,8 @@ import {
 } from './versionPresentation'
 
 const MAX_VERSION_FILE_SIZE = 100 * 1024 * 1024
+const MAX_VERSION_BATCH_SIZE = 500 * 1024 * 1024
+const MAX_VERSION_CANDIDATES = 10
 const MAX_AUTOMATIC_POLL_ATTEMPTS = 30
 const MAX_CONSECUTIVE_POLL_ERRORS = 3
 const MAX_POLL_BACKOFF_MS = 30_000
@@ -40,7 +42,7 @@ const props = defineProps({
 })
 const emit = defineEmits(['committed', 'submission-change', 'focus-issue'])
 
-const selectedFile = ref(null)
+const selectedCandidates = ref([])
 const changelog = ref('')
 const issueHandlingStates = ref({})
 const issueUnhandledReasons = ref({})
@@ -48,7 +50,7 @@ const submissionFormRef = ref(null)
 const fileUploadRef = ref(null)
 const formValidating = ref(false)
 const openIssueSnapshotHash = ref('')
-const uploadResult = ref(null)
+const uploadResults = ref({})
 const uploadProgress = ref(0)
 const submission = ref(null)
 const phase = ref('idle')
@@ -71,6 +73,29 @@ let idempotency = createIdempotencyState(`version-${props.taskId}`)
 
 const acceptedExtensions = computed(() => props.taskKind === 'asset_image' ? ['jpg', 'png'] : ['mp4', 'mov'])
 const acceptAttribute = computed(() => acceptedExtensions.value.map(item => `.${item}`).join(','))
+const isRevisionSubmission = computed(() => props.taskStatus === 'revision' || Number(props.versionCount) > 0)
+const nextVersionNumber = computed(() => `V${String(Math.max(1, Number(props.versionCount || 0) + 1)).padStart(3, '0')}`)
+const submissionCopy = computed(() => isRevisionSubmission.value
+  ? {
+      eyebrow: 'REVISE & RESUBMIT',
+      title: '提交修改成果',
+      description: `根据审核意见上传修改后的候选成果，提交后将生成 ${nextVersionNumber.value} 并重新进入审核。`,
+      uploadPrompt: '选择修改后的候选成果',
+      changelogLabel: '本轮修改说明',
+      footerHint: `提交后可在此查看文件保存、${nextVersionNumber.value} 生成和重新送审进度。`,
+      submitLabel: '提交修改成果并重新送审',
+      retryLabel: '重试提交修改成果'
+    }
+  : {
+      eyebrow: 'FIRST DELIVERY',
+      title: '提交首版成果',
+      description: `上传第一轮候选成果，提交后将生成 ${nextVersionNumber.value} 并进入审核。`,
+      uploadPrompt: '选择首版候选成果',
+      changelogLabel: '首版交付说明',
+      footerHint: `提交后可在此查看文件保存、${nextVersionNumber.value} 生成和审核准备进度。`,
+      submitLabel: '提交首版并进入审核',
+      retryLabel: '重试提交首版成果'
+    })
 const canSubmit = computed(() => (
   recoveryResolved.value &&
   props.allowedActions.includes('version.add') &&
@@ -82,7 +107,9 @@ const changelogPlaceholder = computed(() => {
     const excerpt = description.length > 120 ? `${description.slice(0, 120)}…` : description
     return `首次提交可参考制作内容：“${excerpt}”。请说明本版本实际完成情况和需要审核人关注的内容。`
   }
-  return '说明本版本完成内容、修改点或需要审核人关注的部分。'
+  return isRevisionSubmission.value
+    ? '概括本轮针对审核意见完成的修改，以及仍需审核人关注的内容。'
+    : '说明首版实际完成情况和需要审核人关注的内容。'
 })
 const issueResponses = computed(() => props.taskStatus === 'revision'
   ? props.openIssues.map(issue => ({
@@ -93,13 +120,13 @@ const issueResponses = computed(() => props.taskStatus === 'revision'
     }))
   : [])
 const submissionFormModel = computed(() => ({
-  selectedFile: selectedFile.value,
+  candidates: selectedCandidates.value,
   changelog: changelog.value,
   issueHandlingStates: issueHandlingStates.value,
   issueUnhandledReasons: issueUnhandledReasons.value
 }))
 const submissionFormRules = {
-  selectedFile: [{ validator: validateSelectedFile, trigger: 'change' }],
+  candidates: [{ validator: validateSelectedCandidates, trigger: 'change' }],
   changelog: [{ validator: validateChangelog, trigger: 'blur' }]
 }
 const issueHandlingStateRules = [
@@ -107,7 +134,7 @@ const issueHandlingStateRules = [
 ]
 const hasActiveSubmission = computed(() => Boolean(submission.value && submission.value.submissionStatus !== 'committed'))
 const isBusy = computed(() => formValidating.value || recovering.value || ['preflighting', 'uploading', 'submitting', 'retrying'].includes(phase.value))
-const uploadedOnly = computed(() => Boolean(uploadResult.value && !submission.value))
+const uploadedOnly = computed(() => Boolean(Object.keys(uploadResults.value).length && !submission.value))
 const composerLocked = computed(() => isBusy.value || uploadedOnly.value)
 const canDiscardUploadedFile = computed(() => (
   uploadedOnly.value && [413, 422].includes(Number(requestError.value?.httpStatus || requestError.value?.status || 0))
@@ -150,15 +177,35 @@ function abortRequests() {
   stopPolling()
 }
 
+function revokeCandidatePreview(candidate) {
+  if (candidate?.previewUrl?.startsWith('blob:') && typeof URL.revokeObjectURL === 'function') {
+    URL.revokeObjectURL(candidate.previewUrl)
+  }
+  if (candidate) candidate.previewUrl = ''
+}
+
+function releaseCandidatePreviews(candidates = selectedCandidates.value) {
+  candidates.forEach(revokeCandidatePreview)
+}
+
+function createCandidatePreviewUrl(file) {
+  return file && typeof URL.createObjectURL === 'function' ? URL.createObjectURL(file) : ''
+}
+
+function markCandidatePreviewError(candidate) {
+  candidate.previewError = true
+}
+
 function resetComposer() {
   formValidating.value = false
-  selectedFile.value = null
+  releaseCandidatePreviews()
+  selectedCandidates.value = []
   fileUploadRef.value?.clearFiles?.()
   changelog.value = ''
   issueHandlingStates.value = Object.fromEntries(props.openIssues.map(issue => [issue.issueId, 'handled']))
   issueUnhandledReasons.value = Object.fromEntries(props.openIssues.map(issue => [issue.issueId, '']))
   openIssueSnapshotHash.value = ''
-  uploadResult.value = null
+  uploadResults.value = {}
   uploadProgress.value = 0
   phase.value = 'idle'
   requestError.value = null
@@ -196,6 +243,7 @@ function updateSubmission(nextSubmission) {
 function applyAcceptedSubmission(data, generation, targetTaskId, targetOperationGeneration) {
   const nextSubmission = acceptedToSubmissionStatus(data)
   if (!nextSubmission) return
+  releaseCandidatePreviews()
   updateSubmission(nextSubmission)
   phase.value = nextSubmission.submissionStatus || 'pending'
   resetPollingBudget()
@@ -322,54 +370,101 @@ function discardUploadedFile() {
   resetComposer()
 }
 
-function chooseFile(uploadFile) {
+function chooseFiles(uploadFile, uploadFiles) {
   validationMessage.value = ''
   requestError.value = null
-  const file = uploadFile?.raw || uploadFile?.target?.files?.[0] || null
-  if (!file) {
-    selectedFile.value = null
-    return
-  }
+  const file = uploadFile?.raw || null
+  if (!file) return
   const extension = file.name.includes('.') ? file.name.split('.').pop().toLowerCase() : ''
   if (!acceptedExtensions.value.includes(extension)) {
     validationMessage.value = `当前任务只接受 ${acceptedExtensions.value.map(item => item.toUpperCase()).join('/')} 文件`
-    if (uploadFile?.target) uploadFile.target.value = ''
-    fileUploadRef.value?.clearFiles?.()
-    selectedFile.value = null
+    fileUploadRef.value?.handleRemove?.(uploadFile)
     return
   }
   if (file.size > MAX_VERSION_FILE_SIZE) {
     validationMessage.value = '版本文件不能超过 100 MiB'
-    if (uploadFile?.target) uploadFile.target.value = ''
-    fileUploadRef.value?.clearFiles?.()
-    selectedFile.value = null
+    fileUploadRef.value?.handleRemove?.(uploadFile)
     return
   }
   if (file.size <= 0) {
     validationMessage.value = '版本文件不能为空'
-    if (uploadFile?.target) uploadFile.target.value = ''
-    fileUploadRef.value?.clearFiles?.()
-    selectedFile.value = null
+    fileUploadRef.value?.handleRemove?.(uploadFile)
+    return
+  }
+  const rawFiles = (uploadFiles || []).filter(item => item.raw)
+  if (rawFiles.length > MAX_VERSION_CANDIDATES) {
+    validationMessage.value = `每轮最多提交 ${MAX_VERSION_CANDIDATES} 个候选文件`
+    fileUploadRef.value?.handleRemove?.(uploadFile)
+    return
+  }
+  if (rawFiles.reduce((total, item) => total + Number(item.raw.size || 0), 0) > MAX_VERSION_BATCH_SIZE) {
+    validationMessage.value = '候选文件总大小不能超过 500 MiB'
+    fileUploadRef.value?.handleRemove?.(uploadFile)
     return
   }
   workflowController?.abort()
   fileGeneration += 1
-  selectedFile.value = file
-  submissionFormRef.value?.clearValidate('selectedFile')
-  uploadResult.value = null
+  const existingByKey = new Map(selectedCandidates.value.map(item => [item.clientFileKey, item]))
+  const reusedCandidates = new Set()
+  const nextCandidates = rawFiles.map(item => {
+    const clientFileKey = String(item.uid)
+    const existing = existingByKey.get(clientFileKey)
+    const reused = existing?.file === item.raw
+    if (reused) reusedCandidates.add(existing)
+    return {
+      clientFileKey,
+      file: item.raw,
+      uploadFile: item,
+      candidateNote: existing?.candidateNote || '',
+      previewUrl: reused ? existing.previewUrl : createCandidatePreviewUrl(item.raw),
+      previewError: reused ? existing.previewError : false
+    }
+  })
+  selectedCandidates.value
+    .filter(candidate => !reusedCandidates.has(candidate))
+    .forEach(revokeCandidatePreview)
+  selectedCandidates.value = nextCandidates
+  submissionFormRef.value?.clearValidate('candidates')
+  uploadResults.value = {}
   uploadProgress.value = 0
   phase.value = 'idle'
   idempotency.reset()
 }
 
-function validateSelectedFile(_rule, file, callback) {
-  if (!file) return callback(new Error('请先选择版本文件'))
-  const extension = file.name?.includes('.') ? file.name.split('.').pop().toLowerCase() : ''
-  if (!acceptedExtensions.value.includes(extension)) {
-    return callback(new Error(`当前任务只接受 ${acceptedExtensions.value.map(item => item.toUpperCase()).join('/')} 文件`))
+function removeCandidate(clientFileKey) {
+  if (composerLocked.value) return
+  const candidate = selectedCandidates.value.find(item => item.clientFileKey === clientFileKey)
+  const uploadFile = candidate?.uploadFile
+  if (uploadFile) fileUploadRef.value?.handleRemove?.(uploadFile)
+  revokeCandidatePreview(candidate)
+  selectedCandidates.value = selectedCandidates.value.filter(item => item.clientFileKey !== clientFileKey)
+  fileGeneration += 1
+  uploadResults.value = {}
+  idempotency.reset()
+  submissionFormRef.value?.validateField('candidates').catch(() => {})
+}
+
+function handleCandidateExceed() {
+  validationMessage.value = `每轮最多提交 ${MAX_VERSION_CANDIDATES} 个候选文件`
+}
+
+function validateSelectedCandidates(_rule, candidates, callback) {
+  if (!Array.isArray(candidates) || !candidates.length) return callback(new Error('请至少选择一个候选文件'))
+  if (candidates.length > MAX_VERSION_CANDIDATES) {
+    return callback(new Error(`每轮最多提交 ${MAX_VERSION_CANDIDATES} 个候选文件`))
   }
-  if (file.size > MAX_VERSION_FILE_SIZE) return callback(new Error('版本文件不能超过 100 MiB'))
-  if (file.size <= 0) return callback(new Error('版本文件不能为空'))
+  if (candidates.reduce((total, item) => total + Number(item.file?.size || 0), 0) > MAX_VERSION_BATCH_SIZE) {
+    return callback(new Error('候选文件总大小不能超过 500 MiB'))
+  }
+  for (const candidate of candidates) {
+    const file = candidate.file
+    const extension = file?.name?.includes('.') ? file.name.split('.').pop().toLowerCase() : ''
+    if (!acceptedExtensions.value.includes(extension)) {
+      return callback(new Error(`当前任务只接受 ${acceptedExtensions.value.map(item => item.toUpperCase()).join('/')} 文件`))
+    }
+    if (file.size > MAX_VERSION_FILE_SIZE) return callback(new Error('单个候选文件不能超过 100 MiB'))
+    if (file.size <= 0) return callback(new Error('候选文件不能为空'))
+  }
   callback()
 }
 
@@ -408,7 +503,7 @@ async function submitVersion() {
   requestError.value = null
   pollError.value = null
   if (!canSubmit.value) {
-    validationMessage.value = '当前任务状态或账号权限不允许提交新版本'
+    validationMessage.value = `当前任务状态或账号权限不允许${submissionCopy.value.title}`
     return
   }
   formValidating.value = true
@@ -436,7 +531,7 @@ async function submitVersion() {
   const generation = contextGeneration
   const targetTaskId = Number(props.taskId)
   const targetOperationGeneration = Number(props.operationGeneration)
-  const targetFile = selectedFile.value
+  const targetCandidates = selectedCandidates.value.map(item => ({ ...item }))
   const targetFileGeneration = fileGeneration
   const controller = new AbortController()
   workflowController?.abort()
@@ -444,11 +539,16 @@ async function submitVersion() {
   let failureTitle = '提交前检查未通过'
 
   try {
-    if (!uploadResult.value) {
+    if (!openIssueSnapshotHash.value) {
       phase.value = 'preflighting'
       const preflightPayload = {
-        fileName: targetFile.name,
-        fileSize: targetFile.size,
+        candidates: targetCandidates.map((item, index) => ({
+          clientFileKey: item.clientFileKey,
+          fileName: item.file.name,
+          fileSize: item.file.size,
+          sortOrder: index,
+          candidateNote: String(item.candidateNote || '').trim() || null
+        })),
         changelog: normalizedChangelog,
         issueResponses: issueResponses.value
       }
@@ -460,57 +560,72 @@ async function submitVersion() {
       if (
         workflowController !== controller ||
         !stillCurrent(generation, targetTaskId, targetOperationGeneration) ||
-        fileGeneration !== targetFileGeneration ||
-        selectedFile.value !== targetFile
+        fileGeneration !== targetFileGeneration
       ) return
       if (!canSubmit.value) {
         const permissionError = new Error('提交权限或任务状态已发生变化，文件尚未上传')
         permissionError.httpStatus = 403
         throw permissionError
       }
-      const declaredExtension = targetFile.name.split('.').pop().toLowerCase()
+      const checkedCandidates = preflightResponse?.data?.candidates || []
       if (
         preflightResponse?.data?.ready !== true ||
         Number(preflightResponse.data.taskId) !== targetTaskId ||
         preflightResponse.data.taskKind !== props.taskKind ||
-        preflightResponse.data.fileExtension !== declaredExtension ||
+        checkedCandidates.length !== targetCandidates.length ||
+        checkedCandidates.some((item, index) => (
+          item.clientFileKey !== targetCandidates[index].clientFileKey ||
+          item.fileExtension !== targetCandidates[index].file.name.split('.').pop().toLowerCase()
+        )) ||
         !preflightResponse.data.allowedActions?.includes('version.add')
       ) {
         throw new Error('提交检查结果与当前任务不一致，文件尚未上传')
       }
       openIssueSnapshotHash.value = preflightResponse.data.openIssueSnapshotHash
 
-      failureTitle = '版本文件上传失败'
-      phase.value = 'uploading'
-      uploadProgress.value = 0
-      const response = await uploadProtectedVersionFile(targetFile, {
+    }
+
+    failureTitle = '候选文件上传失败'
+    phase.value = 'uploading'
+    for (let index = 0; index < targetCandidates.length; index += 1) {
+      const candidate = targetCandidates[index]
+      if (uploadResults.value[candidate.clientFileKey]) continue
+      const response = await uploadProtectedVersionFile(candidate.file, {
         signal: controller.signal,
         onUploadProgress: event => {
           if (event.total && stillCurrent(generation, targetTaskId, targetOperationGeneration) && fileGeneration === targetFileGeneration) {
-            uploadProgress.value = Math.min(100, Math.round((event.loaded * 100) / event.total))
+            const currentPercent = Math.min(100, (event.loaded * 100) / event.total)
+            uploadProgress.value = Math.round(((index * 100) + currentPercent) / targetCandidates.length)
           }
         }
       })
       if (
         workflowController !== controller ||
         !stillCurrent(generation, targetTaskId, targetOperationGeneration) ||
-        fileGeneration !== targetFileGeneration ||
-        selectedFile.value !== targetFile
+        fileGeneration !== targetFileGeneration
       ) return
       if (!response?.fileId || response?.accessType !== 'private') {
-        throw new Error('文件上传结果异常，版本尚未提交')
+        throw new Error(`候选 ${index + 1} 上传结果异常，版本尚未提交`)
       }
-      uploadResult.value = {
-        fileId: response.fileId,
-        originalFilename: response.originalFilename || targetFile.name,
-        downloadUrl: response.downloadUrl
+      uploadResults.value = {
+        ...uploadResults.value,
+        [candidate.clientFileKey]: {
+          fileId: response.fileId,
+          originalFilename: response.originalFilename || candidate.file.name,
+          downloadUrl: response.downloadUrl
+        }
       }
-      uploadProgress.value = 100
-      phase.value = 'uploaded'
+      uploadProgress.value = Math.round(((index + 1) * 100) / targetCandidates.length)
     }
+    phase.value = 'uploaded'
 
     const payload = {
-      fileId: uploadResult.value.fileId,
+      candidates: targetCandidates.map((item, index) => ({
+        clientFileKey: item.clientFileKey,
+        fileId: uploadResults.value[item.clientFileKey].fileId,
+        sortOrder: index,
+        candidateNote: String(item.candidateNote || '').trim() || null
+      })),
       changelog: normalizedChangelog,
       openIssueSnapshotHash: openIssueSnapshotHash.value,
       issueResponses: issueResponses.value
@@ -532,7 +647,7 @@ async function submitVersion() {
   } catch (error) {
     if (!isCanceled(error, controller) && stillCurrent(generation, targetTaskId, targetOperationGeneration) && fileGeneration === targetFileGeneration) {
       requestError.value = versionErrorState(error, failureTitle)
-      phase.value = uploadResult.value ? 'submission_failed' : 'idle'
+      phase.value = Object.keys(uploadResults.value).length ? 'submission_failed' : 'idle'
     }
   } finally {
     if (workflowController === controller) workflowController = null
@@ -601,6 +716,7 @@ onBeforeUnmount(() => {
   disposed = true
   contextGeneration += 1
   abortRequests()
+  releaseCandidatePreviews()
 })
 </script>
 
@@ -608,9 +724,9 @@ onBeforeUnmount(() => {
   <el-card class="version-submission-panel" shadow="never">
     <div class="panel-heading">
       <div>
-        <p class="sg-eyebrow">UPLOAD &amp; PUBLISH</p>
-        <h3>提交新版本</h3>
-        <p>上传制作成果并生成不可覆盖的正式版本；完成后将自动进入审核。</p>
+        <p class="sg-eyebrow">{{ submissionCopy.eyebrow }}</p>
+        <h3>{{ submissionCopy.title }}</h3>
+        <p>{{ submissionCopy.description }}</p>
       </div>
       <el-button v-if="submission && canQuery" :icon="Refresh" :disabled="isBusy" @click="refreshSubmissionStatus">刷新状态</el-button>
       <el-button v-else-if="!recoveryResolved && !recovering && canQuery" :icon="Refresh" @click="recoverCurrentSubmission">重新检查</el-button>
@@ -637,27 +753,71 @@ onBeforeUnmount(() => {
       </el-button>
     </el-alert>
 
-    <el-form v-else-if="!submission" ref="submissionFormRef" :model="submissionFormModel" :rules="submissionFormRules" class="submission-form" label-position="top" label-width="auto" aria-label="提交新版本">
-      <el-form-item class="submission-file-field" prop="selectedFile">
-        <el-upload ref="fileUploadRef" class="file-picker" :class="{ 'has-file': selectedFile }" action="#" drag :auto-upload="false" :show-file-list="false" :accept="acceptAttribute" :disabled="composerLocked || !canSubmit" :on-change="chooseFile">
+    <el-form v-else-if="!submission" ref="submissionFormRef" :model="submissionFormModel" :rules="submissionFormRules" class="submission-form" label-position="top" label-width="auto" :aria-label="submissionCopy.title">
+      <el-form-item class="submission-file-field" prop="candidates">
+        <el-upload ref="fileUploadRef" class="file-picker" :class="{ 'has-file': selectedCandidates.length }" action="#" drag multiple :limit="MAX_VERSION_CANDIDATES" :auto-upload="false" :show-file-list="false" :accept="acceptAttribute" :disabled="composerLocked || !canSubmit" :on-change="chooseFiles" :on-exceed="handleCandidateExceed">
           <el-icon><UploadFilled /></el-icon>
           <span>
-            <strong>{{ selectedFile?.name || '选择离线制作成果' }}</strong>
-            <small>{{ selectedFile ? `${(selectedFile.size / 1024 / 1024).toFixed(2)} MiB` : `仅接受 ${acceptedExtensions.map(item => item.toUpperCase()).join('/')}，最大 100 MiB` }}</small>
+            <strong>{{ selectedCandidates.length ? `已选择 ${selectedCandidates.length} 个候选文件` : submissionCopy.uploadPrompt }}</strong>
+            <small>可拖拽或多选；仅接受 {{ acceptedExtensions.map(item => item.toUpperCase()).join('/') }}，单个最大 100 MiB，整批最大 500 MiB</small>
           </span>
-          <b>{{ selectedFile ? '更换' : '拖拽或选择' }}</b>
+          <b>{{ selectedCandidates.length ? '继续添加' : '拖拽或选择' }}</b>
         </el-upload>
+        <div v-if="selectedCandidates.length" class="candidate-upload-list">
+          <el-card v-for="(candidate, index) in selectedCandidates" :key="candidate.clientFileKey" shadow="never" class="candidate-upload-item">
+            <div class="candidate-upload-item__content">
+              <div class="candidate-local-preview">
+                <el-image
+                  v-if="taskKind === 'asset_image' && candidate.previewUrl && !candidate.previewError"
+                  class="candidate-local-preview__media"
+                  :src="candidate.previewUrl"
+                  :preview-src-list="[candidate.previewUrl]"
+                  :alt="`候选 ${String(index + 1).padStart(2, '0')} ${candidate.file.name} 本地预览`"
+                  fit="contain"
+                  hide-on-click-modal
+                  preview-teleported
+                  @error="markCandidatePreviewError(candidate)"
+                />
+                <video
+                  v-else-if="taskKind !== 'asset_image' && candidate.previewUrl && !candidate.previewError"
+                  class="candidate-local-preview__media"
+                  :src="candidate.previewUrl"
+                  :aria-label="`候选 ${String(index + 1).padStart(2, '0')} ${candidate.file.name} 本地预览`"
+                  controls
+                  playsinline
+                  preload="metadata"
+                  @error="markCandidatePreviewError(candidate)"
+                >
+                  当前浏览器不支持视频预览。
+                </video>
+                <div v-else class="candidate-local-preview__fallback" role="status">
+                  <strong>无法本地预览</strong>
+                  <span>浏览器可能不支持该文件编码，仍可继续提交。</span>
+                </div>
+                <span class="candidate-local-preview__label">本地预览</span>
+              </div>
+              <div class="candidate-upload-item__details">
+                <div class="candidate-upload-item__main">
+                  <el-tag size="small" effect="plain" round>候选 {{ String(index + 1).padStart(2, '0') }}</el-tag>
+                  <div><strong>{{ candidate.file.name }}</strong><small>{{ (candidate.file.size / 1024 / 1024).toFixed(2) }} MiB</small></div>
+                  <el-button text type="danger" :disabled="composerLocked" @click="removeCandidate(candidate.clientFileKey)">移除</el-button>
+                </div>
+                <el-input v-model="candidate.candidateNote" maxlength="500" show-word-limit clearable :disabled="composerLocked" placeholder="可选：说明这个候选的特点或希望审核人关注的地方" />
+              </div>
+            </div>
+          </el-card>
+        </div>
       </el-form-item>
 
       <el-card v-if="taskStatus === 'revision'" class="issue-response-panel" shadow="never">
         <header class="issue-response-panel__heading">
           <div>
             <p class="sg-eyebrow">REVIEW ISSUES</p>
-            <h4>逐条确认本轮处理结果</h4>
+            <h4>逐条说明修改情况</h4>
           </div>
           <el-tag type="warning" effect="plain" size="small" round>{{ openIssues.length }} 条待处理</el-tag>
         </header>
-        <p class="issue-response-help">默认标记为已处理；如本轮暂未处理，请说明原因。结果会随新版本永久保存。</p>
+        <p class="issue-response-help">请确认每条审核意见是否已在本轮处理；未处理时说明原因。说明会随 {{ nextVersionNumber }} 永久保存。</p>
         <div v-if="openIssues.length" class="issue-response-list">
           <article v-for="(issue, index) in openIssues" :key="issue.issueId">
             <div class="issue-response-title">
@@ -702,26 +862,26 @@ onBeforeUnmount(() => {
         <el-empty v-else class="issue-response-empty" :image-size="48" description="当前没有可处理问题，请刷新任务后再提交" />
       </el-card>
 
-      <el-form-item class="field-label changelog-field" label="本轮修改说明" prop="changelog">
+      <el-form-item class="field-label changelog-field" :label="submissionCopy.changelogLabel" prop="changelog">
         <el-input v-model="changelog" type="textarea" maxlength="5000" :rows="4" show-word-limit :disabled="composerLocked || !canSubmit" :placeholder="changelogPlaceholder" />
       </el-form-item>
 
       <el-progress v-if="phase === 'uploading'" class="upload-progress" :percentage="uploadProgress" :stroke-width="8" :status="uploadProgress >= 100 ? 'success' : undefined" aria-label="版本文件上传进度" />
       <el-alert v-if="uploadedOnly" class="uploaded-boundary" title="文件已上传，正式版本尚未生成" type="warning" :closable="false" show-icon>
-        <span class="submission-actions__description">文件与说明已锁定，请直接重试提交；若放弃当前文件，可重新选择。</span>
-        <el-button v-if="canDiscardUploadedFile" text @click="discardUploadedFile">放弃已上传文件并重新选择</el-button>
+        <span class="submission-actions__description">候选文件与说明已锁定，请直接重试提交；若服务端拒绝当前批次，可放弃后重新选择。</span>
+        <el-button v-if="canDiscardUploadedFile" text @click="discardUploadedFile">放弃已上传批次并重新选择</el-button>
       </el-alert>
 
       <footer>
-        <p v-if="!canSubmit">当前账号或任务状态不允许提交新版本；任务需处于制作中或退回修改。</p>
-        <p v-else>提交后可在此查看文件保存、版本生成和审核准备进度。</p>
+        <p v-if="!canSubmit">当前账号或任务状态不允许{{ submissionCopy.title }}；请确认任务已进入可交付状态。</p>
+        <p v-else>{{ submissionCopy.footerHint }}</p>
         <el-button
           type="primary"
           :loading="isBusy"
           :disabled="!canSubmit"
           @click="submitVersion"
         >
-          {{ uploadResult ? '重试创建版本提交' : '上传并提交版本' }}
+          {{ uploadedOnly ? submissionCopy.retryLabel : `${submissionCopy.submitLabel}${selectedCandidates.length ? `（${selectedCandidates.length} 个候选）` : ''}` }}
         </el-button>
       </footer>
     </el-form>
@@ -766,6 +926,21 @@ onBeforeUnmount(() => {
 .file-picker:hover :deep(.el-upload-dragger),
 .file-picker.has-file :deep(.el-upload-dragger),
 .file-picker :deep(.el-upload-dragger.is-dragover) { background: rgba(255, 182, 87, 0.055); border-color: rgba(255, 182, 87, 0.5); }
+.candidate-upload-list { display: grid; width: 100%; margin-top: 12px; gap: 10px; }
+.candidate-upload-item:deep(.el-card__body) { padding: 12px; }
+.candidate-upload-item__content { display: grid; grid-template-columns: minmax(220px, 300px) minmax(0, 1fr); gap: 14px; align-items: start; }
+.candidate-upload-item__details { display: grid; min-width: 0; gap: 12px; }
+.candidate-upload-item__main { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: center; }
+.candidate-upload-item__main div { display: grid; min-width: 0; gap: 2px; }
+.candidate-upload-item__main strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.candidate-upload-item__main small { color: var(--sg-text-muted); }
+.candidate-local-preview { position: relative; aspect-ratio: 16 / 9; min-height: 124px; overflow: hidden; background: #050608; border: 1px solid var(--sg-border); border-radius: 9px; }
+.candidate-local-preview__media { display: block; width: 100%; height: 100%; object-fit: contain; }
+.candidate-local-preview:deep(.el-image) { width: 100%; height: 100%; }
+.candidate-local-preview__fallback { display: grid; height: 100%; min-height: 124px; padding: 18px; box-sizing: border-box; color: var(--sg-text-muted); text-align: center; place-content: center; gap: 6px; }
+.candidate-local-preview__fallback strong { color: var(--sg-text-secondary); font-size: 12px; }
+.candidate-local-preview__fallback span { max-width: 230px; font-size: 10px; line-height: 1.5; }
+.candidate-local-preview__label { position: absolute; top: 8px; left: 8px; padding: 3px 7px; color: #fff; font-size: 9px; line-height: 1; background: rgba(0, 0, 0, 0.62); border-radius: 999px; pointer-events: none; }
 .file-picker .el-icon { color: var(--sg-accent); font-size: 25px; }
 .file-picker strong,
 .file-picker small { display: block; }
@@ -783,6 +958,7 @@ onBeforeUnmount(() => {
   .panel-heading,
   .submission-actions,
   .submission-form footer { align-items: stretch; flex-direction: column; }
+  .candidate-upload-item__content { grid-template-columns: 1fr; }
   .submission-form footer .el-button { width: 100%; }
 }
 </style>

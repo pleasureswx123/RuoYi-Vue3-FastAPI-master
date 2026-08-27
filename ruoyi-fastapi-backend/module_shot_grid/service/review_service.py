@@ -2,18 +2,28 @@ import hashlib
 import json
 import unicodedata
 from datetime import datetime
+from pathlib import PureWindowsPath
 from typing import Any
 
+from fastapi import Request
+from sqlalchemy import and_, true
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from common.enums import BusinessType
 from common.vo import PageModel
+from exceptions.exception import ServiceException
+from module_admin.dao.file_info_dao import FileInfoDao
+from module_admin.entity.do.file_do import SysFileInfo
 from module_admin.entity.vo.user_vo import CurrentUserModel
+from module_admin.service.common_service import CommonService
+from module_admin.service.file_business_service import FileReferenceService
+from module_shot_grid.dao.final_delivery_dao import ShotGridFinalDeliveryDao
 from module_shot_grid.dao.project_audit_dao import ShotGridProjectAuditDao
 from module_shot_grid.dao.project_dao import ShotGridProjectDao
 from module_shot_grid.dao.project_member_dao import ShotGridProjectMemberDao
 from module_shot_grid.dao.review_dao import ShotGridReviewDao
+from module_shot_grid.entity.do.final_delivery_do import ShotGridFinalDelivery
 from module_shot_grid.entity.do.review_do import (
     ShotGridIssueVerification,
     ShotGridNote,
@@ -21,15 +31,18 @@ from module_shot_grid.entity.do.review_do import (
     ShotGridReviewIssueDraft,
     ShotGridReviewList,
     ShotGridReviewListVersion,
+    ShotGridVersionCandidateSelection,
 )
 from module_shot_grid.entity.vo.access_vo import ShotGridProjectAccessModel
 from module_shot_grid.entity.vo.common_vo import ShotGridLockVersionModel
 from module_shot_grid.entity.vo.review_vo import (
     ShotGridAutoReviewListSummaryModel,
     ShotGridCarriedIssueModel,
+    ShotGridFinalDeliveryModel,
     ShotGridIssueDetailModel,
     ShotGridIssueDraftModel,
     ShotGridIssueDraftUpdateModel,
+    ShotGridIssueReferenceFileModel,
     ShotGridIssueResponseModel,
     ShotGridIssueVerificationModel,
     ShotGridManualReviewListCreateModel,
@@ -47,6 +60,8 @@ from module_shot_grid.entity.vo.review_vo import (
     ShotGridReviewListQueryModel,
     ShotGridReviewVersionSummaryModel,
     ShotGridVersionAssetProductionModel,
+    ShotGridVersionCandidateModel,
+    ShotGridVersionCandidateSelectModel,
     ShotGridVersionDetailModel,
     ShotGridVersionFileModel,
     ShotGridVersionListItemModel,
@@ -57,8 +72,30 @@ from module_shot_grid.entity.vo.task_vo import ShotGridTaskShotProductionModel
 from module_shot_grid.exceptions import ShotGridDomainException, shot_grid_error
 from module_shot_grid.service.project_access_service import ShotGridProjectAccessService
 from module_shot_grid.service.project_service import ShotGridProjectService
+from utils.file_util import FileDownloadResult
 
 MAX_IDEMPOTENCY_KEY_LENGTH = 100
+REVIEW_ISSUE_DRAFT_REFERENCE_TYPE = 'shot_grid_review_issue_draft'
+REVIEW_ISSUE_REFERENCE_TYPE = 'shot_grid_review_issue'
+MAX_REVIEW_ISSUE_REFERENCE_FILES = 5
+MAX_REVIEW_ISSUE_REFERENCE_FILE_SIZE = 20 * 1024 * 1024
+REVIEW_ISSUE_REFERENCE_EXTENSIONS = {
+    'bmp',
+    'doc',
+    'docx',
+    'gif',
+    'jpeg',
+    'jpg',
+    'mov',
+    'mp4',
+    'pdf',
+    'png',
+    'ppt',
+    'pptx',
+    'txt',
+    'xls',
+    'xlsx',
+}
 
 
 class ShotGridReviewService:
@@ -91,9 +128,7 @@ class ShotGridReviewService:
         has_all_scope = bool(
             user
             and (
-                user.admin
-                or '*:*:*' in current_user.permissions
-                or 'shotgrid:project:all' in current_user.permissions
+                user.admin or '*:*:*' in current_user.permissions or 'shotgrid:project:all' in current_user.permissions
             )
         )
         rows, total = await ShotGridReviewDao.get_mine_review_lists(db, user_id, query, has_all_scope)
@@ -132,13 +167,15 @@ class ShotGridReviewService:
         if row is None:
             raise shot_grid_error(404, 'SG_VERSION_NOT_FOUND', '版本不存在或不可见')
         files = await ShotGridReviewDao.get_version_files(db, version_id)
+        candidate_rows = await ShotGridReviewDao.get_version_candidates(db, version_id)
         summary = await ShotGridReviewDao.get_auto_review_summary(db, version_id)
+        final_delivery = await ShotGridFinalDeliveryDao.get_by_version(db, version_id)
         values = cls._version_list_values(row)
         values['ai_params'] = (
             row.get('ai_params') if access.has_all_scope or access.project_role == 'director' else None
         )
         values['production_target'] = cls._version_production_target(row)
-        values['files'] = [
+        version_files = [
             ShotGridVersionFileModel.model_validate(
                 {
                     **file,
@@ -148,9 +185,17 @@ class ShotGridReviewService:
             )
             for file in files
         ]
+        values['files'] = version_files
+        values['candidates'] = cls._candidate_models(
+            version_no=int(row['version_no']),
+            selected_candidate_id=row.get('selected_candidate_id'),
+            candidate_rows=candidate_rows,
+            files=version_files,
+        )
         values['auto_review_list'] = (
             ShotGridAutoReviewListSummaryModel.model_validate(summary) if summary is not None else None
         )
+        values['final_delivery'] = cls._final_delivery_model(final_delivery)
         return ShotGridVersionDetailModel.model_validate(values)
 
     @staticmethod
@@ -578,6 +623,19 @@ class ShotGridReviewService:
             int(context['task_id']),
         )
         issues = await cls._hydrate_issues(db, rows)
+        candidate_rows = await ShotGridReviewDao.get_version_candidates(db, version_id)
+        final_delivery = await ShotGridFinalDeliveryDao.get_by_version(db, version_id)
+        file_rows = await ShotGridReviewDao.get_version_files(db, version_id)
+        version_files = [
+            ShotGridVersionFileModel.model_validate(
+                {
+                    **file,
+                    'is_primary': file['is_primary'] == '1',
+                    'url': f'/shot-grid/versions/{version_id}/files/{file["file_id"]}/download',
+                }
+            )
+            for file in file_rows
+        ]
         carried: list[ShotGridCarriedIssueModel] = []
         current: list[ShotGridIssueDetailModel] = []
         for issue in issues:
@@ -598,19 +656,167 @@ class ShotGridReviewService:
                 versionNo=int(context['version_no']),
                 versionNumber=f'V{int(context["version_no"]):03d}',
                 versionStatus=context['version_status'],
+                selectedCandidateId=context.get('selected_candidate_id'),
+                finalDelivery=cls._final_delivery_model(final_delivery),
                 lockVersion=int(context['lock_version']),
+            ),
+            candidates=cls._candidate_models(
+                version_no=int(context['version_no']),
+                selected_candidate_id=context.get('selected_candidate_id'),
+                candidate_rows=candidate_rows,
+                files=version_files,
             ),
             carriedIssues=carried,
             currentVersionIssues=current,
-            currentVersionDrafts=[
-                ShotGridIssueDraftModel.model_validate(row)
-                for row in await ShotGridReviewDao.get_issue_drafts(
+            currentVersionDrafts=await cls._hydrate_issue_drafts(
+                db,
+                await ShotGridReviewDao.get_issue_drafts(
                     db,
                     project_id=int(context['project_id']),
                     version_id=version_id,
-                )
-            ],
+                ),
+            ),
         )
+
+    @classmethod
+    async def select_version_candidate(  # noqa: PLR0915 - 候选选择、幂等、草稿门禁和审核审计必须同事务
+        cls,
+        db: AsyncSession,
+        version_id: int,
+        command: ShotGridVersionCandidateSelectModel,
+        idempotency_key: str | None,
+        current_user: CurrentUserModel,
+    ) -> ShotGridReviewContextModel:
+        """选择本轮最佳候选；已有草稿时禁止切换，避免意见错绑。"""
+
+        user_id, actor_name, _, dept_name = cls._actor(current_user)
+        stable_key = cls._normalize_idempotency_key(idempotency_key)
+        request_hash = hashlib.sha256(
+            json.dumps(
+                {
+                    'versionId': version_id,
+                    'candidateId': command.candidate_id,
+                    'lockVersion': command.lock_version,
+                },
+                sort_keys=True,
+                separators=(',', ':'),
+            ).encode()
+        ).hexdigest()
+        context, access = await cls._resolve_version_access(db, version_id, current_user)
+        try:
+            project_id, task, version, access = await cls._lock_version_graph(db, context, current_user, access)
+            cls._require_director(access)
+            existing = await ShotGridReviewDao.find_candidate_selection_by_idempotency(
+                db,
+                version_id=version_id,
+                selected_by=user_id,
+                idempotency_key=stable_key,
+            )
+            if existing is not None:
+                if existing.request_hash != request_hash:
+                    raise shot_grid_error(409, 'SG_IDEMPOTENCY_CONFLICT', '同一幂等键已用于不同候选选择请求')
+                await db.commit()
+                return await cls.get_review_context(db, version_id, current_user)
+            if version.version_status != 'pending_review' or task.task_status != 'pending_review':
+                raise cls._invalid_transition('只有当前待审核版本可以选择最佳候选')
+            cls._ensure_lock_version(int(version.lock_version), command.lock_version)
+            review_list = await ShotGridReviewDao.get_auto_review_list_for_update(db, project_id, version_id)
+            if review_list is None or review_list.review_status != 'active':
+                raise cls._auto_review_integrity_error()
+            await cls._ensure_auto_review_relation(db, int(review_list.review_list_id), version_id)
+            candidate = await ShotGridReviewDao.get_candidate_for_update(
+                db,
+                project_id=project_id,
+                version_id=version_id,
+                candidate_id=command.candidate_id,
+            )
+            if candidate is None:
+                raise shot_grid_error(404, 'SG_VERSION_CANDIDATE_NOT_FOUND', '候选文件不存在或不属于当前版本')
+            previous_candidate_id = version.selected_candidate_id
+            if (
+                previous_candidate_id is not None
+                and previous_candidate_id != command.candidate_id
+                and await ShotGridReviewDao.has_version_issue_drafts(db, version_id)
+            ):
+                raise shot_grid_error(
+                    409, 'SG_CANDIDATE_SELECTION_LOCKED', '当前候选已有问题草稿，请先处理草稿后再切换'
+                )
+            now = datetime.now()
+            await ShotGridReviewDao.add_candidate_selection(
+                db,
+                ShotGridVersionCandidateSelection(
+                    project_id=project_id,
+                    review_list_id=review_list.review_list_id,
+                    version_id=version_id,
+                    candidate_id=command.candidate_id,
+                    previous_candidate_id=(
+                        previous_candidate_id if previous_candidate_id != command.candidate_id else None
+                    ),
+                    selected_by=user_id,
+                    idempotency_key=stable_key,
+                    request_hash=request_hash,
+                    create_time=now,
+                ),
+            )
+            if previous_candidate_id == command.candidate_id:
+                await cls._audit(
+                    db,
+                    actor_name=actor_name,
+                    dept_name=dept_name,
+                    business_type=BusinessType.UPDATE.value,
+                    method='select_version_candidate',
+                    oper_url=f'/shot-grid/versions/{version_id}/selected-candidate',
+                    payload={'versionId': version_id, 'candidateId': command.candidate_id},
+                    result={
+                        'selectedCandidateId': command.candidate_id,
+                        'lockVersion': version.lock_version,
+                        'changed': False,
+                    },
+                )
+                await db.commit()
+                return await cls.get_review_context(db, version_id, current_user)
+            version.selected_candidate_id = command.candidate_id
+            version.selected_by = user_id
+            version.selected_time = now
+            version.lock_version += 1
+            await ShotGridReviewDao.set_primary_candidate_file(
+                db,
+                version_id=version_id,
+                candidate_id=command.candidate_id,
+            )
+            await cls._audit(
+                db,
+                actor_name=actor_name,
+                dept_name=dept_name,
+                business_type=BusinessType.UPDATE.value,
+                method='select_version_candidate',
+                oper_url=f'/shot-grid/versions/{version_id}/selected-candidate',
+                payload={'versionId': version_id, 'candidateId': command.candidate_id},
+                result={'selectedCandidateId': command.candidate_id, 'lockVersion': version.lock_version},
+            )
+            await db.commit()
+            return await cls.get_review_context(db, version_id, current_user)
+        except IntegrityError as exc:
+            constraint = ShotGridProjectService._constraint_name(exc)
+            await db.rollback()
+            if constraint == 'uk_sg_candidate_selection_idempotency':
+                existing = await ShotGridReviewDao.find_candidate_selection_by_idempotency(
+                    db,
+                    version_id=version_id,
+                    selected_by=user_id,
+                    idempotency_key=stable_key,
+                )
+                if existing is None:
+                    await db.rollback()
+                    raise shot_grid_error(409, 'SG_IDEMPOTENCY_CONFLICT', '候选选择幂等键发生并发冲突') from exc
+                if existing.request_hash != request_hash:
+                    await db.rollback()
+                    raise shot_grid_error(409, 'SG_IDEMPOTENCY_CONFLICT', '同一幂等键已用于不同候选选择请求') from exc
+                return await cls.get_review_context(db, version_id, current_user)
+            raise
+        except Exception:
+            await db.rollback()
+            raise
 
     @classmethod
     async def add_issue_draft(
@@ -627,6 +833,8 @@ class ShotGridReviewService:
             cls._require_director(access)
             if version.version_status != 'pending_review' or task.task_status != 'pending_review':
                 raise cls._invalid_transition('只有当前待审核版本可以记录问题草稿')
+            if version.selected_candidate_id is None:
+                raise shot_grid_error(409, 'SG_REVIEW_CANDIDATE_REQUIRED', '请先选择本轮最佳候选，再记录修改问题')
             review_list = await ShotGridReviewDao.get_auto_review_list_for_update(db, project_id, version_id)
             if review_list is None or review_list.review_status != 'active':
                 raise cls._auto_review_integrity_error()
@@ -645,6 +853,7 @@ class ShotGridReviewService:
                     project_id=project_id,
                     review_list_id=review_list.review_list_id,
                     version_id=version_id,
+                    candidate_id=version.selected_candidate_id,
                     reviewer_user_id=user_id,
                     content=command.content,
                     media_time_ms=command.media_time_ms,
@@ -656,16 +865,30 @@ class ShotGridReviewService:
                     lock_version=0,
                 ),
             )
+            reference_files = (
+                await cls._replace_issue_reference_files(
+                    db,
+                    business_type=REVIEW_ISSUE_DRAFT_REFERENCE_TYPE,
+                    business_id=int(draft.draft_id),
+                    file_ids=command.reference_file_ids,
+                    user_id=user_id,
+                    actor_name=actor_name,
+                )
+                if command.reference_file_ids
+                else []
+            )
             result = ShotGridIssueDraftModel(
                 draftId=draft.draft_id,
                 projectId=project_id,
                 reviewListId=review_list.review_list_id,
                 versionId=version_id,
+                candidateId=version.selected_candidate_id,
                 reviewerUserId=user_id,
                 reviewerName=actor_name,
                 content=draft.content,
                 mediaTimeMs=draft.media_time_ms,
                 annotations=draft.annotations,
+                referenceFiles=reference_files,
                 lockVersion=draft.lock_version,
                 createTime=draft.create_time,
                 updateTime=draft.update_time,
@@ -677,7 +900,11 @@ class ShotGridReviewService:
                 business_type=BusinessType.INSERT.value,
                 method='add_issue_draft',
                 oper_url=f'/shot-grid/versions/{version_id}/issues',
-                payload={'versionId': version_id, 'hasAnnotations': command.annotations is not None},
+                payload={
+                    'versionId': version_id,
+                    'hasAnnotations': command.annotations is not None,
+                    'referenceFileCount': len(reference_files),
+                },
                 result={'draftId': draft.draft_id},
             )
             await db.commit()
@@ -717,6 +944,8 @@ class ShotGridReviewService:
             )
             if draft is None:
                 raise shot_grid_error(404, 'SG_REVIEW_ISSUE_DRAFT_NOT_FOUND', '问题草稿不存在或已发布')
+            if draft.candidate_id != version.selected_candidate_id:
+                raise shot_grid_error(409, 'SG_REVIEW_CANDIDATE_CONFLICT', '问题草稿与当前选中候选不一致')
             cls._ensure_lock_version(draft.lock_version, command.lock_version)
             locked_context = await ShotGridReviewDao.get_version_context(db, version_id)
             if locked_context is None:
@@ -725,13 +954,37 @@ class ShotGridReviewService:
             draft.content = command.content
             draft.media_time_ms = command.media_time_ms
             draft.annotations = (
-                command.annotations.model_dump(mode='json', by_alias=True)
-                if command.annotations is not None
-                else None
+                command.annotations.model_dump(mode='json', by_alias=True) if command.annotations is not None else None
             )
             draft.lock_version += 1
             draft.update_time = datetime.now()
             await db.flush()
+            reference_files = await cls._replace_issue_reference_files(
+                db,
+                business_type=REVIEW_ISSUE_DRAFT_REFERENCE_TYPE,
+                business_id=int(draft.draft_id),
+                file_ids=command.reference_file_ids,
+                user_id=user_id,
+                actor_name=actor_name,
+            )
+            # AsyncSession 默认会在 commit 后过期 ORM 属性。响应必须在提交前完成快照，
+            # 避免序列化时隐式发起数据库 I/O 并触发 MissingGreenlet。
+            result = ShotGridIssueDraftModel(
+                draftId=draft.draft_id,
+                projectId=draft.project_id,
+                reviewListId=draft.review_list_id,
+                versionId=draft.version_id,
+                candidateId=draft.candidate_id,
+                reviewerUserId=draft.reviewer_user_id,
+                reviewerName=(actor_name if int(draft.reviewer_user_id) == user_id else None),
+                content=draft.content,
+                mediaTimeMs=draft.media_time_ms,
+                annotations=draft.annotations,
+                referenceFiles=reference_files,
+                lockVersion=draft.lock_version,
+                createTime=draft.create_time,
+                updateTime=draft.update_time,
+            )
             await cls._audit(
                 db,
                 actor_name=actor_name,
@@ -743,20 +996,7 @@ class ShotGridReviewService:
                 result={'draftId': draft_id, 'lockVersion': draft.lock_version},
             )
             await db.commit()
-            return ShotGridIssueDraftModel(
-                draftId=draft.draft_id,
-                projectId=draft.project_id,
-                reviewListId=draft.review_list_id,
-                versionId=draft.version_id,
-                reviewerUserId=draft.reviewer_user_id,
-                reviewerName=(actor_name if int(draft.reviewer_user_id) == user_id else None),
-                content=draft.content,
-                mediaTimeMs=draft.media_time_ms,
-                annotations=draft.annotations,
-                lockVersion=draft.lock_version,
-                createTime=draft.create_time,
-                updateTime=draft.update_time,
-            )
+            return result
         except ShotGridDomainException:
             await db.rollback()
             raise
@@ -792,7 +1032,14 @@ class ShotGridReviewService:
             )
             if draft is None:
                 raise shot_grid_error(404, 'SG_REVIEW_ISSUE_DRAFT_NOT_FOUND', '问题草稿不存在或已发布')
+            if draft.candidate_id != version.selected_candidate_id:
+                raise shot_grid_error(409, 'SG_REVIEW_CANDIDATE_CONFLICT', '问题草稿与当前选中候选不一致')
             cls._ensure_lock_version(draft.lock_version, command.lock_version)
+            await FileReferenceService.remove_business_file_references_services(
+                db,
+                REVIEW_ISSUE_DRAFT_REFERENCE_TYPE,
+                str(draft_id),
+            )
             await ShotGridReviewDao.delete_issue_draft(db, draft)
             await cls._audit(
                 db,
@@ -811,6 +1058,46 @@ class ShotGridReviewService:
         except Exception:
             await db.rollback()
             raise
+
+    @classmethod
+    async def download_issue_reference_file(
+        cls,
+        request: Request,
+        db: AsyncSession,
+        current_user: CurrentUserModel,
+        *,
+        business_type: str,
+        business_id: int,
+        file_id: str,
+        range_header: str | None,
+    ) -> FileDownloadResult:
+        """按审核问题关系授权参考文件下载，显式 deny 仍由平台文件服务优先处理。"""
+
+        if business_type not in {REVIEW_ISSUE_DRAFT_REFERENCE_TYPE, REVIEW_ISSUE_REFERENCE_TYPE}:
+            raise shot_grid_error(403, 'SG_FILE_ACCESS_DENIED', '文件不存在或无权访问')
+        row = await ShotGridReviewDao.get_issue_reference_file_access(
+            db,
+            business_type=business_type,
+            business_id=business_id,
+            file_id=file_id,
+        )
+        if row is None:
+            raise shot_grid_error(403, 'SG_FILE_ACCESS_DENIED', '文件不存在或无权访问')
+        access = await ShotGridProjectAccessService.resolve_access(db, current_user, int(row['project_id']))
+        if business_type == REVIEW_ISSUE_DRAFT_REFERENCE_TYPE:
+            cls._require_director(access)
+        try:
+            return await CommonService.download_managed_file_services(
+                request,
+                db,
+                current_user,
+                file_id,
+                business_access_granted=True,
+                download_filename=str(row['original_name']),
+                range_header=range_header,
+            )
+        except ServiceException as exc:
+            raise shot_grid_error(403, 'SG_FILE_ACCESS_DENIED', '文件不存在或无权访问') from exc
 
     @classmethod
     async def get_review_actions(
@@ -836,7 +1123,44 @@ class ShotGridReviewService:
         )
 
     @classmethod
-    async def create_review_action(
+    async def retry_final_delivery(
+        cls,
+        db: AsyncSession,
+        version_id: int,
+        current_user: CurrentUserModel,
+    ) -> ShotGridFinalDeliveryModel:
+        context, access = await cls._resolve_version_access(db, version_id, current_user)
+        _user_id, actor_name, _, dept_name = cls._actor(current_user)
+        try:
+            _project_id, task, version, access = await cls._lock_version_graph(db, context, current_user, access)
+            cls._require_director(access)
+            if version.version_status != 'final' or task.task_status != 'completed':
+                raise cls._invalid_transition('只有已通过的最终版本可以重试 NAS 最终交付')
+            delivery = await ShotGridFinalDeliveryDao.get_for_update(db, version_id)
+            if delivery is None:
+                raise shot_grid_error(404, 'SG_FINAL_DELIVERY_NOT_FOUND', '最终交付记录不存在')
+            if delivery.delivery_status != 'failed':
+                raise shot_grid_error(409, 'SG_FINAL_DELIVERY_NOT_FAILED', '最终交付当前不处于失败状态')
+            now = datetime.now().replace(microsecond=0)
+            await ShotGridFinalDeliveryDao.reset_failed(delivery, now=now)
+            await cls._audit(
+                db,
+                actor_name=actor_name,
+                dept_name=dept_name,
+                business_type=BusinessType.UPDATE.value,
+                method='retry_final_delivery',
+                oper_url=f'/shot-grid/versions/{version_id}/final-delivery/retry',
+                payload={'versionId': version_id},
+                result={'finalDeliveryId': delivery.final_delivery_id, 'deliveryStatus': 'pending'},
+            )
+            await db.commit()
+            return ShotGridFinalDeliveryModel.model_validate(delivery)
+        except Exception:
+            await db.rollback()
+            raise
+
+    @classmethod
+    async def create_review_action(  # noqa: PLR0915 - 审核、问题确认和最终交付入队必须保持同一事务
         cls,
         db: AsyncSession,
         version_id: int,
@@ -878,6 +1202,7 @@ class ShotGridReviewService:
                             project_id=project_id,
                             note_id=issue.note_id,
                             checked_version_id=version_id,
+                            checked_candidate_id=command.selected_candidate_id,
                             result=verification.result,
                             comment=verification.comment,
                             reviewer_user_id=user_id,
@@ -900,11 +1225,21 @@ class ShotGridReviewService:
             )
             from_status = str(version.version_status)
             cls._apply_review_action_transition(task, version, review_list, command, to_status, actor_name)
+            final_delivery = await cls._enqueue_final_delivery(
+                db,
+                action_type=command.action_type,
+                project_id=project_id,
+                task=task,
+                version=version,
+                candidate_id=command.selected_candidate_id,
+                approved_by=user_id,
+            )
             action = await ShotGridReviewDao.add_review_action(
                 db,
                 ShotGridReviewAction(
                     project_id=project_id,
                     version_id=version_id,
+                    selected_candidate_id=command.selected_candidate_id,
                     reviewer_user_id=user_id,
                     action_type=command.action_type,
                     from_status=from_status,
@@ -923,6 +1258,7 @@ class ShotGridReviewService:
                 project_id=project_id,
                 reviewer_user_id=user_id,
                 reviewer_name=actor_name,
+                final_delivery=final_delivery,
             )
             action.result_snapshot = result.model_dump(mode='json')
             await cls._audit(
@@ -938,6 +1274,7 @@ class ShotGridReviewService:
                     'versionStatus': to_status,
                     'taskStatus': task.task_status,
                     'publishedDraftCount': published_draft_count,
+                    'finalDeliveryId': final_delivery.final_delivery_id if final_delivery is not None else None,
                 },
             )
             await db.commit()
@@ -968,15 +1305,41 @@ class ShotGridReviewService:
             await db.rollback()
             raise
 
-    @staticmethod
+    @classmethod
     async def _publish_review_drafts_if_rejected(
+        cls,
         db: AsyncSession,
         action_type: str,
         issue_drafts: list[ShotGridReviewIssueDraft],
     ) -> int:
         if action_type != 'reject':
             return 0
-        return len(await ShotGridReviewDao.publish_issue_drafts(db, issue_drafts))
+        draft_reference_rows = await ShotGridReviewDao.get_issue_reference_files(
+            db,
+            business_type=REVIEW_ISSUE_DRAFT_REFERENCE_TYPE,
+            business_ids=[int(draft.draft_id) for draft in issue_drafts],
+        )
+        reference_ids_by_draft: dict[int, list[str]] = {}
+        for row in draft_reference_rows:
+            reference_ids_by_draft.setdefault(int(row['business_id']), []).append(str(row['file_id']))
+        notes = await ShotGridReviewDao.publish_issue_drafts(db, issue_drafts)
+        for draft, note in zip(issue_drafts, notes, strict=True):
+            file_ids = reference_ids_by_draft.get(int(draft.draft_id), [])
+            await FileReferenceService.replace_business_file_references_services(
+                db,
+                REVIEW_ISSUE_REFERENCE_TYPE,
+                str(note.note_id),
+                file_ids,
+                create_by='审核问题发布',
+                file_data_scope_sql=true(),
+                business_name='Shot Grid 审核问题参考内容',
+            )
+            await FileReferenceService.remove_business_file_references_services(
+                db,
+                REVIEW_ISSUE_DRAFT_REFERENCE_TYPE,
+                str(draft.draft_id),
+            )
+        return len(notes)
 
     @staticmethod
     async def _replay_review_action(
@@ -995,7 +1358,7 @@ class ShotGridReviewService:
             await db.rollback()
 
     @classmethod
-    async def _validate_review_action_state(
+    async def _validate_review_action_state(  # noqa: PLR0912
         cls,
         db: AsyncSession,
         *,
@@ -1008,6 +1371,10 @@ class ShotGridReviewService:
         cls._ensure_lock_version(version.lock_version, command.lock_version)
         if version.version_status != 'pending_review' or task.task_status != 'pending_review':
             raise cls._invalid_transition('版本或任务已不处于待审核状态')
+        if version.selected_candidate_id is None:
+            raise shot_grid_error(409, 'SG_REVIEW_CANDIDATE_REQUIRED', '请先选择本轮最佳候选')
+        if int(version.selected_candidate_id) != command.selected_candidate_id:
+            raise shot_grid_error(409, 'SG_REVIEW_CANDIDATE_CONFLICT', '审核动作绑定的候选已变化，请刷新后重试')
         latest_version_no = await ShotGridReviewDao.get_latest_version_no(db, task.task_id)
         if latest_version_no != version.version_no:
             raise cls._invalid_transition('只能审核任务的最新版本')
@@ -1033,6 +1400,8 @@ class ShotGridReviewService:
             review_list_id=int(review_list.review_list_id),
             version_id=version_id,
         )
+        if any(int(draft.candidate_id) != command.selected_candidate_id for draft in issue_drafts):
+            raise shot_grid_error(409, 'SG_REVIEW_CANDIDATE_CONFLICT', '问题草稿与当前选中候选不一致')
         expected_issue_ids = {int(issue.note_id) for issue in carried_issues}
         provided_issue_ids = {item.issue_id for item in command.issue_verifications}
         if command.action_type in {'approve', 'reject'} and provided_issue_ids != expected_issue_ids:
@@ -1116,11 +1485,13 @@ class ShotGridReviewService:
         project_id: int,
         reviewer_user_id: int,
         reviewer_name: str,
+        final_delivery: ShotGridFinalDelivery | None,
     ) -> ShotGridReviewActionResultModel:
         return ShotGridReviewActionResultModel(
             actionId=action.action_id,
             projectId=project_id,
             versionId=version.version_id,
+            selectedCandidateId=action.selected_candidate_id,
             reviewerUserId=reviewer_user_id,
             reviewerName=reviewer_name,
             actionType=action.action_type,
@@ -1133,8 +1504,70 @@ class ShotGridReviewService:
             autoReviewListId=review_list.review_list_id,
             reviewStatus=review_list.review_status,
             lockVersion=version.lock_version,
+            finalDelivery=(
+                ShotGridFinalDeliveryModel.model_validate(final_delivery) if final_delivery is not None else None
+            ),
             replayed=False,
         )
+
+    @classmethod
+    async def _enqueue_final_delivery(
+        cls,
+        db: AsyncSession,
+        *,
+        action_type: str,
+        project_id: int,
+        task: Any,
+        version: Any,
+        candidate_id: int,
+        approved_by: int,
+    ) -> ShotGridFinalDelivery | None:
+        """审核事务只创建 Outbox；NAS I/O 由 Leader Worker 在事务外执行。"""
+
+        if action_type != 'approve':
+            return None
+        source = await ShotGridFinalDeliveryDao.get_selected_source(
+            db,
+            version_id=int(version.version_id),
+            candidate_id=candidate_id,
+        )
+        required = ('file_id', 'business_file_name', 'nas_relative_path', 'nas_sha256', 'nas_file_size')
+        if source is None or any(source.get(field) in (None, '') for field in required):
+            raise shot_grid_error(
+                409,
+                'SG_FINAL_DELIVERY_SOURCE_INVALID',
+                '当前最佳候选尚未形成可校验的 NAS 文件，不能确认通过',
+            )
+        source_path = PureWindowsPath(str(source['nas_relative_path']))
+        if source_path.name != str(source['business_file_name']) or source_path.parent == PureWindowsPath('.'):
+            raise shot_grid_error(409, 'SG_FINAL_DELIVERY_SOURCE_INVALID', '当前最佳候选的 NAS 路径不合法')
+        final_directory = source_path.parent / 'FINAL'
+        now = datetime.now().replace(microsecond=0)
+        return await ShotGridFinalDeliveryDao.add(
+            db,
+            ShotGridFinalDelivery(
+                project_id=project_id,
+                task_id=int(task.task_id),
+                version_id=int(version.version_id),
+                candidate_id=candidate_id,
+                source_file_id=str(source['file_id']),
+                business_file_name=str(source['business_file_name']),
+                source_nas_relative_path=str(source_path),
+                final_nas_relative_path=str(final_directory / source_path.name),
+                manifest_nas_relative_path=str(final_directory / 'FINAL.json'),
+                source_sha256=str(source['nas_sha256']).casefold(),
+                source_file_size=int(source['nas_file_size']),
+                delivery_status='pending',
+                approved_by=approved_by,
+                approved_time=now,
+                create_time=now,
+                update_time=now,
+            ),
+        )
+
+    @staticmethod
+    def _final_delivery_model(row: dict[str, Any] | None) -> ShotGridFinalDeliveryModel | None:
+        return ShotGridFinalDeliveryModel.model_validate(row) if row is not None else None
 
     @classmethod
     async def _resolve_task_access(
@@ -1256,6 +1689,28 @@ class ShotGridReviewService:
         values['version_number'] = f'V{int(values["version_no"]):03d}'
         return values
 
+    @staticmethod
+    def _candidate_models(
+        *,
+        version_no: int,
+        selected_candidate_id: int | None,
+        candidate_rows: list[dict[str, Any]],
+        files: list[ShotGridVersionFileModel],
+    ) -> list[ShotGridVersionCandidateModel]:
+        return [
+            ShotGridVersionCandidateModel(
+                candidateId=row['candidate_id'],
+                candidateNo=row['candidate_no'],
+                candidateNumber=f'V{version_no:03d}_{int(row["candidate_no"]):02d}',
+                candidateNote=row.get('candidate_note'),
+                sortOrder=row['sort_order'],
+                isSelected=int(row['candidate_id']) == selected_candidate_id,
+                files=[item for item in files if item.candidate_id == int(row['candidate_id'])],
+                mediaDerivationStatus=row.get('media_derivation_status'),
+            )
+            for row in candidate_rows
+        ]
+
     @classmethod
     def _version_list_item(cls, row: dict[str, Any]) -> ShotGridVersionListItemModel:
         return ShotGridVersionListItemModel.model_validate(cls._version_list_values(row))
@@ -1314,6 +1769,128 @@ class ShotGridReviewService:
         review_list.update_time = datetime.now()
 
     @classmethod
+    async def _replace_issue_reference_files(
+        cls,
+        db: AsyncSession,
+        *,
+        business_type: str,
+        business_id: int,
+        file_ids: list[str],
+        user_id: int,
+        actor_name: str,
+    ) -> list[ShotGridIssueReferenceFileModel]:
+        """校验审核人新上传的私有参考文件，并在当前业务事务内同步引用。"""
+
+        if len(file_ids) > MAX_REVIEW_ISSUE_REFERENCE_FILES:
+            raise shot_grid_error(
+                400,
+                'SG_REVIEW_REFERENCE_FILE_LIMIT_EXCEEDED',
+                f'单条问题最多添加 {MAX_REVIEW_ISSUE_REFERENCE_FILES} 个参考文件',
+            )
+        scope = and_(
+            SysFileInfo.owner_user_id == user_id,
+            SysFileInfo.upload_user_id == user_id,
+            SysFileInfo.access_type == 'private',
+            SysFileInfo.storage_type == 'local',
+        )
+        file_infos = await FileInfoDao.get_file_infos_by_ids_for_update(db, file_ids, scope) if file_ids else []
+        file_info_map = {str(file_info.file_id): file_info for file_info in file_infos}
+        if len(file_info_map) != len(file_ids):
+            raise shot_grid_error(
+                400,
+                'SG_REVIEW_REFERENCE_FILE_INVALID',
+                '部分参考文件不存在、已失效或不属于当前审核人',
+            )
+        ordered_infos = [file_info_map[file_id] for file_id in file_ids]
+        for file_info in ordered_infos:
+            extension = str(file_info.extension or '').casefold().lstrip('.')
+            if extension not in REVIEW_ISSUE_REFERENCE_EXTENSIONS:
+                raise shot_grid_error(
+                    400,
+                    'SG_REVIEW_REFERENCE_FILE_TYPE_INVALID',
+                    f'参考文件 {file_info.original_name} 的类型不受支持',
+                )
+            if int(file_info.file_size or 0) > MAX_REVIEW_ISSUE_REFERENCE_FILE_SIZE:
+                raise shot_grid_error(
+                    400,
+                    'SG_REVIEW_REFERENCE_FILE_TOO_LARGE',
+                    f'参考文件 {file_info.original_name} 不能超过 20 MiB',
+                )
+        try:
+            await FileReferenceService.replace_business_file_references_services(
+                db,
+                business_type,
+                str(business_id),
+                file_ids,
+                create_by=actor_name,
+                file_data_scope_sql=true(),
+                business_name='Shot Grid 审核问题参考内容',
+            )
+        except ServiceException as exc:
+            raise shot_grid_error(400, 'SG_REVIEW_REFERENCE_FILE_INVALID', str(exc)) from exc
+        return [
+            cls._reference_file_model(
+                {
+                    'file_id': file_info.file_id,
+                    'original_name': file_info.original_name,
+                    'content_type': file_info.content_type,
+                    'file_size': file_info.file_size,
+                },
+                business_type=business_type,
+                business_id=business_id,
+            )
+            for file_info in ordered_infos
+        ]
+
+    @classmethod
+    async def _hydrate_issue_drafts(
+        cls,
+        db: AsyncSession,
+        rows: list[dict[str, Any]],
+    ) -> list[ShotGridIssueDraftModel]:
+        draft_ids = [int(row['draft_id']) for row in rows]
+        reference_rows = await ShotGridReviewDao.get_issue_reference_files(
+            db,
+            business_type=REVIEW_ISSUE_DRAFT_REFERENCE_TYPE,
+            business_ids=draft_ids,
+        )
+        references_by_draft: dict[int, list[ShotGridIssueReferenceFileModel]] = {draft_id: [] for draft_id in draft_ids}
+        for row in reference_rows:
+            draft_id = int(row['business_id'])
+            references_by_draft[draft_id].append(
+                cls._reference_file_model(
+                    row,
+                    business_type=REVIEW_ISSUE_DRAFT_REFERENCE_TYPE,
+                    business_id=draft_id,
+                )
+            )
+        return [
+            ShotGridIssueDraftModel.model_validate(
+                {**row, 'reference_files': references_by_draft[int(row['draft_id'])]}
+            )
+            for row in rows
+        ]
+
+    @staticmethod
+    def _reference_file_model(
+        row: dict[str, Any],
+        *,
+        business_type: str,
+        business_id: int,
+    ) -> ShotGridIssueReferenceFileModel:
+        if business_type == REVIEW_ISSUE_DRAFT_REFERENCE_TYPE:
+            download_url = f'/shot-grid/issue-drafts/{business_id}/reference-files/{row["file_id"]}/download'
+        else:
+            download_url = f'/shot-grid/issues/{business_id}/reference-files/{row["file_id"]}/download'
+        return ShotGridIssueReferenceFileModel(
+            fileId=str(row['file_id']),
+            originalName=str(row['original_name']),
+            contentType=row.get('content_type'),
+            fileSize=int(row.get('file_size') or 0),
+            downloadUrl=download_url,
+        )
+
+    @classmethod
     async def _hydrate_issues(
         cls,
         db: AsyncSession,
@@ -1322,10 +1899,25 @@ class ShotGridReviewService:
         issue_ids = [int(row['issue_id']) for row in rows]
         response_rows = await ShotGridReviewDao.get_issue_responses(db, issue_ids)
         verification_rows = await ShotGridReviewDao.get_issue_verifications(db, issue_ids)
+        reference_rows = await ShotGridReviewDao.get_issue_reference_files(
+            db,
+            business_type=REVIEW_ISSUE_REFERENCE_TYPE,
+            business_ids=issue_ids,
+        )
         responses_by_issue: dict[int, list[ShotGridIssueResponseModel]] = {issue_id: [] for issue_id in issue_ids}
         verifications_by_issue: dict[int, list[ShotGridIssueVerificationModel]] = {
             issue_id: [] for issue_id in issue_ids
         }
+        references_by_issue: dict[int, list[ShotGridIssueReferenceFileModel]] = {issue_id: [] for issue_id in issue_ids}
+        for row in reference_rows:
+            issue_id = int(row['business_id'])
+            references_by_issue[issue_id].append(
+                cls._reference_file_model(
+                    row,
+                    business_type=REVIEW_ISSUE_REFERENCE_TYPE,
+                    business_id=issue_id,
+                )
+            )
         for row in response_rows:
             version_no = row.get('version_no')
             responses_by_issue[int(row['issue_id'])].append(
@@ -1345,6 +1937,7 @@ class ShotGridReviewService:
                 ShotGridIssueVerificationModel(
                     verificationId=row['verification_id'],
                     checkedVersionId=row['checked_version_id'],
+                    checkedCandidateId=row['checked_candidate_id'],
                     checkedVersionNumber=f'V{int(row["checked_version_no"]):03d}',
                     result=row['result'],
                     comment=row.get('comment'),
@@ -1372,12 +1965,14 @@ class ShotGridReviewService:
                     issueId=row['issue_id'],
                     projectId=row['project_id'],
                     originVersionId=row['origin_version_id'],
+                    originCandidateId=row['origin_candidate_id'],
                     originVersionNumber=f'V{int(row["origin_version_no"]):03d}',
                     reviewerUserId=row['reviewer_user_id'],
                     reviewerName=row.get('reviewer_name'),
                     content=row.get('content'),
                     mediaTimeMs=row.get('media_time_ms'),
                     annotations=row.get('annotations'),
+                    referenceFiles=references_by_issue[issue_id],
                     status=row['status'],
                     resolvedInVersionId=row.get('resolved_in_version_id'),
                     resolvedInVersionNumber=(

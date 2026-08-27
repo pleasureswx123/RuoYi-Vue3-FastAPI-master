@@ -23,11 +23,15 @@ EXPECTED_ROUTES = {
     ('POST', '/shot-grid/review-lists/{reviewListId}/archive'): 'shotgrid:reviewList:archive',
     ('GET', '/shot-grid/tasks/{taskId}/issues'): 'shotgrid:note:list',
     ('GET', '/shot-grid/versions/{versionId}/review-context'): 'shotgrid:version:review',
+    ('PUT', '/shot-grid/versions/{versionId}/selected-candidate'): 'shotgrid:version:review',
     ('POST', '/shot-grid/versions/{versionId}/issues'): 'shotgrid:note:add',
     ('PUT', '/shot-grid/versions/{versionId}/issue-drafts/{draftId}'): 'shotgrid:note:add',
     ('DELETE', '/shot-grid/versions/{versionId}/issue-drafts/{draftId}'): 'shotgrid:note:add',
+    ('GET', '/shot-grid/issue-drafts/{draftId}/reference-files/{fileId}/download'): 'shotgrid:file:download',
+    ('GET', '/shot-grid/issues/{issueId}/reference-files/{fileId}/download'): 'shotgrid:file:download',
     ('GET', '/shot-grid/versions/{versionId}/review-actions'): 'shotgrid:version:query',
     ('POST', '/shot-grid/versions/{versionId}/review-actions'): 'shotgrid:version:review',
+    ('POST', '/shot-grid/versions/{versionId}/final-delivery/retry'): 'shotgrid:version:retry',
 }
 
 
@@ -59,7 +63,21 @@ def test_review_action_openapi_documents_service_required_idempotency_header_and
     request_schema = operation['requestBody']['content']['application/json']['schema']
     assert request_schema['$ref'].endswith('/ShotGridReviewActionCreateModel')
     action_schema = app.openapi()['components']['schemas']['ShotGridReviewActionCreateModel']
-    assert {'actionType', 'lockVersion'} <= set(action_schema['required'])
+    assert {'actionType', 'selectedCandidateId', 'lockVersion'} <= set(action_schema['required'])
+
+
+def test_candidate_selection_openapi_documents_required_payload_and_idempotency_header() -> None:
+    app = FastAPI()
+    app.include_router(review_controller)
+    operation = app.openapi()['paths']['/shot-grid/versions/{versionId}/selected-candidate']['put']
+
+    idempotency = next(parameter for parameter in operation['parameters'] if parameter['name'] == 'X-Idempotency-Key')
+    assert idempotency['required'] is False
+    assert '业务必填' in idempotency['description']
+    request_schema = operation['requestBody']['content']['application/json']['schema']
+    assert request_schema['$ref'].endswith('/ShotGridVersionCandidateSelectModel')
+    command_schema = app.openapi()['components']['schemas']['ShotGridVersionCandidateSelectModel']
+    assert {'candidateId', 'lockVersion'} <= set(command_schema['required'])
 
 
 def test_review_route_bigint_path_bounds_are_in_openapi() -> None:

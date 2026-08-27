@@ -9,6 +9,7 @@ from module_shot_grid.entity.do.asset_do import (
     ShotGridShotAsset,
     ShotGridShotAssetRequirement,
 )
+from module_shot_grid.entity.do.final_delivery_do import ShotGridFinalDelivery
 from module_shot_grid.entity.do.import_do import ShotGridImportBatch
 from module_shot_grid.entity.do.project_do import (
     ShotGridEpisode,
@@ -25,6 +26,7 @@ from module_shot_grid.entity.do.review_do import (
     ShotGridReviewIssueDraft,
     ShotGridReviewList,
     ShotGridReviewListVersion,
+    ShotGridVersionCandidateSelection,
     ShotGridVersionIssueResponse,
 )
 from module_shot_grid.entity.do.storage_do import (
@@ -36,14 +38,17 @@ from module_shot_grid.entity.do.task_do import ShotGridTask
 from module_shot_grid.entity.do.version_do import (
     ShotGridMediaDerivation,
     ShotGridVersion,
+    ShotGridVersionCandidate,
     ShotGridVersionFile,
     ShotGridVersionSubmission,
+    ShotGridVersionSubmissionFile,
 )
 
 __all__ = [
     'ShotGridAsset',
     'ShotGridAssetItem',
     'ShotGridEpisode',
+    'ShotGridFinalDelivery',
     'ShotGridImportBatch',
     'ShotGridIssueVerification',
     'ShotGridManagedUserRole',
@@ -64,7 +69,10 @@ __all__ = [
     'ShotGridStorageRoot',
     'ShotGridTask',
     'ShotGridVersion',
+    'ShotGridVersionCandidate',
+    'ShotGridVersionCandidateSelection',
     'ShotGridVersionFile',
     'ShotGridVersionIssueResponse',
     'ShotGridVersionSubmission',
+    'ShotGridVersionSubmissionFile',
 ]

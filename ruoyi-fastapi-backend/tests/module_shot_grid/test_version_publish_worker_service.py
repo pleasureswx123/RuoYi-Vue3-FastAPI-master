@@ -28,6 +28,38 @@ def _claimed(*, attempt_count: int = ATTEMPT_COUNT) -> _ClaimedSubmission:
     )
 
 
+def _publish_context(submission_file_id: int, publish_status: str) -> dict[str, object]:
+    return {
+        'submission_id': SUBMISSION_ID,
+        'submission_file_id': submission_file_id,
+        'candidate_no': submission_file_id,
+        'submission_status': 'publishing',
+        'publish_status': publish_status,
+        'lease_owner': 'leader:claim',
+        'attempt_count': ATTEMPT_COUNT,
+        'task_kind': 'shot_video',
+        'source_storage_type': 'local',
+        'source_access_type': 'private',
+        'source_status': 'active',
+        'source_del_flag': '0',
+        'source_storage_key': f'private/{submission_file_id}.mov',
+        'source_sha256': 'a' * 64,
+        'current_source_sha256': 'a' * 64,
+        'source_file_size': PUBLISHED_FILE_SIZE,
+        'current_source_file_size': PUBLISHED_FILE_SIZE,
+        'business_file_name': f'V001_{submission_file_id:02d}.mov',
+        'target_relative_path': f'VIDEO\\V001_{submission_file_id:02d}.mov',
+        'temporary_relative_path': f'VIDEO\\.sgtmp-{submission_file_id}.part',
+        'storage_status': 'ready',
+        'protocol': 'SMB',
+        'configured_root_path': r'\\server\share\project',
+        'root_path_snapshot': r'\\server\share',
+        'project_relative_path': 'project',
+        'project_path_snapshot': r'\\server\share\project',
+        'root_del_flag': '0',
+    }
+
+
 def test_scheduler_wrapper_signature_matches_leader_job_contract() -> None:
     parameters = inspect.signature(ShotGridVersionPublishWorkerService.run_scheduled_batch).parameters
 
@@ -42,6 +74,70 @@ def test_scheduler_wrapper_signature_matches_leader_job_contract() -> None:
         'operation_timeout_seconds',
         'heartbeat_seconds',
     }.issubset(parameters)
+
+
+@pytest.mark.asyncio
+async def test_run_once_publishes_each_unfinished_candidate_and_skips_completed_candidate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db = AsyncMock()
+    claim = SimpleNamespace(
+        submission_id=SUBMISSION_ID,
+        attempt_count=ATTEMPT_COUNT,
+        lease_owner='leader:claim',
+        submission_status='publishing',
+        temporary_relative_path='VIDEO\\.legacy.part',
+    )
+    contexts = [
+        _publish_context(1, 'published'),
+        _publish_context(2, 'publishing'),
+        _publish_context(3, 'publishing'),
+    ]
+    publish = AsyncMock(
+        side_effect=[
+            (VersionPublishResult(sha256='a' * 64, file_size=PUBLISHED_FILE_SIZE, reused_target=False), False),
+            (VersionPublishResult(sha256='a' * 64, file_size=PUBLISHED_FILE_SIZE, reused_target=False), False),
+        ]
+    )
+    mark_child = AsyncMock(return_value=True)
+    mark_parent = AsyncMock(return_value=True)
+    monkeypatch.setattr(
+        'module_shot_grid.service.version_publish_worker_service.ShotGridVersionSubmissionDao.claim_next',
+        AsyncMock(return_value=claim),
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.version_publish_worker_service.ShotGridVersionSubmissionDao.get_publish_contexts',
+        AsyncMock(return_value=contexts),
+    )
+    monkeypatch.setattr(ShotGridVersionPublishWorkerService, '_execute_with_heartbeat', publish)
+    monkeypatch.setattr(
+        'module_shot_grid.service.version_publish_worker_service.ShotGridVersionSubmissionDao.mark_submission_file_published',
+        mark_child,
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.version_publish_worker_service.ShotGridVersionSubmissionDao.mark_published',
+        mark_parent,
+    )
+
+    result = await ShotGridVersionPublishWorkerService.run_once(
+        db,
+        worker_id='leader',
+        adapter=SimpleNamespace(),
+        lease_seconds=10,
+        heartbeat_seconds=2,
+        operation_timeout_seconds=5,
+    )
+
+    assert result.outcome == 'published'
+    expected_publish_count = 2
+    assert publish.await_count == expected_publish_count
+    assert [item.kwargs['context'].business_file_name for item in publish.await_args_list] == [
+        'V001_02.mov',
+        'V001_03.mov',
+    ]
+    assert [item.kwargs['submission_file_id'] for item in mark_child.await_args_list] == [2, 3]
+    mark_parent.assert_awaited_once()
+    db.rollback.assert_not_awaited()
 
 
 @pytest.mark.asyncio

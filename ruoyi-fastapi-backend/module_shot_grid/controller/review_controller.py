@@ -1,6 +1,8 @@
 from typing import Annotated
+from uuid import UUID
 
 from fastapi import Header, Path, Query, Request, Response
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from common.aspect.db_seesion import DBSessionDependency
@@ -13,6 +15,7 @@ from module_shot_grid.dependencies.project_access import ProjectAccessDependency
 from module_shot_grid.entity.vo.access_vo import ShotGridProjectAccessModel
 from module_shot_grid.entity.vo.common_vo import ShotGridLockVersionModel
 from module_shot_grid.entity.vo.review_vo import (
+    ShotGridFinalDeliveryModel,
     ShotGridIssueDetailModel,
     ShotGridIssueDraftModel,
     ShotGridIssueDraftUpdateModel,
@@ -29,14 +32,32 @@ from module_shot_grid.entity.vo.review_vo import (
     ShotGridReviewListDetailModel,
     ShotGridReviewListItemModel,
     ShotGridReviewListQueryModel,
+    ShotGridVersionCandidateSelectModel,
     ShotGridVersionDetailModel,
     ShotGridVersionListItemModel,
     ShotGridVersionListQueryModel,
 )
 from module_shot_grid.service.review_service import ShotGridReviewService
 from utils.response_util import ResponseUtil
+from utils.upload_util import UploadUtil
 
 SQL_BIGINT_MAX = 9_223_372_036_854_775_807
+
+
+def _reference_file_media_type(filename: str) -> str:
+    extension = filename.rsplit('.', 1)[-1].casefold() if '.' in filename else ''
+    return {
+        'bmp': 'image/bmp',
+        'gif': 'image/gif',
+        'jpeg': 'image/jpeg',
+        'jpg': 'image/jpeg',
+        'mov': 'video/quicktime',
+        'mp4': 'video/mp4',
+        'pdf': 'application/pdf',
+        'png': 'image/png',
+        'txt': 'text/plain',
+    }.get(extension, 'application/octet-stream')
+
 
 review_controller = APIRouterPro(
     prefix='/shot-grid',
@@ -327,6 +348,33 @@ async def get_shot_grid_version_review_context(
     return ResponseUtil.success(data=result)
 
 
+@review_controller.put(
+    '/versions/{versionId}/selected-candidate',
+    summary='选择当前版本最佳候选',
+    response_model=DataResponseModel[ShotGridReviewContextModel],
+    dependencies=[UserInterfaceAuthDependency('shotgrid:version:review')],
+)
+async def select_shot_grid_version_candidate(
+    request: Request,
+    version_id: Annotated[int, Path(alias='versionId', gt=0, le=SQL_BIGINT_MAX)],
+    command: ShotGridVersionCandidateSelectModel,
+    query_db: Annotated[AsyncSession, DBSessionDependency()],
+    current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
+    idempotency_key: Annotated[
+        str | None,
+        Header(alias='X-Idempotency-Key', description='业务必填；用于候选选择幂等控制'),
+    ] = None,
+) -> Response:
+    result = await ShotGridReviewService.select_version_candidate(
+        query_db,
+        version_id,
+        command,
+        idempotency_key,
+        current_user,
+    )
+    return ResponseUtil.success(data=result)
+
+
 @review_controller.post(
     '/versions/{versionId}/issues',
     summary='保存绑定当前版本的审核问题草稿',
@@ -385,6 +433,84 @@ async def delete_shot_grid_version_issue_draft(
     return ResponseUtil.success(msg='问题草稿已删除')
 
 
+async def _stream_reference_file(
+    request: Request,
+    query_db: AsyncSession,
+    current_user: CurrentUserModel,
+    *,
+    business_type: str,
+    business_id: int,
+    file_id: UUID,
+) -> Response:
+    download_result = await ShotGridReviewService.download_issue_reference_file(
+        request,
+        query_db,
+        current_user,
+        business_type=business_type,
+        business_id=business_id,
+        file_id=str(file_id),
+        range_header=request.headers.get('Range'),
+    )
+    return ResponseUtil.streaming(
+        data=download_result.data,
+        headers=UploadUtil.build_download_headers(
+            download_result.filename,
+            download_result.byte_range,
+            download_result.accept_ranges,
+        ),
+        media_type=_reference_file_media_type(download_result.filename),
+        status_code=206 if download_result.byte_range.is_partial else 200,
+    )
+
+
+@review_controller.get(
+    '/issue-drafts/{draftId}/reference-files/{fileId}/download',
+    summary='下载审核问题草稿参考文件',
+    response_class=StreamingResponse,
+    responses={200: {'description': '流式返回文件'}, 206: {'description': '分段返回文件'}},
+    dependencies=[UserInterfaceAuthDependency('shotgrid:file:download')],
+)
+async def download_shot_grid_issue_draft_reference_file(
+    request: Request,
+    draft_id: Annotated[int, Path(alias='draftId', gt=0, le=SQL_BIGINT_MAX)],
+    file_id: Annotated[UUID, Path(alias='fileId')],
+    query_db: Annotated[AsyncSession, DBSessionDependency()],
+    current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
+) -> Response:
+    return await _stream_reference_file(
+        request,
+        query_db,
+        current_user,
+        business_type='shot_grid_review_issue_draft',
+        business_id=draft_id,
+        file_id=file_id,
+    )
+
+
+@review_controller.get(
+    '/issues/{issueId}/reference-files/{fileId}/download',
+    summary='下载已发布审核问题参考文件',
+    response_class=StreamingResponse,
+    responses={200: {'description': '流式返回文件'}, 206: {'description': '分段返回文件'}},
+    dependencies=[UserInterfaceAuthDependency('shotgrid:file:download')],
+)
+async def download_shot_grid_issue_reference_file(
+    request: Request,
+    issue_id: Annotated[int, Path(alias='issueId', gt=0, le=SQL_BIGINT_MAX)],
+    file_id: Annotated[UUID, Path(alias='fileId')],
+    query_db: Annotated[AsyncSession, DBSessionDependency()],
+    current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
+) -> Response:
+    return await _stream_reference_file(
+        request,
+        query_db,
+        current_user,
+        business_type='shot_grid_review_issue',
+        business_id=issue_id,
+        file_id=file_id,
+    )
+
+
 @review_controller.get(
     '/versions/{versionId}/review-actions',
     summary='分页查询版本审核动作历史',
@@ -427,3 +553,19 @@ async def create_shot_grid_review_action(
         current_user,
     )
     return ResponseUtil.success(data=result)
+
+
+@review_controller.post(
+    '/versions/{versionId}/final-delivery/retry',
+    summary='重试失败的最终版本 NAS 交付',
+    response_model=DataResponseModel[ShotGridFinalDeliveryModel],
+    dependencies=[UserInterfaceAuthDependency('shotgrid:version:retry')],
+)
+async def retry_shot_grid_final_delivery(
+    request: Request,
+    version_id: Annotated[int, Path(alias='versionId', gt=0, le=SQL_BIGINT_MAX)],
+    query_db: Annotated[AsyncSession, DBSessionDependency()],
+    current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
+) -> Response:
+    result = await ShotGridReviewService.retry_final_delivery(query_db, version_id, current_user)
+    return ResponseUtil.success(msg='最终版本已重新进入 NAS 发布队列', data=result)

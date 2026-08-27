@@ -1,13 +1,14 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElAffix } from 'element-plus'
-import { Refresh } from '@element-plus/icons-vue'
+import { CircleCheckFilled, Clock, Refresh, RefreshLeft } from '@element-plus/icons-vue'
 
 import { getReviewActions, getTaskIssues } from '@/api/shot-grid/reviews'
 import { getTaskVersions, getVersionDetail } from '@/api/shot-grid/versions'
+import ReviewReferenceFiles from '@/components/review/ReviewReferenceFiles.vue'
 import { tagTypeFromTone } from '@/utils/tag'
 import ReviewMediaWorkspace from '@/views/review/components/ReviewMediaWorkspace.vue'
-import { formatMediaTime, formatReviewDateTime, reviewActionMeta, reviewErrorState } from '@/views/review/reviewPresentation'
+import { formatMediaTime, formatReviewDateTime, reviewErrorState } from '@/views/review/reviewPresentation'
 import VersionDetailCard from './VersionDetailCard.vue'
 import { formatVersionDateTime, versionErrorState, versionStatusMeta } from './versionPresentation'
 
@@ -39,12 +40,17 @@ const selectedFeedback = ref(null)
 const feedbackLoading = ref(false)
 const feedbackError = ref(null)
 const feedbackPanel = ref(null)
+const historyPanel = ref(null)
+const versionRailAffix = ref(null)
+const feedbackListAffix = ref(null)
 const affixEnabled = ref(false)
 
 let disposed = false
 let contextGeneration = 0
 let listController = null
 let detailController = null
+let layoutObserver = null
+let observedPanelWidth = null
 
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / props.pageSize)))
 const historyFilters = computed(() => ({ versionStatus: statusFilter.value }))
@@ -52,6 +58,36 @@ const historyFormRef = ref(null)
 const latestDecision = computed(() => feedbackActions.value.find(item => ['approve', 'reject', 'defer'].includes(item.actionType)) || null)
 const hasFeedback = computed(() => Boolean(feedbackNotes.value.length || latestDecision.value))
 const pendingFeedbackCount = computed(() => feedbackNotes.value.filter(item => item.displayScope === 'pending').length)
+const decisionPresentation = computed(() => {
+  const decision = latestDecision.value
+  if (!decision) return null
+  const reason = String(decision.reason || '').trim()
+  if (decision.actionType === 'approve') {
+    return {
+      title: '本版审核已通过',
+      badge: '审核完成',
+      tone: 'success',
+      icon: CircleCheckFilled,
+      message: reason || '本版已确认符合要求，无需继续修改。'
+    }
+  }
+  if (decision.actionType === 'defer') {
+    return {
+      title: '本版暂缓决定',
+      badge: '等待审核',
+      tone: 'info',
+      icon: Clock,
+      message: reason || '审核人将在稍后继续处理，本版暂不需要制作人操作。'
+    }
+  }
+  return {
+    title: '已退回修改',
+    badge: '需要继续修改',
+    tone: 'warning',
+    icon: RefreshLeft,
+    message: reason || `审核人未补充整体说明，请根据下方 ${pendingFeedbackCount.value} 条待处理问题逐项修改。`
+  }
+})
 const historyPanelId = computed(() => `version-history-panel-${Number(props.taskId)}`)
 const feedbackPanelId = computed(() => `version-feedback-panel-${Number(props.taskId)}`)
 const historyAffixTarget = computed(() => `#${historyPanelId.value}`)
@@ -64,9 +100,18 @@ function affixProps(target) {
         appendTo: 'body',
         offset: 92,
         target,
-        teleported: true
+        teleported: true,
+        // 全局顶栏与侧栏分别位于 10、20 层，卡片离开目标区时不可遮挡导航。
+        zIndex: 9
       }
     : {}
+}
+
+function updateAffixLayout() {
+  if (disposed || !affixEnabled.value) return
+  // 固定态会缓存占位宽度和横坐标，侧栏变化后通过组件公开 API 重新测量。
+  versionRailAffix.value?.updateRoot()
+  feedbackListAffix.value?.updateRoot()
 }
 
 async function updateAffixMode() {
@@ -75,7 +120,9 @@ async function updateAffixMode() {
     return
   }
   await nextTick()
-  affixEnabled.value = window.innerWidth > 900 && Boolean(document.querySelector(historyAffixTarget.value))
+  affixEnabled.value = !disposed && window.innerWidth > 900 && Boolean(document.querySelector(historyAffixTarget.value))
+  await nextTick()
+  updateAffixLayout()
 }
 
 function latestVerification(issue) {
@@ -151,13 +198,6 @@ function feedbackBadgeMeta(note) {
     label: `已处理但未通过 · 转入 ${note.pendingVersionNumber || '最新版本'}`,
     tone: 'warning'
   }
-}
-
-function alertTypeFromTone(tone) {
-  if (tone === 'success') return 'success'
-  if (tone === 'danger') return 'error'
-  if (tone === 'warning') return 'warning'
-  return 'info'
 }
 
 function feedbackContext(note) {
@@ -387,6 +427,16 @@ watch(() => props.refreshKey, () => loadVersions({ preserveSelection: true }))
 onMounted(() => {
   updateAffixMode()
   window.addEventListener('resize', updateAffixMode)
+  if (typeof ResizeObserver !== 'undefined') {
+    // 监听未被 Affix 固定尺寸的外层面板，避免卡片高度变化触发重复布局。
+    layoutObserver = new ResizeObserver(([entry]) => {
+      const width = entry.contentRect.width
+      if (width === observedPanelWidth) return
+      observedPanelWidth = width
+      updateAffixLayout()
+    })
+    layoutObserver.observe(historyPanel.value)
+  }
 })
 
 onBeforeUnmount(() => {
@@ -395,13 +445,14 @@ onBeforeUnmount(() => {
   listController?.abort()
   detailController?.abort()
   window.removeEventListener('resize', updateAffixMode)
+  layoutObserver?.disconnect()
 })
 
 defineExpose({ focusIssue })
 </script>
 
 <template>
-  <div :id="historyPanelId" class="version-history-affix-target">
+  <div :id="historyPanelId" ref="historyPanel" class="version-history-affix-target">
     <el-card class="version-history-panel" shadow="never">
     <header class="history-heading">
       <div><p class="sg-eyebrow">IMMUTABLE HISTORY</p><h3>版本历史</h3><p>版本按提交顺序自动编号；每次修订都会新增版本，历史文件始终保留。</p></div>
@@ -422,7 +473,7 @@ defineExpose({ focusIssue })
     <el-alert v-else-if="listError" class="history-error" :title="listError.title" :description="listError.message" type="error" :closable="false" show-icon />
 
     <div class="history-layout">
-      <component :is="affixShell" class="version-rail-affix" v-bind="affixProps(historyAffixTarget)">
+      <component :is="affixShell" ref="versionRailAffix" class="version-rail-affix" v-bind="affixProps(historyAffixTarget)">
       <aside class="version-rail" :aria-busy="loading">
         <el-button
           v-for="version in versions"
@@ -449,27 +500,45 @@ defineExpose({ focusIssue })
         <el-skeleton v-if="detailLoading" class="detail-placeholder" :rows="8" animated />
         <el-alert v-else-if="detailError" class="detail-placeholder is-error" :title="detailError.title" :description="detailError.message" type="error" :closable="false" show-icon />
         <template v-else-if="versionDetail">
-          <VersionDetailCard :version="versionDetail" :can-download="canDownload" :show-preview="!feedbackNotes.length" />
+          <VersionDetailCard
+            :version="versionDetail"
+            :can-download="canDownload"
+            :show-preview="!feedbackNotes.length"
+            show-file-preview-action
+          />
           <div v-if="feedbackLoading || feedbackError || hasFeedback" :id="feedbackPanelId" ref="feedbackPanel" class="version-feedback-affix-target">
             <el-card class="version-feedback-panel" shadow="never">
               <header class="version-feedback-panel__heading"><div><p class="sg-eyebrow">REVIEW FEEDBACK</p><h3>本版待处理问题与审核记录</h3><p>待处理工作始终归属最近一次退回的版本；原始问题与标注仍保留在最初提出版本中供追溯。</p></div><span>{{ pendingFeedbackCount }} 条待处理 · {{ feedbackNotes.length - pendingFeedbackCount }} 条历史</span></header>
-              <el-alert v-if="latestDecision" class="feedback-decision" :type="alertTypeFromTone(reviewActionMeta(latestDecision.actionType).tone)" :title="reviewActionMeta(latestDecision.actionType).label" :description="`${latestDecision.reason || '审核人未填写额外说明。'} · ${latestDecision.reviewerName || `用户 #${latestDecision.reviewerUserId}`} · ${formatReviewDateTime(latestDecision.createTime)}`" :closable="false" show-icon />
+              <section v-if="latestDecision && decisionPresentation" class="feedback-decision" :class="`is-${latestDecision.actionType}`" aria-label="本版审核结果">
+                <span class="feedback-decision__icon" aria-hidden="true"><el-icon><component :is="decisionPresentation.icon" /></el-icon></span>
+                <div class="feedback-decision__content">
+                  <div class="feedback-decision__heading">
+                    <strong>{{ decisionPresentation.title }}</strong>
+                    <el-tag size="small" effect="plain" round :type="tagTypeFromTone(decisionPresentation.tone)">{{ decisionPresentation.badge }}</el-tag>
+                  </div>
+                  <p>{{ decisionPresentation.message }}</p>
+                  <small>审核人 {{ latestDecision.reviewerName || `用户 #${latestDecision.reviewerUserId}` }} · {{ formatReviewDateTime(latestDecision.createTime) }}</small>
+                </div>
+              </section>
               <el-skeleton v-if="feedbackLoading" class="feedback-state" :rows="4" animated />
               <el-alert v-else-if="feedbackError" class="feedback-state is-error" :title="feedbackError.title" :description="feedbackError.message" type="error" :closable="false" show-icon />
               <div v-else-if="feedbackNotes.length" class="feedback-layout">
                 <ReviewMediaWorkspace :version="versionDetail" :selected-note="selectedFeedback" :can-download="canDownload" feedback-mode @clear-note-focus="selectedFeedback = null" />
-                <component :is="affixShell" class="feedback-list-affix" v-bind="affixProps(feedbackAffixTarget)">
+                <component :is="affixShell" ref="feedbackListAffix" class="feedback-list-affix" v-bind="affixProps(feedbackAffixTarget)">
                 <aside class="feedback-list">
-                  <el-button v-for="note in feedbackNotes" :key="note.noteId" text class="feedback-item" :class="{ active: selectedFeedback?.noteId === note.noteId }" @click="selectFeedback(note)">
-                    <span class="feedback-item__content">
-                      <span class="feedback-item__heading"><strong>{{ note.displayScope === 'pending' ? '本版待处理问题' : note.displayScope === 'origin_history' ? '来源版本历史问题' : '本版处理确认记录' }}</strong><el-tag size="small" effect="plain" round :type="tagTypeFromTone(feedbackBadgeMeta(note).tone)">{{ feedbackBadgeMeta(note).label }}</el-tag></span>
-                      <p>{{ note.content || '该问题仅包含画面标注' }}</p>
-                      <small class="feedback-context">{{ feedbackContext(note) }}</small>
-                      <p v-if="displayedResponse(note)" class="feedback-response">制作人对 {{ displayedResponse(note).versionNumber || '后续版本' }} 的处理说明：{{ displayedResponse(note).responseText }}</p>
-                      <p v-if="feedbackVerificationComment(note)" class="feedback-verification">审核人未通过原因：{{ feedbackVerificationComment(note) }}</p>
-                      <small><template v-if="note.annotations?.items?.length">{{ note.annotations.items.length }} 个画面标注 · </template><template v-if="note.mediaTimeMs !== null && note.mediaTimeMs !== undefined">{{ formatMediaTime(note.mediaTimeMs) }} · </template>{{ formatReviewDateTime(note.createTime) }}</small>
-                    </span>
-                  </el-button>
+                  <el-card v-for="note in feedbackNotes" :key="note.noteId" class="feedback-item" :class="{ active: selectedFeedback?.noteId === note.noteId }" shadow="never">
+                    <el-button text class="feedback-item__select" :aria-pressed="selectedFeedback?.noteId === note.noteId" @click="selectFeedback(note)">
+                      <span class="feedback-item__content">
+                        <span class="feedback-item__heading"><strong>{{ note.displayScope === 'pending' ? '本版待处理问题' : note.displayScope === 'origin_history' ? '来源版本历史问题' : '本版处理确认记录' }}</strong><el-tag size="small" effect="plain" round :type="tagTypeFromTone(feedbackBadgeMeta(note).tone)">{{ feedbackBadgeMeta(note).label }}</el-tag></span>
+                        <p>{{ note.content || '该问题仅包含画面标注' }}</p>
+                        <small class="feedback-context">{{ feedbackContext(note) }}</small>
+                        <p v-if="displayedResponse(note)" class="feedback-response">制作人对 {{ displayedResponse(note).versionNumber || '后续版本' }} 的处理说明：{{ displayedResponse(note).responseText }}</p>
+                        <p v-if="feedbackVerificationComment(note)" class="feedback-verification">审核人未通过原因：{{ feedbackVerificationComment(note) }}</p>
+                        <small><template v-if="note.annotations?.items?.length">{{ note.annotations.items.length }} 个画面标注 · </template><template v-if="note.mediaTimeMs !== null && note.mediaTimeMs !== undefined">{{ formatMediaTime(note.mediaTimeMs) }} · </template>{{ formatReviewDateTime(note.createTime) }}</small>
+                      </span>
+                    </el-button>
+                    <ReviewReferenceFiles :files="note.referenceFiles || []" compact />
+                  </el-card>
                 </aside>
                 </component>
               </div>
@@ -488,6 +557,9 @@ defineExpose({ focusIssue })
 <style scoped lang="scss">
 .version-history-panel { --el-card-bg-color: var(--sg-surface); --el-card-border-color: var(--sg-border); overflow: visible; border-radius: var(--sg-radius-lg); }
 .version-history-panel:deep(.el-card__body) { padding: 24px; }
+// 只让两侧列表内部滚动，卡片内容层不能截获整页滚动容器的识别。
+.version-history-panel > :deep(.el-card__body),
+.version-feedback-panel > :deep(.el-card__body) { overflow: visible; }
 .history-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
 .history-heading h3 { margin: 3px 0 7px; font-size: 20px; }
 .history-heading p:not(.sg-eyebrow) { margin: 0; color: var(--sg-text-muted); font-size: 12px; }
@@ -505,7 +577,7 @@ defineExpose({ focusIssue })
 .version-rail > .el-button {  width: 100%; min-width: 0; height: auto; margin: 0; padding: 14px; color: var(--sg-text); text-align: left; white-space: normal; background: rgba(255, 255, 255, 0.025); border: 1px solid var(--sg-border); border-radius: 10px; }
 .version-rail__content { display: grid; width: 100%; min-width: 0; box-sizing: border-box; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
 .version-rail :deep(.el-button > span),
-.feedback-list :deep(.feedback-item > span) { width: 100%; min-width: 0; }
+.feedback-list :deep(.feedback-item__select > span) { width: 100%; min-width: 0; }
 
 .version-rail > .el-button:hover,
 .version-rail > .el-button.active { background: rgba(255, 182, 87, 0.06); border-color: rgba(255, 182, 87, 0.35); }
@@ -529,11 +601,23 @@ defineExpose({ focusIssue })
 .version-feedback-panel__heading h3 { margin: 3px 0 5px; font-size: 17px; }
 .version-feedback-panel__heading p:not(.sg-eyebrow) { margin: 0; color: var(--sg-text-muted); font-size: 10px; }
 .version-feedback-panel__heading > span { color: var(--sg-text-muted); font-size: 10px; white-space: nowrap; }
-.feedback-decision { padding: 12px 14px; }
+.feedback-decision { display: grid; padding: 14px; background: rgba(255, 182, 87, 0.055); border: 1px solid rgba(255, 182, 87, 0.24); border-radius: 10px; grid-template-columns: auto minmax(0, 1fr); gap: 12px; align-items: start; }
+.feedback-decision.is-approve { background: rgba(103, 194, 58, 0.055); border-color: rgba(103, 194, 58, 0.24); }
+.feedback-decision.is-defer { background: rgba(104, 181, 255, 0.055); border-color: rgba(104, 181, 255, 0.24); }
+.feedback-decision__icon { display: grid; width: 30px; height: 30px; color: var(--sg-accent); background: var(--sg-accent-soft); border-radius: 50%; place-items: center; }
+.feedback-decision.is-approve .feedback-decision__icon { color: #7bd84b; background: rgba(103, 194, 58, 0.1); }
+.feedback-decision.is-defer .feedback-decision__icon { color: #68b5ff; background: rgba(104, 181, 255, 0.1); }
+.feedback-decision__content { min-width: 0; }
+.feedback-decision__heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.feedback-decision__heading strong { font-size: 12px; }
+.feedback-decision p { margin: 6px 0 7px; color: var(--sg-text-secondary); font-size: 11px; line-height: 1.55; }
 .feedback-decision small { color: var(--sg-text-muted); font-size: 9px; }
 .feedback-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 0.44fr); gap: 14px; align-items: start; }
 .feedback-list { display: grid; max-height: min(620px, calc(100dvh - 116px)); align-content: start; overflow-x: hidden; overflow-y: auto; scrollbar-width: thin; gap: 10px; }
-.feedback-list .feedback-item { width: 100%; min-width: 0; height: auto; margin: 0; padding: 13px; color: var(--sg-text); text-align: left; white-space: normal; background: rgba(255, 255, 255, 0.025); border: 1px solid var(--sg-border); border-radius: 9px; }
+.feedback-list .feedback-item { width: 100%; min-width: 0; color: var(--sg-text); background: rgba(255, 255, 255, 0.025); border-color: var(--sg-border); border-radius: 9px; }
+.feedback-item > :deep(.el-card__body) { display: grid; padding: 13px; gap: 10px; }
+.feedback-item__select.el-button { width: 100%; min-width: 0; height: auto; margin: 0; padding: 0; color: inherit; text-align: left; white-space: normal; }
+.feedback-item__select.el-button:hover { background: transparent; }
 .feedback-item__content { display: grid; width: 100%; min-width: 0; box-sizing: border-box; gap: 8px; }
 .feedback-list .feedback-item:hover,
 .feedback-list .feedback-item.active { background: rgba(104, 181, 255, 0.07); border-color: rgba(104, 181, 255, 0.42); }

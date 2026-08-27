@@ -1357,7 +1357,7 @@ class ShotGridShotCrudService:
             return None
         business_file_name = projection.get('latest_business_file_name')
         if not business_file_name:
-            raise shot_grid_error(409, 'SG_INVALID_STATE_TRANSITION', '镜头最新版本缺少主审核媒体')
+            raise shot_grid_error(409, 'SG_INVALID_STATE_TRANSITION', '镜头最新版本缺少可展示的审核媒体')
         return ShotGridShotLatestVersionModel(
             versionId=projection['latest_version_id'],
             versionNumber=f'V{projection["latest_version_no"]:03d}',
@@ -1434,7 +1434,9 @@ class ShotGridShotCrudService:
             or row.get('storage_status') != 'ready'
         ):
             return []
-        candidates = [('task.assign', 'shotgrid:task:assign')]
+        candidates = []
+        if row.get('task_status') != 'completed' and not row['has_uncommitted_submission']:
+            candidates.append(('task.assign', 'shotgrid:task:assign'))
         if row.get('task_status') in {None, 'not_started'}:
             candidates.append(('shot.edit', 'shotgrid:shot:edit'))
             candidates.append(('shot.archive', 'shotgrid:shot:archive'))

@@ -12,6 +12,7 @@ from module_shot_grid.entity.do.asset_do import (
     ShotGridShotAsset,
     ShotGridShotAssetRequirement,
 )
+from module_shot_grid.entity.do.final_delivery_do import ShotGridFinalDelivery
 from module_shot_grid.entity.do.import_do import ShotGridImportBatch
 from module_shot_grid.entity.do.project_do import (
     ShotGridEpisode,
@@ -28,6 +29,7 @@ from module_shot_grid.entity.do.review_do import (
     ShotGridReviewIssueDraft,
     ShotGridReviewList,
     ShotGridReviewListVersion,
+    ShotGridVersionCandidateSelection,
     ShotGridVersionIssueResponse,
 )
 from module_shot_grid.entity.do.storage_do import ShotGridProjectStorage, ShotGridStorageOperation
@@ -35,8 +37,10 @@ from module_shot_grid.entity.do.task_do import ShotGridTask
 from module_shot_grid.entity.do.version_do import (
     ShotGridMediaDerivation,
     ShotGridVersion,
+    ShotGridVersionCandidate,
     ShotGridVersionFile,
     ShotGridVersionSubmission,
+    ShotGridVersionSubmissionFile,
 )
 
 
@@ -101,6 +105,18 @@ class ShotGridProjectPurgeDao:
         if any(item.submission_status in {'publishing', 'committing'} for item in submissions):
             active.add('version')
 
+        final_deliveries = list(
+            (
+                await db.scalars(
+                    select(ShotGridFinalDelivery)
+                    .where(ShotGridFinalDelivery.project_id == project_id)
+                    .with_for_update()
+                )
+            ).all()
+        )
+        if any(item.delivery_status == 'publishing' for item in final_deliveries):
+            active.add('final_delivery')
+
         media_tasks = list(
             (
                 await db.scalars(
@@ -117,9 +133,7 @@ class ShotGridProjectPurgeDao:
         import_batches = list(
             (
                 await db.scalars(
-                    select(ShotGridImportBatch)
-                    .where(ShotGridImportBatch.project_id == project_id)
-                    .with_for_update()
+                    select(ShotGridImportBatch).where(ShotGridImportBatch.project_id == project_id).with_for_update()
                 )
             ).all()
         )
@@ -149,22 +163,42 @@ class ShotGridProjectPurgeDao:
         version_ids = list(
             await db.scalars(select(ShotGridVersion.version_id).where(ShotGridVersion.project_id == project_id))
         )
-        file_ids = set(
+        submission_ids = list(
             await db.scalars(
-                select(ShotGridVersionSubmission.source_file_id).where(
+                select(ShotGridVersionSubmission.submission_id).where(
                     ShotGridVersionSubmission.project_id == project_id
                 )
             )
         )
+        file_ids = set(
+            await db.scalars(
+                select(ShotGridVersionSubmissionFile.source_file_id)
+                .join(
+                    ShotGridVersionSubmission,
+                    ShotGridVersionSubmission.submission_id == ShotGridVersionSubmissionFile.submission_id,
+                )
+                .where(ShotGridVersionSubmission.project_id == project_id)
+            )
+        )
         if version_ids:
             file_ids.update(
-                await db.scalars(select(ShotGridVersionFile.file_id).where(ShotGridVersionFile.version_id.in_(version_ids)))
+                await db.scalars(
+                    select(ShotGridVersionFile.file_id).where(ShotGridVersionFile.version_id.in_(version_ids))
+                )
             )
             await db.execute(
                 delete(SysFileReference).where(
                     SysFileReference.file_id.in_(file_ids),
                     SysFileReference.business_type == 'shotgrid_version',
                     SysFileReference.business_id.in_([str(version_id) for version_id in version_ids]),
+                )
+            )
+        if file_ids and submission_ids:
+            await db.execute(
+                delete(SysFileReference).where(
+                    SysFileReference.file_id.in_(file_ids),
+                    SysFileReference.business_type == 'shotgrid_version_submission',
+                    SysFileReference.business_id.in_([str(submission_id) for submission_id in submission_ids]),
                 )
             )
         if not file_ids:
@@ -175,9 +209,13 @@ class ShotGridProjectPurgeDao:
         )
         externally_referenced.update(
             await db.scalars(
-                select(ShotGridVersionSubmission.source_file_id)
+                select(ShotGridVersionSubmissionFile.source_file_id)
+                .join(
+                    ShotGridVersionSubmission,
+                    ShotGridVersionSubmission.submission_id == ShotGridVersionSubmissionFile.submission_id,
+                )
                 .where(
-                    ShotGridVersionSubmission.source_file_id.in_(file_ids),
+                    ShotGridVersionSubmissionFile.source_file_id.in_(file_ids),
                     ShotGridVersionSubmission.project_id != project_id,
                 )
                 .distinct()
@@ -197,7 +235,10 @@ class ShotGridProjectPurgeDao:
         file_infos = list(
             (
                 await db.scalars(
-                    select(SysFileInfo).where(SysFileInfo.file_id.in_(exclusive_ids)).order_by(SysFileInfo.file_id).with_for_update()
+                    select(SysFileInfo)
+                    .where(SysFileInfo.file_id.in_(exclusive_ids))
+                    .order_by(SysFileInfo.file_id)
+                    .with_for_update()
                 )
             ).all()
         )
@@ -228,9 +269,10 @@ class ShotGridProjectPurgeDao:
         """按现有 RESTRICT 外键的逆拓扑顺序删除项目业务数据。"""
 
         version_ids = select(ShotGridVersion.version_id).where(ShotGridVersion.project_id == project_id)
-        review_list_ids = select(ShotGridReviewList.review_list_id).where(
-            ShotGridReviewList.project_id == project_id
+        submission_ids = select(ShotGridVersionSubmission.submission_id).where(
+            ShotGridVersionSubmission.project_id == project_id
         )
+        review_list_ids = select(ShotGridReviewList.review_list_id).where(ShotGridReviewList.project_id == project_id)
         for model in (
             ShotGridReviewIssueDraft,
             ShotGridIssueVerification,
@@ -239,13 +281,28 @@ class ShotGridProjectPurgeDao:
             ShotGridNote,
         ):
             await db.execute(delete(model).where(model.project_id == project_id))
-        await db.execute(delete(ShotGridReviewListVersion).where(ShotGridReviewListVersion.review_list_id.in_(review_list_ids)))
+        await db.execute(
+            delete(ShotGridVersionCandidateSelection).where(ShotGridVersionCandidateSelection.project_id == project_id)
+        )
+        await db.execute(
+            delete(ShotGridReviewListVersion).where(ShotGridReviewListVersion.review_list_id.in_(review_list_ids))
+        )
         await db.execute(delete(ShotGridReviewList).where(ShotGridReviewList.project_id == project_id))
+        await db.execute(delete(ShotGridFinalDelivery).where(ShotGridFinalDelivery.project_id == project_id))
         await db.execute(delete(ShotGridMediaDerivation).where(ShotGridMediaDerivation.version_id.in_(version_ids)))
         await db.execute(delete(ShotGridVersionFile).where(ShotGridVersionFile.version_id.in_(version_ids)))
+        await db.execute(
+            update(ShotGridVersion)
+            .where(ShotGridVersion.project_id == project_id)
+            .values(selected_candidate_id=None, selected_by=None, selected_time=None)
+        )
+        await db.execute(delete(ShotGridVersionCandidate).where(ShotGridVersionCandidate.project_id == project_id))
+        await db.execute(delete(ShotGridVersion).where(ShotGridVersion.project_id == project_id))
+        await db.execute(
+            delete(ShotGridVersionSubmissionFile).where(ShotGridVersionSubmissionFile.submission_id.in_(submission_ids))
+        )
+        await db.execute(delete(ShotGridVersionSubmission).where(ShotGridVersionSubmission.project_id == project_id))
         for model in (
-            ShotGridVersion,
-            ShotGridVersionSubmission,
             ShotGridTask,
             ShotGridShotAssetRequirement,
             ShotGridShotAsset,

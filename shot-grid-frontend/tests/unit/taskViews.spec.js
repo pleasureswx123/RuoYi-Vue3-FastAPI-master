@@ -174,7 +174,7 @@ async function mountDetail(path = '/tasks/31', permissions = ['shotgrid:task:que
       stubs: {
         VersionWorkspace: {
           props: ['taskId', 'taskKind', 'taskStatus', 'versionCount', 'productionDescription', 'allowedActions', 'hasUncommittedSubmission', 'operationGeneration'],
-          template: '<div data-testid="version-workspace" :data-version-count="versionCount" :data-production-description="productionDescription" />'
+          template: '<div data-testid="version-workspace" :data-task-status="taskStatus" :data-allowed-actions="allowedActions.join(\',\')" :data-version-count="versionCount" :data-production-description="productionDescription" />'
         }
       }
     }
@@ -504,7 +504,15 @@ describe('任务详情、状态动作与异步上下文', () => {
     wrapper.unmount()
   })
 
-  it('镜头任务开始后处于目录准备中，并给出与 preparing 一致的提示', async () => {
+  it('任务开始后自动等待目录准备完成，并立即更新版本提交区域', async () => {
+    const inProgressTask = taskFixture(31, {
+      taskStatus: 'in_progress',
+      lockVersion: 4,
+      allowedActions: ['task.assign', 'version.add']
+    })
+    getTaskDetail
+      .mockResolvedValueOnce({ data: taskFixture() })
+      .mockResolvedValueOnce({ data: inProgressTask })
     startTask.mockResolvedValueOnce({ data: taskFixture(31, {
       taskStatus: 'preparing',
       lockVersion: 3,
@@ -512,15 +520,30 @@ describe('任务详情、状态动作与异步上下文', () => {
     }) })
     const messageSpy = vi.spyOn(ElMessage, 'success').mockImplementation(() => undefined)
     const { wrapper } = await mountDetail()
+    vi.useFakeTimers()
 
-    await wrapper.findAll('button').find(button => button.text().includes('开始任务')).trigger('click')
-    await flushPromises()
+    try {
+      await wrapper.findAll('button').find(button => button.text().includes('开始任务')).trigger('click')
+      await flushPromises()
 
-    expect(wrapper.text()).toContain('目录准备中')
-    expect(wrapper.findAll('button').map(button => button.text())).not.toContain('编辑任务')
-    expect(messageSpy).toHaveBeenCalledWith('任务已开始，正在创建镜头目录')
-    messageSpy.mockRestore()
-    wrapper.unmount()
+      expect(wrapper.text()).toContain('目录准备中')
+      expect(wrapper.findAll('button').map(button => button.text())).not.toContain('编辑任务')
+      expect(messageSpy).toHaveBeenCalledWith('任务已开始，正在准备制作目录')
+
+      await vi.advanceTimersByTimeAsync(1500)
+      await flushPromises()
+
+      const versionWorkspace = wrapper.get('[data-testid="version-workspace"]')
+      expect(getTaskDetail).toHaveBeenCalledTimes(2)
+      expect(wrapper.text()).toContain('制作中')
+      expect(versionWorkspace.attributes('data-task-status')).toBe('in_progress')
+      expect(versionWorkspace.attributes('data-allowed-actions')).toContain('version.add')
+      expect(messageSpy).toHaveBeenCalledWith('制作目录已准备完成，可以提交首版成果')
+    } finally {
+      wrapper.unmount()
+      vi.useRealTimers()
+      messageSpy.mockRestore()
+    }
   })
 
   it('任务详情的状态、优先级、类型、生命周期和版本标记使用 ElTag', async () => {
