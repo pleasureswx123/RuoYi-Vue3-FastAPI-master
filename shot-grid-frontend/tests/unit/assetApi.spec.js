@@ -9,6 +9,7 @@ import {
   commitAssetImport,
   createAsset,
   createAssetItem,
+  deleteAssetItem,
   downloadAssetImportTemplate,
   downloadAssetThumbnail,
   getAssetDetail,
@@ -52,6 +53,9 @@ describe('资产 API 契约', () => {
     createAssetItem(8, 31, { productionItem: '正视图' })
     updateAssetItem(8, 41, { productionItem: '侧视图', lockVersion: 0 })
     archiveAssetItem(8, 41, { reason: '合并分项', lockVersion: 1 })
+    deleteAssetItem(8, 41, { reason: '误建分项', lockVersion: 1 })
+    expect(request).toHaveBeenLastCalledWith(expect.objectContaining({ data: { reason: '误建分项', lockVersion: 1 } }))
+    expect(() => deleteAssetItem(8, '../41', {})).toThrow()
     assignAssetItemTask(8, 41, { assigneeUserId: 7, taskLockVersion: null })
 
     expect(request.mock.calls.map(([config]) => [config.method, config.url])).toEqual([
@@ -62,6 +66,7 @@ describe('资产 API 契约', () => {
       ['post', '/shot-grid/projects/8/assets/31/items'],
       ['put', '/shot-grid/projects/8/asset-items/41'],
       ['post', '/shot-grid/projects/8/asset-items/41/archive'],
+      ['post', '/shot-grid/projects/8/asset-items/41/delete'],
       ['post', '/shot-grid/projects/8/asset-items/41/assign']
     ])
   })

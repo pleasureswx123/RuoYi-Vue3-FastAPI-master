@@ -9,7 +9,7 @@ from common.aspect.interface_auth import CheckUserInterfaceAuth
 from common.router import auto_register_controller_files
 from module_shot_grid.controller.asset_crud_controller import asset_crud_controller
 
-ASSET_ROUTE_COUNT = 10
+ASSET_ROUTE_COUNT = 11
 CRUD_ROUTER_ORDER = 45
 IMPORT_ROUTER_ORDER = 43
 
@@ -34,6 +34,7 @@ def _route(method: str, path: str) -> APIRoute:
         ('GET', '/shot-grid/projects/{projectId}/assets/{assetId}/items', 'shotgrid:asset:query', False),
         ('POST', '/shot-grid/projects/{projectId}/assets/{assetId}/items', 'shotgrid:asset:add', True),
         ('PUT', '/shot-grid/projects/{projectId}/asset-items/{assetItemId}', 'shotgrid:asset:edit', True),
+        ('POST', '/shot-grid/projects/{projectId}/asset-items/{assetItemId}/delete', 'shotgrid:asset:archive', True),
         (
             'POST',
             '/shot-grid/projects/{projectId}/asset-items/{assetItemId}/archive',

@@ -10,6 +10,7 @@ from module_shot_grid.entity.do.storage_do import ShotGridProjectStorage, ShotGr
 from module_shot_grid.entity.do.task_do import ShotGridTask
 from module_shot_grid.entity.do.version_do import (
     ShotGridVersion,
+    ShotGridVersionCandidate,
     ShotGridVersionFile,
     ShotGridVersionSubmission,
 )
@@ -285,10 +286,27 @@ class ShotGridAssetCrudDao:
     async def get_versions_for_tasks(cls, db: AsyncSession, task_ids: list[int]) -> list[dict[str, Any]]:
         if not task_ids:
             return []
+        display_candidate_id = (
+            select(ShotGridVersionCandidate.candidate_id)
+            .where(ShotGridVersionCandidate.version_id == ShotGridVersion.version_id)
+            .order_by(
+                case(
+                    (ShotGridVersionCandidate.candidate_id == ShotGridVersion.selected_candidate_id, 0),
+                    else_=1,
+                ),
+                ShotGridVersionCandidate.sort_order,
+                ShotGridVersionCandidate.candidate_no,
+                ShotGridVersionCandidate.candidate_id,
+            )
+            .limit(1)
+            .correlate(ShotGridVersion)
+            .scalar_subquery()
+        )
         thumbnail_file_id = (
             select(ShotGridVersionFile.file_id)
             .where(
                 ShotGridVersionFile.version_id == ShotGridVersion.version_id,
+                ShotGridVersionFile.candidate_id == display_candidate_id,
                 ShotGridVersionFile.file_role == 'thumbnail',
             )
             .order_by(ShotGridVersionFile.sort_order, ShotGridVersionFile.file_id)
@@ -299,6 +317,7 @@ class ShotGridAssetCrudDao:
             select(ShotGridVersionFile.business_file_name)
             .where(
                 ShotGridVersionFile.version_id == ShotGridVersion.version_id,
+                ShotGridVersionFile.candidate_id == display_candidate_id,
                 ShotGridVersionFile.file_role == 'thumbnail',
             )
             .order_by(ShotGridVersionFile.sort_order, ShotGridVersionFile.file_id)

@@ -4,6 +4,7 @@ from pydantic import ValidationError
 from module_shot_grid.entity.vo.asset_crud_vo import (
     ShotGridAssetArchiveModel,
     ShotGridAssetCreateModel,
+    ShotGridAssetItemDeleteModel,
     ShotGridAssetItemUpdateModel,
     ShotGridAssetListQueryModel,
     ShotGridAssetUpdateModel,
@@ -44,6 +45,7 @@ def test_asset_create_normalizes_text_without_creating_task_input() -> None:
         (ShotGridAssetUpdateModel, {'assetName': '场景', 'lockVersion': 0}),
         (ShotGridAssetUpdateModel, {'lifecycleStatus': 'archived', 'lockVersion': 0}),
         (ShotGridAssetArchiveModel, {'reason': '归档', 'lockVersion': 0, 'delFlag': '2'}),
+        (ShotGridAssetItemDeleteModel, {'reason': '误建', 'lockVersion': 0, 'delFlag': '2'}),
     ],
 )
 def test_asset_write_models_reject_state_or_delete_fields(model: type, payload: dict[str, object]) -> None:
@@ -93,3 +95,18 @@ def test_asset_create_rejects_task_assignment_and_query_bounds_assignee_filter()
 
     with pytest.raises(ValidationError):
         ShotGridAssetListQueryModel(assigneeUserId=SQL_BIGINT_MAX + 1)
+
+
+@pytest.mark.parametrize('reason', ['', '   ', 'x' * 501, None])
+def test_item_delete_rejects_missing_or_invalid_reason(reason: object) -> None:
+    with pytest.raises(ValidationError):
+        ShotGridAssetItemDeleteModel(reason=reason, lockVersion=0)
+
+
+def test_item_delete_normalizes_reason_and_requires_nonnegative_lock() -> None:
+    command = ShotGridAssetItemDeleteModel(reason='  误建分项  ', lockVersion=0)
+    assert command.reason == '误建分项'
+    with pytest.raises(ValidationError):
+        ShotGridAssetItemDeleteModel(reason='误建分项')
+    with pytest.raises(ValidationError):
+        ShotGridAssetItemDeleteModel(reason='误建分项', lockVersion=-1)

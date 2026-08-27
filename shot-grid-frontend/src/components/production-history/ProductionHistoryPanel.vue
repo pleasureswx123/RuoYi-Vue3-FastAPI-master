@@ -266,6 +266,7 @@ defineExpose({ refresh: loadHistory })
             <span v-if="selectedLane?.task">当前负责人：{{ currentAssignee }}</span>
           </div>
           <div class="history-stage__tags">
+            <slot v-if="selectedLane" name="lane-actions" :lane="selectedLane" :loading="loading" />
             <el-tag v-if="selectedLane?.lifecycleStatus === 'archived'" type="info" effect="plain" round>已归档</el-tag>
             <el-tag :type="historyTagType(currentStageMeta)" effect="plain" round>{{ currentStageMeta.label }}</el-tag>
           </div>

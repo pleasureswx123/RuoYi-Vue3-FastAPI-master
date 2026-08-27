@@ -10,6 +10,7 @@ from module_shot_grid.entity.vo.access_vo import ShotGridProjectAccessModel
 from module_shot_grid.entity.vo.asset_crud_vo import (
     ShotGridAssetArchiveModel,
     ShotGridAssetCreateModel,
+    ShotGridAssetItemDeleteModel,
     ShotGridAssetItemUpdateModel,
     ShotGridAssetUpdateModel,
 )
@@ -22,6 +23,8 @@ ASSET_ITEM_ID = 30
 ASSIGNEE_USER_ID = 2
 UPDATED_SORT_ORDER = 20
 RENAMED_TASK_LOCK_VERSION = 3
+DELETED_ITEM_LOCK_VERSION = 1
+CONFLICT_STATUS = 409
 
 
 def _current_user() -> CurrentUserModel:
@@ -540,6 +543,222 @@ def test_asset_thumbnail_uses_latest_version_and_parent_uses_first_sorted_item_w
     }
 
 
+def _patch_item_delete_dependencies(monkeypatch: pytest.MonkeyPatch) -> tuple[SimpleNamespace, dict[str, AsyncMock]]:
+    mocks = _patch_create_dependencies(monkeypatch)
+    asset = SimpleNamespace(asset_id=ASSET_ID, lifecycle_status='active', del_flag='0')
+    item = SimpleNamespace(
+        asset_item_id=ASSET_ITEM_ID,
+        asset_id=ASSET_ID,
+        project_id=PROJECT_ID,
+        lifecycle_status='active',
+        del_flag='0',
+        lock_version=0,
+        production_item='误建分项',
+        update_by='old',
+        update_time=None,
+    )
+    for name, target, result in [
+        ('asset', 'get_asset', asset),
+        ('item', 'get_asset_item', item),
+        ('task', 'get_task_for_item', None),
+        ('versions', 'has_versions_for_item', False),
+        ('delete_task', 'delete_not_started_task', True),
+    ]:
+        mocks[name] = AsyncMock(return_value=result)
+        monkeypatch.setattr(ShotGridAssetCrudDao, target, mocks[name])
+    mocks['submission'] = AsyncMock(return_value=None)
+    monkeypatch.setattr(
+        'module_shot_grid.dao.task_dao.ShotGridTaskDao.get_uncommitted_submission_for_update', mocks['submission']
+    )
+    return item, mocks
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('with_task', [False, True])
+async def test_delete_item_soft_deletes_only_target_and_unstarted_task_with_audit(
+    monkeypatch: pytest.MonkeyPatch, *, with_task: bool
+) -> None:
+    item, mocks = _patch_item_delete_dependencies(monkeypatch)
+    if with_task:
+        mocks['task'].return_value = SimpleNamespace(task_id=71, task_status='not_started')
+    db = AsyncMock()
+
+    result = await ShotGridAssetCrudService.delete_asset_item(
+        db,
+        PROJECT_ID,
+        ASSET_ITEM_ID,
+        ShotGridAssetItemDeleteModel(reason='误建分项', lockVersion=0),
+        _current_user(),
+        _access(),
+    )
+
+    assert result.deleted_asset_item_id == ASSET_ITEM_ID
+    assert result.asset_id == ASSET_ID
+    assert item.del_flag == '2'
+    assert item.lifecycle_status == 'archived'
+    assert item.lock_version == DELETED_ITEM_LOCK_VERSION
+    assert mocks['asset'].return_value.del_flag == '0'
+    assert mocks['audit'].await_args.kwargs['result']['deletedAssetItemId'] == ASSET_ITEM_ID
+    if with_task:
+        mocks['delete_task'].assert_awaited_once_with(db, task_id=71, actor_name='director', now=item.update_time)
+    else:
+        mocks['delete_task'].assert_not_awaited()
+    db.commit.assert_awaited_once()
+    db.rollback.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('task_status', ['preparing', 'in_progress', 'pending_review', 'revision', 'completed'])
+async def test_delete_item_rejects_any_task_that_has_started(monkeypatch: pytest.MonkeyPatch, task_status: str) -> None:
+    item, mocks = _patch_item_delete_dependencies(monkeypatch)
+    mocks['task'].return_value = SimpleNamespace(task_id=71, task_status=task_status)
+    db = AsyncMock()
+
+    with pytest.raises(ShotGridDomainException) as error:
+        await ShotGridAssetCrudService.delete_asset_item(
+            db,
+            PROJECT_ID,
+            ASSET_ITEM_ID,
+            ShotGridAssetItemDeleteModel(reason='误建', lockVersion=0),
+            _current_user(),
+            _access(),
+        )
+
+    assert error.value.error_key == 'SG_ASSET_TASK_ALREADY_STARTED'
+    assert item.del_flag == '0'
+    db.commit.assert_not_awaited()
+    db.rollback.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('blocker', 'error_key'),
+    [
+        ('versions', 'SG_ASSET_HAS_VERSION'),
+        ('submission', 'SG_ASSET_ITEM_SUBMISSION_IN_PROGRESS'),
+        ('lock', 'SG_OPTIMISTIC_LOCK_CONFLICT'),
+        ('archived', 'SG_INVALID_STATE_TRANSITION'),
+        ('task_changed', 'SG_OPTIMISTIC_LOCK_CONFLICT'),
+    ],
+)
+async def test_delete_item_rechecks_version_submission_and_lock_before_mutation(
+    monkeypatch: pytest.MonkeyPatch, blocker: str, error_key: str
+) -> None:
+    item, mocks = _patch_item_delete_dependencies(monkeypatch)
+    mocks['task'].return_value = SimpleNamespace(task_id=71, task_status='not_started')
+    if blocker in {'versions', 'submission'}:
+        mocks[blocker].return_value = True
+    elif blocker == 'lock':
+        item.lock_version = 1
+    elif blocker == 'archived':
+        item.lifecycle_status = 'archived'
+    else:
+        mocks['delete_task'].return_value = False
+    db = AsyncMock()
+
+    with pytest.raises(ShotGridDomainException) as error:
+        await ShotGridAssetCrudService.delete_asset_item(
+            db,
+            PROJECT_ID,
+            ASSET_ITEM_ID,
+            ShotGridAssetItemDeleteModel(reason='误建', lockVersion=0),
+            _current_user(),
+            _access(),
+        )
+
+    assert error.value.error_key == error_key
+    assert error.value.http_status == CONFLICT_STATUS
+    assert item.del_flag == '0'
+    mocks['audit'].assert_not_awaited()
+    db.commit.assert_not_awaited()
+    db.rollback.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('blocker', ['completed', 'archived', 'storage', 'role', 'asset_archived', 'missing'])
+async def test_delete_item_preserves_project_scope_and_lifecycle_guards(
+    monkeypatch: pytest.MonkeyPatch, blocker: str
+) -> None:
+    item, mocks = _patch_item_delete_dependencies(monkeypatch)
+    if blocker in {'completed', 'archived'}:
+        mocks['project'].return_value.project_status = blocker
+    elif blocker == 'storage':
+        mocks['storage'].return_value = 'failed'
+    elif blocker == 'role':
+        mocks['access'].return_value = _access(role='creator')
+    elif blocker == 'asset_archived':
+        mocks['asset'].return_value.lifecycle_status = 'archived'
+    else:
+        mocks['item'].return_value = None
+    db = AsyncMock()
+
+    with pytest.raises(ShotGridDomainException):
+        await ShotGridAssetCrudService.delete_asset_item(
+            db,
+            PROJECT_ID,
+            ASSET_ITEM_ID,
+            ShotGridAssetItemDeleteModel(reason='误建', lockVersion=0),
+            _current_user(),
+            _access(),
+        )
+
+    assert item.del_flag == '0'
+    mocks['delete_task'].assert_not_awaited()
+    db.commit.assert_not_awaited()
+    db.rollback.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_delete_item_rolls_back_when_audit_cannot_be_persisted(monkeypatch: pytest.MonkeyPatch) -> None:
+    _item, mocks = _patch_item_delete_dependencies(monkeypatch)
+    mocks['audit'].side_effect = RuntimeError('审计写入失败')
+    db = AsyncMock()
+    with pytest.raises(RuntimeError, match='审计写入失败'):
+        await ShotGridAssetCrudService.delete_asset_item(
+            db,
+            PROJECT_ID,
+            ASSET_ITEM_ID,
+            ShotGridAssetItemDeleteModel(reason='误建', lockVersion=0),
+            _current_user(),
+            _access(),
+        )
+    db.commit.assert_not_awaited()
+    db.rollback.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    ('task_status', 'has_versions', 'has_submission', 'can_delete'),
+    [
+        (None, False, False, True),
+        ('not_started', False, False, True),
+        ('preparing', False, False, False),
+        ('in_progress', False, False, False),
+        ('pending_review', False, False, False),
+        ('revision', False, False, False),
+        ('completed', False, False, False),
+        ('not_started', True, False, False),
+        ('not_started', False, True, False),
+    ],
+)
+def test_item_delete_action_is_limited_to_unstarted_items_without_versions_or_submissions(
+    task_status: str | None, *, has_versions: bool, has_submission: bool, can_delete: bool
+) -> None:
+    actions = ShotGridAssetCrudService._item_allowed_actions(
+        _current_user(),
+        _access(),
+        project_id=PROJECT_ID,
+        project_status='active',
+        storage_status='ready',
+        asset_lifecycle_status='active',
+        item_lifecycle_status='active',
+        production_item='误建分项',
+        has_versions=has_versions,
+        task_status=task_status,
+        has_uncommitted_submission=has_submission,
+    )
+    assert ('assetItem.delete' in actions) is can_delete
+
+
 def test_asset_and_item_allowed_actions_are_server_side_state_mirrors() -> None:
     asset_actions = ShotGridAssetCrudService._asset_allowed_actions(
         _current_user(),
@@ -566,7 +785,7 @@ def test_asset_and_item_allowed_actions_are_server_side_state_mirrors() -> None:
     )
 
     assert asset_actions == ['asset.edit', 'asset.archive', 'assetItem.add', 'task.assign']
-    assert item_actions == ['assetItem.edit', 'assetItem.archive', 'task.assign']
+    assert item_actions == ['assetItem.edit', 'assetItem.archive', 'assetItem.delete', 'task.assign']
     assert ShotGridAssetCrudService._item_allowed_actions(
         _current_user(),
         _access(),

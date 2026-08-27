@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { ArrowLeft, Edit, Lock, Plus, Refresh, UserFilled } from '@element-plus/icons-vue'
+import { ArrowLeft, Delete, Edit, Lock, Plus, Refresh, UserFilled } from '@element-plus/icons-vue'
 
 import { getAssetDetail, listAssetAssignees } from '@/api/shot-grid/assets'
 import { assertPositiveId, getProjectDetail } from '@/api/shot-grid/projects'
@@ -14,6 +14,7 @@ import AssetArchiveDialog from '@/views/asset/components/AssetArchiveDialog.vue'
 import AssetAssignDialog from '@/views/asset/components/AssetAssignDialog.vue'
 import AssetFormDialog from '@/views/asset/components/AssetFormDialog.vue'
 import AssetItemFormDialog from '@/views/asset/components/AssetItemFormDialog.vue'
+import AssetItemDeleteDialog from '@/views/asset/components/AssetItemDeleteDialog.vue'
 import ProtectedAssetThumbnail from '@/views/asset/components/ProtectedAssetThumbnail.vue'
 import { assetDirectoryStatusMeta, assetErrorState, assetStatusMeta, assetTypeMeta, formatAssetDateTime, memberUserName } from '@/views/asset/assetPresentation'
 import { taskPriorityMeta, taskStatusMeta, taskVersionStatusMeta } from '@/views/task/taskPresentation'
@@ -36,6 +37,7 @@ const editAssetContext = ref(null)
 const itemFormContext = ref(null)
 const assignContext = ref(null)
 const archiveContext = ref(null)
+const deleteItemContext = ref(null)
 const historyRefreshKey = ref(0)
 
 function taskAssigneeName(task) {
@@ -96,6 +98,7 @@ function closeDialogs() {
   itemFormContext.value = null
   assignContext.value = null
   archiveContext.value = null
+  deleteItemContext.value = null
 }
 
 async function loadDetail() {
@@ -163,6 +166,31 @@ function openAssign(item) {
 
 function openArchive(item = null) {
   archiveContext.value = newContext(item)
+}
+
+function openDeleteItem(item) {
+  if (loading.value || disposed || !itemCanDelete(item)) return
+  deleteItemContext.value = newContext(item)
+}
+
+function itemForLane(lane) {
+  return asset.value?.items?.find(item => Number(item.assetItemId) === Number(lane?.laneId))
+}
+
+function itemCanDelete(item) {
+  return new Set(item?.allowedActions || []).has('assetItem.delete') && hasPermission('shotgrid:asset:archive')
+}
+
+async function handleItemDeleted(_result, operationContext) {
+  if (disposed) return
+  if (!contextMatches(deleteItemContext.value, operationContext) || !stillOnTarget(operationContext)) {
+    notifyDetachedOperation()
+    return
+  }
+  deleteItemContext.value = null
+  ElMessage.success('制作分项已删除')
+  await loadDetail()
+  emit('changed', { projectId: operationContext.projectId, assetId: operationContext.assetId })
 }
 
 function contextMatches(active, operationContext) {
@@ -307,7 +335,11 @@ onBeforeUnmount(() => {
         :subject-id="assetId"
         subject-type="asset"
         :refresh-key="historyRefreshKey"
-      />
+      >
+        <template #lane-actions="{ lane, loading: historyLoading }">
+          <el-button v-if="itemCanDelete(itemForLane(lane))" type="danger" plain :icon="Delete" :disabled="loading || historyLoading" @click="openDeleteItem(itemForLane(lane))">删除分项</el-button>
+        </template>
+      </ProductionHistoryPanel>
 
       <section class="detail-grid">
         <el-card class="detail-card" shadow="never"><template #header><h3>资产信息与目录</h3></template><el-descriptions :column="2" border><el-descriptions-item label="资产类型"><el-tag size="small" effect="plain" round :type="tagTypeFromTone(assetTypeMeta(asset.assetType).tone)">{{ assetTypeMeta(asset.assetType).label }}</el-tag></el-descriptions-item><el-descriptions-item label="存储目录名">{{ asset.storageDirName }}</el-descriptions-item><el-descriptions-item label="目录状态"><el-tag size="small" effect="plain" round :type="tagTypeFromTone(assetDirectoryStatusMeta(asset.directoryStatus).tone)">{{ assetDirectoryStatusMeta(asset.directoryStatus).label }}</el-tag></el-descriptions-item><el-descriptions-item label="使用状态"><el-tag size="small" effect="plain" round :type="asset.lifecycleStatus === 'active' ? 'success' : 'info'">{{ asset.lifecycleStatus === 'active' ? '活动' : '已归档' }}</el-tag></el-descriptions-item></el-descriptions></el-card>
@@ -321,11 +353,12 @@ onBeforeUnmount(() => {
           <el-card v-for="item in asset.items" :key="item.assetItemId" class="item-card" :class="{ 'is-archived': item.lifecycleStatus === 'archived' }" shadow="never">
             <ProtectedAssetThumbnail class="item-card__thumbnail" :thumbnail="item.thumbnail" :alt="`${item.productionItem || '未命名制作分项'} 缩略图`" />
             <div class="item-card__body"><header><div><span class="item-card__id">分项 #{{ item.assetItemId }}</span><h4>{{ item.productionItem || '未命名制作分项' }}</h4></div><el-tag size="small" effect="plain" round :type="tagTypeFromTone(assetStatusMeta(item.assetStatus).tone)">{{ assetStatusMeta(item.assetStatus).label }}</el-tag></header><p>{{ item.description || '暂无分项说明' }}</p><el-descriptions class="item-card__details" :column="4" border><el-descriptions-item label="负责人">{{ taskAssigneeName(item.task) }}</el-descriptions-item><el-descriptions-item label="任务"><span v-if="item.task" class="detail-tag-group"><el-tag size="small" effect="plain" round :type="tagTypeFromTone(taskStatusMeta(item.task.taskStatus).tone)">{{ taskStatusMeta(item.task.taskStatus).label }}</el-tag><el-tag size="small" effect="plain" round :type="tagTypeFromTone(taskPriorityMeta(item.task.priority).tone)">{{ taskPriorityMeta(item.task.priority).label }}优先级</el-tag></span><el-tag v-else type="info" size="small" effect="plain" round>未分配</el-tag></el-descriptions-item><el-descriptions-item label="最新版本"><span v-if="item.latestVersion" class="detail-tag-group"><span>V{{ String(item.latestVersion.versionNo).padStart(3, '0') }}</span><el-tag size="small" effect="plain" round :type="tagTypeFromTone(taskVersionStatusMeta(item.latestVersion.versionStatus).tone)">{{ taskVersionStatusMeta(item.latestVersion.versionStatus).label }}</el-tag></span><span v-else>—</span></el-descriptions-item><el-descriptions-item label="最终版本"><span v-if="item.finalVersion" class="detail-tag-group"><span>V{{ String(item.finalVersion.versionNo).padStart(3, '0') }}</span><el-tag size="small" effect="plain" round :type="tagTypeFromTone(taskVersionStatusMeta(item.finalVersion.versionStatus).tone)">{{ taskVersionStatusMeta(item.finalVersion.versionStatus).label }}</el-tag></span><span v-else>—</span></el-descriptions-item></el-descriptions><small>{{ item.remark || '无备注' }} · 更新于 {{ formatAssetDateTime(item.updateTime) }}</small></div>
-            <div class="item-card__actions"><el-button v-if="itemCanAssign(item)" text type="primary" :icon="UserFilled" @click="openAssign(item)">{{ item.task ? '改派任务' : '分配任务' }}</el-button><el-button v-if="itemCanEdit(item)" text :type="item.productionItem ? 'default' : 'warning'" :icon="Edit" @click="openItemForm(item)">{{ item.productionItem ? '编辑分项' : '补齐制作分项' }}</el-button><el-button v-if="itemCanArchive(item)" text type="danger" :icon="Lock" @click="openArchive(item)">归档分项</el-button></div>
+            <div class="item-card__actions"><el-button v-if="itemCanAssign(item)" text type="primary" :icon="UserFilled" @click="openAssign(item)">{{ item.task ? '改派任务' : '分配任务' }}</el-button><el-button v-if="itemCanEdit(item)" text :type="item.productionItem ? 'default' : 'warning'" :icon="Edit" @click="openItemForm(item)">{{ item.productionItem ? '编辑分项' : '补齐制作分项' }}</el-button><el-button v-if="itemCanDelete(item)" text type="danger" :icon="Delete" @click="openDeleteItem(item)">删除分项</el-button><el-button v-else-if="itemCanArchive(item)" text type="danger" :icon="Lock" @click="openArchive(item)">归档分项</el-button></div>
           </el-card>
         </div>
       </el-card>
 
+      <AssetItemDeleteDialog v-if="deleteItemContext" :project-id="deleteItemContext.projectId" :operation-generation="deleteItemContext.operationGeneration" :asset="asset" :item="deleteItemContext.item" @close="deleteItemContext = null" @deleted="handleItemDeleted" @refresh="loadDetail" />
       <AssetFormDialog v-if="editAssetContext" :project-id="editAssetContext.projectId" :operation-generation="editAssetContext.operationGeneration" :asset="asset" @close="editAssetContext = null" @saved="handleAssetSaved" @refresh="loadDetail" />
       <AssetItemFormDialog v-if="itemFormContext" :project-id="itemFormContext.projectId" :operation-generation="itemFormContext.operationGeneration" :asset="asset" :item="itemFormContext.item" @close="itemFormContext = null" @saved="handleItemSaved" @refresh="loadDetail" />
       <AssetAssignDialog v-if="assignContext" :project-id="assignContext.projectId" :operation-generation="assignContext.operationGeneration" :asset="asset" :item="assignContext.item" :members="members" @close="assignContext = null" @assigned="handleAssigned" @refresh="loadDetail" />

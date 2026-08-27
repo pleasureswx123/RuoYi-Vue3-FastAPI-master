@@ -143,6 +143,15 @@ export function archiveAssetItem(projectId, assetItemId, data) {
   })
 }
 
+export function deleteAssetItem(projectId, assetItemId, data) {
+  return request({
+    url: assetItemUrl(projectId, assetItemId, '/delete'),
+    method: 'post',
+    data,
+    silentError: true
+  })
+}
+
 export function assignAssetItemTask(projectId, assetItemId, data) {
   return request({
     url: assetItemUrl(projectId, assetItemId, '/assign'),

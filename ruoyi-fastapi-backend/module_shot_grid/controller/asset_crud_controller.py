@@ -18,6 +18,8 @@ from module_shot_grid.entity.vo.asset_crud_vo import (
     ShotGridAssetCreateModel,
     ShotGridAssetDetailModel,
     ShotGridAssetItemCreateModel,
+    ShotGridAssetItemDeleteModel,
+    ShotGridAssetItemDeleteResultModel,
     ShotGridAssetItemModel,
     ShotGridAssetItemUpdateModel,
     ShotGridAssetListItemModel,
@@ -277,5 +279,26 @@ async def archive_shot_grid_asset_item(
         command,
         current_user,
         access,
+    )
+    return ResponseUtil.success(data=result)
+
+
+@asset_crud_controller.post(
+    '/{projectId}/asset-items/{assetItemId}/delete',
+    summary='删除未开始制作的资产分项',
+    response_model=DataResponseModel[ShotGridAssetItemDeleteResultModel],
+    dependencies=[UserInterfaceAuthDependency('shotgrid:asset:archive')],
+)
+async def delete_shot_grid_asset_item(
+    request: Request,
+    project_id: Annotated[int, Path(alias='projectId', gt=0, le=SQL_BIGINT_MAX)],
+    asset_item_id: Annotated[int, Path(alias='assetItemId', gt=0, le=SQL_BIGINT_MAX)],
+    command: ShotGridAssetItemDeleteModel,
+    query_db: Annotated[AsyncSession, DBSessionDependency()],
+    current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
+    access: Annotated[ShotGridProjectAccessModel, ProjectRoleDependency('director')],
+) -> Response:
+    result = await ShotGridAssetCrudService.delete_asset_item(
+        query_db, project_id, asset_item_id, command, current_user, access
     )
     return ResponseUtil.success(data=result)

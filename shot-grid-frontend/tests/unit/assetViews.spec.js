@@ -9,6 +9,7 @@ import {
   assignAssetItemTask,
   createAsset,
   createAssetItem,
+  deleteAssetItem,
   getAssetDetail,
   getAssetPage,
   getAssetRequirementPage,
@@ -25,6 +26,7 @@ import AssetAssignDialog from '@/views/asset/components/AssetAssignDialog.vue'
 import AssetFormDialog from '@/views/asset/components/AssetFormDialog.vue'
 import AssetImportDialog from '@/views/asset/components/AssetImportDialog.vue'
 import AssetItemFormDialog from '@/views/asset/components/AssetItemFormDialog.vue'
+import AssetItemDeleteDialog from '@/views/asset/components/AssetItemDeleteDialog.vue'
 import ProtectedAssetThumbnail from '@/views/asset/components/ProtectedAssetThumbnail.vue'
 import AssetRequirementDialog from '@/views/asset/components/AssetRequirementDialog.vue'
 
@@ -40,6 +42,7 @@ vi.mock('@/api/shot-grid/projects', () => ({
 vi.mock('@/api/shot-grid/assets', () => ({
   archiveAsset: vi.fn(),
   archiveAssetItem: vi.fn(),
+  deleteAssetItem: vi.fn(),
   assignAssetItemTask: vi.fn(),
   batchAssignAssetItemTasks: vi.fn(),
   batchDeleteAssets: vi.fn(),
@@ -136,7 +139,7 @@ async function mountList(permissions = ['shotgrid:asset:list', 'shotgrid:asset:a
   })
   await router.push('/assets?projectId=8')
   await router.isReady()
-  const wrapper = mount(AssetListView, { global: { plugins: [pinia, router], components: { ElButton, ElCard, ElDatePicker, ElDialog, ElDrawer, ElEmpty, ElForm, ElFormItem, ElIcon, ElInput, ElInputNumber, ElPagination, ElRadioButton, ElRadioGroup, ElTable, ElTableColumn, ElTag } } })
+  const wrapper = mount(AssetListView, { global: { plugins: [pinia, router], stubs: { ProductionHistoryPanel: true }, components: { ElButton, ElCard, ElDatePicker, ElDialog, ElDrawer, ElEmpty, ElForm, ElFormItem, ElIcon, ElInput, ElInputNumber, ElPagination, ElRadioButton, ElRadioGroup, ElTable, ElTableColumn, ElTag } } })
   await flushPromises()
   await flushPromises()
   return { wrapper, router }
@@ -156,8 +159,12 @@ async function mountDetail(path = '/projects/8/assets/31', permissions = ['shotg
   const wrapper = mount(AssetDetailView, {
     global: {
       plugins: [pinia, router],
-      components: { ElButton, ElDatePicker, ElForm, ElFormItem, ElIcon, ElInput, ElTag },
-      stubs: { ProductionHistoryPanel: true, ProtectedAssetThumbnail: true }
+      components: { ElAlert, ElButton, ElDatePicker, ElDialog, ElForm, ElFormItem, ElIcon, ElInput, ElTag },
+      stubs: {
+        ProductionHistoryPanel: true,
+        ProtectedAssetThumbnail: true,
+        ElDialog: { template: '<section><slot name="header" /><slot /><slot name="footer" /></section>' }
+      }
     }
   })
   await flushPromises()
@@ -432,6 +439,39 @@ describe('资产详情动作镜像与路由隔离', () => {
     restricted.wrapper.unmount()
   })
 
+  it.each([
+    [true, true, true],
+    [true, false, false],
+    [false, true, false]
+  ])('删除分项入口取后端动作与平台权限交集 %s/%s', async (allowed, permitted, visible) => {
+    getAssetDetail.mockResolvedValue({ data: {
+      ...assetDetail(), items: [{ ...assetItem, allowedActions: allowed ? ['assetItem.delete'] : [] }]
+    } })
+    const { wrapper } = await mountDetail('/projects/8/assets/31', permitted ? ['shotgrid:asset:archive'] : [])
+    expect(wrapper.findAll('button').some(button => button.text() === '删除分项')).toBe(visible)
+    wrapper.unmount()
+  })
+
+  it('删除分项成功后刷新卡片、缩略图与制作履历，并通知资产列表', async () => {
+    getAssetDetail.mockResolvedValue({ data: {
+      ...assetDetail(), items: [{ ...assetItem, allowedActions: ['assetItem.delete'] }]
+    } })
+    const { wrapper } = await mountDetail()
+    await wrapper.findAll('button').find(button => button.text() === '删除分项').trigger('click')
+    const dialog = wrapper.findComponent(AssetItemDeleteDialog)
+    expect(dialog.props('item').assetItemId).toBe(41)
+    getAssetDetail.mockResolvedValue({ data: { ...assetDetail(), items: [], itemCount: 0 } })
+    dialog.vm.$emit('deleted', { deletedAssetItemId: 41 }, {
+      projectId: 8, assetId: 31, assetItemId: 41, operationGeneration: dialog.props('operationGeneration')
+    })
+    await flushPromises()
+    expect(wrapper.findComponent(AssetItemDeleteDialog).exists()).toBe(false)
+    expect(wrapper.find('.item-card').exists()).toBe(false)
+    expect(wrapper.find('.asset-hero__item').exists()).toBe(false)
+    expect(wrapper.emitted('changed').at(-1)).toEqual([{ projectId: 8, assetId: 31 }])
+    wrapper.unmount()
+  })
+
   it('详情头部按活动制作分项顺序展示各自当前缩略图', async () => {
     const firstThumbnail = {
       fileId: 'thumbnail-1',
@@ -605,6 +645,71 @@ describe('资产表单统一使用 Element Plus 校验链路', () => {
       hasNext: false
     })
     resolveAssetRequirement.mockReset().mockResolvedValue({ data: { requirementId: 91 } })
+  })
+
+  it('删除分项确认校验原因、携带锁版本并阻止重复提交', async () => {
+    let finishDelete
+    deleteAssetItem.mockReset().mockImplementation(() => new Promise(resolve => { finishDelete = resolve }))
+    const wrapper = mountAssetDialog(AssetItemDeleteDialog, {
+      projectId: 8, operationGeneration: 1, asset: assetDetail(), item: { ...assetItem, lockVersion: 3 }
+    })
+    const form = wrapper.findComponent(ElForm)
+    const confirm = form.findAllComponents(ElButton).find(button => button.text() === '确认删除')
+    await confirm.trigger('click')
+    await flushPromises()
+    expect(deleteAssetItem).not.toHaveBeenCalled()
+    await vi.waitFor(() => expect(form.text()).toContain('请填写删除原因'))
+    await form.get('textarea').setValue('  新增后不再需要  ')
+    await Promise.all([confirm.trigger('click'), confirm.trigger('click')])
+    await flushPromises()
+    expect(deleteAssetItem).toHaveBeenCalledTimes(1)
+    expect(deleteAssetItem).toHaveBeenCalledWith(8, 41, { reason: '新增后不再需要', lockVersion: 3 })
+    expect(confirm.props('loading')).toBe(true)
+    expect(form.findAllComponents(ElButton).find(button => button.text() === '取消').props('disabled')).toBe(true)
+    finishDelete({ data: { projectId: 8, assetId: 31, deletedAssetItemId: 41 } })
+    await flushPromises()
+    expect(wrapper.emitted('deleted')[0]).toEqual([
+      { projectId: 8, assetId: 31, deletedAssetItemId: 41 },
+      { projectId: 8, assetId: 31, assetItemId: 41, lockVersion: 3, operationGeneration: 1 }
+    ])
+    wrapper.unmount()
+  })
+
+  it('删除发生状态冲突时保留原因，允许刷新且不报告成功', async () => {
+    deleteAssetItem.mockReset().mockRejectedValue({ httpStatus: 409, message: '制作任务已经开始，分项不能删除' })
+    const wrapper = mountAssetDialog(AssetItemDeleteDialog, {
+      projectId: 8, operationGeneration: 1, asset: assetDetail(), item: assetItem
+    })
+    await wrapper.get('textarea').setValue('误建分项')
+    await wrapper.findAllComponents(ElButton).find(button => button.text() === '确认删除').trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('制作任务已经开始，分项不能删除')
+    expect(wrapper.get('textarea').element.value).toBe('误建分项')
+    expect(wrapper.emitted('deleted')).toBeUndefined()
+    await wrapper.findAllComponents(ElButton).find(button => button.text() === '刷新后重试').trigger('click')
+    expect(wrapper.emitted('refresh')).toHaveLength(1)
+    wrapper.unmount()
+  })
+
+  it('取消删除重置原因，关闭后未返回的删除结果不再更新旧弹窗', async () => {
+    let finishDelete
+    deleteAssetItem.mockReset().mockImplementation(() => new Promise(resolve => { finishDelete = resolve }))
+    const props = { projectId: 8, operationGeneration: 1, asset: assetDetail(), item: assetItem }
+    const canceled = mountAssetDialog(AssetItemDeleteDialog, props)
+    await canceled.get('textarea').setValue('误建')
+    await canceled.findAllComponents(ElButton).find(button => button.text() === '取消').trigger('click')
+    expect(canceled.findComponent(ElForm).props('model').reason).toBe('')
+    expect(canceled.emitted('close')).toHaveLength(1)
+    expect(deleteAssetItem).not.toHaveBeenCalled()
+    canceled.unmount()
+    const wrapper = mountAssetDialog(AssetItemDeleteDialog, props)
+    await wrapper.get('textarea').setValue('误建')
+    await wrapper.findAllComponents(ElButton).find(button => button.text() === '确认删除').trigger('click')
+    await flushPromises()
+    wrapper.unmount()
+    finishDelete({ data: { deletedAssetItemId: 41 } })
+    await flushPromises()
+    expect(wrapper.emitted('deleted')).toBeUndefined()
   })
 
   it('归档表单通过按钮点击和 Form.validate 阻止空原因', async () => {

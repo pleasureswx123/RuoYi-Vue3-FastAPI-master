@@ -11,6 +11,7 @@ from module_admin.entity.vo.user_vo import CurrentUserModel
 from module_shot_grid.dao.asset_crud_dao import ACTIVE_TASK_STATUSES, ShotGridAssetCrudDao
 from module_shot_grid.dao.project_audit_dao import ShotGridProjectAuditDao
 from module_shot_grid.dao.project_dao import ShotGridProjectDao
+from module_shot_grid.dao.task_dao import ShotGridTaskDao
 from module_shot_grid.entity.do.asset_do import ShotGridAsset, ShotGridAssetItem
 from module_shot_grid.entity.do.task_do import ShotGridTask
 from module_shot_grid.entity.vo.access_vo import ShotGridProjectAccessModel
@@ -21,6 +22,8 @@ from module_shot_grid.entity.vo.asset_crud_vo import (
     ShotGridAssetCreateModel,
     ShotGridAssetDetailModel,
     ShotGridAssetItemCreateModel,
+    ShotGridAssetItemDeleteModel,
+    ShotGridAssetItemDeleteResultModel,
     ShotGridAssetItemModel,
     ShotGridAssetItemUpdateModel,
     ShotGridAssetListItemModel,
@@ -551,6 +554,77 @@ class ShotGridAssetCrudService:
         return result
 
     @classmethod
+    async def delete_asset_item(
+        cls,
+        db: AsyncSession,
+        project_id: int,
+        asset_item_id: int,
+        command: ShotGridAssetItemDeleteModel,
+        current_user: CurrentUserModel,
+        access: ShotGridProjectAccessModel,
+    ) -> ShotGridAssetItemDeleteResultModel:
+        actor_user_id, actor_name, dept_name = ShotGridProjectService._actor(current_user)
+        cls._require_write_access(access, project_id, actor_user_id)
+        try:
+            await cls._lock_writable_project(db, project_id, current_user, actor_user_id)
+            preview = await ShotGridAssetCrudDao.get_asset_item(db, project_id, asset_item_id)
+            if preview is None:
+                raise shot_grid_error(404, 'SG_ASSET_ITEM_NOT_FOUND', '资产制作分项不存在或不可见')
+            asset = await cls._lock_active_asset(db, project_id, preview.asset_id)
+            item = await ShotGridAssetCrudDao.get_asset_item(db, project_id, asset_item_id, for_update=True)
+            if item is None or item.asset_id != asset.asset_id:
+                raise shot_grid_error(404, 'SG_ASSET_ITEM_NOT_FOUND', '资产制作分项不存在或不可见')
+            if item.lifecycle_status != 'active':
+                raise shot_grid_error(409, 'SG_INVALID_STATE_TRANSITION', '已归档制作分项不能删除')
+            cls._require_lock_version(item.lock_version, command.lock_version)
+            task = await ShotGridAssetCrudDao.get_task_for_item(db, project_id, asset_item_id, for_update=True)
+            if task is not None and task.task_status != 'not_started':
+                raise shot_grid_error(409, 'SG_ASSET_TASK_ALREADY_STARTED', '制作任务已经开始，分项不能删除')
+            if await ShotGridAssetCrudDao.has_versions_for_item(db, project_id, asset_item_id):
+                raise shot_grid_error(409, 'SG_ASSET_HAS_VERSION', '制作分项已有版本，不能删除')
+            if (
+                task is not None
+                and await ShotGridTaskDao.get_uncommitted_submission_for_update(db, task.task_id) is not None
+            ):
+                raise shot_grid_error(
+                    409, 'SG_ASSET_ITEM_SUBMISSION_IN_PROGRESS', '制作分项存在尚未处理完成的版本提交，不能删除'
+                )
+            now = datetime.now().replace(microsecond=0)
+            if task is not None and not await ShotGridAssetCrudDao.delete_not_started_task(
+                db, task_id=task.task_id, actor_name=actor_name, now=now
+            ):
+                raise shot_grid_error(409, 'SG_OPTIMISTIC_LOCK_CONFLICT', '资产任务状态已发生变化，请刷新后重试')
+            item.lifecycle_status = 'archived'
+            item.del_flag = '2'
+            item.update_by = actor_name
+            item.update_time = now
+            item.lock_version += 1
+            await db.flush()
+            result = ShotGridAssetItemDeleteResultModel(
+                projectId=project_id, assetId=asset.asset_id, deletedAssetItemId=asset_item_id
+            )
+            await cls._audit(
+                db,
+                actor_name=actor_name,
+                dept_name=dept_name,
+                business_type=BusinessType.DELETE.value,
+                method='delete_asset_item',
+                request_method='POST',
+                oper_url=f'/shot-grid/projects/{project_id}/asset-items/{asset_item_id}/delete',
+                payload={
+                    'projectId': project_id,
+                    'assetItemId': asset_item_id,
+                    **command.model_dump(mode='json', by_alias=True),
+                },
+                result={**result.model_dump(by_alias=True), 'deletedTaskId': task.task_id if task else None},
+            )
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            raise
+        return result
+
+    @classmethod
     async def archive_asset_item(
         cls,
         db: AsyncSession,
@@ -943,6 +1017,13 @@ class ShotGridAssetCrudService:
             'shotgrid:asset:archive',
         ):
             actions.append('assetItem.archive')
+        if (
+            task_status in EDITABLE_ASSET_ITEM_TASK_STATUSES
+            and not has_versions
+            and not has_uncommitted_submission
+            and cls._has_permission(current_user, 'shotgrid:asset:archive')
+        ):
+            actions.append('assetItem.delete')
         if (
             task_status != 'completed'
             and is_asset_production_item_ready(production_item)

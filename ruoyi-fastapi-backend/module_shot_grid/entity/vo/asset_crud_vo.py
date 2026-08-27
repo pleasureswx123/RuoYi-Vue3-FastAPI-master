@@ -128,6 +128,28 @@ class ShotGridAssetArchiveModel(ShotGridLockVersionModel):
         return value.strip()
 
 
+class ShotGridAssetItemDeleteModel(ShotGridLockVersionModel):
+    """删除尚未开始制作的分项。"""
+
+    model_config = ConfigDict(extra='forbid')
+    reason: str = Field(min_length=1, max_length=500, description='删除原因')
+
+    @field_validator('reason', mode='before')
+    @classmethod
+    def normalize_reason(cls, value: object) -> object:
+        if not isinstance(value, str):
+            raise ValueError('删除原因必须是字符串')
+        return value.strip()
+
+
+class ShotGridAssetItemDeleteResultModel(ShotGridApiModel):
+    """制作分项删除结果，父资产继续保留。"""
+
+    project_id: int
+    asset_id: int
+    deleted_asset_item_id: int
+
+
 class ShotGridAssetBatchDeleteItemModel(ShotGridApiModel):
     """批量删除中的资产及其锁版本。"""
 

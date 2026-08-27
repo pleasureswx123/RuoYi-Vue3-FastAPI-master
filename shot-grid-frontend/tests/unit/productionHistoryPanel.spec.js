@@ -21,6 +21,7 @@ import {
   ElTimelineItem
 } from 'element-plus'
 import { flushPromises, mount } from '@vue/test-utils'
+import { h } from 'vue'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -300,7 +301,7 @@ function assetHistory() {
   }
 }
 
-async function mountPanel(props = { projectId: 8, subjectId: 41, subjectType: 'shot' }) {
+async function mountPanel(props = { projectId: 8, subjectId: 41, subjectType: 'shot' }, slots = {}) {
   const router = createRouter({
     history: createMemoryHistory(),
     routes: [
@@ -316,6 +317,7 @@ async function mountPanel(props = { projectId: 8, subjectId: 41, subjectType: 's
   await router.isReady()
   const wrapper = mount(ProductionHistoryPanel, {
     props,
+    slots,
     global: { plugins: [router], components }
   })
   await flushPromises()
@@ -386,6 +388,24 @@ describe('制作履历面板', () => {
     expect(wrapper.find('.history-timeline').text()).toContain('已提交')
     expect(wrapper.find('.history-timeline').text()).toContain('主视角任务已建立')
     expect(wrapper.find('.history-timeline').text()).not.toContain('反打视角任务已建立')
+    wrapper.unmount()
+  })
+
+  it('分项操作跟随选中标签，删除当前分项并刷新后回到全部分项', async () => {
+    const data = assetHistory()
+    getProductionHistory.mockResolvedValue({ data })
+    const { wrapper } = await mountPanel({ projectId: 8, subjectId: 31, subjectType: 'asset' }, {
+      'lane-actions': ({ lane }) => h(ElButton, { class: 'lane-delete-action' }, () => `删除${lane.name}`)
+    })
+    expect(wrapper.find('.lane-delete-action').exists()).toBe(false)
+    await wrapper.get('#tab-1001').trigger('click')
+    expect(wrapper.find('.history-stage .lane-delete-action').text()).toBe('删除主视角')
+    getProductionHistory.mockResolvedValue({ data: { ...data, lanes: [data.lanes[1]] } })
+    await wrapper.setProps({ refreshKey: 1 })
+    await flushPromises()
+    expect(wrapper.find('#tab-1001').exists()).toBe(false)
+    expect(wrapper.get('#tab-all').attributes('aria-selected')).toBe('true')
+    expect(wrapper.find('.lane-delete-action').exists()).toBe(false)
     wrapper.unmount()
   })
 

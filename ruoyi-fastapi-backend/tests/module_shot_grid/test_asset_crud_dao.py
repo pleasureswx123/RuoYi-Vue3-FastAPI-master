@@ -120,7 +120,7 @@ async def test_version_immutability_guard_is_project_and_item_scoped() -> None:
 
 
 @pytest.mark.asyncio
-async def test_asset_thumbnail_projection_is_project_scoped_and_uses_latest_version_rows() -> None:
+async def test_asset_thumbnail_projection_uses_latest_version_display_candidate() -> None:
     refs_db = _SequenceDb([_MappingResult([])])
     versions_db = _SequenceDb([_MappingResult([])])
 
@@ -138,6 +138,10 @@ async def test_asset_thumbnail_projection_is_project_scoped_and_uses_latest_vers
     assert "sg_asset_item.lifecycle_status = 'active'" in refs_sql
     assert 'ORDER BY sg_asset_item.asset_id, sg_asset_item.sort_order, sg_asset_item.asset_item_id' in refs_sql
     assert 'sg_version.task_id IN (200, 201)' in versions_sql
+    assert 'sg_version_candidate.version_id = sg_version.version_id' in versions_sql
+    assert 'sg_version_candidate.candidate_id = sg_version.selected_candidate_id' in versions_sql
+    assert 'sg_version_candidate.sort_order' in versions_sql
+    assert 'sg_version_candidate.candidate_no' in versions_sql
     assert "sg_version_file.file_role = 'thumbnail'" in versions_sql
     assert 'ORDER BY sg_version.task_id, sg_version.version_no DESC' in versions_sql
 
