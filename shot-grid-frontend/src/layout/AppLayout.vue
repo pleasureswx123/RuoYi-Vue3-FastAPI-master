@@ -532,6 +532,8 @@ onBeforeUnmount(() => {
 .app-content {
   min-height: calc(100vh - 76px);
   padding: 0;
+  // 页面使用整页滚动，避免 ElMain 默认 overflow: auto 让 Affix 监听错误容器。
+  overflow: visible;
 }
 
 .app-security-notice {

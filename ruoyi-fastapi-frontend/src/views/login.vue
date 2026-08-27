@@ -1,5 +1,11 @@
 <template>
-  <main class="admin-login" :style="{ '--company-logo-image': `url(${companyLogoUrl})` }">
+  <main
+    class="admin-login"
+    :style="{
+      '--company-logo-image': `url(${companyLogoUrl})`,
+      '--brand-scene-image': `url(${brandSceneImageUrl})`
+    }"
+  >
     <section class="brand-scene" aria-label="SHOT GRID 管理平台介绍">
       <div class="brand-scene__frame" aria-hidden="true"></div>
       <img
@@ -143,6 +149,7 @@ import { CircleCheckFilled, Histogram, Lock, Refresh, User } from '@element-plus
 import Cookies from 'js-cookie'
 
 import { getCodeImg } from '@/api/login'
+import brandSceneImageUrl from '@/assets/images/login-management-console.webp'
 import useUserStore from '@/store/modules/user'
 import { decrypt, encrypt } from '@/utils/jsencrypt'
 
@@ -285,6 +292,7 @@ getCookie()
 
 .brand-scene {
   position: relative;
+  isolation: isolate;
   display: flex;
   min-height: 100vh;
   padding: clamp(52px, 6vw, 96px);
@@ -300,6 +308,7 @@ getCookie()
 .brand-scene::before,
 .brand-scene::after {
   position: absolute;
+  z-index: 1;
   content: '';
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 50%;
@@ -321,8 +330,14 @@ getCookie()
 
 .brand-scene__frame {
   position: absolute;
+  z-index: 0;
   inset: 28px;
+  background:
+    linear-gradient(180deg, rgba(3, 7, 12, 0.06) 0%, rgba(3, 7, 12, 0.32) 44%, rgba(3, 7, 12, 0.94) 100%),
+    linear-gradient(90deg, rgba(3, 7, 12, 0.7) 0%, rgba(3, 7, 12, 0.18) 58%, rgba(3, 7, 12, 0.08) 100%),
+    var(--brand-scene-image) center / cover no-repeat;
   border: 1px solid rgba(255, 255, 255, 0.06);
+  box-shadow: inset 0 0 96px rgba(0, 0, 0, 0.3);
   pointer-events: none;
 }
 
@@ -352,7 +367,7 @@ getCookie()
   position: absolute;
   top: clamp(58px, 6vw, 96px);
   left: clamp(58px, 6vw, 96px);
-  z-index: 1;
+  z-index: 2;
   display: block;
   width: clamp(230px, 21vw, 340px);
   height: auto;
@@ -361,7 +376,7 @@ getCookie()
 
 .brand-scene__content {
   position: relative;
-  z-index: 1;
+  z-index: 2;
   max-width: 760px;
 }
 
@@ -414,6 +429,7 @@ getCookie()
 
 .brand-scene__caption {
   position: absolute;
+  z-index: 2;
   right: clamp(58px, 6vw, 96px);
   bottom: clamp(58px, 6vw, 96px);
   margin: 0;

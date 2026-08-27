@@ -3,6 +3,7 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Lock, Refresh, User } from '@element-plus/icons-vue'
 
+import loginSceneImageUrl from '@/assets/login-production-stage.webp'
 import { useSessionStore } from '@/store/modules/session'
 import { sanitizeInternalRedirect } from '@/router/routeRegistry'
 
@@ -80,7 +81,7 @@ onMounted(() => refreshCaptcha().catch(() => undefined))
 </script>
 
 <template>
-  <main class="login-page">
+  <main class="login-page" :style="{ '--login-scene-image': `url(${loginSceneImageUrl})` }">
     <section class="login-scene" aria-label="Shot Grid 产品介绍">
       <div class="login-scene__frame-lines" aria-hidden="true"></div>
       <img
@@ -181,6 +182,7 @@ onMounted(() => refreshCaptcha().catch(() => undefined))
 
 .login-scene {
   position: relative;
+  isolation: isolate;
   display: flex;
   min-height: 100vh;
   align-items: flex-end;
@@ -196,6 +198,7 @@ onMounted(() => refreshCaptcha().catch(() => undefined))
 .login-scene::before,
 .login-scene::after {
   position: absolute;
+  z-index: 1;
   content: '';
   border: 1px solid rgba(255, 255, 255, 0.09);
   border-radius: 50%;
@@ -217,8 +220,14 @@ onMounted(() => refreshCaptcha().catch(() => undefined))
 
 .login-scene__frame-lines {
   position: absolute;
+  z-index: 0;
   inset: 28px;
+  background:
+    linear-gradient(180deg, rgba(4, 7, 11, 0.08) 0%, rgba(4, 7, 11, 0.32) 42%, rgba(4, 7, 11, 0.92) 100%),
+    linear-gradient(90deg, rgba(4, 7, 11, 0.68) 0%, rgba(4, 7, 11, 0.16) 58%, rgba(4, 7, 11, 0.08) 100%),
+    var(--login-scene-image) center / cover no-repeat;
   border: 1px solid rgba(255, 255, 255, 0.06);
+  box-shadow: inset 0 0 90px rgba(0, 0, 0, 0.28);
   pointer-events: none;
 }
 
@@ -248,7 +257,7 @@ onMounted(() => refreshCaptcha().catch(() => undefined))
   position: absolute;
   top: clamp(52px, 7vw, 104px);
   left: clamp(52px, 7vw, 104px);
-  z-index: 1;
+  z-index: 2;
   display: block;
   width: clamp(300px, 26vw, 380px);
   height: auto;
@@ -258,7 +267,7 @@ onMounted(() => refreshCaptcha().catch(() => undefined))
 
 .login-scene__content {
   position: relative;
-  z-index: 1;
+  z-index: 2;
   max-width: 760px;
 }
 
