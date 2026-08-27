@@ -130,6 +130,33 @@ describe('审核媒体工作区', () => {
     wrapper.unmount()
   })
 
+  it('同一版本切换候选文件时重新加载中央审核媒体', async () => {
+    const secondFile = {
+      ...file,
+      fileId: '6ed39e04-2f29-45ab-a58c-4f8168f5131b',
+      originalName: 'review-candidate-02.png',
+      businessFileName: 'LCFR_asset_V003_02.png'
+    }
+    const wrapper = mount(ReviewMediaWorkspace, {
+      props: { version, canDownload: true },
+      global: { components }
+    })
+    await flushPromises()
+    expect(downloadProtectedVersionFile).toHaveBeenCalledWith(33, file.fileId, {
+      signal: expect.any(AbortSignal)
+    })
+
+    downloadProtectedVersionFile.mockClear()
+    await wrapper.setProps({ version: { ...version, files: [secondFile] } })
+    await flushPromises()
+
+    expect(downloadProtectedVersionFile).toHaveBeenCalledWith(33, secondFile.fileId, {
+      signal: expect.any(AbortSignal)
+    })
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:review-media')
+    wrapper.unmount()
+  })
+
   it('查看已保存意见时播放会先退出定位并继续播放', async () => {
     const videoFile = { ...file, originalName: 'review.mp4', contentType: 'video/mp4' }
     const selectedNote = {
@@ -204,6 +231,88 @@ describe('审核媒体工作区', () => {
       points: [{ x: 0.1, y: 0.2 }, { x: 0.8, y: 0.7 }]
     })
     expect(wrapper.find('.annotation-arrow').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('进入标注默认框选，拖动实时显示轮廓且工具栏使用小按钮', async () => {
+    const wrapper = mount(ReviewMediaWorkspace, {
+      props: { version, canDownload: true, canAnnotate: true },
+      global: { components }
+    })
+    await flushPromises()
+
+    await wrapper.findAll('button').find(button => button.text().includes('标注此画面')).trigger('click')
+    expect(wrapper.find('.annotation-toolbar .el-button--primary').text()).toBe('框选')
+    const layer = wrapper.find('.annotation-layer')
+    layer.element.getBoundingClientRect = () => ({ left: 0, top: 0, width: 200, height: 100 })
+
+    await layer.trigger('pointerdown', { clientX: 20, clientY: 10, pointerId: 4 })
+    await layer.trigger('pointermove', { clientX: 120, clientY: 70, pointerId: 4 })
+
+    const preview = wrapper.find('.annotation-rectangle.is-drawing')
+    expect(preview.exists()).toBe(true)
+    expect(preview.attributes('style')).toContain('left: 10%')
+    expect(preview.attributes('style')).toContain('width: 50%')
+    expect(wrapper.emitted('annotations-change').at(-1)[0]).toBeNull()
+
+    await layer.trigger('pointerup', { clientX: 140, clientY: 80, pointerId: 4 })
+
+    expect(wrapper.find('.annotation-rectangle.is-drawing').exists()).toBe(false)
+    const payload = wrapper.emitted('annotations-change').at(-1)[0]
+    expect(payload.items[0]).toMatchObject({
+      type: 'rectangle',
+      points: [{ x: 0.1, y: 0.1 }, { x: 0.7, y: 0.8 }]
+    })
+    const toolbarButtons = wrapper.find('.annotation-toolbar__actions').findAllComponents(ElButton)
+    expect(toolbarButtons).toHaveLength(8)
+    for (const button of toolbarButtons) expect(button.classes()).toContain('el-button--small')
+
+    await wrapper.findAll('button').find(button => button.text().includes('查看画面')).trigger('click')
+    expect(wrapper.text()).toContain('查看模式，可操作视频播放控件')
+    expect(layer.attributes('data-active')).toBe('false')
+    await wrapper.findAll('button').find(button => button.text().includes('退出标注')).trigger('click')
+    await wrapper.findAll('button').find(button => button.text().includes('标注此画面')).trigger('click')
+    expect(wrapper.find('.annotation-toolbar .el-button--primary').text()).toBe('框选')
+    wrapper.unmount()
+  })
+
+  it('涂抹拖动时连续显示轨迹，松开后保存归一化自由曲线', async () => {
+    const wrapper = mount(ReviewMediaWorkspace, {
+      props: { version, canDownload: true, canAnnotate: true },
+      global: { components }
+    })
+    await flushPromises()
+
+    await wrapper.findAll('button').find(button => button.text().includes('标注此画面')).trigger('click')
+    await wrapper.findAll('button').find(button => button.text().includes('涂抹')).trigger('click')
+    const layer = wrapper.find('.annotation-layer')
+    layer.element.getBoundingClientRect = () => ({ left: 0, top: 0, width: 200, height: 100 })
+
+    await layer.trigger('pointerdown', { clientX: 20, clientY: 10, pointerId: 5 })
+    await layer.trigger('pointermove', { clientX: 40, clientY: 20, pointerId: 5 })
+    await layer.trigger('pointermove', { clientX: 80, clientY: 30, pointerId: 5 })
+
+    const preview = wrapper.find('.annotation-freehand.is-drawing')
+    expect(preview.exists()).toBe(true)
+    expect(preview.find('polyline').attributes('points')).toBe('100,100 200,200 400,300')
+    expect(wrapper.emitted('annotations-change').at(-1)[0]).toBeNull()
+
+    await layer.trigger('pointerup', { clientX: 120, clientY: 70, pointerId: 5 })
+
+    expect(wrapper.find('.annotation-freehand.is-drawing').exists()).toBe(false)
+    const payload = wrapper.emitted('annotations-change').at(-1)[0]
+    expect(payload.items[0]).toMatchObject({
+      type: 'freehand',
+      color: '#ff8a4c',
+      strokeWidth: 0.008,
+      points: [
+        { x: 0.1, y: 0.1 },
+        { x: 0.2, y: 0.2 },
+        { x: 0.4, y: 0.3 },
+        { x: 0.6, y: 0.7 }
+      ]
+    })
+    expect(wrapper.find('.annotation-freehand:not(.is-drawing)').exists()).toBe(true)
     wrapper.unmount()
   })
 

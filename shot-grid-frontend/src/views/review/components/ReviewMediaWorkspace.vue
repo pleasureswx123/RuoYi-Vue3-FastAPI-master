@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Aim, Crop, Delete, EditPen, TopRight, VideoPlay } from '@element-plus/icons-vue'
+import { Aim, Brush, Crop, Delete, EditPen, TopRight, VideoPlay } from '@element-plus/icons-vue'
 
 import {
   createVersionPlaybackTicket,
@@ -38,12 +38,18 @@ const workspaceRoot = ref(null)
 const currentTimeMs = ref(0)
 const pendingSeekMs = ref(null)
 const dragStart = ref(null)
+const dragCurrent = ref(null)
+const dragPointerId = ref(null)
+const dragPath = ref([])
 const noteFocusPulse = ref(false)
 let currentController = null
 let compareController = null
 let historyController = null
 let generation = 0
 let focusTimer = null
+
+const MAX_FREEHAND_POINTS = 512
+const MIN_FREEHAND_POINT_DISTANCE = 0.002
 
 const primaryFile = version => version?.files?.find(file => file.role === 'proxy_media')
   || version?.files?.find(file => file.isPrimary && file.role === 'review_media')
@@ -54,6 +60,12 @@ const thumbnailFile = version => version?.files?.find(file => file.role === 'thu
 const versionOrder = version => Number(version?.versionNo ?? String(version?.versionNumber || '').match(/\d+/)?.[0] ?? 0)
 const mediaKind = file => String(file?.contentType || '').startsWith('video/') ? 'video'
   : String(file?.contentType || '').startsWith('image/') ? 'image' : 'unsupported'
+const currentMediaKey = computed(() => [
+  props.version?.versionId,
+  primaryFile(props.version)?.fileId,
+  thumbnailFile(props.version)?.fileId,
+  props.version?.mediaDerivationStatus
+].join(':'))
 const currentKind = computed(() => mediaKind(currentMedia.file))
 const compareKind = computed(() => mediaKind(compareMedia.file))
 const sourceWidth = computed(() => currentMedia.width || 1)
@@ -88,6 +100,16 @@ const hasDraftContext = computed(() => (
   || draftItems.value.length > 0
 ))
 const hasUnsavedAnnotations = computed(() => props.draftAnnotationCount > 0 || draftItems.value.length > 0)
+const activeAnnotationPreview = computed(() => {
+  if (!dragStart.value || !dragCurrent.value || !['rectangle', 'arrow', 'freehand'].includes(tool.value)) return null
+  return {
+    id: 'active-annotation-preview',
+    type: tool.value,
+    color: tool.value === 'rectangle' ? '#ff6b6b' : tool.value === 'arrow' ? '#68b5ff' : '#ff8a4c',
+    strokeWidth: tool.value === 'freehand' ? 0.008 : 0.004,
+    points: tool.value === 'freehand' ? dragPath.value : [dragStart.value, dragCurrent.value]
+  }
+})
 const playbackStatus = computed(() => {
   if (usingProxy.value) {
     return { label: '流畅预览', type: 'success', title: '当前使用适合网页播放的审核预览。' }
@@ -271,13 +293,13 @@ function startIssueAtCurrentMedia() {
 
 function toggleAnnotationMode() {
   annotationMode.value = !annotationMode.value
+  resetAnnotationGesture()
   if (annotationMode.value) {
     video.value?.pause()
-    tool.value = 'point'
+    tool.value = 'rectangle'
     return
   }
   tool.value = 'navigate'
-  dragStart.value = null
 }
 
 function toggleComparison() {
@@ -309,10 +331,52 @@ function pointFromEvent(event) {
   }
 }
 
+function pointDistance(left, right) {
+  return Math.hypot(right.x - left.x, right.y - left.y)
+}
+
+function appendFreehandPoint(points, point, { force = false } = {}) {
+  const lastPoint = points.at(-1)
+  if (!lastPoint) return [point]
+  const distance = pointDistance(lastPoint, point)
+  if (distance === 0 || (!force && distance < MIN_FREEHAND_POINT_DISTANCE)) return points
+  if (points.length >= MAX_FREEHAND_POINTS) return [...points.slice(0, -1), point]
+  return [...points, point]
+}
+
+function freehandPoints(item) {
+  return item.points.map(point => `${point.x * 1000},${point.y * 1000}`).join(' ')
+}
+
+function freehandStrokeWidth(item) {
+  return Math.max(3, Math.min(16, Number(item.strokeWidth || 0.008) * 1000))
+}
+
 function beginAnnotation(event) {
   if (!props.canAnnotate || tool.value === 'navigate') return
   dragStart.value = pointFromEvent(event)
+  dragCurrent.value = dragStart.value
+  dragPointerId.value = event.pointerId
+  dragPath.value = tool.value === 'freehand' ? [dragStart.value] : []
   event.currentTarget.setPointerCapture?.(event.pointerId)
+}
+
+function moveAnnotation(event) {
+  if (!dragStart.value || dragPointerId.value !== event.pointerId) return
+  dragCurrent.value = pointFromEvent(event)
+  if (tool.value === 'freehand') {
+    dragPath.value = appendFreehandPoint(dragPath.value, dragCurrent.value)
+  }
+}
+
+function resetAnnotationGesture(event = null) {
+  if (event && dragPointerId.value !== null && event.currentTarget.hasPointerCapture?.(dragPointerId.value)) {
+    event.currentTarget.releasePointerCapture?.(dragPointerId.value)
+  }
+  dragStart.value = null
+  dragCurrent.value = null
+  dragPointerId.value = null
+  dragPath.value = []
 }
 
 function arrowStyle(item, width = sourceWidth.value, height = sourceHeight.value) {
@@ -351,10 +415,13 @@ async function requestAnnotationText() {
 }
 
 async function finishAnnotation(event) {
-  if (!dragStart.value || !props.canAnnotate || tool.value === 'navigate') return
+  if (!dragStart.value || dragPointerId.value !== event.pointerId || !props.canAnnotate || tool.value === 'navigate') return
   const end = pointFromEvent(event)
   const start = dragStart.value
-  dragStart.value = null
+  const freehandPath = tool.value === 'freehand'
+    ? appendFreehandPoint(dragPath.value, end, { force: true })
+    : []
+  resetAnnotationGesture(event)
   const id = `annotation-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`
   let item = null
   if (tool.value === 'point') {
@@ -363,6 +430,8 @@ async function finishAnnotation(event) {
     item = { id, type: 'rectangle', color: '#ff6b6b', strokeWidth: 0.004, points: [start, end] }
   } else if (tool.value === 'arrow') {
     item = { id, type: 'arrow', color: '#68b5ff', strokeWidth: 0.004, points: [start, end] }
+  } else if (tool.value === 'freehand') {
+    item = { id, type: 'freehand', color: '#ff8a4c', strokeWidth: 0.008, points: freehandPath }
   } else if (tool.value === 'text') {
     const text = await requestAnnotationText()
     if (!text) return
@@ -387,7 +456,7 @@ function emitAnnotations() {
 function clearDraft() {
   annotationMode.value = false
   tool.value = 'navigate'
-  dragStart.value = null
+  resetAnnotationGesture()
   draftItems.value = []
   emitAnnotations()
 }
@@ -395,7 +464,7 @@ function clearDraft() {
 function loadDraft(annotations = null, sourceTimeMs = null) {
   annotationMode.value = false
   tool.value = 'navigate'
-  dragStart.value = null
+  resetAnnotationGesture()
   draftItems.value = JSON.parse(JSON.stringify(annotations?.items || []))
   seekToDraft(sourceTimeMs)
 }
@@ -467,10 +536,13 @@ function isDraftItem(item) {
   return draftItems.value.some(draft => draft.id === item.id)
 }
 
-watch(() => props.version?.versionId, async () => {
+watch(currentMediaKey, async () => {
   annotationMode.value = false
   tool.value = 'navigate'
+  resetAnnotationGesture()
   await loadCurrentMedia()
+}, { immediate: true })
+watch(() => props.version?.versionId, async () => {
   await loadComparisonOptions()
 }, { immediate: true })
 watch(comparisonVersionId, loadComparison)
@@ -509,26 +581,31 @@ defineExpose({ clearDraft, loadDraft, seekToDraft, seekToNote })
         <div v-if="currentMedia.state === 'ready' && currentKind !== 'unsupported'" class="media-stage" :class="{ 'is-note-focus': noteFocusPulse }" :style="stageStyle">
           <img v-if="currentKind === 'image'" :src="currentMedia.url" alt="当前审核图片" @load="onMediaReady($event, currentMedia)" />
           <video v-else ref="video" :src="currentMedia.url" :poster="currentMedia.posterUrl || undefined" controls preload="metadata" @loadedmetadata="onMediaReady($event, currentMedia)" @play="handlePrimaryPlay" @pause="syncComparisonPlayback('pause')" @seeking="syncComparisonPlayback('seek')" @timeupdate="updateVideoTime" />
-          <div class="annotation-layer" :data-active="annotationMode && tool !== 'navigate'" @pointerdown="beginAnnotation" @pointerup="finishAnnotation">
+          <div class="annotation-layer" :data-active="annotationMode && tool !== 'navigate'" @pointerdown="beginAnnotation" @pointermove="moveAnnotation" @pointerup="finishAnnotation" @pointercancel="resetAnnotationGesture">
             <template v-for="item in visibleItems" :key="item.id">
               <span v-if="item.type === 'point'" class="annotation-point" :class="{ 'is-selected-note': isSelectedItem(item) || (noteFocusPulse && isDraftItem(item)) }" :style="{ left: `${item.points[0].x * 100}%`, top: `${item.points[0].y * 100}%`, borderColor: item.color }" />
               <span v-else-if="item.type === 'rectangle' && item.points.length > 1" class="annotation-rectangle" :class="{ 'is-selected-note': isSelectedItem(item) || (noteFocusPulse && isDraftItem(item)) }" :style="{ left: `${Math.min(item.points[0].x,item.points[1].x) * 100}%`, top: `${Math.min(item.points[0].y,item.points[1].y) * 100}%`, width: `${Math.abs(item.points[1].x-item.points[0].x) * 100}%`, height: `${Math.abs(item.points[1].y-item.points[0].y) * 100}%`, borderColor: item.color }" />
               <span v-else-if="item.type === 'arrow' && item.points.length > 1" class="annotation-arrow" :class="{ 'is-selected-note': isSelectedItem(item) || (noteFocusPulse && isDraftItem(item)) }" :style="arrowStyle(item)"><i /></span>
+              <svg v-else-if="item.type === 'freehand' && item.points.length" class="annotation-freehand" :class="{ 'is-selected-note': isSelectedItem(item) || (noteFocusPulse && isDraftItem(item)) }" :style="{ color: item.color }" viewBox="0 0 1000 1000" preserveAspectRatio="none" aria-hidden="true"><polyline v-if="item.points.length > 1" :points="freehandPoints(item)" :stroke="item.color" :stroke-width="freehandStrokeWidth(item)" /><circle v-else :cx="item.points[0].x * 1000" :cy="item.points[0].y * 1000" :r="freehandStrokeWidth(item) / 2" :fill="item.color" /></svg>
               <span v-else-if="item.type === 'text' && item.points.length" class="annotation-text" :class="{ 'is-selected-note': isSelectedItem(item) || (noteFocusPulse && isDraftItem(item)) }" :style="{ left: `${item.points[0].x * 100}%`, top: `${item.points[0].y * 100}%`, color: item.color }">{{ item.text }}</span>
             </template>
+            <span v-if="activeAnnotationPreview?.type === 'rectangle'" class="annotation-rectangle is-drawing" :style="{ left: `${Math.min(activeAnnotationPreview.points[0].x,activeAnnotationPreview.points[1].x) * 100}%`, top: `${Math.min(activeAnnotationPreview.points[0].y,activeAnnotationPreview.points[1].y) * 100}%`, width: `${Math.abs(activeAnnotationPreview.points[1].x-activeAnnotationPreview.points[0].x) * 100}%`, height: `${Math.abs(activeAnnotationPreview.points[1].y-activeAnnotationPreview.points[0].y) * 100}%`, color: activeAnnotationPreview.color, borderColor: activeAnnotationPreview.color }" />
+            <span v-else-if="activeAnnotationPreview?.type === 'arrow'" class="annotation-arrow is-drawing" :style="arrowStyle(activeAnnotationPreview)"><i /></span>
+            <svg v-else-if="activeAnnotationPreview?.type === 'freehand' && activeAnnotationPreview.points.length" class="annotation-freehand is-drawing" :style="{ color: activeAnnotationPreview.color }" viewBox="0 0 1000 1000" preserveAspectRatio="none" aria-hidden="true"><polyline v-if="activeAnnotationPreview.points.length > 1" :points="freehandPoints(activeAnnotationPreview)" :stroke="activeAnnotationPreview.color" :stroke-width="freehandStrokeWidth(activeAnnotationPreview)" /><circle v-else :cx="activeAnnotationPreview.points[0].x * 1000" :cy="activeAnnotationPreview.points[0].y * 1000" :r="freehandStrokeWidth(activeAnnotationPreview) / 2" :fill="activeAnnotationPreview.color" /></svg>
           </div>
         </div>
         <div v-else class="media-empty"><el-skeleton v-if="currentMedia.state === 'loading'" animated :rows="4" /><el-empty v-else :image-size="52" :description="!hasMedia ? '当前版本没有审核文件' : currentMedia.state === 'forbidden' ? '没有媒体下载权限' : currentMedia.state === 'error' ? currentMedia.error?.message : currentKind === 'unsupported' ? '该文件类型暂不支持内嵌预览' : '正在准备媒体…'" /></div>
         <div v-if="annotationMode" class="annotation-toolbar" role="toolbar" aria-label="画面标注方式">
-          <div><strong>已暂停，请直接在画面上标注</strong><span>标注会自动归入右侧正在编辑的问题</span></div>
+          <div><strong>{{ tool === 'navigate' ? '查看模式，可操作视频播放控件' : '已暂停，请直接在画面上标注' }}</strong><span>{{ tool === 'navigate' ? '选择点、框选、箭头、涂抹或文字后，即可继续标注' : '标注会自动归入右侧正在编辑的问题' }}</span></div>
           <div class="annotation-toolbar__actions">
-            <el-button :type="tool === 'navigate' ? 'primary' : 'default'" :icon="VideoPlay" @click="tool = 'navigate'">浏览</el-button>
-            <el-button :type="tool === 'point' ? 'primary' : 'default'" :icon="Aim" @click="tool = 'point'">点</el-button>
-            <el-button :type="tool === 'rectangle' ? 'primary' : 'default'" :icon="Crop" @click="tool = 'rectangle'">框选</el-button>
-            <el-button :type="tool === 'arrow' ? 'primary' : 'default'" :icon="TopRight" @click="tool = 'arrow'">箭头</el-button>
-            <el-button :type="tool === 'text' ? 'primary' : 'default'" :icon="EditPen" @click="tool = 'text'">文字</el-button>
-            <el-button v-if="draftItems.length" @click="undoLastAnnotation">撤销上一步</el-button>
-            <el-button v-if="draftItems.length" :icon="Delete" @click="clearDraft">清空</el-button>
+            <el-button size="small" :type="tool === 'navigate' ? 'primary' : 'default'" :icon="VideoPlay" title="切换为查看模式，可使用视频播放控件" @click="tool = 'navigate'">查看画面</el-button>
+            <el-button size="small" :type="tool === 'point' ? 'primary' : 'default'" :icon="Aim" @click="tool = 'point'">点</el-button>
+            <el-button size="small" :type="tool === 'rectangle' ? 'primary' : 'default'" :icon="Crop" @click="tool = 'rectangle'">框选</el-button>
+            <el-button size="small" :type="tool === 'arrow' ? 'primary' : 'default'" :icon="TopRight" @click="tool = 'arrow'">箭头</el-button>
+            <el-button size="small" :type="tool === 'freehand' ? 'primary' : 'default'" :icon="Brush" @click="tool = 'freehand'">涂抹</el-button>
+            <el-button size="small" :type="tool === 'text' ? 'primary' : 'default'" :icon="EditPen" @click="tool = 'text'">文字</el-button>
+            <el-button size="small" v-if="draftItems.length" @click="undoLastAnnotation">撤销上一步</el-button>
+            <el-button size="small" v-if="draftItems.length" :icon="Delete" @click="clearDraft">清空</el-button>
           </div>
         </div>
         <div v-if="!feedbackMode && hasDraftContext" class="draft-link" aria-live="polite">
@@ -549,6 +626,7 @@ defineExpose({ clearDraft, loadDraft, seekToDraft, seekToNote })
               <span v-if="item.type === 'point'" class="annotation-point is-selected-note" :style="{ left: `${item.points[0].x * 100}%`, top: `${item.points[0].y * 100}%`, borderColor: item.color }" />
               <span v-else-if="item.type === 'rectangle' && item.points.length > 1" class="annotation-rectangle is-selected-note" :style="{ left: `${Math.min(item.points[0].x,item.points[1].x) * 100}%`, top: `${Math.min(item.points[0].y,item.points[1].y) * 100}%`, width: `${Math.abs(item.points[1].x-item.points[0].x) * 100}%`, height: `${Math.abs(item.points[1].y-item.points[0].y) * 100}%`, borderColor: item.color }" />
               <span v-else-if="item.type === 'arrow' && item.points.length > 1" class="annotation-arrow is-selected-note" :style="arrowStyle(item, compareMedia.width || 1, compareMedia.height || 1)"><i /></span>
+              <svg v-else-if="item.type === 'freehand' && item.points.length" class="annotation-freehand is-selected-note" :style="{ color: item.color }" viewBox="0 0 1000 1000" preserveAspectRatio="none" aria-hidden="true"><polyline v-if="item.points.length > 1" :points="freehandPoints(item)" :stroke="item.color" :stroke-width="freehandStrokeWidth(item)" /><circle v-else :cx="item.points[0].x * 1000" :cy="item.points[0].y * 1000" :r="freehandStrokeWidth(item) / 2" :fill="item.color" /></svg>
               <span v-else-if="item.type === 'text' && item.points.length" class="annotation-text is-selected-note" :style="{ left: `${item.points[0].x * 100}%`, top: `${item.points[0].y * 100}%`, color: item.color }">{{ item.text }}</span>
             </template>
           </div>
@@ -584,8 +662,8 @@ defineExpose({ clearDraft, loadDraft, seekToDraft, seekToNote })
 .media-columns{display:grid;align-items:start;gap:14px}.media-columns.has-comparison{grid-template-columns:repeat(2,minmax(0,1fr))}.media-column{display:grid;min-width:0;align-content:start;gap:10px}.media-label strong{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
 .media-stage{position:relative;overflow:hidden;max-height:620px;background:#050608;border:1px solid var(--sg-border-strong);border-radius:10px}.media-stage img,.media-stage video{display:block;width:100%;height:100%;object-fit:contain}.media-empty{display:grid;min-height:260px;color:var(--sg-text-muted);text-align:center;background:#080a0d;border:1px dashed var(--sg-border);border-radius:10px;place-items:center}
 .record-action{grid-column:1/-1;padding:10px 12px;background:rgba(255,179,71,.06);border:1px solid rgba(255,179,71,.18);border-radius:9px}.record-action__primary{min-width:0}.record-action__primary span{color:var(--sg-text-muted);font-size:9px}.record-action__summary{display:grid;min-width:0;gap:3px}.record-action__summary strong{font-size:11px}.record-action__summary span{color:var(--sg-text-muted);font-size:9px}.record-action__tools{min-width:0;margin-left:auto;justify-content:flex-end;flex-wrap:wrap}.record-action__tools .el-select{width:230px;max-width:100%}.draft-link{flex-wrap:wrap;padding:9px 11px;background:rgba(104,181,255,.075);border:1px solid rgba(104,181,255,.24);border-radius:9px}.draft-link strong{font-size:10px}.draft-link span{margin-left:auto;color:var(--sg-text-secondary);font-size:9px}
-.annotation-layer{position:absolute;inset:0;pointer-events:none}.annotation-layer[data-active=true]{cursor:crosshair;pointer-events:auto}.annotation-point{position:absolute;width:18px;height:18px;border:3px solid;border-radius:50%;box-shadow:0 0 0 2px rgba(0,0,0,.6);transform:translate(-50%,-50%)}.annotation-rectangle{position:absolute;border:3px solid;box-shadow:0 0 0 1px rgba(0,0,0,.55)}.annotation-arrow{position:absolute;height:3px;background:currentColor;box-shadow:0 1px 2px rgba(0,0,0,.7);transform-origin:left center}.annotation-arrow i{position:absolute;top:50%;right:-2px;width:12px;height:12px;border-top:3px solid currentColor;border-right:3px solid currentColor;transform:translateY(-50%) rotate(45deg)}.annotation-text{position:absolute;max-width:min(280px,60%);padding:5px 8px;font-size:12px;font-weight:700;line-height:1.45;white-space:pre-wrap;overflow-wrap:anywhere;background:rgba(0,0,0,.72);border:1px solid currentColor;border-radius:6px;box-shadow:0 2px 8px rgba(0,0,0,.4);transform:translateY(-50%)}
-.note-focus-banner{display:grid;grid-template-columns:auto 1fr auto;gap:4px 10px;align-items:center;padding:10px 12px;background:rgba(104,181,255,.07);border:1px solid rgba(104,181,255,.22);border-radius:9px}.note-focus-banner strong{font-size:10px}.note-focus-banner p{grid-column:1/-1;margin:0;color:var(--sg-text-muted);font-size:9px;line-height:1.5;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.note-focus-banner.is-pulsing{animation:note-focus-banner 1.2s ease-out}.media-stage.is-note-focus{box-shadow:0 0 0 2px rgba(104,181,255,.65),0 0 24px rgba(104,181,255,.18)}.annotation-point.is-selected-note,.annotation-rectangle.is-selected-note,.annotation-arrow.is-selected-note,.annotation-text.is-selected-note{z-index:2;filter:drop-shadow(0 0 6px currentColor);animation:selected-annotation 1s ease-in-out 2}.annotation-point.is-selected-note{box-shadow:0 0 0 5px rgba(255,255,255,.35),0 0 18px currentColor}
+.annotation-layer{position:absolute;inset:0;pointer-events:none}.annotation-layer[data-active=true]{cursor:crosshair;pointer-events:auto;touch-action:none}.annotation-point{position:absolute;width:18px;height:18px;border:3px solid;border-radius:50%;box-shadow:0 0 0 2px rgba(0,0,0,.6);transform:translate(-50%,-50%)}.annotation-rectangle{position:absolute;border:3px solid;box-shadow:0 0 0 1px rgba(0,0,0,.55)}.annotation-arrow{position:absolute;height:3px;background:currentColor;box-shadow:0 1px 2px rgba(0,0,0,.7);transform-origin:left center}.annotation-arrow i{position:absolute;top:50%;right:-2px;width:12px;height:12px;border-top:3px solid currentColor;border-right:3px solid currentColor;transform:translateY(-50%) rotate(45deg)}.annotation-freehand{position:absolute;z-index:1;inset:0;width:100%;height:100%;overflow:visible;pointer-events:none}.annotation-freehand polyline{fill:none;stroke-linecap:round;stroke-linejoin:round;vector-effect:non-scaling-stroke}.annotation-freehand circle{vector-effect:non-scaling-stroke}.annotation-rectangle.is-drawing{border-style:dashed}.annotation-arrow.is-drawing,.annotation-rectangle.is-drawing,.annotation-freehand.is-drawing{z-index:3;pointer-events:none;filter:drop-shadow(0 0 5px currentColor)}.annotation-text{position:absolute;max-width:min(280px,60%);padding:5px 8px;font-size:12px;font-weight:700;line-height:1.45;white-space:pre-wrap;overflow-wrap:anywhere;background:rgba(0,0,0,.72);border:1px solid currentColor;border-radius:6px;box-shadow:0 2px 8px rgba(0,0,0,.4);transform:translateY(-50%)}
+.note-focus-banner{display:grid;grid-template-columns:auto 1fr auto;gap:4px 10px;align-items:center;padding:10px 12px;background:rgba(104,181,255,.07);border:1px solid rgba(104,181,255,.22);border-radius:9px}.note-focus-banner strong{font-size:10px}.note-focus-banner p{grid-column:1/-1;margin:0;color:var(--sg-text-muted);font-size:9px;line-height:1.5;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.note-focus-banner.is-pulsing{animation:note-focus-banner 1.2s ease-out}.media-stage.is-note-focus{box-shadow:0 0 0 2px rgba(104,181,255,.65),0 0 24px rgba(104,181,255,.18)}.annotation-point.is-selected-note,.annotation-rectangle.is-selected-note,.annotation-arrow.is-selected-note,.annotation-freehand.is-selected-note,.annotation-text.is-selected-note{z-index:2;filter:drop-shadow(0 0 6px currentColor);animation:selected-annotation 1s ease-in-out 2}.annotation-point.is-selected-note{box-shadow:0 0 0 5px rgba(255,255,255,.35),0 0 18px currentColor}
 @keyframes note-focus-banner{0%{transform:translateY(-3px);box-shadow:0 0 0 0 rgba(104,181,255,.45)}100%{transform:translateY(0);box-shadow:0 0 0 12px rgba(104,181,255,0)}}@keyframes selected-annotation{50%{opacity:.45}}
 @media(max-width:950px){.media-heading,.annotation-toolbar,.record-action{align-items:flex-start;flex-direction:column}.annotation-toolbar__actions,.record-action__tools{justify-content:flex-start}.record-action__tools,.record-action__tools .el-select{width:100%}.media-columns.has-comparison{grid-template-columns:1fr}.review-flow{align-items:flex-start;flex-direction:column}.review-flow i{display:none}.record-action__primary{align-items:flex-start;flex-direction:column}.draft-link span{width:100%;margin-left:0}}
 </style>
