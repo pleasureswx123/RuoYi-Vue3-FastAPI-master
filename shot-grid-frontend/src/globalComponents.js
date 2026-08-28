@@ -15,6 +15,9 @@ import {
   ElDescriptionsItem,
   ElDialog,
   ElDrawer,
+  ElDropdown,
+  ElDropdownItem,
+  ElDropdownMenu,
   ElEmpty,
   ElForm,
   ElFormItem,
@@ -46,6 +49,7 @@ import {
   ElTableColumn,
   ElTag,
   ElTabs,
+  ElText,
   ElTimeline,
   ElTimelineItem,
   ElTooltip,
@@ -65,6 +69,7 @@ import 'element-plus/es/components/date-picker/style/css'
 import 'element-plus/es/components/descriptions/style/css'
 import 'element-plus/es/components/dialog/style/css'
 import 'element-plus/es/components/drawer/style/css'
+import 'element-plus/es/components/dropdown/style/css'
 import 'element-plus/es/components/empty/style/css'
 import 'element-plus/es/components/form/style/css'
 import 'element-plus/es/components/form-item/style/css'
@@ -92,6 +97,7 @@ import 'element-plus/es/components/table/style/css'
 import 'element-plus/es/components/table-column/style/css'
 import 'element-plus/es/components/tag/style/css'
 import 'element-plus/es/components/tabs/style/css'
+import 'element-plus/es/components/text/style/css'
 import 'element-plus/es/components/timeline/style/css'
 import 'element-plus/es/components/timeline-item/style/css'
 import 'element-plus/es/components/tooltip/style/css'
@@ -117,6 +123,9 @@ export const globalComponents = [
   ElDescriptionsItem,
   ElDialog,
   ElDrawer,
+  ElDropdown,
+  ElDropdownItem,
+  ElDropdownMenu,
   ElEmpty,
   ElForm,
   ElFormItem,
@@ -147,6 +156,7 @@ export const globalComponents = [
   ElTableColumn,
   ElTag,
   ElTabs,
+  ElText,
   ElTimeline,
   ElTimelineItem,
   ElTooltip,

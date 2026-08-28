@@ -179,6 +179,19 @@ src/utils/request.js
 - 用户可见文案、校验提示和注释以中文为主。
 - 不在模板中复制大段复杂业务表达式；抽到 `computed` 或具名函数。
 
+### 9.1 表格组件契约
+
+- 行列数据使用 `ElTable` / `ElTableColumn`，单对象的键值信息优先使用 `ElDescriptions` / `ElDescriptionsItem`。不得用原生 `table` 或套用 `el-table` 内部 CSS 类来模拟组件。
+- 表格必须绑定真实 `data`，列按实际字段设置 `prop` / `label` 或作用域插槽。新增和本次改造的业务表格统一提供稳定业务 `row-key`，不得使用数组序号；官方在树形数据和保留选择场景要求 `row-key`，普通历史表缺少它应区分为一致性改善项。
+- 多选使用 `type="selection"` 列、`selection-change` 和按需配置的 `selectable`；程序回显或清除选择使用表格实例 API。不得通过普通列中的自制 Checkbox、独立全选逻辑和手写选中样式绕过 Table 选择模型。需要跨页保留时同时配置稳定 `row-key` 和 `reserve-selection`，并明确筛选切换时的清理规则。
+- 树形数据通过 `children` / `tree-props`、展开键和 `expand-change` 表达层级；懒加载按 `lazy` / `load` 契约实现，不得用手工展开行替代已有树表能力。
+- 按实际场景落实 loading、空态、错误与重试、排序、分页和禁用状态；分页与筛选刷新不得保留失效的业务选择。无排序、分页或选择需求的只读表格不必虚构相应交互。
+- 长文本、最小列宽、溢出提示和横向滚动交由 Table 对应 API 处理；不要依赖内部 DOM 结构或高权重 CSS 重建表头、滚动条及选中行为。
+- 验收检查最终组件层级、数据绑定及直接相关行为，不以标签替换、构建或页面可打开代替交互证据。组件数据契约测试不能描述为完整浏览器 E2E。
+- 当前 Element Plus 2.14.3 的描述单元格默认跨度在本次真实组件验证中出现无效属性；本次监控页显式提供合法 `span` / `rowspan`，后续升级需通过真实组件渲染验证后再移除兼容配置，不修改依赖源码。
+
+API 依据：[Table 官方文档](https://element-plus.org/zh-CN/component/table.html)、[Descriptions 官方文档](https://element-plus.org/zh-CN/component/descriptions.html)，同时核对当前安装版本的 API。
+
 ## 10. 文件上传与下载
 
 ### 10.1 组件选择
@@ -317,6 +330,14 @@ npm.cmd run build:prod
 ```
 
 当前 `package.json` 没有正式的 lint、typecheck 或完整组件测试脚本。涉及核心交互时，除构建外还应通过独立 E2E 工程验证真实浏览器流程。
+
+监控信息及 Cron 表格的定向数据契约测试复用现有 Vue 编译器、Element Plus 和 Node 测试运行器，不增加依赖：
+
+```powershell
+node --test tests/components/monitorTableContracts.test.js
+```
+
+该测试验证真实组件的数据、描述渲染、失败恢复和 Cron 输出，不覆盖浏览器布局、鼠标悬浮提示或完整端到端流程；日常局部改动按根目录第 13.0 节选择最小检查，不默认重复执行全量构建。
 
 端到端测试位于仓库根目录的：
 

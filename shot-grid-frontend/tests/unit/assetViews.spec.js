@@ -1,4 +1,4 @@
-import { ElAlert, ElButton, ElCard, ElDatePicker, ElDialog, ElDrawer, ElEmpty, ElForm, ElFormItem, ElIcon, ElInput, ElInputNumber, ElLoading, ElMessageBox, ElOption, ElPagination, ElRadioButton, ElRadioGroup, ElSelect, ElTable, ElTableColumn, ElTag } from 'element-plus'
+import { ElAlert, ElButton, ElCard, ElDatePicker, ElDialog, ElDrawer, ElDropdown, ElDropdownItem, ElEmpty, ElForm, ElFormItem, ElIcon, ElInput, ElInputNumber, ElLoading, ElMessageBox, ElOption, ElPagination, ElRadioButton, ElRadioGroup, ElSelect, ElTable, ElTableColumn, ElTag, ElText } from 'element-plus'
 import { createPinia, setActivePinia } from 'pinia'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
@@ -11,7 +11,9 @@ import {
   createAsset,
   createAssetItem,
   deleteAssetItem,
+  downloadAssetThumbnail,
   getAssetDetail,
+  getAssetItems,
   getAssetPage,
   getAssetRequirementPage,
   listAssetAssignees,
@@ -56,6 +58,7 @@ vi.mock('@/api/shot-grid/assets', () => ({
   downloadAssetImportTemplate: vi.fn(),
   downloadAssetThumbnail: vi.fn(),
   getAssetDetail: vi.fn(),
+  getAssetItems: vi.fn(),
   getAssetPage: vi.fn(),
   getAssetRequirementPage: vi.fn(),
   ignoreAssetRequirement: vi.fn(),
@@ -215,6 +218,388 @@ describe('资产管理真实列表页', () => {
     listAssetAssignees.mockResolvedValue({ rows: [memberRow], total: 1, hasNext: false })
     getAssetPage.mockResolvedValue({ rows: [assetRow], total: 1, hasNext: false })
     getAssetDetail.mockResolvedValue({ data: assetDetail() })
+    getAssetItems.mockReset().mockResolvedValue({ data: [assetItem] })
+  })
+
+  it('树表说明在每个子项中组合共有内容与各自补充', async () => {
+    getAssetItems.mockResolvedValue({ data: [assetItem, { ...assetItem, assetItemId: 42, productionItem: '反打视角', description: '反打补充要求' }] })
+    const { wrapper } = await mountList(['shotgrid:asset:list', 'shotgrid:asset:query'])
+    try {
+      await wrapper.find('.el-table__expand-icon').trigger('click')
+      await flushPromises()
+      const descriptions = wrapper.findAll('.el-table__row--level-1 .asset-description')
+      expect(descriptions).toHaveLength(2)
+      for (const description of descriptions) expect(description.text()).toContain(`共有说明：${assetRow.description}`)
+      expect(descriptions[0].text()).toContain(`分项补充：${assetItem.description}`)
+      expect(descriptions[1].text()).toContain('分项补充：反打补充要求')
+    } finally { wrapper.unmount() }
+  })
+
+  it.each([
+    { common: '同一段说明', item: '同一段说明', expected: '共有说明：同一段说明', absent: '分项补充' },
+    { common: '资产共有说明', item: '', expected: '共有说明：资产共有说明', absent: '分项补充' },
+    { common: '', item: '历史分项说明', expected: '分项说明：历史分项说明', absent: '共有说明：历史分项说明' }
+  ])('树表说明兼容相同、空白与旧数据：$common / $item', async ({ common, item, expected, absent }) => {
+    getAssetPage.mockResolvedValue({ rows: [{ ...assetRow, description: common }], total: 1 })
+    getAssetItems.mockResolvedValue({ data: [{ ...assetItem, description: item }] })
+    const { wrapper } = await mountList(['shotgrid:asset:list', 'shotgrid:asset:query'])
+    try {
+      await wrapper.find('.el-table__expand-icon').trigger('click')
+      await flushPromises()
+      const description = wrapper.find('.el-table__row--level-1 .asset-description').text()
+      expect(description).toContain(expected)
+      expect(description).not.toContain(absent)
+      if (common === item) expect(description.split(common)).toHaveLength(2)
+      if (!common) expect(wrapper.find('.el-table__body-wrapper tr .asset-description').text()).toContain('共有说明未填写')
+    } finally { wrapper.unmount() }
+  })
+
+  it('树表说明由原生文本组件截断，能展开全文并收起', async () => {
+    const height = vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockImplementation(function () {
+      return this.classList.contains('asset-description-preview') ? 54 : 0
+    })
+    const scroll = vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(function () {
+      return this.classList.contains('asset-description-preview') ? 180 : 0
+    })
+    const fullDescription = '舱室共有说明。'.repeat(30)
+    getAssetPage.mockResolvedValue({ rows: [{ ...assetRow, description: fullDescription }], total: 1 })
+    const { wrapper } = await mountList()
+    try {
+      const cell = wrapper.find('.asset-description')
+      expect(cell.findComponent(ElText).exists()).toBe(true)
+      expect(cell.findComponent(ElText).props('lineClamp')).toBe(3)
+      await cell.find('button').trigger('click')
+      expect(cell.findComponent(ElText).props('lineClamp')).toBeUndefined()
+      expect(cell.text()).toContain(fullDescription)
+      expect(cell.find('button').attributes('aria-expanded')).toBe('true')
+      await cell.find('button').trigger('click')
+      expect(cell.findComponent(ElText).props('lineClamp')).toBe(3)
+    } finally { wrapper.unmount(); height.mockRestore(); scroll.mockRestore() }
+  })
+
+  it('树表概要将分项数放在名称旁、版本放在缩略图下，父级只显示状态汇总', async () => {
+    getAssetPage.mockResolvedValue({ rows: [{ ...assetRow, itemCount: 2, itemStatusCounts: { in_progress: 1, not_started: 1 } }], total: 1 })
+    getAssetItems.mockResolvedValue({ data: [{ ...assetItem, latestVersion: { versionNo: 3 } }] })
+    const { wrapper } = await mountList(['shotgrid:asset:list', 'shotgrid:asset:query'])
+    try {
+      expect(wrapper.findAllComponents(ElTableColumn).map(column => column.props('label'))).not.toContain('分项 / 版本')
+      expect(wrapper.find('.asset-identity').text()).toContain('2 个分项')
+      expect(wrapper.find('.asset-status').findAllComponents(ElTag).map(tag => tag.text())).toEqual(['待开工 1', '制作中 1'])
+      await wrapper.find('.el-table__expand-icon').trigger('click')
+      await flushPromises()
+      expect(wrapper.find('.el-table__row--level-1 .asset-thumbnail-cell').text()).toContain('V003')
+    } finally { wrapper.unmount() }
+  })
+
+  it('树表更多操作使用原生下拉菜单并保留资产编辑入口', async () => {
+    const { wrapper } = await mountList(['shotgrid:asset:list', 'shotgrid:asset:query', 'shotgrid:asset:edit', 'shotgrid:asset:archive'])
+    try {
+      const actions = wrapper.find('.asset-row-actions')
+      expect(actions.findAll('button').map(button => button.text())).toEqual(['详情', '更多'])
+      const dropdown = actions.findComponent(ElDropdown)
+      expect(dropdown.exists()).toBe(true)
+      await actions.findAll('button').find(button => button.text() === '更多').trigger('click')
+      await vi.waitFor(() => expect(dropdown.findAllComponents(ElDropdownItem)).toHaveLength(2))
+      // 下拉菜单通过 Teleport 挂到 body，点击真实菜单项而非组件的 Fragment 根。
+      const editMenuItem = [...document.querySelectorAll('[role="menuitem"]')].find(item => item.textContent.trim() === '编辑资产')
+      expect(editMenuItem).toBeTruthy()
+      editMenuItem.click()
+      await flushPromises()
+      expect(wrapper.findComponent(AssetFormDialog).props('asset').assetId).toBe(31)
+    } finally { wrapper.unmount() }
+  })
+
+  it('树表更多操作在无写权限时不显示', async () => {
+    const { wrapper } = await mountList(['shotgrid:asset:list', 'shotgrid:asset:query'])
+    try { expect(wrapper.find('.asset-row-actions').findComponent(ElDropdown).exists()).toBe(false) }
+    finally { wrapper.unmount() }
+  })
+
+  it('树表首次展开才加载全部活动分项，父子主键不冲突且收起重开复用结果', async () => {
+    let finishItems
+    getAssetItems.mockImplementation(() => new Promise(resolve => { finishItems = resolve }))
+    const { wrapper } = await mountList(['shotgrid:asset:list', 'shotgrid:asset:query'])
+    try {
+      expect(getAssetItems).not.toHaveBeenCalled()
+      expect(wrapper.find('.el-table__expand-icon').exists()).toBe(true)
+      await wrapper.find('.el-table__expand-icon').trigger('click')
+      expect(wrapper.find('.el-table__expand-icon .is-loading').exists()).toBe(true)
+      expect(getAssetItems).toHaveBeenCalledWith(8, 31, { signal: expect.any(AbortSignal) })
+      finishItems({ data: [
+        { ...assetItem, assetItemId: 31, task: { taskId: 51, assigneeUserId: 7, assigneeName: 'YJF', taskStatus: 'in_progress', lockVersion: 1 } },
+        { ...assetItem, assetItemId: 42, productionItem: '舱门反打', description: '红色灯光', assetStatus: 'unassigned' },
+        { ...assetItem, assetItemId: 43, productionItem: '旧稿', lifecycleStatus: 'archived' }
+      ] })
+      await flushPromises()
+      const rows = wrapper.findAll('.el-table__body-wrapper tbody > tr')
+      expect(rows).toHaveLength(3)
+      expect(rows[1].text()).toContain('恐怖气氛主视角')
+      expect(rows[1].text()).toContain('杨景锋')
+      expect(rows[2].text()).toContain('舱门反打')
+      expect(rows[2].text()).toContain('红色灯光')
+      expect(rows[2].text()).toContain('待分配')
+      expect(wrapper.find('.asset-table-wrap').text()).not.toContain('旧稿')
+      await wrapper.find('.el-table__expand-icon').trigger('click')
+      await wrapper.find('.el-table__expand-icon').trigger('click')
+      await flushPromises()
+      expect(getAssetItems).toHaveBeenCalledTimes(1)
+      expect(wrapper.findComponent(ElPagination).props('total')).toBe(1)
+      getAssetDetail.mockResolvedValue({ data: {
+        ...assetDetail(), items: [assetItem, { ...assetItem, assetItemId: 42, productionItem: '舱门反打' }]
+      } })
+      await rows[2].findAll('button').find(button => button.text() === '分项详情').trigger('click')
+      await flushPromises()
+      expect(wrapper.findComponent(AssetDetailView).props()).toMatchObject({ targetAssetId: 31, targetAssetItemId: 42 })
+      expect(wrapper.findComponent(AssetDetailView).find('.item-card.is-targeted').text()).toContain('舱门反打')
+      expect(startTask).not.toHaveBeenCalled()
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('树表使用标准选择列，全选只选择可操作父资产而不选择制作分项', async () => {
+    getAssetPage.mockResolvedValue({ rows: [
+      { ...assetRow, allowedActions: ['task.assign'] },
+      { ...assetRow, assetId: 32, assetName: '不可操作资产', itemCount: 0, allowedActions: [] }
+    ], total: 2 })
+    const { wrapper } = await mountList(['shotgrid:asset:list', 'shotgrid:asset:query', 'shotgrid:task:assign'])
+    try {
+      expect(wrapper.findAllComponents(ElTableColumn).some(column => column.props('type') === 'selection')).toBe(true)
+      await wrapper.find('.el-table__expand-icon').trigger('click')
+      await flushPromises()
+      await wrapper.find('.el-table__header-wrapper input[type="checkbox"]').setValue(true)
+      await vi.waitFor(() => expect(wrapper.findAll('.el-table__body-wrapper input[type="checkbox"]').filter(input => input.element.checked)).toHaveLength(1))
+      expect(wrapper.text()).toContain('批量重新分配（1）')
+      const child = wrapper.find('.el-table__row--level-1')
+      expect(child.find('input[type="checkbox"]').element.disabled).toBe(true)
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('树表分项加载失败显示错误并能重试，不把失败伪装为无分项', async () => {
+    getAssetItems.mockRejectedValueOnce({ httpStatus: 503, message: '分项服务暂不可用' }).mockResolvedValueOnce({ data: [assetItem] })
+    const { wrapper } = await mountList(['shotgrid:asset:list', 'shotgrid:asset:query'])
+    try {
+      expect(wrapper.find('.el-table__expand-icon').exists()).toBe(true)
+      await wrapper.find('.el-table__expand-icon').trigger('click')
+      await flushPromises()
+      expect(wrapper.find('.asset-table-wrap').text()).toContain('分项服务暂不可用')
+      await wrapper.findAll('button').find(button => button.text() === '重试分项').trigger('click')
+      await flushPromises()
+      expect(wrapper.find('.el-table__row--level-1').text()).toContain('恐怖气氛主视角')
+      expect(wrapper.find('.asset-table-wrap').text()).not.toContain('分项服务暂不可用')
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('树表切换项目后中止分项查询并丢弃迟到结果', async () => {
+    getProjectPage.mockResolvedValue({ rows: [projectRow, { projectId: 9, projectName: '新项目' }] })
+    let finishItems
+    getAssetItems.mockImplementation(() => new Promise(resolve => { finishItems = resolve }))
+    const { wrapper } = await mountList(['shotgrid:asset:list', 'shotgrid:asset:query'])
+    try {
+      expect(wrapper.find('.el-table__expand-icon').exists()).toBe(true)
+      await wrapper.find('.el-table__expand-icon').trigger('click')
+      const signal = getAssetItems.mock.calls[0][2].signal
+      getAssetPage.mockResolvedValue({ rows: [{ ...assetRow, projectId: 9, assetId: 99, assetName: '新资产' }], total: 1 })
+      await setElSelectValue(wrapper.find('.project-context').findComponent({ name: 'ElSelect' }), '9')
+      await flushPromises()
+      expect(signal.aborted).toBe(true)
+      finishItems({ data: [{ ...assetItem, productionItem: '旧项目迟到分项' }] })
+      await flushPromises()
+      expect(wrapper.find('.asset-table-wrap').text()).toContain('新资产')
+      expect(wrapper.find('.asset-table-wrap').text()).not.toContain('旧项目迟到分项')
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('树表无查询权限时不请求分项，空分项结果不留下加载状态', async () => {
+    const restricted = await mountList(['shotgrid:asset:list'])
+    expect(restricted.wrapper.find('.el-table__expand-icon').exists()).toBe(false)
+    expect(getAssetItems).not.toHaveBeenCalled()
+    restricted.wrapper.unmount()
+    getAssetItems.mockResolvedValue({ data: [] })
+    const { wrapper } = await mountList(['shotgrid:asset:list', 'shotgrid:asset:query'])
+    try {
+      expect(wrapper.find('.el-table__expand-icon').exists()).toBe(true)
+      await wrapper.find('.el-table__expand-icon').trigger('click')
+      await flushPromises()
+      expect(wrapper.find('.asset-table-wrap').text()).toContain('暂无活动分项')
+      expect(wrapper.find('.el-table__expand-icon .is-loading').exists()).toBe(false)
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('树表刷新保留展开并重读分项，筛选变化清理旧分项缓存', async () => {
+    const { wrapper } = await mountList(['shotgrid:asset:list', 'shotgrid:asset:query'])
+    try {
+      expect(wrapper.find('.el-table__expand-icon').exists()).toBe(true)
+      await wrapper.find('.el-table__expand-icon').trigger('click')
+      await flushPromises()
+      const scrollElement = wrapper.find('.el-table__body-wrapper .el-scrollbar__wrap').element
+      scrollElement.scrollTop = 90
+      scrollElement.scrollLeft = 60
+      getAssetPage.mockResolvedValue({ rows: [{ ...assetRow }], total: 1 })
+      getAssetItems.mockResolvedValue({ data: [{ ...assetItem, productionItem: '刷新后的分项', assetStatus: 'completed' }] })
+      await wrapper.findAll('button').find(button => button.text() === '刷新').trigger('click')
+      await flushPromises()
+      expect(wrapper.find('.el-table__row--level-1').text()).toContain('刷新后的分项')
+      expect(wrapper.find('.el-table__row--level-1').text()).toContain('已完成')
+      expect(getAssetItems).toHaveBeenCalledTimes(2)
+      expect(wrapper.find('.el-table__body-wrapper .el-scrollbar__wrap').element.scrollTop).toBe(90)
+      expect(wrapper.find('.el-table__body-wrapper .el-scrollbar__wrap').element.scrollLeft).toBe(60)
+      await wrapper.find('.asset-filters').findComponent(ElInput).setValue('新筛选')
+      await wrapper.findAll('button').find(button => button.text() === '查询').trigger('click')
+      await flushPromises()
+      expect(wrapper.find('.el-table__row--level-1').exists()).toBe(false)
+      await wrapper.find('.el-table__expand-icon').trigger('click')
+      await flushPromises()
+      expect(getAssetItems).toHaveBeenCalledTimes(3)
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('树表分项拒绝访问后不随列表轮询重复请求，人工刷新才重新尝试', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    getAssetPage.mockImplementation(() => Promise.resolve({ rows: [{ ...assetRow, itemStatusCounts: { not_started: 1 } }], total: 1 }))
+    getAssetItems.mockRejectedValue({ httpStatus: 403, message: '分项访问已收回' })
+    const { wrapper } = await mountList(['shotgrid:asset:list', 'shotgrid:asset:query'])
+    try {
+      await wrapper.find('.el-table__expand-icon').trigger('click')
+      await flushPromises()
+      await vi.advanceTimersByTimeAsync(5000)
+      await flushPromises()
+      expect(wrapper.find('.asset-table-wrap').text()).toContain('分项访问已收回')
+      expect(getAssetItems).toHaveBeenCalledTimes(1)
+      await wrapper.findAll('button').find(button => button.text() === '刷新').trigger('click')
+      await flushPromises()
+      expect(getAssetItems).toHaveBeenCalledTimes(2)
+    } finally {
+      wrapper.unmount()
+      vi.useRealTimers()
+    }
+  })
+
+  it('树表慢分项请求跨过两轮轮询仍能完成，轮询不反复中止加载', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    getAssetPage.mockImplementation(() => Promise.resolve({ rows: [{ ...assetRow, itemStatusCounts: { preparing: 1 } }], total: 1 }))
+    let finishItems
+    getAssetItems.mockImplementationOnce(() => new Promise(resolve => { finishItems = resolve })).mockResolvedValue({ data: [assetItem] })
+    const { wrapper } = await mountList(['shotgrid:asset:list', 'shotgrid:asset:query'])
+    try {
+      await wrapper.find('.el-table__expand-icon').trigger('click')
+      const signal = getAssetItems.mock.calls[0][2].signal
+      await vi.advanceTimersByTimeAsync(3500)
+      expect(signal.aborted).toBe(false)
+      expect(getAssetItems).toHaveBeenCalledTimes(1)
+      finishItems({ data: [assetItem] })
+      await flushPromises()
+      expect(wrapper.find('.el-table__row--level-1').text()).toContain('恐怖气氛主视角')
+      expect(getAssetPage).toHaveBeenCalledTimes(2)
+    } finally {
+      wrapper.unmount()
+      vi.useRealTimers()
+    }
+  })
+
+  it('树表后台更新分项时保留缩略图预览，不重建整表或重复下载相同图片', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: vi.fn(() => 'blob:tree-thumbnail') })
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: vi.fn() })
+    const thumbnail = { fileId: 'thumb-1', name: '缩略图', url: '/shot-grid/versions/1/files/thumb-1/download' }
+    downloadAssetThumbnail.mockResolvedValue(new Blob(['image']))
+    getAssetPage.mockImplementation(() => Promise.resolve({ rows: [{ ...assetRow, thumbnail, itemStatusCounts: { preparing: 1 } }], total: 1 }))
+    const { wrapper } = await mountList(['shotgrid:asset:list', 'shotgrid:asset:query'])
+    try {
+      await wrapper.find('.el-table__expand-icon').trigger('click')
+      await flushPromises()
+      await wrapper.find('.asset-thumbnail img').trigger('click')
+      await flushPromises()
+      expect(document.querySelector('.el-image-viewer__wrapper')).not.toBeNull()
+      getAssetItems.mockResolvedValue({ data: [{ ...assetItem, productionItem: '后台更新分项' }] })
+      await vi.advanceTimersByTimeAsync(1500)
+      await flushPromises()
+      expect(wrapper.find('.el-table__row--level-1').text()).toContain('后台更新分项')
+      expect(document.querySelector('.el-image-viewer__wrapper')).not.toBeNull()
+      expect(downloadAssetThumbnail).toHaveBeenCalledTimes(1)
+    } finally {
+      wrapper.unmount()
+      vi.useRealTimers()
+    }
+  })
+
+  it('树表后台刷新能加载原空分支，最后一个分项移除后清理旧子行', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    getAssetPage.mockImplementation(() => Promise.resolve({ rows: [{ ...assetRow, itemStatusCounts: { preparing: 1 } }], total: 1 }))
+    getAssetItems.mockResolvedValueOnce({ data: [] }).mockResolvedValue({ data: [assetItem] })
+    const { wrapper } = await mountList(['shotgrid:asset:list', 'shotgrid:asset:query'])
+    try {
+      await wrapper.find('.el-table__expand-icon').trigger('click')
+      await flushPromises()
+      expect(wrapper.find('.asset-table-wrap').text()).toContain('暂无活动分项')
+      await vi.advanceTimersByTimeAsync(1500)
+      await flushPromises()
+      expect(wrapper.find('.el-table__row--level-1').text()).toContain('恐怖气氛主视角')
+      getAssetPage.mockResolvedValue({ rows: [{ ...assetRow, itemCount: 0, itemStatusCounts: {} }], total: 1 })
+      await vi.advanceTimersByTimeAsync(1500)
+      await flushPromises()
+      expect(wrapper.find('.el-table__row--level-1').exists()).toBe(false)
+      expect(getAssetItems).toHaveBeenCalledTimes(2)
+    } finally {
+      wrapper.unmount()
+      vi.useRealTimers()
+    }
+  })
+
+  it.each(['失去操作权限', '离开当前分页'])('树表后台刷新剔除%s的旧勾选', async change => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const selectableAsset = { ...assetRow, allowedActions: ['task.assign'], itemStatusCounts: { preparing: 1 } }
+    getAssetPage.mockResolvedValueOnce({ rows: [selectableAsset], total: 1 }).mockResolvedValue({
+      rows: [change === '失去操作权限' ? { ...selectableAsset, allowedActions: [] } : { ...selectableAsset, assetId: 32 }], total: 1
+    })
+    const { wrapper } = await mountList(['shotgrid:asset:list', 'shotgrid:task:assign'])
+    try {
+      await wrapper.find('.el-table__body-wrapper input[type="checkbox"]').setValue(true)
+      await flushPromises()
+      expect(wrapper.text()).toContain('批量重新分配（1）')
+      await vi.advanceTimersByTimeAsync(1500)
+      await flushPromises()
+      expect(wrapper.find('.el-table__body-wrapper input[type="checkbox"]').element.checked).toBe(false)
+      expect(wrapper.text()).not.toContain('批量重新分配（1）')
+    } finally {
+      wrapper.unmount()
+      vi.useRealTimers()
+    }
+  })
+
+  it.each(['分项全部移除', '父资产离开当前页'])('树表在父请求期间展开，%s后取消新分项请求并忽略迟到响应', async change => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    let finishPage
+    let finishItems
+    getAssetPage.mockResolvedValueOnce({ rows: [{ ...assetRow, itemStatusCounts: { preparing: 1 } }], total: 1 })
+      .mockImplementationOnce(() => new Promise(resolve => { finishPage = resolve }))
+    getAssetItems.mockImplementationOnce(() => new Promise(resolve => { finishItems = resolve }))
+    const { wrapper } = await mountList(['shotgrid:asset:list', 'shotgrid:asset:query'])
+    try {
+      await vi.advanceTimersByTimeAsync(1500)
+      await wrapper.find('.el-table__expand-icon').trigger('click')
+      const signal = getAssetItems.mock.calls[0][2].signal
+      finishPage({ rows: [{ ...assetRow, assetId: change === '父资产离开当前页' ? 32 : 31, itemCount: 0, itemStatusCounts: {} }], total: 1 })
+      await flushPromises()
+      expect(signal.aborted).toBe(true)
+      finishItems({ data: [assetItem] })
+      await flushPromises()
+      expect(wrapper.find('.el-table__row--level-1').exists()).toBe(false)
+      expect(wrapper.find('.el-table__expand-icon').exists()).toBe(false)
+    } finally {
+      wrapper.unmount()
+      vi.useRealTimers()
+    }
   })
 
   it('展示真实资产结果、四类筛选、分页与三种视图', async () => {
@@ -443,15 +828,14 @@ describe('资产管理真实列表页', () => {
     }], total: 1, hasNext: false })
     const { wrapper } = await mountList(['shotgrid:asset:list', 'shotgrid:task:assign'])
     try {
-      const checkbox = wrapper.findAllComponents({ name: 'ElCheckbox' }).find(item => item.attributes('aria-label') === '选择资产 动力舱室内')
-      checkbox.vm.$emit('change', true)
+      await wrapper.find('.el-table__body-wrapper input[type="checkbox"]').setValue(true)
       await flushPromises()
       const calls = getAssetPage.mock.calls.length
       await vi.advanceTimersByTimeAsync(1500)
       await flushPromises()
       expect(getAssetPage).toHaveBeenCalledTimes(calls + 1)
       expect(wrapper.text()).toContain('制作中 1')
-      expect(wrapper.findAllComponents({ name: 'ElCheckbox' }).find(item => item.attributes('aria-label') === '选择资产 动力舱室内').props('modelValue')).toBe(true)
+      expect(wrapper.find('.el-table__body-wrapper input[type="checkbox"]').element.checked).toBe(true)
       await vi.advanceTimersByTimeAsync(5000)
       expect(getAssetPage).toHaveBeenCalledTimes(calls + 1)
     } finally {

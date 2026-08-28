@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowLeft, Delete, Edit, Lock, Plus, Refresh, UserFilled, VideoPlay } from '@element-plus/icons-vue'
@@ -24,6 +24,7 @@ import { taskPriorityMeta, taskStatusMeta, taskVersionStatusMeta } from '@/views
 const props = defineProps({
   targetProjectId: { type: [Number, String], default: null },
   targetAssetId: { type: [Number, String], default: null },
+  targetAssetItemId: { type: [Number, String], default: null },
   embedded: { type: Boolean, default: false }
 })
 const emit = defineEmits(['changed', 'deleted'])
@@ -42,6 +43,16 @@ const archiveContext = ref(null)
 const deleteItemContext = ref(null)
 const historyRefreshKey = ref(0)
 const startingOperation = ref(null)
+const itemElements = new Map()
+
+watch([() => props.targetAssetItemId, loading], async () => {
+  const targetId = Number(props.targetAssetItemId)
+  if (!targetId || loading.value) return
+  await nextTick()
+  const element = itemElements.get(targetId)?.$el
+  element?.scrollIntoView?.({ block: 'center' })
+  element?.focus?.({ preventScroll: true })
+}, { flush: 'post' })
 
 function taskAssigneeName(task) {
   if (!task) return '未分配'
@@ -461,7 +472,7 @@ onBeforeUnmount(() => {
         <template #header><header><div><p class="sg-eyebrow">PRODUCTION ITEMS</p><h3>制作分项</h3></div><el-tag size="small" type="info" effect="plain" round>{{ asset.items?.length || 0 }} 个</el-tag></header></template>
         <el-empty v-if="!asset.items?.length" :image-size="72" description="当前资产尚无制作分项" />
         <div v-else class="item-list">
-          <el-card v-for="item in asset.items" :key="item.assetItemId" class="item-card" :class="{ 'is-archived': item.lifecycleStatus === 'archived' }" shadow="never">
+          <el-card v-for="item in asset.items" :key="item.assetItemId" :ref="element => element ? itemElements.set(Number(item.assetItemId), element) : itemElements.delete(Number(item.assetItemId))" class="item-card" :class="{ 'is-archived': item.lifecycleStatus === 'archived', 'is-targeted': Number(targetAssetItemId) === Number(item.assetItemId) }" tabindex="-1" shadow="never">
             <ProtectedAssetThumbnail class="item-card__thumbnail" :thumbnail="item.thumbnail" :alt="`${item.productionItem || '未命名制作分项'} 缩略图`" />
             <div class="item-card__body"><header><div><span class="item-card__id">分项 #{{ item.assetItemId }}</span><h4>{{ item.productionItem || '未命名制作分项' }}</h4></div><el-tag size="small" effect="plain" round :type="tagTypeFromTone(assetStatusMeta(item.assetStatus).tone)">{{ assetStatusMeta(item.assetStatus).label }}</el-tag></header><p>{{ item.description || '暂无分项说明' }}</p><el-descriptions class="item-card__details" :column="4" border><el-descriptions-item label="负责人">{{ taskAssigneeName(item.task) }}</el-descriptions-item><el-descriptions-item label="任务"><span v-if="item.task" class="detail-tag-group"><el-tag size="small" effect="plain" round :type="tagTypeFromTone(taskStatusMeta(item.task.taskStatus).tone)">{{ taskStatusMeta(item.task.taskStatus).label }}</el-tag><el-tag size="small" effect="plain" round :type="tagTypeFromTone(taskPriorityMeta(item.task.priority).tone)">{{ taskPriorityMeta(item.task.priority).label }}优先级</el-tag></span><el-tag v-else type="info" size="small" effect="plain" round>未分配</el-tag></el-descriptions-item><el-descriptions-item label="最新版本"><span v-if="item.latestVersion" class="detail-tag-group"><span>V{{ String(item.latestVersion.versionNo).padStart(3, '0') }}</span><el-tag size="small" effect="plain" round :type="tagTypeFromTone(taskVersionStatusMeta(item.latestVersion.versionStatus).tone)">{{ taskVersionStatusMeta(item.latestVersion.versionStatus).label }}</el-tag></span><span v-else>—</span></el-descriptions-item><el-descriptions-item label="最终版本"><span v-if="item.finalVersion" class="detail-tag-group"><span>V{{ String(item.finalVersion.versionNo).padStart(3, '0') }}</span><el-tag size="small" effect="plain" round :type="tagTypeFromTone(taskVersionStatusMeta(item.finalVersion.versionStatus).tone)">{{ taskVersionStatusMeta(item.finalVersion.versionStatus).label }}</el-tag></span><span v-else>—</span></el-descriptions-item></el-descriptions><small>{{ item.remark || '无备注' }} · 更新于 {{ formatAssetDateTime(item.updateTime) }}</small></div>
             <div class="item-card__actions"><el-button v-if="itemCanStart(item)" size="small" type="primary" :icon="VideoPlay" :loading="startingOperation?.assetItemId === item.assetItemId" :disabled="startDisabled" @click="confirmStartItem(item)">开始任务</el-button><el-button v-if="itemCanAssign(item)" text type="primary" :icon="UserFilled" :disabled="startDisabled" @click="openAssign(item)">{{ item.task ? '改派任务' : '分配任务' }}</el-button><el-button v-if="itemCanEdit(item)" text :type="item.productionItem ? 'default' : 'warning'" :icon="Edit" :disabled="startDisabled" @click="openItemForm(item)">{{ item.productionItem ? '编辑分项' : '补齐制作分项' }}</el-button><el-button v-if="itemCanDelete(item)" text type="danger" :icon="Delete" :disabled="startDisabled" @click="openDeleteItem(item)">删除分项</el-button><el-button v-else-if="itemCanArchive(item)" text type="danger" :icon="Lock" :disabled="startDisabled" @click="openArchive(item)">归档分项</el-button></div>
@@ -479,6 +490,7 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.item-card.is-targeted { border-color: var(--el-color-primary); outline: 1px solid var(--el-color-primary); outline-offset: 2px; }
 .asset-detail-page{display:grid;gap:18px}.back-link{width:max-content;color:var(--sg-text-muted)}.back-link:hover{color:var(--sg-text)}.detail-loading{min-height:360px;background:var(--sg-surface);border-color:var(--sg-border);border-radius:var(--sg-radius-lg)}.detail-loading:deep(.el-card__body){padding:30px}.asset-hero{background:linear-gradient(135deg,rgba(128,191,255,.07),transparent 38%),var(--sg-surface);border-color:var(--sg-border);border-radius:var(--sg-radius-lg);container-type:inline-size}.asset-hero:deep(.el-card__body){padding:22px}.asset-hero__layout{display:grid;grid-template-columns:minmax(260px,420px) minmax(240px,1fr) auto;grid-template-areas:"gallery main actions";gap:22px;align-items:center}.asset-hero__main{grid-area:main;min-width:0}.asset-hero__thumbnail{overflow:hidden;height:148px;border-radius:12px}.asset-hero__main>div{display:flex;gap:9px;align-items:center;flex-wrap:wrap}.asset-hero h2,.asset-hero p{margin:0}.asset-hero h2{font-size:27px}.asset-hero__main>p:not(.sg-eyebrow){margin-top:8px;color:var(--sg-text-secondary);font-size:13px;line-height:1.6}.asset-hero__main small{display:block;color:var(--sg-text-muted)}.asset-hero__summary{margin-top:8px}.asset-hero__actions{display:flex;grid-area:actions;grid-column:auto;max-width:330px;gap:8px;justify-content:flex-end;flex-wrap:wrap}.detail-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.detail-card,.item-section{background:var(--sg-surface);border-color:var(--sg-border);border-radius:var(--sg-radius-md)}.detail-card:deep(.el-card__header),.item-section:deep(.el-card__header){padding:16px 20px;border-bottom-color:var(--sg-border)}.detail-card:deep(.el-card__body),.item-section:deep(.el-card__body){padding:20px}.detail-card h3{margin:0}.detail-card :deep(.el-descriptions__body),.detail-card :deep(.el-descriptions__cell),.item-card__details:deep(.el-descriptions__body),.item-card__details:deep(.el-descriptions__cell){background:var(--sg-surface-raised)!important;border-color:var(--sg-border)!important}.detail-card :deep(.el-descriptions__label),.item-card__details:deep(.el-descriptions__label){color:var(--sg-text-muted);font-size:10px}.detail-card :deep(.el-descriptions__content),.item-card__details:deep(.el-descriptions__content){color:var(--sg-text-secondary);font-size:11px;overflow-wrap:anywhere}.item-section>header,.item-section :deep(.el-card__header)>header{display:flex;align-items:center;justify-content:space-between}.item-section h3,.item-section p{margin:0}.item-list{display:grid;gap:10px}.item-card{background:var(--sg-surface-raised);border-color:var(--sg-border);border-radius:11px}.item-card:deep(.el-card__body){display:grid;grid-template-columns:140px minmax(0,1fr) auto;gap:15px;align-items:stretch;padding:13px}.item-card.is-archived{opacity:.62}.item-card__thumbnail{height:110px;border-radius:8px}.item-card__body{min-width:0}.item-card__body>header{display:flex;align-items:flex-start;justify-content:space-between}.item-card__id{color:var(--sg-text-muted);font-size:9px}.item-card h4,.item-card p{margin:0}.item-card h4{margin-top:3px}.item-card__body>p{margin-top:6px;color:var(--sg-text-muted);font-size:11px}.item-card__details{margin-top:10px}.detail-tag-group{display:flex;gap:5px;align-items:center;flex-wrap:wrap}.item-card__body>small{display:block;margin-top:8px;color:var(--sg-text-muted);font-size:9px}.item-card__actions{display:flex;max-width:120px;align-content:center;justify-content:flex-end;flex-direction:column}@media(max-width:1050px){.item-card:deep(.el-card__body){grid-template-columns:110px 1fr}.item-card__actions{grid-column:1/-1;max-width:none;flex-direction:row;justify-content:flex-start}}@media(max-width:700px){.detail-grid,.item-card:deep(.el-card__body){grid-template-columns:1fr}}
 .detail-loading__label{display:block;margin-bottom:18px;color:var(--sg-text-secondary);font-size:13px}
 .asset-hero__gallery{display:grid;grid-area:gallery;min-width:0;align-self:start;grid-auto-flow:column;grid-auto-columns:132px;gap:10px;overflow-x:auto;padding-bottom:4px;scrollbar-width:thin}

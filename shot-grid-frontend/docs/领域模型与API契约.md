@@ -479,6 +479,12 @@ Shot Grid 对平台 `sys_user_role` 增量的来源标记。该表不是第三�
 - 资产创建时按 Windows/SMB 安全规则生成并确认 `storage_dir_name`；`asset_type`、`asset_name`、规范键和目录快照共同构成稳定身份，创建后普通编辑均不可修改。
 - 制作分项、任务描述、状态、制作人、缩略图、最新版本和批准版本来自 `sg_asset_item` 及其唯一任务；资产完成状态按全部活动制作分项聚合。
 - 制作分项 `thumbnail` 只取其当前最新版本的首个 `file_role=thumbnail` 文件；最新版本没有缩略图时返回 `null`，不得回退旧版本。资产父级 `thumbnail` 按活动制作分项 `(sort_order, asset_item_id)` 升序选择第一张非空缩略图，保证列表、详情和不同前端视图的代表图一致。
+- 资产列表的表格视图使用 Element Plus 原生树形懒加载（`lazy/load/row-key/tree-props`），父行为资产、子行为其活动制作分项；分页数量、筛选和批量选择仍以父资产为单位。子行不改变父资产的服务端聚合状态，不把某个分项状态作为整资产状态。
+- 首次展开通过现有鉴权 `GET /shot-grid/projects/{projectId}/assets/{assetId}/items` 获取 `data: ShotGridAssetItemModel[]`，保留 `shotgrid:asset:query` 和项目访问依赖；前端过滤 `lifecycleStatus=active` 并按 `sortOrder/assetItemId` 排序，归档历史从详情查看。此变更不新增后端接口或数据库字段。
+- 树节点键分别为 `asset:{projectId}:{assetId}` 和 `item:{projectId}:{assetItemId}`；`tree-props` 声明 `children/hasChildren`，并使用 `checkStrictly=true`。标准选择列只允许父资产进入原有批量业务链，分项行不能误传为资产或自动联动勾选。
+- 子行展示自身 `productionItem/description/thumbnail/task/assetStatus/latestVersion`；制作人优先使用平台 `userName`，无任务为未分配。点击“分项详情”打开原资产抽屉并定位对应分项，不直接执行开工或绕过现有分项动作确认。
+- 表格“说明”是当前主数据的组合视图：父行读取 `sg_asset.description`，子行读取同一父字段并追加自身 `sg_asset_item.description`。父子文本完全相同时只展示一次；父字段为空时不推断共有内容，保留原分项说明且提示父级尚未填写。该组合不写回字段、不修改任务 `requirements` 或版本快照，也不改变 `asset-v2` 导入映射。长文本使用 `ElText.line-clamp=3`，实际溢出时提供明确的展开/收起按钮；分项数归入父名称，版本归入子缩略图，父行显示分项状态计数，不再同时重复聚合状态标签。编辑/删除收进 `ElDropdown`，仍复用原动作和确认流程。
+- 懒加载失败必须呈现错误，不能伪装成零个分项；可重试错误提供“重试分项”，权限错误不自动重试。人工刷新失效成功缓存并重新读取已展开分项；后台轮询等待当前分项请求完成，再通过公开 `updateKeyChildren` 刷新已加载分支，保留有效勾选、展开、滚动和图片预览；原空分支新增分项时才重建懒加载入口。后台不反复请求失败分支，人工刷新可重新尝试。项目、筛选、分页变化或卸载必须取消旧请求、清除旧树上下文，迟到响应不得调用失效表格的 `resolve`。
 - 资产与制作分项响应分别携带后端计算的 `allowedActions`。动作集合必须同时满足平台权限、项目访问/角色、项目非 `completed/archived`、项目存储 `ready`、资源活动状态以及任务/版本约束；前端不得自行合成。
 - 资产列表与详情返回 `itemStatusCounts`，固定包含 `unassigned/not_started/preparing/in_progress/reviewing/revision/completed` 七个非负整数键，仅统计活动且未删除分项。父级状态按 `revision → reviewing → in_progress → preparing → unassigned → not_started` 聚合；至少有一个活动分项且全部完成才为 `completed`，无活动分项为 `unassigned`。父级 `task.start` 仅表示可进入分项选择，至少存在一个实际可开工分项才返回；真正 start 必须对选中分项任务提交，不能整资产开工。
 - 资产详情普通刷新必须保留编辑草稿对应的父资产/分项快照与锁号，不能用新锁提交旧稿；409“刷新后重试”应显式关闭旧操作上下文、刷新详情并要求重新核对。开工后等待详情刷新结束，还须再次复核操作代次才能通知父列表，防止同ID往返接受迟到事件。

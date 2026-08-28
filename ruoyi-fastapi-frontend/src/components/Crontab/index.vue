@@ -68,50 +68,18 @@
         <div class="popup-main">
             <div class="popup-result">
                 <p class="title">时间表达式</p>
-                <table>
-                    <thead>
-                        <tr>
-                            <th v-for="item of tabTitles" :key="item">{{item}}</th>
-                            <th>Cron 表达式</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <tr>
-                            <td>
-                                <span v-if="crontabValueObj.second.length < 10">{{crontabValueObj.second}}</span>
-                                <el-tooltip v-else :content="crontabValueObj.second" placement="top"><span>{{crontabValueObj.second}}</span></el-tooltip>
-                            </td>
-                            <td>
-                                <span v-if="crontabValueObj.min.length < 10">{{crontabValueObj.min}}</span>
-                                <el-tooltip v-else :content="crontabValueObj.min" placement="top"><span>{{crontabValueObj.min}}</span></el-tooltip>
-                            </td>
-                            <td>
-                                <span v-if="crontabValueObj.hour.length < 10">{{crontabValueObj.hour}}</span>
-                                <el-tooltip v-else :content="crontabValueObj.hour" placement="top"><span>{{crontabValueObj.hour}}</span></el-tooltip>
-                            </td>
-                            <td>
-                                <span v-if="crontabValueObj.day.length < 10">{{crontabValueObj.day}}</span>
-                                <el-tooltip v-else :content="crontabValueObj.day" placement="top"><span>{{crontabValueObj.day}}</span></el-tooltip>
-                            </td>
-                            <td>
-                                <span v-if="crontabValueObj.month.length < 10">{{crontabValueObj.month}}</span>
-                                <el-tooltip v-else :content="crontabValueObj.month" placement="top"><span>{{crontabValueObj.month}}</span></el-tooltip>
-                            </td>
-                            <td>
-                                <span v-if="crontabValueObj.week.length < 10">{{crontabValueObj.week}}</span>
-                                <el-tooltip v-else :content="crontabValueObj.week" placement="top"><span>{{crontabValueObj.week}}</span></el-tooltip>
-                            </td>
-                            <td>
-                                <span v-if="crontabValueObj.year.length < 10">{{crontabValueObj.year}}</span>
-                                <el-tooltip v-else :content="crontabValueObj.year" placement="top"><span>{{crontabValueObj.year}}</span></el-tooltip>
-                            </td>
-                            <td class="result">
-                                <span v-if="crontabValueString.length < 90">{{crontabValueString}}</span>
-                                <el-tooltip v-else :content="crontabValueString" placement="top"><span>{{crontabValueString}}</span></el-tooltip>
-                            </td>
-                        </tr>
-                    </tbody>
-                </table>
+                <el-table :data="expressionRows" row-key="id" border size="small" empty-text="暂无表达式">
+                    <el-table-column
+                        v-for="column in expressionColumns"
+                        :key="column.key"
+                        :prop="column.key"
+                        :label="column.label"
+                        min-width="70"
+                        align="center"
+                        show-overflow-tooltip
+                    />
+                    <el-table-column prop="expression" label="Cron 表达式" min-width="260" align="center" show-overflow-tooltip />
+                </el-table>
             </div>
             <CrontabResult :ex="crontabValueString"></CrontabResult>
 
@@ -145,7 +113,15 @@ const props = defineProps({
         default: ""
     }
 })
-const tabTitles = ref(["秒", "分钟", "小时", "日", "月", "周", "年"])
+const expressionColumns = [
+    { key: 'second', label: '秒' },
+    { key: 'min', label: '分钟' },
+    { key: 'hour', label: '小时' },
+    { key: 'day', label: '日' },
+    { key: 'month', label: '月' },
+    { key: 'week', label: '周' },
+    { key: 'year', label: '年' }
+]
 const tabActive = ref(0)
 const hideComponent = ref([])
 const expression = ref('')
@@ -173,6 +149,11 @@ const crontabValueString = computed(() => {
         + obj.week
         + (obj.year === "" ? "" : " " + obj.year)
 })
+const expressionRows = computed(() => [{
+    id: 'current',
+    ...crontabValueObj.value,
+    expression: crontabValueString.value
+}])
 watch(expression, () => resolveExp())
 function shouldHide(key) {
     return !(hideComponent.value && hideComponent.value.includes(key))
@@ -270,7 +251,7 @@ onMounted(() => {
     line-height: 24px;
     margin: 25px auto;
     padding: 15px 10px 10px;
-    border: 1px solid #ccc;
+    border: 1px solid var(--el-border-color);
     position: relative;
 }
 .popup-result .title {
@@ -282,27 +263,7 @@ onMounted(() => {
     margin-left: -70px;
     text-align: center;
     line-height: 30px;
-    background: #fff;
-}
-.popup-result table {
-    text-align: center;
-    width: 100%;
-    margin: 0 auto;
-}
-.popup-result table td:not(.result) {
-    width: 3.5rem;
-    min-width: 3.5rem;
-    max-width: 3.5rem;
-}
-.popup-result table span {
-    display: block;
-    width: 100%;
-    font-family: arial;
-    line-height: 30px;
-    height: 30px;
-    white-space: nowrap;
-    overflow: hidden;
-    border: 1px solid #e8e8e8;
+    background: var(--el-bg-color);
 }
 .popup-result-scroll {
     font-size: 12px;

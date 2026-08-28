@@ -80,6 +80,7 @@ let disposed = false
 let operationGeneration = 0
 let projectGeneration = 0
 let rowSortable = null
+let syncingShotSelection = false
 const MAX_SCENE_SORT_SHOTS = 2000
 
 const wildcard = computed(() => sessionStore.permissions.includes('*:*:*'))
@@ -147,8 +148,6 @@ const hasAssignedSelection = computed(() => selectedShots.value.some(shot => Boo
 const batchAssignLabel = computed(() => hasAssignedSelection.value ? '批量重新分配' : '批量分配')
 const detailShot = computed(() => shots.value.find(shot => Number(shot.shotId) === detailShotId.value) || null)
 const detailDrawerTitle = computed(() => detailShot.value ? `镜头详情 · ${detailShot.value.shotCode}` : '镜头详情')
-const selectableShots = computed(() => shots.value.filter(shot => canSelectShot(shot)))
-const allSelectableSelected = computed(() => Boolean(selectableShots.value.length) && selectableShots.value.every(shot => selectedShotIds.value.has(Number(shot.shotId))))
 const canDeleteSelection = computed(() => Boolean(selectedShots.value.length) && selectedShots.value.every(shot => canDeleteShot(shot)))
 const { pollingError } = useTaskStatePolling({
   getDelay: () => {
@@ -297,6 +296,10 @@ function canSelectShot(shot) {
   return canAssignShot(shot) || canDeleteShot(shot)
 }
 
+function isShotSelectable(shot) {
+  return !deleting.value && !assigning.value && canSelectShot(shot)
+}
+
 async function fetchAllPages(loader, baseParams, signal) {
   const rows = []
   let pageNum = 1
@@ -350,7 +353,7 @@ async function loadProjectContext() {
   members.value = []
   shots.value = []
   sceneOrderFullyLoaded.value = false
-  selectedShotIds.value = new Set()
+  clearShotSelection()
   total.value = 0
   if (!projectId) return
   const controller = new AbortController()
@@ -423,6 +426,7 @@ async function loadShots(existingController = null, background = false) {
   const controller = existingController || new AbortController()
   shotController = controller
   if (!background) {
+    clearShotSelection()
     shotsLoading.value = true
     shotsError.value = null
     sceneOrderFullyLoaded.value = false
@@ -466,6 +470,7 @@ async function loadShots(existingController = null, background = false) {
       loadedTotal <= MAX_SCENE_SORT_SHOTS &&
       loadedRows.length === loadedTotal
     )
+    await syncShotTableSelection()
   } catch (error) {
     if (error?.code !== 'ERR_CANCELED' && !controller.signal.aborted && shotController === controller && !disposed) {
       if (background) throw error
@@ -658,19 +663,32 @@ async function handleDetailDeleted(operationContext) {
   await loadShots()
 }
 
-function toggleShotSelection(shot) {
-  if (!canSelectShot(shot)) return
-  const next = new Set(selectedShotIds.value)
-  const shotId = Number(shot.shotId)
-  if (next.has(shotId)) next.delete(shotId)
-  else next.add(shotId)
-  selectedShotIds.value = next
+function handleShotSelectionChange(selection) {
+  if (syncingShotSelection) return
+  const selectedIds = new Set(selection.map(shot => Number(shot.shotId)))
+  selectedShotIds.value = new Set(shots.value
+    .filter(shot => selectedIds.has(Number(shot.shotId)) && canSelectShot(shot))
+    .map(shot => Number(shot.shotId)))
 }
 
-function toggleAllSelectable() {
-  selectedShotIds.value = allSelectableSelected.value
-    ? new Set()
-    : new Set(selectableShots.value.map(shot => Number(shot.shotId)))
+function clearShotSelection() {
+  selectedShotIds.value = new Set()
+  shotTableRef.value?.clearSelection()
+}
+
+async function syncShotTableSelection() {
+  await nextTick()
+  if (disposed || !shotTableRef.value) return
+  // 轮询替换行对象后，仅恢复当前列表中仍有操作权限的选择。
+  syncingShotSelection = true
+  try {
+    shotTableRef.value.clearSelection()
+    selectedShots.value.filter(canSelectShot).forEach(shot => {
+      shotTableRef.value.toggleRowSelection(shot, true, false)
+    })
+  } finally {
+    syncingShotSelection = false
+  }
 }
 
 async function confirmBatchAssign() {
@@ -703,7 +721,7 @@ async function confirmBatchAssign() {
     if (currentProjectId.value === targetProjectId) {
       showBatchAssign.value = false
       resetBatchAssignForm()
-      selectedShotIds.value = new Set()
+      clearShotSelection()
       await loadShots()
     }
   } catch (error) {
@@ -802,7 +820,7 @@ async function confirmDeleteShots(targetShots) {
     await batchDeleteShots(targetProjectId, items)
     ElMessage.success(`已删除 ${items.length} 个镜头`)
     if (currentProjectId.value === targetProjectId) {
-      selectedShotIds.value = new Set()
+      clearShotSelection()
       await loadShots()
     }
   } catch (error) {
@@ -975,20 +993,14 @@ onBeforeUnmount(() => { disposed = true; destroyRowSortable(); projectController
 
         <el-alert v-if="pollingError" :title="pollingError" type="warning" show-icon :closable="false" />
         <ProjectStatePanel v-if="shotsError" :title="shotsError.title" :message="shotsError.message" :retryable="shotsError.retryable" @retry="loadProjectContext" />
-        <el-card v-else-if="shotsLoading && !shots.length" class="shot-loading" shadow="never" aria-busy="true"><el-skeleton animated :rows="8" /></el-card>
-        <el-empty v-else-if="!shots.length" class="shot-empty" description="当前筛选没有镜头"><p>可以调整集、场次、状态或制作人筛选；项目管理人也可以新建或导入镜头。</p></el-empty>
+        <el-card v-else-if="viewMode !== 'table' && shotsLoading && !shots.length" class="shot-loading" shadow="never" aria-busy="true"><el-skeleton animated :rows="8" /></el-card>
+        <el-empty v-else-if="viewMode !== 'table' && !shots.length" class="shot-empty" description="当前筛选没有镜头"><p>可以调整集、场次、状态或制作人筛选；项目管理人也可以新建或导入镜头。</p></el-empty>
 
-        <div v-else-if="viewMode === 'table'" class="shot-table-wrap" :class="{ 'is-refreshing':shotsLoading }">
-          <el-table ref="shotTableRef" class="shot-data-table" :data="shots" row-key="shotId" max-height="620">
+        <div v-else-if="viewMode === 'table'" class="shot-table-wrap">
+          <el-table ref="shotTableRef" v-loading="shotsLoading" class="shot-data-table" :data="shots" row-key="shotId" max-height="620" empty-text="当前筛选没有镜头" @selection-change="handleShotSelectionChange">
+            <template #empty><el-empty class="shot-empty" description="当前筛选没有镜头"><p>可以调整集、场次、状态或制作人筛选；项目管理人也可以新建或导入镜头。</p></el-empty></template>
             <!-- <el-table-column v-if="canDragSort" width="38" fixed="left" align="center"><template #default="scope"><el-icon class="shot-drag-handle" :class="{ 'is-disabled': !isShotOrderMutable(scope.row) }" :title="isShotOrderMutable(scope.row) ? '拖拽调整场内顺序，Sxxx 将同步更新' : shotOrderLockReason(scope.row)"><Rank /></el-icon></template></el-table-column> -->
-            <el-table-column width="48" fixed="left" align="center">
-              <template #header>
-                <el-checkbox aria-label="选择当前页可批量操作镜头" :model-value="allSelectableSelected" :indeterminate="selectedShots.length > 0 && !allSelectableSelected" :disabled="!selectableShots.length || deleting || assigning" @change="toggleAllSelectable" />
-              </template>
-              <template #default="scope">
-                <el-checkbox v-if="scope?.row" :aria-label="`选择 ${scope.row.shotCode}`" :model-value="selectedShotIds.has(Number(scope.row.shotId))" :disabled="!canSelectShot(scope.row) || deleting || assigning" :title="canSelectShot(scope.row) ? '选择镜头进行批量操作' : '当前镜头不能批量操作'" @change="toggleShotSelection(scope.row)" />
-              </template>
-            </el-table-column>
+            <el-table-column type="selection" width="48" fixed="left" align="center" :selectable="isShotSelectable" reserve-selection />
             <el-table-column label="集 / 场 / 镜头" width="180" fixed="left">
               <template #default="scope"><div v-if="scope?.row" class="shot-identity"><strong>{{ scope.row.episodeCode }} / {{ scope.row.sceneCode }} / {{ scope.row.shotCode }}</strong><small>本场第 {{ scope.row.shotNo }} 镜 · {{ formatShotDuration(scope.row.durationMs) }}</small></div></template>
             </el-table-column>

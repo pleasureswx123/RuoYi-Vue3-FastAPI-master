@@ -251,7 +251,7 @@ onBeforeUnmount(() => {
       </el-form>
 
       <el-alert v-if="error" :title="error.title" :description="error.message" type="error" show-icon :closable="false" />
-      <el-table v-else :data="rows" v-loading="loading" empty-text="当前条件下没有资产需求" max-height="470">
+      <el-table v-else :data="rows" row-key="requirementId" v-loading="loading" empty-text="当前条件下没有资产需求" max-height="470">
         <el-table-column label="来源镜头" min-width="150"><template #default="{ row }"><strong>{{ shotLabel(row) }}</strong><small>#{{ row.shotId }}</small></template></el-table-column>
         <el-table-column label="类型 / 原始名称" min-width="190"><template #default="{ row }"><el-tag size="small" effect="plain" round :type="tagTypeFromTone(assetTypeMeta(row.assetType).tone)">{{ assetTypeMeta(row.assetType).label }}</el-tag><strong>{{ row.rawName }}</strong></template></el-table-column>
         <el-table-column label="状态" width="100"><template #default="{ row }"><el-tag size="small" effect="plain" round :type="stateMeta(row.resolutionStatus).type">{{ stateMeta(row.resolutionStatus).label }}</el-tag></template></el-table-column>

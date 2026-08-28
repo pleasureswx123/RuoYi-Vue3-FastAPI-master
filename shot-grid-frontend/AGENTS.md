@@ -139,6 +139,10 @@ ruoyi-fastapi-frontend
 - 资产属于且只属于一个项目；MVP 资产类型只允许 `Character`、`Environment`、`Prop`，不拆成独立业务模块。
 - 未来增加资产类型必须同步数据库约束、后端校验、字典、导入映射、路径规则和测试，不能只新增字典值。
 - 一个资产可以包含多个制作分项；制作分项是独立分配、提交版本和审核的最小图片生产单元，保存在 `sg_asset_item`，不放在资产主表。
+- 资产表格使用 `AssetTreeTable` 的 Element Plus 原生树形懒加载：`lazy`、`load`、`row-key`、`tree-props` 必须协同配置。资产为父行，活动制作分项为子行；首次展开调用既有 `GET /shot-grid/projects/{projectId}/assets/{assetId}/items`，需要 `shotgrid:asset:query`，不得启动时逐资产预取。键分别为 `asset:{projectId}:{assetId}`、`item:{projectId}:{assetItemId}`，避免父子数值主键碰撞。
+- 子行展示自身的名称、说明、最新版本缩略图、制作人、状态和最新版本号；缺图不借用父资产或其他分项图片。分项详情复用资产详情抽屉并定位目标分项，写操作继续由原详情的 `allowedActions`、平台权限和确认流程控制。已归档分项仍从资产详情查看，不计入树表活动子行或父级分页。
+- 树表选择使用标准 `selection` 列、`selectable`、`selection-change` 和 `reserve-selection`，`tree-props.checkStrictly=true`；只能勾选可操作父资产，子行不能参与批量分配/删除，失权或离开当前页的勾选必须移除。成功分支收起后重开复用当前查询缓存；人工刷新重新获取已展开分项并保留展开与滚动，后台刷新等待当前分项请求完成，通过公开 `updateKeyChildren` 更新已加载分支，保留表格实例、图片预览和有效勾选；原空分支新增分项时才重建懒加载入口。切换项目、筛选、分页或卸载时取消旧请求并隔离迟到响应；失败分支保留错误且不随轮询反复请求，只有显式重试或人工刷新才重试。
+- 资产树表父行说明取 `sg_asset.description`，子行完整组合父资产共有说明与自身 `sg_asset_item.description`；有共有说明时将不同的子项文本标为“分项补充”，无共有说明的旧数据仍按“分项说明”完整保留，父行明确显示“共有说明未填写”。完全相同的父子文本只在展示时去重，不自动将相同子项文本搬入父资产，不修改数据库、既有导入映射或历史任务要求。说明使用 `ElText.line-clamp` 默认最多三行，实际溢出后用 `ElButton` 展开/收起；分项数量放在父名称旁，版本放在子项缩略图下，父状态只显示汇总，编辑/删除通过原生 `ElDropdown` 并保持权限、加载和上下文门禁。
 - 资产表至少包含类型、名称、制作分项、描述、备注、状态、制作人；任务描述、状态和制作人从当前制作分项唯一任务聚合。
 - 资产或制作分项可执行动作必须读取后端 `allowedActions`，再与当前平台权限取交集；页面不得根据角色名、状态文案或是否显示按钮自行合成写权限。资产动作代码为 `asset.edit`、`assetItem.add`、`asset.archive`，制作分项动作代码为 `assetItem.edit`、`assetItem.archive`、`assetItem.delete`、`task.assign`、`task.start`；父级 `task.start` 仅打开已有详情抽屉选择分项，确认框冻结资产/分项/任务/负责人、三份版本与 generation，使用 Element Plus 并防止重复提交。
 - 资产列表中的批量分配以资产为选择单位、以其全部活动制作分项任务为实际写入单位；父资产 `allowedActions` 仅在全部活动分项均可分配时聚合返回 `task.assign`。弹窗确认前应读取详情取得每个 `assetItemId/taskLockVersion`，后端按制作分项执行单事务批量创建或改派。资产删除仅允许无镜头引用、无版本且任务均未开始的资产，并在同一事务内软删除未开始任务、归档制作分项和父资产。

@@ -155,6 +155,29 @@ function findTag(wrapper, text) {
   return wrapper.findAllComponents(ElTag).find(tag => tag.text() === text)
 }
 
+function shotRowCheckboxes(wrapper) {
+  return wrapper.find('.shot-data-table').findAll('.el-table__body-wrapper tbody tr')
+    .map(row => row.find('input[type="checkbox"]'))
+}
+
+function shotHeaderCheckbox(wrapper) {
+  return wrapper.find('.shot-data-table .el-table__header-wrapper input[type="checkbox"]')
+}
+
+function selectedTableShots(wrapper) {
+  return wrapper.findComponent(ElTable).vm.$.exposed.getSelectionRows()
+}
+
+async function setShotHeaderSelection(wrapper, selected) {
+  const table = wrapper.findComponent(ElTable)
+  const previousEvents = table.emitted('select-all')?.length || 0
+  await shotHeaderCheckbox(wrapper).setValue(selected)
+  // Element Plus 表头全选有 10ms 防抖，等待真实选择事件而不是只等待 Vue 更新。
+  if (vi.isFakeTimers()) await vi.advanceTimersByTimeAsync(10)
+  await vi.waitFor(() => expect(table.emitted('select-all')?.length).toBe(previousEvents + 1))
+  await flushPromises()
+}
+
 function shotDetail(projectId, shotId, shotCode, description) {
   return {
     ...shotRow,
@@ -195,27 +218,134 @@ describe('镜头管理真实列表页', () => {
     reorderShot.mockResolvedValue({ data: { shotId: 41, sequencePosition: 1, lockVersion: 1 } })
   })
 
-  it('列表自动刷新目录准备结果，保留选中镜头并在就绪后停止查询', async () => {
+  it('原生表格选择同步批量操作，表头全选跳过不能操作的镜头', async () => {
+    getShotPage.mockResolvedValue({ rows: [
+      shotRow,
+      { ...shotRow, shotId: 42, shotCode: 'S002', status: 'not_started' },
+      { ...shotRow, shotId: 43, shotCode: 'S003', status: 'completed' }
+    ], total: 3 })
+    const { wrapper } = await mountView(['shotgrid:shot:list', 'shotgrid:task:assign'])
+    try {
+      const checkboxes = shotRowCheckboxes(wrapper)
+      expect(checkboxes.map(checkbox => checkbox.element.disabled)).toEqual([false, false, true])
+      await checkboxes[0].setValue(true)
+      await flushPromises()
+      expect(selectedTableShots(wrapper).map(row => row.shotId)).toEqual([41])
+      expect(wrapper.text()).toContain('批量重新分配（1）')
+      expect(shotHeaderCheckbox(wrapper).element.indeterminate).toBe(true)
+
+      await setShotHeaderSelection(wrapper, true)
+      expect(selectedTableShots(wrapper).map(row => row.shotId)).toEqual([41, 42])
+      expect(wrapper.text()).toContain('批量重新分配（2）')
+      expect(checkboxes[2].element.checked).toBe(false)
+
+      await setShotHeaderSelection(wrapper, false)
+      expect(selectedTableShots(wrapper)).toEqual([])
+      expect(wrapper.text()).not.toContain('批量重新分配')
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('没有批量操作权限时行选择禁用，表头全选不会选中镜头', async () => {
+    const { wrapper } = await mountView(['shotgrid:shot:list'])
+    expect(shotRowCheckboxes(wrapper)[0].element.disabled).toBe(true)
+    await setShotHeaderSelection(wrapper, true)
+    expect(selectedTableShots(wrapper)).toEqual([])
+    wrapper.unmount()
+  })
+
+  it('表格刷新使用加载遮罩，空结果由表格空态展示', async () => {
+    const { wrapper } = await mountView()
+    let resolvePage
+    try {
+      getShotPage.mockImplementationOnce(() => new Promise(resolve => { resolvePage = resolve }))
+      await wrapper.find('button[aria-label="刷新镜头"]').trigger('click')
+      await flushPromises()
+      expect(wrapper.find('.shot-data-table .el-loading-mask').exists()).toBe(true)
+      resolvePage({ rows: [], total: 0 })
+      await flushPromises()
+      expect(wrapper.find('.shot-data-table .el-table__empty-text').text()).toContain('当前筛选没有镜头')
+      expect(wrapper.find('.shot-data-table .el-table__empty-text').text()).toContain('可以调整集、场次、状态或制作人筛选')
+    } finally {
+      resolvePage?.({ rows: [], total: 0 })
+      wrapper.unmount()
+    }
+  })
+
+  it('列表自动刷新只保留仍存在且可操作的选中镜头，并在就绪后停止查询', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
-    getShotPage.mockResolvedValueOnce({ rows: [{ ...shotRow, status: 'preparing' }], total: 1 })
+    getShotPage.mockResolvedValueOnce({ rows: [
+      { ...shotRow, status: 'preparing' },
+      { ...shotRow, shotId: 42, shotCode: 'S002', status: 'not_started' },
+      { ...shotRow, shotId: 43, shotCode: 'S003', status: 'not_started' }
+    ], total: 3 })
+    getShotPage.mockResolvedValue({ rows: [
+      { ...shotRow, description: '轮询后的最新镜头内容' },
+      { ...shotRow, shotId: 42, shotCode: 'S002', status: 'completed' }
+    ], total: 2 })
     const { wrapper } = await mountView(['shotgrid:shot:list', 'shotgrid:task:assign'])
     try {
       expect(findTag(wrapper, '目录准备中')).toBeDefined()
-      const checkbox = wrapper.findAllComponents({ name: 'ElCheckbox' }).find(item => item.attributes('aria-label') === '选择 S001')
-      checkbox.vm.$emit('change', true)
-      await flushPromises()
+      await setShotHeaderSelection(wrapper, true)
+      expect(wrapper.text()).toContain('批量重新分配（3）')
       const calls = getShotPage.mock.calls.length
       await vi.advanceTimersByTimeAsync(1500)
       await flushPromises()
+      expect(wrapper.find('.shot-data-table .el-loading-mask').exists()).toBe(false)
       expect(getShotPage).toHaveBeenCalledTimes(calls + 1)
       expect(findTag(wrapper, '制作中')).toBeDefined()
       expect(findTag(wrapper, '目录准备中')).toBeUndefined()
-      expect(wrapper.findAllComponents({ name: 'ElCheckbox' }).find(item => item.attributes('aria-label') === '选择 S001').props('modelValue')).toBe(true)
+      expect(shotRowCheckboxes(wrapper).map(checkbox => checkbox.element.checked)).toEqual([true, false])
+      expect(selectedTableShots(wrapper)).toEqual([
+        expect.objectContaining({ shotId: 41, description: '轮询后的最新镜头内容' })
+      ])
+      expect(wrapper.text()).toContain('批量重新分配（1）')
       await vi.advanceTimersByTimeAsync(10000)
       expect(getShotPage).toHaveBeenCalledTimes(calls + 1)
     } finally {
       wrapper.unmount()
       vi.useRealTimers()
+    }
+  })
+
+  it.each(['查询', '分页', '项目', '视图'])('%s 切换立即清空表格选择，响应返回后不恢复旧选择', async (changeType) => {
+    getProjectPage.mockResolvedValue({ rows: [projectRow, { projectId: 9, projectCode: 'NEW', projectName: '新项目' }], total: 2 })
+    getShotPage.mockResolvedValue({ rows: [shotRow], total: 201, hasNext: true })
+    const { wrapper } = await mountView(['shotgrid:shot:list', 'shotgrid:task:assign'])
+    let resolvePage
+    try {
+      await shotRowCheckboxes(wrapper)[0].setValue(true)
+      await flushPromises()
+      expect(wrapper.text()).toContain('批量重新分配（1）')
+      getShotPage.mockImplementationOnce(() => new Promise(resolve => { resolvePage = resolve }))
+      if (changeType === '查询') {
+        await wrapper.find('.shot-filters input').setValue('动力舱')
+        await wrapper.find('.shot-filters').findAllComponents(ElButton).find(button => button.text() === '查询').trigger('click')
+      } else if (changeType === '分页') {
+        await wrapper.find('.shot-pagination .btn-next').trigger('click')
+      } else if (changeType === '项目') {
+        await setElSelectValue(wrapper.find('.project-context').findComponent(ElSelect), '9')
+      } else {
+        await wrapper.findAllComponents(ElRadioButton).find(button => button.text() === '卡片').find('input[type="radio"]').setValue(true)
+      }
+      await flushPromises()
+      expect(wrapper.text()).not.toContain('批量重新分配')
+      if (wrapper.findComponent(ElTable).exists()) {
+        expect(selectedTableShots(wrapper)).toEqual([])
+      }
+      resolvePage({ rows: [{ ...shotRow, projectId: changeType === '项目' ? 9 : 8 }], total: 201, hasNext: true })
+      await flushPromises()
+      if (changeType === '视图') {
+        await wrapper.findAllComponents(ElRadioButton).find(button => button.text() === '表格').find('input[type="radio"]').setValue(true)
+        await flushPromises()
+      }
+      expect(shotRowCheckboxes(wrapper)[0].element.checked).toBe(false)
+      expect(selectedTableShots(wrapper)).toEqual([])
+      expect(wrapper.text()).not.toContain('批量重新分配')
+    } finally {
+      resolvePage?.({ rows: [], total: 0 })
+      wrapper.unmount()
     }
   })
 
@@ -868,20 +998,29 @@ describe('镜头管理真实列表页', () => {
       'shotgrid:shot:archive'
     ])
 
-    const checkbox = wrapper.findAllComponents({ name: 'ElCheckbox' }).find(item => item.attributes('aria-label') === '选择 S001')
-    expect(checkbox.props('disabled')).toBe(false)
+    const checkbox = shotRowCheckboxes(wrapper)[0]
+    expect(checkbox.element.disabled).toBe(false)
     expect(wrapper.text()).toContain('编辑')
     expect(wrapper.text()).toContain('删除')
-    checkbox.vm.$emit('change', true)
+    await checkbox.setValue(true)
     await flushPromises()
+    let resolveDelete
+    batchDeleteShots.mockImplementationOnce(() => new Promise(resolve => { resolveDelete = resolve }))
     await wrapper.findAll('button').find(button => button.text().includes('批量删除')).trigger('click')
     await flushPromises()
     expect(batchDeleteShots).toHaveBeenCalledWith(8, [{ shotId: 41, lockVersion: 0 }])
+    expect(shotRowCheckboxes(wrapper)[0].element.disabled).toBe(true)
+    await setShotHeaderSelection(wrapper, false)
+    expect(selectedTableShots(wrapper).map(row => row.shotId)).toEqual([41])
+    expect(batchDeleteShots).toHaveBeenCalledTimes(1)
+    resolveDelete({ data: { deletedShotIds: [41], deletedCount: 1 } })
+    await flushPromises()
+    expect(selectedTableShots(wrapper)).toEqual([])
 
     getShotPage.mockResolvedValue({ rows: [{ ...shotRow, status: 'in_progress' }], total: 1, hasNext: false })
     await wrapper.find('button[aria-label="刷新镜头"]').trigger('click')
     await flushPromises()
-    expect(wrapper.findAllComponents({ name: 'ElCheckbox' }).find(item => item.attributes('aria-label') === '选择 S001').props('disabled')).toBe(true)
+    expect(shotRowCheckboxes(wrapper)[0].element.disabled).toBe(true)
     expect(wrapper.findAll('button').map(button => button.text())).not.toContain('编辑')
     confirmSpy.mockRestore()
     wrapper.unmount()
@@ -894,7 +1033,7 @@ describe('镜头管理真实列表页', () => {
       'shotgrid:task:assign'
     ])
 
-    wrapper.findAllComponents({ name: 'ElCheckbox' }).find(item => item.attributes('aria-label') === '选择 S001').vm.$emit('change', true)
+    await shotRowCheckboxes(wrapper)[0].setValue(true)
     await flushPromises()
     const batchAssignButton = wrapper.findAll('button').find(button => button.text().includes('批量重新分配'))
     expect(batchAssignButton.element.disabled).toBe(false)
@@ -911,12 +1050,21 @@ describe('镜头管理真实列表页', () => {
     expect(batchAssignShotTasks).not.toHaveBeenCalled()
 
     await setElSelectValue(batchAssignForm.findComponent(ElSelect), '7')
+    let resolveAssignment
+    batchAssignShotTasks.mockImplementationOnce(() => new Promise(resolve => { resolveAssignment = resolve }))
     confirmButton.click()
     await flushPromises()
 
     expect(batchAssignShotTasks).toHaveBeenCalledWith(8, 7, [
       { shotId: 41, taskLockVersion: 4 }
     ])
+    expect(shotRowCheckboxes(wrapper)[0].element.disabled).toBe(true)
+    await setShotHeaderSelection(wrapper, false)
+    expect(selectedTableShots(wrapper).map(row => row.shotId)).toEqual([41])
+    expect(batchAssignShotTasks).toHaveBeenCalledTimes(1)
+    resolveAssignment({ data: { assignedShotIds: [41], assignedCount: 1 } })
+    await flushPromises()
+    expect(selectedTableShots(wrapper)).toEqual([])
     confirmSpy.mockRestore()
     wrapper.unmount()
   })
