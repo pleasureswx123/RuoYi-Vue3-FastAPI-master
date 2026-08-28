@@ -2202,7 +2202,7 @@ COMMENT ON COLUMN sg_shot.shot_id IS '镜头ID';
 COMMENT ON COLUMN sg_shot.project_id IS '项目ID';
 COMMENT ON COLUMN sg_shot.episode_id IS '集ID';
 COMMENT ON COLUMN sg_shot.scene_id IS '场次ID';
-COMMENT ON COLUMN sg_shot.shot_no IS '场内位置编号；1即S001，2即S002';
+COMMENT ON COLUMN sg_shot.shot_no IS '场内位置编号；1即0001，2即0002';
 COMMENT ON COLUMN sg_shot.storage_dir_name IS '开始制作时冻结的含场次代码NAS镜头目录快照；未开始时为空';
 COMMENT ON COLUMN sg_shot.duration_ms IS '镜头时长（毫秒）';
 COMMENT ON COLUMN sg_shot.shot_size IS '景别';

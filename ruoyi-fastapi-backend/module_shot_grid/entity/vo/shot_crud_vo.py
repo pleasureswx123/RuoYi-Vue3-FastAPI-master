@@ -64,7 +64,7 @@ class ShotGridShotWriteFieldsModel(ShotGridApiModel):
         default=None,
         gt=0,
         le=SQL_INTEGER_MAX,
-        description='兼容字段；Sxxx 由服务端按场内位置生成，业务前端不再提交',
+        description='兼容字段；数字镜头号 由服务端按场内位置生成，业务前端不再提交',
     )
     duration_ms: int = Field(default=0, ge=0, le=SQL_BIGINT_MAX, description='镜头时长（毫秒）')
     shot_size: str | None = Field(default=None, max_length=40, description='景别')
@@ -86,7 +86,7 @@ class ShotGridShotWriteFieldsModel(ShotGridApiModel):
         default=None,
         ge=1,
         le=SQL_INTEGER_MAX,
-        description='场内镜头位置，从 1 开始；该位置同时决定 Sxxx',
+        description='场内镜头位置，从 1 开始；该位置同时决定 数字镜头号',
     )
     asset_ids: list[int] = Field(default_factory=list, description='完整关联资产ID集合')
 
@@ -152,7 +152,7 @@ class ShotGridShotReorderResultModel(ShotGridApiModel):
 
     shot_id: int
     shot_no: int | None = Field(default=None, ge=1, description='立即完成时的新场内镜头号')
-    shot_code: str | None = Field(default=None, description='立即完成时的新 Sxxx')
+    shot_code: str | None = Field(default=None, description='立即完成时的新 数字镜头号')
     sequence_position: int = Field(ge=1)
     lock_version: int = Field(ge=0)
     operation_id: int | None = None

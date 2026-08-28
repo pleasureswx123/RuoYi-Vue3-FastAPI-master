@@ -19,7 +19,7 @@ from module_shot_grid.exceptions import ShotGridDomainException
 from module_shot_grid.service.shot_excel_parser import ShotExcelParser
 from module_shot_grid.service.shot_import_template_service import ShotGridShotImportTemplateService
 
-EXPECTED_SHA256 = 'b6f24078ca56295e9e6cce50bb3455af198dfffe5c08f8d85605a68c09439ece'
+EXPECTED_SHA256 = '23ff46f60bd4e52a7c3b9350f89882bb18963c92823ac40afe601ac1553204f8'
 SERVICE_UNAVAILABLE_STATUS = 503
 EXPECTED_HEADERS = (
     '场次',
@@ -85,6 +85,10 @@ def test_packaged_template_uses_exact_business_headers_without_assignee_column()
         assert ShotExcelParser.EXPECTED_HEADERS == EXPECTED_HEADERS
         for sheet in visible_sheets:
             assert tuple(sheet.cell(row=1, column=index).value for index in range(1, 16)) == EXPECTED_HEADERS
+            for (shot_code,) in sheet.iter_rows(min_row=2, min_col=2, max_col=2):
+                assert re.fullmatch(r'[0-9]{4,}', shot_code.value)
+                assert shot_code.data_type == 's'
+                assert shot_code.number_format == '@'
             assert not any(
                 '制作人' in str(cell.value)
                 for row in sheet.iter_rows(min_row=1, max_row=sheet.max_row)
@@ -109,7 +113,7 @@ async def test_template_service_uses_stable_unavailable_error(
     tmp_path: Path,
     mode: str,
 ) -> None:
-    template_path = tmp_path / 'shot-v2.xlsx'
+    template_path = tmp_path / 'shot-v3.xlsx'
     if mode == 'digest_mismatch':
         template_path.write_bytes(b'not-the-frozen-template')
     monkeypatch.setattr(ShotGridShotImportTemplateService, 'TEMPLATE_PATH', template_path)
@@ -144,6 +148,6 @@ async def test_template_route_returns_versioned_download_headers() -> None:
 
     disposition = unquote(response.headers['Content-Disposition'])
     assert response.media_type == XLSX_MEDIA_TYPE
-    assert response.headers['X-Shot-Grid-Template-Version'] == 'shot-v2'
-    assert '镜头导入模板-shot-v2.xlsx' in disposition
+    assert response.headers['X-Shot-Grid-Template-Version'] == 'shot-v3'
+    assert '镜头导入模板-shot-v3.xlsx' in disposition
     assert response.body == _template_bytes()

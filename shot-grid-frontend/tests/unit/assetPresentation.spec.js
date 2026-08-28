@@ -5,6 +5,7 @@ import {
   assetDirectoryStatusMeta,
   assetErrorState,
   assetItemStatusEntries,
+  assetItemTimeEntries,
   assetStatusMeta,
   assetStatusTagClass,
   assetTypeMeta,
@@ -54,6 +55,25 @@ describe('资产展示模型', () => {
       retryable: true,
       errorKey: 'SG_OPTIMISTIC_LOCK_CONFLICT'
     })
+  })
+
+  it('按紧急程度汇总全部分项时间，相同状态合并且已完成不催办', () => {
+    const groups = [
+      { taskStatus: null, expectedEndTime: null, itemCount: 2 },
+      { taskStatus: 'completed', expectedEndTime: '2026-08-27T12:00:00', itemCount: 1 },
+      { taskStatus: 'in_progress', expectedEndTime: '2026-08-30T12:00:00', itemCount: 2 },
+      { taskStatus: 'revision', expectedEndTime: '2026-08-31T12:00:00', itemCount: 1 },
+      { taskStatus: 'in_progress', expectedEndTime: '2026-08-29T12:00:00', itemCount: 1 },
+      { taskStatus: 'pending_review', expectedEndTime: '2026-08-28T12:00:00', itemCount: 1 }
+    ]
+    expect(assetItemTimeEntries(groups, new Date('2026-08-28T12:00:00'))).toEqual([
+      { state: 'overdue', label: '已延期', tone: 'danger', count: 1 },
+      { state: 'warning', label: '临近结束', tone: 'warning', count: 1 },
+      { state: 'normal', label: '正常', tone: 'success', count: 3 },
+      { state: 'unset', label: '未设置时间', tone: 'neutral', count: 2 },
+      { state: 'completed', label: '已完成', tone: 'success', count: 1 }
+    ])
+    expect(assetItemTimeEntries([])).toEqual([])
   })
 
   it('跨 Sheet 选择使用复合身份且只包含可导入行', () => {

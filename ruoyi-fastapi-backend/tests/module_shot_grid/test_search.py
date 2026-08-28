@@ -67,7 +67,7 @@ async def test_search_filters_resource_types_by_permissions(monkeypatch: pytest.
         current_user(['shotgrid:shot:list', 'shotgrid:shot:query']),
     )
 
-    assert result.shots.items[0].title == 'EP001-002-S003'
+    assert result.shots.items[0].title == 'EP001-002-0003'
     assert result.shots.items[0].target_path == '/projects/8/shots/31'
     search_shots.assert_awaited_once_with(
         ANY,

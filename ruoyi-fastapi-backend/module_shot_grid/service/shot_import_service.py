@@ -33,6 +33,7 @@ from module_shot_grid.exceptions import ShotGridDomainException, shot_grid_error
 from module_shot_grid.service.excel_security_service import ExcelSecurityService
 from module_shot_grid.service.import_preview_store import ImportPreviewStore
 from module_shot_grid.service.shot_excel_parser import ShotExcelParser
+from module_shot_grid.shot_number import format_shot_code
 from utils.log_util import logger
 
 
@@ -392,15 +393,15 @@ class ShotGridShotImportService:
                     {
                         'episodeCode': episode_code,
                         'sceneCode': scene_code,
-                        'actualShotCodes': [f'S{number:03d}' for number in sorted(combined_numbers)],
-                        'expectedShotCodes': [f'S{number:03d}' for number in sorted(expected_numbers)],
+                        'actualShotCodes': [format_shot_code(number) for number in sorted(combined_numbers)],
+                        'expectedShotCodes': [format_shot_code(number) for number in sorted(expected_numbers)],
                     }
                 )
         if discontinuous_scenes:
             raise shot_grid_error(
                 409,
                 'SG_SHOT_SEQUENCE_NOT_CONTIGUOUS',
-                '镜头导入后的场内编号必须从 S001 起连续递增',
+                '镜头导入后的场内编号必须从 0001 起连续递增',
                 details={'scenes': discontinuous_scenes},
             )
 

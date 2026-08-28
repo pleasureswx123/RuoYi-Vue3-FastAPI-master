@@ -260,7 +260,8 @@ class ShotGridVersionPublishPathAdapter(ShotGridStoragePathAdapter):
             valid = (
                 folded[0] == 'video'
                 and re.fullmatch(r'ep\d{2,}', folded[1]) is not None
-                and re.fullmatch(r'\d{3,}_s\d{3,}', folded[2]) is not None
+                # 新目录使用四位数字镜头号；已有 S 前缀的冻结快照仍可读取和重试。
+                and re.fullmatch(r'[0-9]{3,}_(?:[0-9]{4,}|s[0-9]{3,})', folded[2]) is not None
             )
         elif context.task_kind == 'asset_image':
             valid = folded[0] == 'asset' and folded[1] in {'character', 'environment', 'prop'}

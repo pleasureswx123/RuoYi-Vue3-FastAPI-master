@@ -56,7 +56,7 @@ GET /shot-grid/imports/assets/template
 - 任务列表与详情的 `assignee` 安全摘要同时返回 `userName/nickName`；业务页面优先展示 `sys_user.user_name`，`nickName` 只作为缺失时的历史兼容回退，避免把制作人账号缩写当作姓名。
 - 版本列表、详情、最近提交及人工审核单中的 `submitterName` 统一取 `sys_user.user_name`；文件名中的制作人标识仍按冻结契约取 `sys_user.nick_name`，不得因展示姓名调整而重命名历史版本文件。
 - 两类模板下载分别要求对应导入权限，返回 XLSX 二进制和 `X-Shot-Grid-Template-Version`，不套统一 JSON envelope。应用层传输加密只精确放行模板 GET；同前缀预检和提交 JSON 仍保持原加密策略。部署文件缺失或摘要不一致时返回 HTTP 503 / `SG_IMPORT_TEMPLATE_UNAVAILABLE`。
-- 当前服务资源为 `resources/templates/shot-v2.xlsx` 与 `resources/templates/asset-v2.xlsx`，附件文件名分别为 `镜头导入模板-shot-v2.xlsx`、`资产导入模板-asset-v2.xlsx`。冻结 SHA-256 分别为 `B6F24078CA56295E9E6CCE50BB3455AF198DFFFE5C08F8D85605A68C09439ECE`、`B551AC1D1D5EDC20A025B0ED90157412E1365006108816F08CB2C59AE4301696`；镜头主数据区固定 A:O 15 列，资产固定 A:F 6 列，均不含制作人。旧 `shot-v1.xlsx`、`asset-v1.xlsx` 仅保留为历史资源，不再由服务下载。
+- 当前服务资源为 `resources/templates/shot-v3.xlsx` 与 `resources/templates/asset-v2.xlsx`，附件文件名分别为 `镜头导入模板-shot-v3.xlsx`、`资产导入模板-asset-v2.xlsx`。冻结 SHA-256 分别为 `23FF46F60BD4E52A7C3B9350F89882BB18963C92823AC40AFE601AC1553204F8`、`B551AC1D1D5EDC20A025B0ED90157412E1365006108816F08CB2C59AE4301696`；镜头主数据区固定 A:O 15 列，资产固定 A:F 6 列，均不含制作人。旧 `shot-v1.xlsx`、`shot-v2.xlsx`、`asset-v1.xlsx` 仅保留为历史资源，不再由服务下载。
 - 集、场次、镜头、资产和资产制作分项的创建、修改、归档在锁内读取项目状态；镜头和资产导入 preview 普通读取状态并拒绝，commit 再以 `FOR UPDATE` 锁定项目重检。`completed` 或 `archived` 均返回 HTTP 409 / `SG_INVALID_STATE_TRANSITION`。项目 `completed` 时详情只保留合法的 `project.archive`，`archived` 时无写动作，镜头、资产和制作分项 `allowedActions` 同步为空。
 - 镜头制作字段只允许在未分配或唯一任务仍为 `not_started` 时编辑；任务进入 `preparing/in_progress/pending_review/revision/completed` 后详情不再返回 `shot.edit`，列表也隐藏编辑入口，直接调用普通更新接口返回 HTTP 409 / `SG_SHOT_EDIT_PRODUCTION_STARTED`。负责人改派仍是独立受控动作，不能借改派覆盖镜头制作字段。
 - 资产及制作分项 `allowedActions` 由后端结合平台权限、项目管理人/全项目范围、项目状态、`storageStatus=ready`、资源生命周期、版本、任务状态和未提交版本发布记录计算：资产可返回 `asset.edit`、`assetItem.add`、`asset.archive`，并在全部活动分项均可分配时聚合返回 `task.assign`；制作分项可返回 `assetItem.edit`、`assetItem.archive`、`assetItem.delete`、`task.assign`、`task.start`，前端不能自行合成。资产删除允许级联处理尚未开始的任务和活动制作分项，但仍被镜头使用、已有版本或任一任务已开始时必须拒绝；分项仅在未分配或任务仍为 `not_started` 且尚无版本时允许普通编辑，任务开始后直接调用更新接口返回 HTTP 409 / `SG_ASSET_ITEM_PRODUCTION_STARTED`。存在活动任务时不允许单独归档，任务已完成或存在非 `committed` 提交时不允许分配/改派。
@@ -114,7 +114,7 @@ POST /shot-grid/versions/{versionId}/review-actions
 GET  /shot-grid/versions/{versionId}/files/{fileId}/download
 ```
 
-- 预检请求体固定为有序 `candidates[]`（每项含 `clientFileKey/fileName/fileSize/sortOrder/candidateNote`）以及 `changelog/aiParams/issueResponses`。后端校验候选数量、连续顺序、单文件/整批大小和任务上下文，并为同一轮次生成共享版本号与时间戳、连续候选号和逐候选业务文件名；它不写数据库、不创建引用、不上传文件、不访问 NAS，也不检查实际目标文件。正式创建仍会在固定顺序锁定项目、任务与全部源文件后全量复核当前负责人本人、活动成员/账号、项目/任务状态、资源归属、文件授权与摘要、批内重复内容、业务上下文、未解决提交、目标相对路径生成和目录快照一致性，以关闭 TOCTOU 窗口；实际目标文件已存在的摘要冲突由 Worker 无覆盖发布阶段处理。
+- 预检请求体固定为有序 `candidates[]`（每项含 `clientFileKey/fileName/fileSize/sortOrder/candidateNote`）以及 `changelog/aiParams/issueResponses`。后端校验候选数量、连续顺序、单文件/整批大小和任务上下文，并预览同一轮次的共享版本号、连续候选号和逐候选业务文件名（不再追加时间戳）；它不写数据库、不创建引用、不上传文件、不访问 NAS，也不检查实际目标文件。正式创建仍会在固定顺序锁定项目、任务与全部源文件后全量复核当前负责人本人、活动成员/账号、项目/任务状态、资源归属、文件授权与摘要、批内重复内容、业务上下文、未解决提交、目标相对路径生成和目录快照一致性，以关闭 TOCTOU 窗口；实际目标文件已存在的摘要冲突由 Worker 无覆盖发布阶段处理。
 - 创建提交要求平台 `shotgrid:version:add`、任务详情包含 `version.add`，并且操作者是任务当前委派的活动 `creator` 本人；`director`、管理员、超级管理员和全项目范围不得代提交或代重试。查询 current/status、失败重试、版本历史/详情和文件下载分别受 `shotgrid:version:query`、`shotgrid:version:retry`、`shotgrid:version:list` / `shotgrid:version:query`、`shotgrid:file:download` 约束，其中查询可以按项目范围授权，retry 仍为当前活动负责人本人专属。
 - 暂存事务为每个源文件建立 `businessType=shotgrid_version_submission` 临时引用；Worker 按候选独立记录发布状态并跳过已成功候选。只有全部候选均发布完成，正式版本短事务才把全部引用切换为 `shotgrid_version`，同时创建一个不可变版本轮次、全部 `sg_version_candidate`/`sg_version_file`、候选级媒体派生任务、一个 `auto_single` 审核单和关系，并把任务改为 `pending_review`。单候选版本在同一事务内自动设为本轮最佳并将其审核媒体设为主文件，不写审核人选择历史；多候选版本初始不选最佳，审核人选择后才切换主审核媒体。`committed` 状态下的 `versionId` 通过 `sg_version.submission_id` 反查，提交表不重复保存该列。
 - `current` 返回当前任务未解决提交，用于页面刷新后恢复；状态机中只有 `committed` 表示正式版本成功。`failed` 仍占用原提交行，只能经 retry 重置并重试原行，不能通过新建提交绕过唯一性和任务占用约束。前端每轮自动查询最多 30 次，连续 3 次查询错误后暂停，使用有上限的指数退避；401/403/404 立即停止，到达边界后保留人工刷新或合法重试。
@@ -149,7 +149,7 @@ GET  /shot-grid/versions/{versionId}/files/{fileId}/download
 | `SHOT_GRID_IMPORT_PREVIEW_TTL_SECONDS` | `1800` | Redis 预览有效期 |
 | `SHOT_GRID_IMPORT_REDIS_KEY_PREFIX` | `shotgrid:import:preview` | Redis Key 前缀 |
 
-安全门禁在线程中、`openpyxl` 建立工作簿对象前扫描全部 OOXML Sheet（含隐藏 Sheet），并在 Redis 写入和数据库提交前检查预览 JSON 大小。镜头模板版本为 `shot-v2`，资产模板版本为 `asset-v2`；两类模板和提交请求都不包含制作人。预检与提交只处理镜头或资产制作分项，正式提交结果中的任务创建数固定为 0；导入后由项目管理人另行显式委派。上传原文件只用于临时解析，不持久化本地路径；若需长期保留，必须另走平台受保护文件和业务引用。
+安全门禁在线程中、`openpyxl` 建立工作簿对象前扫描全部 OOXML Sheet（含隐藏 Sheet），并在 Redis 写入和数据库提交前检查预览 JSON 大小。镜头模板版本为 `shot-v3`，资产模板版本为 `asset-v2`；两类模板和提交请求都不包含制作人。预检与提交只处理镜头或资产制作分项，正式提交结果中的任务创建数固定为 0；导入后由项目管理人另行显式委派。上传原文件只用于临时解析，不持久化本地路径；若需长期保留，必须另走平台受保护文件和业务引用。
 
 ## NAS 目录 Worker 配置
 
@@ -207,7 +207,7 @@ failed ──人工重试──→ 新建 reconcile_directory(pending)
 ## NAS 目录路径作用域与目录结果
 
 - `initialize_project` 和项目级 `reconcile_directory` 的 `target_relative_path` 相对 `sg_storage_root`，必须等于项目绑定的 `project_relative_path`。成功后确认项目根目录、`ASSET/Character`、`ASSET/Environment`、`ASSET/Prop` 和 `VIDEO` 存在且项目根可写。
-- `ensure_episode_directory`、`ensure_shot_directory`、`ensure_asset_directory` 以及非项目级 `reconcile_directory` 的目标相对项目根目录，分别只允许 `VIDEO\EPxx`、`VIDEO\EPxx\Sxxx`、`ASSET\{Character|Environment|Prop}\资产目录` 等冻结快照。
+- `ensure_episode_directory`、`ensure_shot_directory`、`ensure_asset_directory` 以及非项目级 `reconcile_directory` 的目标相对项目根目录，分别只允许 `VIDEO\EPxx`、`VIDEO\EPxx\数字镜头号`、`ASSET\{Character|Environment|Prop}\资产目录` 等冻结快照。
 - 每次执行重新比对配置根路径、根路径快照、项目相对路径和完整项目路径快照，并拒绝越界、非法片段、符号链接、Windows reparse point 及被普通文件占用的目录。
 - 项目初始化或项目级对账成功后才把 `sg_project_storage` 改为 `ready`；其最终失败才把项目存储改为 `failed`。动态目录失败只记录安全错误，不把已就绪的项目根存储降级为失败。
 
@@ -238,7 +238,7 @@ POST /shot-grid/storage-operations/{operationId}/retry
 - 2026-08-26 多候选增量使用 fresh PostgreSQL head `20260826_20`、隔离 Redis DB 15、真实平台登录和浏览器页面完成 `V001` 三候选提交 → 选择 `V001_02` → 发布修改要求并退回 → `V002` 两候选提交 → 选择 `V002_02` → 确认历史问题已修复并通过的闭环；任务最终为 `completed`。5 个候选都完成真实私有上传、版本 Worker 复制、正式候选/文件引用提交和物理文件 SHA-256 复核，首次发布失败后从页面重试并复用原提交及 `V001`。该旅程使用测试专用 UNC 到本机临时目录映射，不证明正式 NAS 服务账号、SMB/CIFS 挂载、共享 ACL、FFmpeg 或生产媒体能力，也不是完整系统 E2E。
 - 2026-08-26 旅程结束后已停止隔离前后端，删除 5 个私有上传夹具、本机映射目录、临时数据库并清空专用 Redis DB 15；15174/19099 无监听，未改动现有 PostgreSQL/Redis 容器及其他数据库或 Redis DB。
 - 2026-08-11 的镜头导入浏览器旅程基于旧 `shot-v1` 模板和“导入即预分配任务”规则。它曾验证 24 行解析、三视图、筛选、深链、会话清理和目录 Worker 关闭边界，但其中模板含制作人、导入创建 24 个任务及详情直接出现负责人等结论已被 v2 契约废止，不能作为当前验收证据。
-- 当前必须重新验证 `shot-v2` 下载及冻结摘要、A:O 15 列预检、导入后 24 个镜头均未分配、任务创建数为 0，以及随后显式委派只创建一个唯一任务。逻辑 `storageStatus=ready` 夹具和关闭的 Worker 仍不能证明真实 UNC/NAS、物理目录、写探针或 NAS/AD/Windows 共享 ACL。
+- 当前必须重新验证 `shot-v3` 下载及冻结摘要、A:O 15 列预检、导入后 24 个镜头均未分配、任务创建数为 0，以及随后显式委派只创建一个唯一任务。逻辑 `storageStatus=ready` 夹具和关闭的 Worker 仍不能证明真实 UNC/NAS、物理目录、写探针或 NAS/AD/Windows 共享 ACL。
 - 验收后已关闭浏览器和后端 PID 12996，删除临时 Nginx 容器/镜像、隔离数据库、Redis DB 15 数据及临时文件；18080/19098 端口空闲，原 9099 服务、PostgreSQL 服务及其他数据库和 Redis 其他 DB 未改动。
 
 ### 历史 v1 资产管理与资产 Excel 导入子集（当前契约已失效）

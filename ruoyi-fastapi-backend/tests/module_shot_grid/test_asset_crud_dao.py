@@ -143,7 +143,7 @@ async def test_asset_thumbnail_projection_uses_latest_version_display_candidate(
     refs_db = _SequenceDb([_MappingResult([])])
     versions_db = _SequenceDb([_MappingResult([])])
 
-    await ShotGridAssetCrudDao.get_active_asset_task_refs(  # type: ignore[arg-type]
+    await ShotGridAssetCrudDao.get_active_asset_item_refs(  # type: ignore[arg-type]
         refs_db,
         10,
         [20, 21],
@@ -155,6 +155,11 @@ async def test_asset_thumbnail_projection_uses_latest_version_display_candidate(
     assert 'sg_asset_item.project_id = 10' in refs_sql
     assert 'sg_asset_item.asset_id IN (20, 21)' in refs_sql
     assert "sg_asset_item.lifecycle_status = 'active'" in refs_sql
+    assert "sg_asset_item.del_flag = '0'" in refs_sql
+    assert 'LEFT OUTER JOIN sg_task' in refs_sql
+    assert "sg_task.del_flag = '0'" in refs_sql
+    assert 'sg_task.task_status' in refs_sql
+    assert 'sg_task.expected_end_time' in refs_sql
     assert 'ORDER BY sg_asset_item.asset_id, sg_asset_item.sort_order, sg_asset_item.asset_item_id' in refs_sql
     assert 'sg_version.task_id IN (200, 201)' in versions_sql
     assert 'sg_version_candidate.version_id = sg_version.version_id' in versions_sql

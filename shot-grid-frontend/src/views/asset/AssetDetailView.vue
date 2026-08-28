@@ -18,6 +18,7 @@ import ProjectStatePanel from '@/views/project/components/ProjectStatePanel.vue'
 import AssetArchiveDialog from '@/views/asset/components/AssetArchiveDialog.vue'
 import AssetAssignDialog from '@/views/asset/components/AssetAssignDialog.vue'
 import AssetFormDialog from '@/views/asset/components/AssetFormDialog.vue'
+import AssetDescriptionCell from '@/views/asset/components/AssetDescriptionCell.vue'
 import AssetItemFormDialog from '@/views/asset/components/AssetItemFormDialog.vue'
 import AssetItemDeleteDialog from '@/views/asset/components/AssetItemDeleteDialog.vue'
 import ProtectedAssetThumbnail from '@/views/asset/components/ProtectedAssetThumbnail.vue'
@@ -386,19 +387,48 @@ onBeforeUnmount(() => {
     <template v-else-if="asset">
       <el-alert v-if="pollingError" :title="pollingError" type="warning" show-icon :closable="false" />
       <el-card class="asset-hero" shadow="never">
-        <div class="asset-hero__layout">
-        <div class="asset-hero__gallery" aria-label="制作分项缩略图">
-          <article v-for="item in activeThumbnailItems" :key="item.assetItemId" class="asset-hero__item">
-            <ProtectedAssetThumbnail class="asset-hero__item-thumbnail" :thumbnail="item.thumbnail" :alt="`${item.productionItem || '未命名制作分项'} 缩略图`" />
-            <div class="asset-hero__item-meta">
-              <strong :title="item.productionItem || '未命名制作分项'">{{ item.productionItem || '未命名制作分项' }}</strong>
-              <span>{{ assetItemVersionLabel(item) }}</span>
+        <template #header>
+          <div class="asset-hero__header">
+            <div class="asset-hero__identity">
+              <p class="sg-eyebrow">{{ project?.projectCode }} · ASSET {{ asset.assetId }}</p>
+              <div class="asset-hero__title">
+                <el-tag size="small" effect="plain" round :type="tagTypeFromTone(assetTypeMeta(asset.assetType).tone)">{{ assetTypeMeta(asset.assetType).label }}</el-tag>
+                <h2>{{ asset.assetName }}</h2>
+                <el-tag v-if="!visibleItemStatusEntries(asset.itemStatusCounts).length" size="small" effect="plain" round :type="tagTypeFromTone(assetStatusMeta(asset.assetStatus).tone)">{{ assetStatusMeta(asset.assetStatus).label }}</el-tag>
+              </div>
             </div>
-          </article>
-          <el-empty v-if="!activeThumbnailItems.length" class="asset-hero__empty" :image-size="36" description="暂无活动制作分项" />
-        </div>
-        <div class="asset-hero__main"><p class="sg-eyebrow">{{ project?.projectCode }} · ASSET {{ asset.assetId }}</p><div><el-tag size="small" effect="plain" round :type="tagTypeFromTone(assetTypeMeta(asset.assetType).tone)">{{ assetTypeMeta(asset.assetType).label }}</el-tag><h2>{{ asset.assetName }}</h2><el-tag size="small" effect="plain" round :type="tagTypeFromTone(assetStatusMeta(asset.assetStatus).tone)">{{ assetStatusMeta(asset.assetStatus).label }}</el-tag></div><p>{{ asset.description || '暂无资产说明' }}</p><div class="asset-hero__summary"><small>{{ asset.itemCount }} 个制作分项 · {{ asset.usageShotCount }} 个使用镜头</small><el-tag size="small" effect="plain" round :type="tagTypeFromTone(assetDirectoryStatusMeta(asset.directoryStatus).tone)">{{ assetDirectoryStatusMeta(asset.directoryStatus).label }}</el-tag></div><div v-if="visibleItemStatusEntries(asset.itemStatusCounts).length" class="asset-item-status-counts" aria-label="制作分项状态数量"><el-tag v-for="entry in visibleItemStatusEntries(asset.itemStatusCounts)" :key="entry.status" size="small" effect="plain" round :type="tagTypeFromTone(assetStatusMeta(entry.status).tone)">{{ entry.label }} {{ entry.count }}</el-tag></div></div>
-        <div class="asset-hero__actions"><el-button :icon="Refresh" :loading="loading" :disabled="Boolean(startingOperation)" @click="loadDetail">刷新</el-button><el-button v-if="canAddItem" :icon="Plus" :disabled="startDisabled" @click="openItemForm()">新增制作分项</el-button><el-button v-if="canEditAsset" :icon="Edit" :disabled="startDisabled" @click="openEditAsset">编辑资产</el-button><el-button v-if="canArchiveAsset" type="danger" plain :icon="Lock" :disabled="startDisabled" @click="openArchive()">归档资产</el-button></div>
+            <div class="asset-hero__actions">
+              <el-button size="small" :icon="Refresh" :loading="loading" :disabled="Boolean(startingOperation)" @click="loadDetail">刷新</el-button>
+              <el-button v-if="canAddItem" size="small" :icon="Plus" :disabled="startDisabled" @click="openItemForm()">新增制作分项</el-button>
+              <el-button v-if="canEditAsset" size="small" :icon="Edit" :disabled="startDisabled" @click="openEditAsset">编辑资产</el-button>
+              <el-button v-if="canArchiveAsset" size="small" type="danger" plain :icon="Lock" :disabled="startDisabled" @click="openArchive()">归档资产</el-button>
+            </div>
+          </div>
+        </template>
+        <div class="asset-hero__layout">
+          <div class="asset-hero__main">
+            <p class="asset-hero__description">{{ asset.description || '暂无资产描述' }}</p>
+            <div class="asset-hero__summary">
+              <small>{{ asset.itemCount }} 个制作分项 · {{ asset.usageShotCount }} 个使用镜头</small>
+              <el-tag size="small" effect="plain" round :type="tagTypeFromTone(assetDirectoryStatusMeta(asset.directoryStatus).tone)">{{ assetDirectoryStatusMeta(asset.directoryStatus).label }}</el-tag>
+              <div v-if="visibleItemStatusEntries(asset.itemStatusCounts).length" class="asset-item-status-counts" aria-label="制作分项状态数量">
+                <el-tag v-for="entry in visibleItemStatusEntries(asset.itemStatusCounts)" :key="entry.status" size="small" effect="plain" round :type="tagTypeFromTone(assetStatusMeta(entry.status).tone)">{{ entry.label }} {{ entry.count }}</el-tag>
+              </div>
+            </div>
+          </div>
+          <div class="asset-hero__previews">
+            <h3>制作分项预览</h3>
+            <div class="asset-hero__gallery" aria-label="制作分项缩略图">
+              <el-card v-for="item in activeThumbnailItems" :key="item.assetItemId" class="asset-hero__item" shadow="never">
+                <ProtectedAssetThumbnail class="asset-hero__item-thumbnail" :thumbnail="item.thumbnail" :alt="`${item.productionItem || '未命名制作分项'} 缩略图`" />
+                <div class="asset-hero__item-meta">
+                  <el-text tag="strong" :line-clamp="2">{{ item.productionItem || '未命名制作分项' }}</el-text>
+                  <span>{{ assetItemVersionLabel(item) }}</span>
+                </div>
+              </el-card>
+              <el-empty v-if="!activeThumbnailItems.length" class="asset-hero__empty" :image-size="36" description="暂无活动制作分项" />
+            </div>
+          </div>
         </div>
       </el-card>
 
@@ -426,7 +456,7 @@ onBeforeUnmount(() => {
             <ProtectedAssetThumbnail class="item-card__thumbnail" :thumbnail="item.thumbnail" :alt="`${item.productionItem || '未命名制作分项'} 缩略图`" />
             <div class="item-card__body">
               <header><div><span class="item-card__id">分项 #{{ item.assetItemId }}</span><h4>{{ item.productionItem || '未命名制作分项' }}</h4></div><el-tag size="small" effect="plain" round :type="tagTypeFromTone(assetStatusMeta(item.assetStatus).tone)">{{ assetStatusMeta(item.assetStatus).label }}</el-tag></header>
-              <p>{{ item.description || '暂无分项说明' }}</p>
+              <AssetDescriptionCell :common-description="asset.description" :item-description="item.description" is-item />
               <el-descriptions class="item-card__details" :column="4" border>
                 <el-descriptions-item label="负责人">{{ taskAssigneeName(item.task) }}</el-descriptions-item>
                 <el-descriptions-item label="任务"><span v-if="item.task" class="detail-tag-group"><el-tag size="small" effect="plain" round :type="tagTypeFromTone(taskStatusMeta(item.task.taskStatus).tone)">{{ taskStatusMeta(item.task.taskStatus).label }}</el-tag><el-tag size="small" effect="plain" round :type="tagTypeFromTone(taskPriorityMeta(item.task.priority).tone)">{{ taskPriorityMeta(item.task.priority).label }}优先级</el-tag></span><el-tag v-else type="info" size="small" effect="plain" round>未分配</el-tag></el-descriptions-item>
@@ -458,16 +488,34 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .item-card.is-targeted { border-color: var(--el-color-primary); outline: 1px solid var(--el-color-primary); outline-offset: 2px; }
-.asset-detail-page{display:grid;gap:18px}.back-link{width:max-content;color:var(--sg-text-muted)}.back-link:hover{color:var(--sg-text)}.detail-loading{min-height:360px;background:var(--sg-surface);border-color:var(--sg-border);border-radius:var(--sg-radius-lg)}.detail-loading:deep(.el-card__body){padding:30px}.asset-hero{background:linear-gradient(135deg,rgba(128,191,255,.07),transparent 38%),var(--sg-surface);border-color:var(--sg-border);border-radius:var(--sg-radius-lg);container-type:inline-size}.asset-hero:deep(.el-card__body){padding:22px}.asset-hero__layout{display:grid;grid-template-columns:minmax(260px,420px) minmax(240px,1fr) auto;grid-template-areas:"gallery main actions";gap:22px;align-items:center}.asset-hero__main{grid-area:main;min-width:0}.asset-hero__thumbnail{overflow:hidden;height:148px;border-radius:12px}.asset-hero__main>div{display:flex;gap:9px;align-items:center;flex-wrap:wrap}.asset-hero h2,.asset-hero p{margin:0}.asset-hero h2{font-size:27px}.asset-hero__main>p:not(.sg-eyebrow){margin-top:8px;color:var(--sg-text-secondary);font-size:13px;line-height:1.6}.asset-hero__main small{display:block;color:var(--sg-text-muted)}.asset-hero__summary{margin-top:8px}.asset-hero__actions{display:flex;grid-area:actions;grid-column:auto;max-width:330px;gap:8px;justify-content:flex-end;flex-wrap:wrap}.detail-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.detail-card,.item-section{background:var(--sg-surface);border-color:var(--sg-border);border-radius:var(--sg-radius-md)}.detail-card:deep(.el-card__header),.item-section:deep(.el-card__header){padding:16px 20px;border-bottom-color:var(--sg-border)}.detail-card:deep(.el-card__body),.item-section:deep(.el-card__body){padding:20px}.detail-card h3{margin:0}.detail-card :deep(.el-descriptions__body),.detail-card :deep(.el-descriptions__cell),.item-card__details:deep(.el-descriptions__body),.item-card__details:deep(.el-descriptions__cell){background:var(--sg-surface-raised)!important;border-color:var(--sg-border)!important}.detail-card :deep(.el-descriptions__label),.item-card__details:deep(.el-descriptions__label){color:var(--sg-text-muted);font-size:10px}.detail-card :deep(.el-descriptions__content),.item-card__details:deep(.el-descriptions__content){color:var(--sg-text-secondary);font-size:11px;overflow-wrap:anywhere}.item-section>header,.item-section :deep(.el-card__header)>header{display:flex;align-items:center;justify-content:space-between}.item-section h3,.item-section p{margin:0}.item-list{display:grid;gap:10px}.item-card{background:var(--sg-surface-raised);border-color:var(--sg-border);border-radius:11px}.item-card:deep(.el-card__body){display:grid;grid-template-columns:140px minmax(0,1fr) auto;gap:15px;align-items:stretch;padding:13px}.item-card.is-archived{opacity:.62}.item-card__thumbnail{height:110px;border-radius:8px}.item-card__body{min-width:0}.item-card__body>header{display:flex;align-items:flex-start;justify-content:space-between}.item-card__id{color:var(--sg-text-muted);font-size:9px}.item-card h4,.item-card p{margin:0}.item-card h4{margin-top:3px}.item-card__body>p{margin-top:6px;color:var(--sg-text-muted);font-size:11px}.item-card__details{margin-top:10px}.detail-tag-group{display:flex;gap:5px;align-items:center;flex-wrap:wrap}.item-card__body>small{display:block;margin-top:8px;color:var(--sg-text-muted);font-size:9px}.item-card__actions{display:flex;max-width:120px;align-content:center;justify-content:flex-end;flex-direction:column}@media(max-width:1050px){.item-card:deep(.el-card__body){grid-template-columns:110px 1fr}.item-card__actions{grid-column:1/-1;max-width:none;flex-direction:row;justify-content:flex-start}}@media(max-width:700px){.detail-grid,.item-card:deep(.el-card__body){grid-template-columns:1fr}}
+.asset-detail-page{display:grid;gap:18px}.back-link{width:max-content;color:var(--sg-text-muted)}.back-link:hover{color:var(--sg-text)}.detail-loading{min-height:360px;background:var(--sg-surface);border-color:var(--sg-border);border-radius:var(--sg-radius-lg)}.detail-loading:deep(.el-card__body){padding:30px}.detail-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.detail-card,.item-section{background:var(--sg-surface);border-color:var(--sg-border);border-radius:var(--sg-radius-md)}.detail-card:deep(.el-card__header),.item-section:deep(.el-card__header){padding:16px 20px;border-bottom-color:var(--sg-border)}.detail-card:deep(.el-card__body),.item-section:deep(.el-card__body){padding:20px}.detail-card h3{margin:0}.detail-card :deep(.el-descriptions__body),.detail-card :deep(.el-descriptions__cell),.item-card__details:deep(.el-descriptions__body),.item-card__details:deep(.el-descriptions__cell){background:var(--sg-surface-raised)!important;border-color:var(--sg-border)!important}.detail-card :deep(.el-descriptions__label),.item-card__details:deep(.el-descriptions__label){color:var(--sg-text-muted);font-size:10px}.detail-card :deep(.el-descriptions__content),.item-card__details:deep(.el-descriptions__content){color:var(--sg-text-secondary);font-size:11px;overflow-wrap:anywhere}.item-section>header,.item-section :deep(.el-card__header)>header{display:flex;align-items:center;justify-content:space-between}.item-section h3,.item-section p{margin:0}.item-list{display:grid;gap:10px}.item-card{background:var(--sg-surface-raised);border-color:var(--sg-border);border-radius:11px}.item-card:deep(.el-card__body){display:grid;grid-template-columns:140px minmax(0,1fr) auto;gap:15px;align-items:stretch;padding:13px}.item-card.is-archived{opacity:.62}.item-card__thumbnail{height:110px;border-radius:8px}.item-card__body{min-width:0}.item-card__body>header{display:flex;align-items:flex-start;justify-content:space-between}.item-card__id{color:var(--sg-text-muted);font-size:9px}.item-card h4,.item-card p{margin:0}.item-card h4{margin-top:3px}.item-card__body>p{margin-top:6px;color:var(--sg-text-muted);font-size:11px}.item-card__details{margin-top:10px}.detail-tag-group{display:flex;gap:5px;align-items:center;flex-wrap:wrap}.item-card__body>small{display:block;margin-top:8px;color:var(--sg-text-muted);font-size:9px}.item-card__actions{display:flex;max-width:120px;align-content:center;justify-content:flex-end;flex-direction:column}@media(max-width:1050px){.item-card:deep(.el-card__body){grid-template-columns:110px 1fr}.item-card__actions{grid-column:1/-1;max-width:none;flex-direction:row;justify-content:flex-start}}@media(max-width:700px){.detail-grid,.item-card:deep(.el-card__body){grid-template-columns:1fr}}
 .detail-loading__label{display:block;margin-bottom:18px;color:var(--sg-text-secondary);font-size:13px}
-.asset-hero__gallery{display:grid;grid-area:gallery;min-width:0;align-self:start;grid-auto-flow:column;grid-auto-columns:132px;gap:10px;overflow-x:auto;padding-bottom:4px;scrollbar-width:thin}
-.asset-hero__item{display:grid;min-width:0;overflow:hidden;grid-template-rows:100px auto;border:1px solid var(--sg-border);border-radius:12px;background:var(--sg-surface-raised)}
-.asset-hero__item-thumbnail{height:100px}
-.asset-hero__item-meta{display:grid;gap:2px;padding:7px 8px}
-.asset-hero__item-meta strong{overflow:hidden;color:var(--sg-text);font-size:11px;text-overflow:ellipsis;white-space:nowrap}
-.asset-hero__item-meta span{color:var(--sg-text-muted);font-size:9px;white-space:nowrap}
-.asset-hero__empty{width:132px;height:148px;border:1px dashed var(--sg-border);border-radius:12px}
-@container (max-width:1050px){.asset-hero__layout{grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"main actions" "gallery gallery";align-items:start}.asset-hero__actions{max-width:none;justify-content:flex-end}}
-@container (max-width:700px){.asset-hero__layout{grid-template-columns:1fr;grid-template-areas:"main" "gallery" "actions"}.asset-hero__gallery{width:100%;grid-auto-columns:140px}.asset-hero__actions{justify-content:flex-start}}
+.asset-hero { min-width: 0; background: linear-gradient(135deg, rgba(128,191,255,.07), transparent 38%), var(--sg-surface); border-color: var(--sg-border); border-radius: var(--sg-radius-lg); }
+.asset-hero > :deep(.el-card__header) { padding: 20px 22px; border-bottom-color: var(--sg-border); }
+.asset-hero > :deep(.el-card__body) { padding: 20px 22px; }
+.asset-hero__header { display: flex; gap: 14px 20px; align-items: flex-start; flex-wrap: wrap; }
+.asset-hero__identity { flex: 1 1 420px; min-width: 0; }
+.asset-hero__identity .sg-eyebrow { margin: 0 0 8px; }
+.asset-hero__title { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.asset-hero__title h2 { min-width: 0; margin: 0; color: var(--sg-text); font-size: 24px; line-height: 1.4; overflow-wrap: anywhere; }
+.asset-hero__title .el-tag { flex-shrink: 0; }
+.asset-hero__actions { display: flex; max-width: 100%; gap: 8px; align-items: center; flex-wrap: wrap; }
+.asset-hero__actions .el-button { margin: 0; }
+.asset-hero__layout { display: grid; min-width: 0; gap: 20px; }
+.asset-hero__main { min-width: 0; }
+.asset-hero__description { margin: 0; color: var(--sg-text-secondary); font-size: 13px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
+.asset-hero__summary { display: flex; gap: 8px 12px; align-items: center; flex-wrap: wrap; margin-top: 12px; }
+.asset-hero__summary small { color: var(--sg-text-secondary); font-size: 12px; line-height: 1.5; }
+.asset-hero__summary .asset-item-status-counts { margin: 0; }
+.asset-hero__previews { min-width: 0; }
+.asset-hero__previews h3 { margin: 0 0 10px; color: var(--sg-text-secondary); font-size: 12px; font-weight: 500; }
+.asset-hero__gallery { display: grid; min-width: 0; grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr)); gap: 12px; align-items: stretch; }
+.asset-hero__item { min-width: 0; overflow: hidden; border-color: var(--sg-border); border-radius: 10px; background: var(--sg-surface-raised); }
+.asset-hero__item :deep(.el-card__body) { display: grid; height: 100%; grid-template-rows: 140px minmax(58px, auto); padding: 0; }
+.asset-hero__item-thumbnail { height: 140px; }
+.asset-hero__item-meta { display: flex; min-width: 0; flex-direction: column; gap: 4px; padding: 10px 12px; }
+.asset-hero__item-meta strong { align-self: stretch; color: var(--sg-text); font-size: 12px; font-weight: 600; line-height: 1.5; overflow-wrap: anywhere; }
+.asset-hero__item-meta span { color: var(--sg-text-muted); font-size: 11px; line-height: 1.5; }
+.asset-hero__empty { grid-column: 1 / -1; min-height: 140px; padding: 20px; border: 1px dashed var(--sg-border); border-radius: 10px; }
 .asset-item-status-counts{display:flex;gap:5px;flex-wrap:wrap;margin-top:8px}.item-card__actions{gap:4px}
 </style>

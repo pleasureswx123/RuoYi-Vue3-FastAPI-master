@@ -47,8 +47,12 @@ class ShotGridSearchDao:
             func.lpad(cast(ShotGridEpisode.episode_no, String), 3, '0'),
             '-',
             func.lpad(cast(ShotGridScene.scene_no, String), 3, '0'),
-            '-S',
-            func.lpad(cast(ShotGridShot.shot_no, String), 3, '0'),
+            '-',
+            func.lpad(
+                cast(ShotGridShot.shot_no, String),
+                func.greatest(4, func.length(cast(ShotGridShot.shot_no, String))),
+                '0',
+            ),
         )
         statement = (
             select(

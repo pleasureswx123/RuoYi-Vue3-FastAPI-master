@@ -1,3 +1,5 @@
+import { taskTimeReminder } from '@/views/task/taskPresentation'
+
 const TYPE_META = {
   Character: { label: '角色', tone: 'character' },
   Environment: { label: '场景', tone: 'environment' },
@@ -36,6 +38,19 @@ export function assetItemStatusEntries(counts = {}) {
       label: assetStatusMeta(status).label,
       count: Math.max(0, Number(counts?.[status]) || 0)
     }))
+}
+
+export function assetItemTimeEntries(groups = [], now = new Date()) {
+  const entries = new Map()
+  for (const group of groups) {
+    const count = Number(group.itemCount)
+    if (!Number.isSafeInteger(count) || count <= 0) continue
+    const { state, label, tone } = taskTimeReminder({ taskStatus: group.taskStatus, expectedEndTime: group.expectedEndTime }, now)
+    const entry = entries.get(state) || { state, label, tone, count: 0 }
+    entry.count += count
+    entries.set(state, entry)
+  }
+  return ['overdue', 'warning', 'normal', 'unset', 'completed'].map(state => entries.get(state)).filter(Boolean)
 }
 
 export function assetDirectoryStatusMeta(status) {

@@ -22,19 +22,27 @@ def _iso_bmff(brand: bytes, payload: bytes = b'video-payload') -> bytes:
     return (len(body) + 4).to_bytes(4, 'big') + body + payload
 
 
-def _prepare_roots(tmp_path: Path, content: bytes, extension: str) -> tuple[Path, Path, str]:
+def _prepare_roots(
+    tmp_path: Path, content: bytes, extension: str, shot_directory: str = '001_S001'
+) -> tuple[Path, Path, str]:
     source_root = tmp_path / 'private'
     source_path = source_root / '2026' / '08' / f'upload.{extension}'
     source_path.parent.mkdir(parents=True)
     source_path.write_bytes(content)
     nas_root = tmp_path / 'nas'
-    target_parent = nas_root / 'AI影视短片' / '罗刹夫人' / 'VIDEO' / 'EP01' / '001_S001'
+    target_parent = nas_root / 'AI影视短片' / '罗刹夫人' / 'VIDEO' / 'EP01' / shot_directory
     target_parent.mkdir(parents=True)
     return source_root, nas_root, f'2026/08/upload.{extension}'
 
 
-def _context(nas_root: Path, storage_key: str, content: bytes) -> VersionPublishPathContext:
-    business_name = 'WGZR_EP001_001_S001_YJF_V001_1786094626499.mp4'
+def _context(
+    nas_root: Path,
+    storage_key: str,
+    content: bytes,
+    shot_directory: str = '001_S001',
+    filename_suffix: str = 'V001_1786094626499',
+) -> VersionPublishPathContext:
+    business_name = f'WGZR_EP001_{shot_directory}_YJF_{filename_suffix}.mp4'
     return VersionPublishPathContext(
         submission_id=SUBMISSION_ID,
         attempt_count=ATTEMPT_COUNT,
@@ -43,8 +51,8 @@ def _context(nas_root: Path, storage_key: str, content: bytes) -> VersionPublish
         source_sha256=hashlib.sha256(content).hexdigest(),
         source_file_size=len(content),
         business_file_name=business_name,
-        target_relative_path=f'VIDEO\\EP01\\001_S001\\{business_name}',
-        temporary_relative_path=(f'VIDEO\\EP01\\001_S001\\.sgtmp-{SUBMISSION_ID}-a{ATTEMPT_COUNT}-abc123.part'),
+        target_relative_path=f'VIDEO\\EP01\\{shot_directory}\\{business_name}',
+        temporary_relative_path=(f'VIDEO\\EP01\\{shot_directory}\\.sgtmp-{SUBMISSION_ID}-a{ATTEMPT_COUNT}-abc123.part'),
         storage_status='ready',
         protocol='smb_unc',
         configured_root_path=str(nas_root),
@@ -130,11 +138,15 @@ async def test_extension_must_match_sniffed_media_type(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_publish_uses_unique_temp_and_never_overwrites_target(tmp_path: Path) -> None:
+@pytest.mark.parametrize('shot_directory', ['001_S001', '001_0001', '000_0001', '1000_10000'])
+@pytest.mark.parametrize('filename_suffix', ['V001_1786094626499', 'V001_01'])
+async def test_publish_uses_unique_temp_and_never_overwrites_target(
+    tmp_path: Path, shot_directory: str, filename_suffix: str
+) -> None:
     content = _iso_bmff(b'mp42')
-    source_root, nas_root, storage_key = _prepare_roots(tmp_path, content, 'mp4')
+    source_root, nas_root, storage_key = _prepare_roots(tmp_path, content, 'mp4', shot_directory)
     adapter = ShotGridVersionPublishPathAdapter(source_root=source_root, allow_local_root=True)
-    context = _context(nas_root, storage_key, content)
+    context = _context(nas_root, storage_key, content, shot_directory, filename_suffix)
     target = nas_root / 'AI影视短片' / '罗刹夫人' / Path(context.target_relative_path.replace('\\', '/'))
     temporary = nas_root / 'AI影视短片' / '罗刹夫人' / Path(context.temporary_relative_path.replace('\\', '/'))
 
@@ -154,14 +166,17 @@ async def test_publish_uses_unique_temp_and_never_overwrites_target(tmp_path: Pa
 
 
 @pytest.mark.asyncio
-async def test_multi_candidate_temp_name_must_match_candidate_number(tmp_path: Path) -> None:
+@pytest.mark.parametrize('shot_directory', ['001_S001', '000_0001'])
+async def test_multi_candidate_temp_name_must_match_candidate_number(tmp_path: Path, shot_directory: str) -> None:
     content = _iso_bmff(b'mp42')
-    source_root, nas_root, storage_key = _prepare_roots(tmp_path, content, 'mp4')
+    source_root, nas_root, storage_key = _prepare_roots(tmp_path, content, 'mp4', shot_directory)
     adapter = ShotGridVersionPublishPathAdapter(source_root=source_root, allow_local_root=True)
     context = replace(
-        _context(nas_root, storage_key, content),
+        _context(nas_root, storage_key, content, shot_directory),
         candidate_no=2,
-        temporary_relative_path=(f'VIDEO\\EP01\\001_S001\\.sgtmp-{SUBMISSION_ID}-02-a{ATTEMPT_COUNT}-abc123.part'),
+        temporary_relative_path=(
+            f'VIDEO\\EP01\\{shot_directory}\\.sgtmp-{SUBMISSION_ID}-02-a{ATTEMPT_COUNT}-abc123.part'
+        ),
     )
 
     result = await adapter.publish(context)
@@ -173,11 +188,31 @@ async def test_multi_candidate_temp_name_must_match_candidate_number(tmp_path: P
             replace(
                 context,
                 temporary_relative_path=(
-                    f'VIDEO\\EP01\\001_S001\\.sgtmp-{SUBMISSION_ID}-03-a{ATTEMPT_COUNT}-wrong.part'
+                    f'VIDEO\\EP01\\{shot_directory}\\.sgtmp-{SUBMISSION_ID}-03-a{ATTEMPT_COUNT}-wrong.part'
                 ),
             )
         )
     assert exc_info.value.error_key == 'SG_STORAGE_PATH_INVALID'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('shot_directory', ['000_001', '000_A001', '000_0001_extra', '000_0001/..'])
+async def test_invalid_shot_directory_is_still_rejected(tmp_path: Path, shot_directory: str) -> None:
+    content = _iso_bmff(b'mp42')
+    source_root, nas_root, storage_key = _prepare_roots(tmp_path, content, 'mp4')
+    adapter = ShotGridVersionPublishPathAdapter(source_root=source_root, allow_local_root=True)
+    context = _context(nas_root, storage_key, content)
+    context = replace(
+        context,
+        target_relative_path=f'VIDEO\\EP01\\{shot_directory}\\{context.business_file_name}',
+        temporary_relative_path=f'VIDEO\\EP01\\{shot_directory}\\.sgtmp-{SUBMISSION_ID}-a{ATTEMPT_COUNT}-abc123.part',
+    )
+
+    with pytest.raises(VersionPublishPathAdapterError) as exc_info:
+        await adapter.publish(context)
+
+    assert exc_info.value.error_key == 'SG_STORAGE_PATH_INVALID'
+    assert not list(nas_root.rglob('*.mp4'))
 
 
 @pytest.mark.asyncio

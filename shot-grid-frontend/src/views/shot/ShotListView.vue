@@ -24,7 +24,7 @@ import ShotDetailView from '@/views/shot/ShotDetailView.vue'
 import ShotFormDialog from '@/views/shot/components/ShotFormDialog.vue'
 import ShotAssignDialog from '@/views/shot/components/ShotAssignDialog.vue'
 import ShotImportDialog from '@/views/shot/components/ShotImportDialog.vue'
-import { directoryStatusMeta, formatShotDuration, shotAssigneeName, shotAssigneeOptionLabel, shotErrorState, shotStatusMeta, shotStatusTagClass } from '@/views/shot/shotPresentation'
+import { directoryStatusMeta, formatShotCode, formatShotDuration, shotAssigneeName, shotAssigneeOptionLabel, shotErrorState, shotStatusMeta, shotStatusTagClass } from '@/views/shot/shotPresentation'
 
 const route = useRoute()
 const router = useRouter()
@@ -123,7 +123,7 @@ const sceneSequenceConsistent = computed(() => (
     return (
       Number(shot?.sequencePosition) === expected &&
       Number(shot?.shotNo) === expected &&
-      shot?.shotCode === `S${String(expected).padStart(3, '0')}`
+      shot?.shotCode === formatShotCode(expected)
     )
   })
 ))
@@ -146,7 +146,7 @@ const dragSortHint = computed(() => {
   if (!sceneSequenceConsistent.value) return ' · 当前场次镜头号不连续，请先完成历史数据治理后再排序'
   if (shots.value.length <= 1) return ' · 当前场次无需排序'
   if (!shots.value.some(isShotOrderMutable)) return ' · 当前场次镜头均已冻结，不能调整顺序'
-  return ' · 拖动左侧手柄调整顺序，Sxxx 会同步更新；已开始制作或目录已冻结的镜头不可调整'
+  return ' · 拖动左侧手柄调整顺序，镜头号会同步更新；已开始制作或目录已冻结的镜头不可调整'
 })
 const pageCount = computed(() => Math.max(1, Math.ceil(total.value / query.pageSize)))
 const currentProjectId = computed(() => {
@@ -657,10 +657,10 @@ async function handleRowDragEnd(event) {
     })
     const result = response?.data || response
     if (result?.operationStatus === 'pending') {
-      ElMessage.success(`顺序已受理，正在迁移存量目录；完成后自动更新为 S${String(sequencePosition).padStart(3, '0')}`)
+      ElMessage.success(`顺序已受理，正在迁移存量目录；完成后自动更新为 ${formatShotCode(sequencePosition)}`)
       await loadProjectContext()
     } else {
-      ElMessage.success(`已调整为本场第 ${sequencePosition} 镜（${result?.shotCode || `S${String(sequencePosition).padStart(3, '0')}`}）`)
+      ElMessage.success(`已调整为本场第 ${sequencePosition} 镜（${result?.shotCode || formatShotCode(sequencePosition)}）`)
     }
   } catch (error) {
     const state = shotErrorState(error, '镜头顺序调整失败')
@@ -1042,7 +1042,7 @@ onBeforeUnmount(() => { disposed = true; closeSingleAssign(); destroyRowSortable
       <template v-else-if="projectContext.projectId">
         <el-form ref="shotFilterForm" :model="query" :rules="shotFilterRules" class="shot-filters" size="large" aria-label="镜头筛选">
           <el-form-item class="shot-filter-item shot-filter-item--keyword" prop="keyword">
-            <el-input v-model="query.keyword" class="shot-search" :prefix-icon="Search" maxlength="200" clearable placeholder="Sxxx、制作内容、台词或场次名称" aria-label="搜索镜头" />
+            <el-input v-model="query.keyword" class="shot-search" :prefix-icon="Search" maxlength="200" clearable placeholder="镜头号、制作内容、台词或场次名称" aria-label="搜索镜头" />
           </el-form-item>
           <el-form-item class="shot-filter-item" prop="episodeId">
             <el-select v-model="query.episodeId" class="sg-select" placeholder="全部集" aria-label="按集筛选" @change="changeEpisodeFilter"><el-option label="全部集" value="" /><el-option v-for="episode in episodes" :key="episode.episodeId" :label="`${episode.episodeCode} ${episode.episodeName || ''}`" :value="String(episode.episodeId)" /></el-select>
@@ -1073,7 +1073,7 @@ onBeforeUnmount(() => { disposed = true; closeSingleAssign(); destroyRowSortable
         <div v-else-if="viewMode === 'table'" class="shot-table-wrap">
           <el-table ref="shotTableRef" v-loading="shotsLoading" class="shot-data-table" :data="shots" row-key="shotId" max-height="620" empty-text="当前筛选没有镜头" @selection-change="handleShotSelectionChange">
             <template #empty><el-empty class="shot-empty" description="当前筛选没有镜头"><p>可以调整集、场次、状态或制作人筛选；项目管理人也可以新建或导入镜头。</p></el-empty></template>
-            <!-- <el-table-column v-if="canDragSort" width="38" fixed="left" align="center"><template #default="scope"><el-icon class="shot-drag-handle" :class="{ 'is-disabled': !isShotOrderMutable(scope.row) }" :title="isShotOrderMutable(scope.row) ? '拖拽调整场内顺序，Sxxx 将同步更新' : shotOrderLockReason(scope.row)"><Rank /></el-icon></template></el-table-column> -->
+            <!-- <el-table-column v-if="canDragSort" width="38" fixed="left" align="center"><template #default="scope"><el-icon class="shot-drag-handle" :class="{ 'is-disabled': !isShotOrderMutable(scope.row) }" :title="isShotOrderMutable(scope.row) ? '拖拽调整场内顺序，镜头号将同步更新' : shotOrderLockReason(scope.row)"><Rank /></el-icon></template></el-table-column> -->
             <el-table-column type="selection" width="48" fixed="left" align="center" :selectable="isShotSelectable" reserve-selection />
             <el-table-column label="集 / 场 / 镜头" width="180" fixed="left">
               <template #default="scope"><div v-if="scope?.row" class="shot-identity"><strong>{{ scope.row.episodeCode }} / {{ scope.row.sceneCode }} / {{ scope.row.shotCode }}</strong><small>本场第 {{ scope.row.shotNo }} 镜 · {{ formatShotDuration(scope.row.durationMs) }}</small></div></template>

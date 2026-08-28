@@ -281,6 +281,14 @@ class ShotGridAssetItemStatusCountsModel(BaseModel):
     completed: int = Field(default=0, ge=0)
 
 
+class ShotGridAssetItemTimeGroupModel(ShotGridApiModel):
+    """相同任务状态、结束时间的活动分项摘要，供前端随时钟计算提醒。"""
+
+    task_status: TaskStatus | None = None
+    expected_end_time: datetime | None = None
+    item_count: int = Field(ge=1)
+
+
 class ShotGridAssetListItemModel(ShotGridApiModel):
     """资产列表项。"""
 
@@ -294,6 +302,7 @@ class ShotGridAssetListItemModel(ShotGridApiModel):
     asset_status: AssetWorkStatus
     item_count: int = 0
     item_status_counts: ShotGridAssetItemStatusCountsModel = Field(default_factory=ShotGridAssetItemStatusCountsModel)
+    item_time_groups: list[ShotGridAssetItemTimeGroupModel] = Field(default_factory=list)
     usage_shot_count: int = 0
     assignee_user_ids: list[int] = Field(default_factory=list)
     thumbnail: ShotGridAssetThumbnailModel | None = None
@@ -306,6 +315,7 @@ class ShotGridAssetListItemModel(ShotGridApiModel):
 class ShotGridAssetDetailModel(ShotGridAssetListItemModel):
     """资产详情。"""
 
+    description_locked: bool = Field(description='任一未删除分项已开工后，共有说明只读；包含归档分项')
     storage_dir_name: str
     remark: str | None = None
     items: list[ShotGridAssetItemModel] = Field(default_factory=list)

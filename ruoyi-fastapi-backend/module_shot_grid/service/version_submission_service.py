@@ -57,6 +57,7 @@ from module_shot_grid.service.version_publish_path_adapter import (
     ShotGridVersionPublishPathAdapter,
     VersionPublishPathAdapterError,
 )
+from module_shot_grid.shot_number import format_shot_code
 from utils.file_util import FileDownloadResult
 
 WINDOWS_FILENAME_FORBIDDEN = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
@@ -112,7 +113,6 @@ class ShotGridVersionSubmissionService:
             )
 
         version_no = await ShotGridVersionSubmissionDao.next_reserved_version_no(db, task_id)
-        generated_at_ms = int(time.time_ns() // 1_000_000)
         candidate_results: list[ShotGridVersionSubmissionPreflightCandidateResultModel] = []
         for candidate_no, candidate in enumerate(command.candidates, start=1):
             extension = cls._preflight_file_extension(task_context['task_kind'], candidate.file_name)
@@ -120,7 +120,6 @@ class ShotGridVersionSubmissionService:
                 task_context,
                 version_no=version_no,
                 candidate_no=candidate_no,
-                generated_at_ms=generated_at_ms,
                 extension=extension,
             )
             cls.build_target_relative_path(task_context, business_file_name)
@@ -283,6 +282,7 @@ class ShotGridVersionSubmissionService:
                     raise shot_grid_error(409, 'SG_VERSION_FILE_ALREADY_BOUND', '文件已经绑定到其他版本提交')
 
             version_no = await ShotGridVersionSubmissionDao.next_reserved_version_no(db, task_id)
+            # 批次生成时间仅作为元数据保存，不拼入业务文件名。
             generated_at_ms = int(time.time_ns() // 1_000_000)
             candidate_specs: list[dict[str, Any]] = []
             for candidate_no, candidate in enumerate(command.candidates, start=1):
@@ -293,7 +293,6 @@ class ShotGridVersionSubmissionService:
                     task_context,
                     version_no=version_no,
                     candidate_no=candidate_no,
-                    generated_at_ms=generated_at_ms,
                     extension=inspection.extension,
                 )
                 target_relative_path = cls.build_target_relative_path(task_context, business_file_name)
@@ -885,10 +884,9 @@ class ShotGridVersionSubmissionService:
         *,
         version_no: int,
         candidate_no: int = 1,
-        generated_at_ms: int,
         extension: str,
     ) -> str:
-        """按冻结规则生成一次性业务文件名；长资产名采用稳定摘要缩短。"""
+        """新文件名以版本及候选号结尾；长资产名采用稳定摘要缩短。"""
 
         project_code = context['project_code']
         producer_code = context.get('producer_code')
@@ -902,7 +900,7 @@ class ShotGridVersionSubmissionService:
                 raise shot_grid_error(422, 'SG_TASK_FILE_TYPE_INVALID', '镜头任务只允许MP4或MOV')
             filename = (
                 f'{project_code}_EP{int(context["episode_no"]):03d}_{int(context["scene_no"]):03d}_'
-                f'S{int(context["shot_no"]):03d}_{producer_code}_{version_segment}_{generated_at_ms}.{extension}'
+                f'{format_shot_code(int(context["shot_no"]))}_{producer_code}_{version_segment}.{extension}'
             )
         elif context['task_kind'] == 'asset_image':
             if extension not in {'jpg', 'png'}:
@@ -918,7 +916,7 @@ class ShotGridVersionSubmissionService:
             if not asset_name:
                 raise shot_grid_error(422, 'SG_STORAGE_PATH_INVALID', '资产名称无法生成安全文件名')
             fixed_prefix = f'{project_code}_Asset_{context["asset_type"]}_'
-            fixed_suffix = f'_{producer_code}_{version_segment}_{generated_at_ms}.{extension}'
+            fixed_suffix = f'_{producer_code}_{version_segment}.{extension}'
             variable = f'{asset_name}_{production_item}'
             max_variable_length = MAX_BUSINESS_FILENAME_LENGTH - len(fixed_prefix) - len(fixed_suffix)
             if max_variable_length < MIN_SHORTENED_VARIABLE_LENGTH:

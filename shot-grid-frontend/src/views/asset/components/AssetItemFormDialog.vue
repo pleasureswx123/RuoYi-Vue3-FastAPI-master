@@ -85,8 +85,12 @@ function closeDialog() {
   <ProjectModal :title="isEdit ? '编辑制作分项' : `新增制作分项 · ${asset.assetName}`" :description="isEdit ? '制作分项是独立分配、提交图片版本和审核的最小生产单元；管理人员确认开工后，制作信息不可再修改。' : '先新增未分配制作分项；保存后再通过“分配任务”选择制作人并创建任务。'" :busy="saving" @close="closeDialog">
     <el-form ref="itemForm" :model="form" :rules="itemRules" class="item-form" size="large" label-position="top" aria-label="资产制作分项表单">
       <el-alert v-if="requestError" :title="requestError.title" type="error" show-icon :closable="false"><span>{{ requestError.message }}</span><el-button v-if="requestError.status === 409" link type="danger" @click="emit('refresh')">刷新后重试</el-button></el-alert>
+      <el-descriptions :column="1" border aria-label="所属资产信息">
+        <el-descriptions-item label="资产">{{ asset.assetName }}</el-descriptions-item>
+        <el-descriptions-item label="资产描述">{{ asset.description || '暂无资产描述' }}</el-descriptions-item>
+      </el-descriptions>
       <el-form-item label="制作分项" prop="productionItem"><el-input v-model="form.productionItem" maxlength="240" :disabled="saving" placeholder="未分配时可留空；分配任务前必须填写" /></el-form-item>
-      <el-form-item label="分项说明" prop="description"><el-input v-model="form.description" type="textarea" :rows="3" :disabled="saving" /></el-form-item>
+      <el-form-item label="分项补充要求" prop="description"><el-input v-model="form.description" type="textarea" :rows="3" :disabled="saving" placeholder="仅填写该分项独有的要求，可留空；资产描述由所有分项共用" /></el-form-item>
       <el-form-item label="排序" prop="sortOrder"><el-input-number v-model="form.sortOrder" :min="0" :step="1" step-strictly controls-position="right" :disabled="saving" /></el-form-item>
       <el-form-item label="备注" prop="remark"><el-input v-model="form.remark" type="textarea" :rows="2" maxlength="500" show-word-limit :disabled="saving" /></el-form-item>
       <el-alert v-if="item?.task" title="该分项已有任务" description="如需更换负责人，请使用“改派任务”；编辑分项信息不会变更负责人。" type="info" show-icon :closable="false" />

@@ -165,7 +165,7 @@ async function downloadTemplate() {
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = url
-    link.download = '镜头导入模板-shot-v2.xlsx'
+    link.download = '镜头导入模板-shot-v3.xlsx'
     document.body.appendChild(link)
     link.click()
     link.remove()

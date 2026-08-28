@@ -9,7 +9,7 @@ import { tagTypeFromTone } from '@/utils/tag'
 import TableActionButton from '@/components/TableActionButton.vue'
 import ProtectedAssetThumbnail from './ProtectedAssetThumbnail.vue'
 import AssetDescriptionCell from './AssetDescriptionCell.vue'
-import { assetAssigneeSummary, assetDirectoryStatusMeta, assetErrorState, assetItemStatusEntries, assetStatusMeta, assetStatusTagClass, assetTypeMeta, memberUserName, resolveAssetThumbnail } from '../assetPresentation'
+import { assetAssigneeSummary, assetDirectoryStatusMeta, assetErrorState, assetItemStatusEntries, assetItemTimeEntries, assetStatusMeta, assetStatusTagClass, assetTypeMeta, memberUserName, resolveAssetThumbnail } from '../assetPresentation'
 
 const props = defineProps({
   assets: { type: Array, required: true },
@@ -38,6 +38,9 @@ let generation = 0
 let disposed = false
 let restoringSelection = false
 const assetById = computed(() => new Map(props.assets.map(asset => [Number(asset.assetId), asset])))
+const timeEntriesByAssetId = computed(() => new Map(props.assets.map(asset => [
+  Number(asset.assetId), assetItemTimeEntries(asset.itemTimeGroups, currentTime.value)
+])))
 
 const rows = computed(() => props.assets.map(asset => ({
   ...asset,
@@ -288,6 +291,7 @@ defineExpose({ waitForLoads, refreshLoadedChildren })
       <el-table-column label="说明" min-width="300">
         <template #default="{ row }">
           <AssetDescriptionCell :common-description="row.rowKind === 'asset' ? row.description : assetById.get(Number(row.assetId))?.description"
+                                :show-common-description="row.rowKind === 'asset'"
                                 :item-description="row.rowKind === 'item' ? row.description : ''" :is-item="row.rowKind === 'item'" />
         </template>
       </el-table-column>
@@ -297,9 +301,12 @@ defineExpose({ waitForLoads, refreshLoadedChildren })
       <el-table-column prop="task.expectedEndTime" label="结束时间" width="150" class-name="task-expected-end">
         <template #default="{ row }"><span class="task-date-cell">{{ formatTaskDateTime(row.rowKind === 'item' ? row.task?.expectedEndTime : null) }}</span></template>
       </el-table-column>
-      <el-table-column label="时间状态" fixed="right" width="120" class-name="task-time-state">
+      <el-table-column label="时间状态" fixed="right" width="200" class-name="task-time-state">
         <template #default="{ row }">
           <el-tag v-if="row.rowKind === 'item'" :type="tagTypeFromTone(itemTimeState(row).tone)" size="small" effect="light" round>{{ itemTimeState(row).label }}</el-tag>
+          <div v-else-if="timeEntriesByAssetId.get(Number(row.assetId))?.length" class="asset-time-summary">
+            <el-tag v-for="entry in timeEntriesByAssetId.get(Number(row.assetId))" :key="entry.state" :type="tagTypeFromTone(entry.tone)" size="small" effect="light" round>{{ entry.label }} {{ entry.count }}</el-tag>
+          </div>
           <span v-else>—</span>
         </template>
       </el-table-column>
@@ -340,6 +347,7 @@ defineExpose({ waitForLoads, refreshLoadedChildren })
 .asset-thumbnail-cell { display: grid; justify-items: center; gap: 4px; }
 .asset-thumb--small { width: 78px; height: 52px; border-radius: 7px; }
 .asset-status { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
+.asset-time-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
 .asset-items-error { display: grid; gap: 4px; margin-top: 6px; color: var(--el-color-danger); }
 .asset-items-error .el-button { justify-self: start; }
 .asset-data-table :deep(.el-table__row--level-1) { --el-table-tr-bg-color: var(--sg-surface-raised, var(--sg-surface)); }

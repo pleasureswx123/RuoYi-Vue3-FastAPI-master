@@ -96,7 +96,7 @@ def _task_row(**overrides: Any) -> dict[str, Any]:
         'project_id': PROJECT_ID,
         'shot_id': SHOT_ID,
         'asset_item_id': None,
-        'task_name': 'EP001-001-S001 镜头视频制作',
+        'task_name': 'EP001-001-0001 镜头视频制作',
         'task_kind': 'shot_video',
         'assignee_user_id': ASSIGNEE_USER_ID,
         'task_status': 'in_progress',
@@ -123,7 +123,7 @@ def _task_row(**overrides: Any) -> dict[str, Any]:
         'scene_no': 1,
         'scene_name': '动力舱',
         'shot_no': 1,
-        'shot_storage_dir_name': '001_S001',
+        'shot_storage_dir_name': '001_0001',
         'shot_duration_ms': SHOT_DURATION_MS,
         'shot_description': '主角进入动力舱',
         'shot_size': '中景',
@@ -137,6 +137,7 @@ def _task_row(**overrides: Any) -> dict[str, Any]:
         'shot_lifecycle_status': 'active',
         'asset_id': None,
         'production_item': None,
+        'asset_description': None,
         'asset_item_description': None,
         'asset_item_lifecycle_status': None,
         'asset_lifecycle_status': 'active',
@@ -155,6 +156,35 @@ def _task_row(**overrides: Any) -> dict[str, Any]:
     }
     row.update(overrides)
     return row
+
+
+@pytest.mark.parametrize(
+    ('description', 'supplement', 'expected'),
+    [
+        ('狭小舱室', None, '资产描述：狭小舱室'),
+        ('狭小舱室', '门口主视角', '资产描述：狭小舱室\n分项补充要求：门口主视角'),
+        ('狭小舱室', '狭小舱室', '资产描述：狭小舱室'),
+        (None, '门口主视角', '分项补充要求：门口主视角'),
+    ],
+)
+def test_asset_task_target_contains_asset_description_and_item_requirements(
+    description: str | None, supplement: str | None, expected: str
+) -> None:
+    result = ShotGridTaskService._build_list_item(
+        _task_row(
+            task_kind='asset_image',
+            shot_id=None,
+            asset_id=ASSET_ID,
+            asset_item_id=ASSET_ITEM_ID,
+            asset_type='Environment',
+            asset_name='舱室',
+            production_item='主视角',
+            asset_item_lifecycle_status='active',
+            asset_description=description,
+            asset_item_description=supplement,
+        )
+    )
+    assert result.target.target_description == expected
 
 
 def _patch_locked_access(
@@ -177,7 +207,7 @@ def test_task_detail_builds_target_version_and_permission_actions() -> None:
     )
 
     assert detail.target.target_type == 'shot'
-    assert detail.target.target_name == 'EP001-001-S001'
+    assert detail.target.target_name == 'EP001-001-0001'
     assert detail.assignee.user_name == '杨景锋'
     assert detail.shot_production is not None
     assert detail.shot_production.duration_ms == SHOT_DURATION_MS
@@ -337,7 +367,7 @@ async def test_assign_shot_locks_project_target_task_then_member_and_audits(
     async def lock_target(*_args: Any, **_kwargs: Any) -> tuple[Any, Any, Any]:
         events.append('target')
         return (
-            SimpleNamespace(shot_no=1, storage_dir_name='001_S001', description='镜头原始制作内容'),
+            SimpleNamespace(shot_no=1, storage_dir_name='001_0001', description='镜头原始制作内容'),
             SimpleNamespace(episode_no=1),
             SimpleNamespace(scene_no=1),
         )
@@ -408,7 +438,7 @@ async def test_assign_shot_locks_project_target_task_then_member_and_audits(
     assert events == ['project', 'target', 'task', 'member', 'insert']
     audit.assert_awaited_once()
     assigned_task = audit.await_args.kwargs['task']
-    assert assigned_task.task_name == 'EP001-001-S001 镜头视频制作'
+    assert assigned_task.task_name == 'EP001-001-0001 镜头视频制作'
     assert assigned_task.task_status == 'not_started'
     assert assigned_task.requirements == '镜头原始制作内容'
     assert assigned_task.lock_version == 0
@@ -429,7 +459,7 @@ async def test_existing_task_assignment_requires_task_lock_and_rolls_back(
         'module_shot_grid.service.task_service.ShotGridTaskDao.lock_shot_target',
         AsyncMock(
             return_value=(
-                SimpleNamespace(shot_no=1, storage_dir_name='001_S001', description='镜头原始制作内容'),
+                SimpleNamespace(shot_no=1, storage_dir_name='001_0001', description='镜头原始制作内容'),
                 SimpleNamespace(episode_no=1),
                 SimpleNamespace(scene_no=1),
             )
@@ -512,12 +542,12 @@ async def test_batch_assign_shots_assigns_all_selected_shots_in_one_transaction(
     target_lock = AsyncMock(
         side_effect=[
             (
-                SimpleNamespace(shot_no=1, storage_dir_name='001_S001', description='第一镜制作内容'),
+                SimpleNamespace(shot_no=1, storage_dir_name='001_0001', description='第一镜制作内容'),
                 SimpleNamespace(episode_no=1),
                 SimpleNamespace(scene_no=1),
             ),
             (
-                SimpleNamespace(shot_no=2, storage_dir_name='001_S002', description='第二镜制作内容'),
+                SimpleNamespace(shot_no=2, storage_dir_name='001_0002', description='第二镜制作内容'),
                 SimpleNamespace(episode_no=1),
                 SimpleNamespace(scene_no=1),
             ),
@@ -832,9 +862,11 @@ async def test_reassignment_is_blocked_after_start_or_by_uncommitted_submission(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('all_scope', [False, True])
+@pytest.mark.parametrize('existing_directory', [None, '001_S001'])
 async def test_start_shot_allows_manager_and_increments_lock_in_same_transaction(
     monkeypatch: pytest.MonkeyPatch,
     all_scope: bool,
+    existing_directory: str | None,
 ) -> None:
     monkeypatch.setattr(ShotGridTaskService, '_now', staticmethod(lambda: datetime(2026, 8, 28, 10)))
     task = _task(assignee_user_id=ASSIGNEE_USER_ID, lock_version=INITIAL_TASK_LOCK_VERSION)
@@ -855,7 +887,7 @@ async def test_start_shot_allows_manager_and_increments_lock_in_same_transaction
     shot = SimpleNamespace(
         shot_id=SHOT_ID,
         shot_no=1,
-        storage_dir_name=None,
+        storage_dir_name=existing_directory,
         update_by='old',
         update_time=None,
         lock_version=0,
@@ -923,7 +955,8 @@ async def test_start_shot_allows_manager_and_increments_lock_in_same_transaction
     assert task.expected_end_time == datetime(2026, 8, 30, 18)
     assert task.due_date == date(2026, 8, 30)
     assert task.priority == 'urgent'
-    assert shot.storage_dir_name == '001_S001'
+    assert shot.storage_dir_name == (existing_directory or '001_0001')
+    assert db.add.call_args.args[0].target_relative_path == f'VIDEO\\EP001\\{shot.storage_dir_name}'
     assert task.lock_version == UPDATED_TASK_LOCK_VERSION
     audit.assert_awaited_once()
     assert audit.await_args.kwargs['payload']['assetsConfirmed'] is True

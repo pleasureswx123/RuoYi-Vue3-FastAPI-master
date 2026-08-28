@@ -1,6 +1,7 @@
 """资产管理员开工的真实 PostgreSQL 门禁；每例独立数据库，绝不复用业务库。"""
 
 import asyncio
+import io
 import json
 import os
 import re
@@ -18,6 +19,7 @@ import pytest_asyncio
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
 from dotenv import dotenv_values
+from openpyxl import Workbook
 from psycopg2 import sql
 from sqlalchemy import URL, select, text, update
 from sqlalchemy.exc import DBAPIError
@@ -25,9 +27,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from module_admin.entity.do.user_do import SysUser
 from module_admin.entity.vo.user_vo import CurrentUserModel, UserInfoModel
+from module_shot_grid.dao.search_dao import ShotGridSearchDao
+from module_shot_grid.dao.shot_crud_dao import ShotGridShotCrudDao
 from module_shot_grid.dao.storage_operation_dao import ShotGridStorageOperationDao
 from module_shot_grid.dao.task_dao import ShotGridTaskDao
 from module_shot_grid.entity.do.asset_do import ShotGridAsset, ShotGridAssetItem
+from module_shot_grid.entity.do.import_do import ShotGridImportBatch
 from module_shot_grid.entity.do.project_do import (
     ShotGridEpisode,
     ShotGridProject,
@@ -41,7 +46,9 @@ from module_shot_grid.entity.vo.asset_crud_vo import (
     ShotGridAssetArchiveModel,
     ShotGridAssetItemDeleteModel,
     ShotGridAssetListQueryModel,
+    ShotGridAssetUpdateModel,
 )
+from module_shot_grid.entity.vo.shot_crud_vo import ShotGridShotListQueryModel
 from module_shot_grid.entity.vo.task_vo import (
     ShotGridAssetItemTaskBatchAssignModel,
     ShotGridShotTaskBatchAssignModel,
@@ -51,6 +58,8 @@ from module_shot_grid.entity.vo.task_vo import (
 )
 from module_shot_grid.exceptions import ShotGridDomainException
 from module_shot_grid.service.asset_crud_service import ShotGridAssetCrudService
+from module_shot_grid.service.asset_excel_parser import AssetExcelParser
+from module_shot_grid.service.asset_import_service import AssetImportService
 from module_shot_grid.service.project_access_service import ShotGridProjectAccessService
 from module_shot_grid.service.storage_path_adapter import StorageOperationPathContext
 from module_shot_grid.service.storage_worker_service import ShotGridStorageWorkerService
@@ -73,6 +82,7 @@ DIRECTOR_ID = 930
 CREATOR_ID = 931
 OUTSIDER_ID = 932
 STARTED_ITEM_COUNT = 2
+IMPORTED_ITEM_COUNT = 2
 ARCHIVED_ITEM_INDEX = 4
 DELETED_ITEM_INDEX = 5
 SessionFactory = async_sessionmaker[AsyncSession]
@@ -339,6 +349,90 @@ async def test_expected_times_save_with_start_and_are_visible_to_creator(pg_sess
         assert (detail.expected_start_time, detail.expected_end_time) == (start, end)
 
 
+async def test_imported_asset_description_persists_on_parent_and_reaches_creator(pg_sessions: SessionFactory) -> None:
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.append(['类型', '名称', '描述', '制作分项', '分项补充要求', '备注'])
+    sheet.append(['场景', '新导入舱室', '斑驳铁皮墙和狭小舱室', '主视角', None, '主视角备注'])
+    sheet.append([None, None, None, '反打视角', '从睡袋看向铁皮门', '反打备注'])
+    for column in ('A', 'B', 'C'):
+        sheet.merge_cells(f'{column}2:{column}3')
+    stream = io.BytesIO()
+    workbook.save(stream)
+    workbook.close()
+    parsed = AssetExcelParser().parse(stream.getvalue())
+    user = _user(permissions=['shotgrid:asset:query', 'shotgrid:task:assign'])
+    async with pg_sessions() as db:
+        batch = ShotGridImportBatch(
+            project_id=PROJECT_ID,
+            import_type='asset',
+            original_file_name='测试资产.xlsx',
+            file_sha256='f' * 64,
+            template_version='asset-v2',
+            total_rows=2,
+            valid_rows=2,
+            previewed_by=DIRECTOR_ID,
+            batch_status='committing',
+            committed_by=DIRECTOR_ID,
+            idempotency_key='test-description-import',
+            selection_hash='a' * 64,
+        )
+        db.add(batch)
+        await db.flush()
+        result = await AssetImportService._commit_transaction(
+            db,
+            project_id=PROJECT_ID,
+            batch=batch,
+            rows=parsed.rows,
+            actor_name=f'pg-user-{DIRECTOR_ID}',
+            dept_name=None,
+            selection_hash='a' * 64,
+            current_user=user,
+        )
+        assert result.created_asset_items == IMPORTED_ITEM_COUNT
+    async with pg_sessions() as db:
+        asset = (
+            await db.execute(
+                select(ShotGridAsset).where(
+                    ShotGridAsset.project_id == PROJECT_ID,
+                    ShotGridAsset.asset_name == '新导入舱室',
+                )
+            )
+        ).scalar_one()
+        assert asset.description == '斑驳铁皮墙和狭小舱室'
+        items = (
+            (
+                await db.execute(
+                    select(ShotGridAssetItem)
+                    .where(
+                        ShotGridAssetItem.asset_id == asset.asset_id,
+                    )
+                    .order_by(ShotGridAssetItem.sort_order)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert [item.description for item in items] == [None, '从睡袋看向铁皮门']
+        access = await ShotGridProjectAccessService.resolve_access(db, user, PROJECT_ID)
+        detail = await ShotGridAssetCrudService.get_asset_detail(db, PROJECT_ID, asset.asset_id, user, access)
+        assert detail.description == '斑驳铁皮墙和狭小舱室'
+        assigned = await ShotGridTaskService.assign_asset_item(
+            db,
+            PROJECT_ID,
+            items[0].asset_item_id,
+            ShotGridTaskAssignModel(assigneeUserId=CREATOR_ID),
+            user,
+            access,
+        )
+        creator_task = await ShotGridTaskService.get_task_detail(
+            db,
+            assigned.task_id,
+            _user(CREATOR_ID, ['shotgrid:task:query']),
+        )
+        assert creator_task.target.target_description == '资产描述：斑驳铁皮墙和狭小舱室'
+
+
 async def test_expected_time_in_past_leaves_no_start_side_effects(pg_sessions: SessionFactory) -> None:
     before = await _snapshot(pg_sessions)
     start = datetime.now().replace(microsecond=0) - timedelta(seconds=1)
@@ -346,6 +440,204 @@ async def test_expected_time_in_past_leaves_no_start_side_effects(pg_sessions: S
         await _start(pg_sessions, command=_command(expectedStartTime=start, expectedEndTime=start + timedelta(days=1)))
     assert error.value.error_key == 'SG_TASK_EXPECTED_TIME_INVALID'
     assert await _snapshot(pg_sessions) == before
+
+
+@pytest.mark.parametrize(
+    ('task_status', 'lifecycle'),
+    [
+        ('preparing', 'active'),
+        ('in_progress', 'active'),
+        ('pending_review', 'active'),
+        ('revision', 'active'),
+        ('completed', 'active'),
+        ('completed', 'archived'),
+    ],
+)
+async def test_asset_description_locked_after_start_but_metadata_remains_editable(
+    pg_sessions: SessionFactory, task_status: str, lifecycle: str
+) -> None:
+    user = _user(permissions=['shotgrid:asset:query', 'shotgrid:asset:edit'])
+    async with pg_sessions() as db:
+        await db.execute(
+            update(ShotGridAsset).where(ShotGridAsset.asset_id == ASSET_ID).values(description='原共有说明')
+        )
+        await db.execute(
+            update(ShotGridTask).where(ShotGridTask.task_id == FIRST_TASK_ID).values(task_status=task_status)
+        )
+        await db.execute(
+            update(ShotGridAssetItem)
+            .where(ShotGridAssetItem.asset_item_id == FIRST_ITEM_ID)
+            .values(lifecycle_status=lifecycle)
+        )
+        await db.commit()
+        access = await ShotGridProjectAccessService.resolve_access(db, user, PROJECT_ID)
+        before = await _snapshot(pg_sessions)
+        for description in ('篡改共有说明', None):
+            with pytest.raises(ShotGridDomainException) as error:
+                await ShotGridAssetCrudService.update_asset(
+                    db,
+                    PROJECT_ID,
+                    ASSET_ID,
+                    ShotGridAssetUpdateModel(description=description, sortOrder=9, remark='不应保存', lockVersion=0),
+                    user,
+                    access,
+                )
+            assert error.value.error_key == 'SG_ASSET_DESCRIPTION_LOCKED'
+            assert error.value.http_status == HTTPStatus.CONFLICT
+            assert await _snapshot(pg_sessions) == before
+
+        detail = await ShotGridAssetCrudService.get_asset_detail(db, PROJECT_ID, ASSET_ID, user, access)
+        assert detail.description_locked is True
+        assert 'asset.edit' in detail.allowed_actions
+        result = await ShotGridAssetCrudService.update_asset(
+            db,
+            PROJECT_ID,
+            ASSET_ID,
+            ShotGridAssetUpdateModel(description='原共有说明', sortOrder=9, remark='允许内部备注', lockVersion=0),
+            user,
+            access,
+        )
+        assert (result.description, result.sort_order, result.remark) == ('原共有说明', 9, '允许内部备注')
+        assert result.description_locked is True
+        assert result.lock_version == 1
+
+
+async def test_asset_description_editable_before_start_and_ignores_deleted_history(pg_sessions: SessionFactory) -> None:
+    user = _user(permissions=['shotgrid:asset:query', 'shotgrid:asset:edit'])
+    async with pg_sessions() as db:
+        # 已删除任务、已删除分项的历史不属于当前资产的开工判断。
+        await db.execute(
+            update(ShotGridTask)
+            .where(ShotGridTask.task_id == FIRST_TASK_ID)
+            .values(task_status='completed', del_flag='2')
+        )
+        await db.execute(
+            update(ShotGridTask)
+            .where(ShotGridTask.task_id == FIRST_TASK_ID + 1)
+            .values(asset_item_id=FIRST_ITEM_ID + DELETED_ITEM_INDEX, task_status='completed')
+        )
+        await db.commit()
+        access = await ShotGridProjectAccessService.resolve_access(db, user, PROJECT_ID)
+        detail = await ShotGridAssetCrudService.get_asset_detail(db, PROJECT_ID, ASSET_ID, user, access)
+        assert detail.description_locked is False
+        result = await ShotGridAssetCrudService.update_asset(
+            db,
+            PROJECT_ID,
+            ASSET_ID,
+            ShotGridAssetUpdateModel(description='补齐共有说明', sortOrder=9, remark='新备注', lockVersion=0),
+            user,
+            access,
+        )
+        assert result.description == '补齐共有说明'
+        assert result.description_locked is False
+        # 保留 PUT 完整快照语义：未开工时省略说明、排序和备注表示清空/归零。
+        result = await ShotGridAssetCrudService.update_asset(
+            db,
+            PROJECT_ID,
+            ASSET_ID,
+            ShotGridAssetUpdateModel(lockVersion=1),
+            user,
+            access,
+        )
+        assert (result.description, result.sort_order, result.remark) == (None, 0, None)
+
+
+async def test_asset_description_old_dialog_cannot_write_after_real_start(pg_sessions: SessionFactory) -> None:
+    user = _user(permissions=['shotgrid:asset:query', 'shotgrid:asset:edit'])
+    async with pg_sessions() as db:
+        access = await ShotGridProjectAccessService.resolve_access(db, user, PROJECT_ID)
+        opened = await ShotGridAssetCrudService.get_asset_detail(db, PROJECT_ID, ASSET_ID, user, access)
+        assert opened.description_locked is False
+    started = await _start(pg_sessions)
+    assert started.task_status == 'preparing'
+    before = await _snapshot(pg_sessions)
+    async with pg_sessions() as db:
+        access = await ShotGridProjectAccessService.resolve_access(db, user, PROJECT_ID)
+        assert (await db.get(ShotGridAsset, ASSET_ID)).lock_version == opened.lock_version
+        with pytest.raises(ShotGridDomainException) as error:
+            await ShotGridAssetCrudService.update_asset(
+                db,
+                PROJECT_ID,
+                ASSET_ID,
+                ShotGridAssetUpdateModel(description='旧弹窗的说明草稿', lockVersion=opened.lock_version),
+                user,
+                access,
+            )
+        assert error.value.error_key == 'SG_ASSET_DESCRIPTION_LOCKED'
+    assert await _snapshot(pg_sessions) == before
+
+
+async def test_asset_description_edit_rechecks_start_after_waiting_for_project_lock(
+    pg_sessions: SessionFactory,
+) -> None:
+    async def edit_description() -> None:
+        user = _user(permissions=['shotgrid:asset:query', 'shotgrid:asset:edit'])
+        async with pg_sessions() as db:
+            access = await ShotGridProjectAccessService.resolve_access(db, user, PROJECT_ID)
+            await ShotGridAssetCrudService.update_asset(
+                db,
+                PROJECT_ID,
+                ASSET_ID,
+                ShotGridAssetUpdateModel(description='并发编辑草稿', lockVersion=0),
+                user,
+                access,
+            )
+
+    before = await _snapshot(pg_sessions)
+    async with pg_sessions() as starter:
+        await starter.execute(select(ShotGridProject).where(ShotGridProject.project_id == PROJECT_ID).with_for_update())
+        job = asyncio.create_task(edit_description())
+        try:
+            async with pg_sessions() as observer:
+                deadline = asyncio.get_running_loop().time() + 5
+                while True:
+                    waiting = (
+                        await observer.execute(
+                            text(
+                                'SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() '
+                                "AND wait_event_type = 'Lock'"
+                            )
+                        )
+                    ).scalar_one()
+                    if waiting:
+                        break
+                    assert asyncio.get_running_loop().time() < deadline, '未观察到资产编辑等待项目行锁'
+                    await observer.rollback()
+                    await asyncio.sleep(0.01)
+            # 同一会话持有项目锁并执行真实开工，提交后才允许旧编辑请求继续。
+            await ShotGridTaskService.start_task(starter, FIRST_TASK_ID, _command(), _user())
+        finally:
+            await starter.rollback()
+            results = await asyncio.gather(job, return_exceptions=True)
+    assert isinstance(results[0], ShotGridDomainException)
+    assert results[0].error_key == 'SG_ASSET_DESCRIPTION_LOCKED'
+    after = await _snapshot(pg_sessions)
+    assert after['assets'] == before['assets']
+    assert len(after['audit']) == 1
+
+
+async def test_asset_description_locked_preserves_legacy_whitespace_when_saving_metadata(
+    pg_sessions: SessionFactory,
+) -> None:
+    user = _user(permissions=['shotgrid:asset:query', 'shotgrid:asset:edit'])
+    async with pg_sessions() as db:
+        await db.execute(
+            update(ShotGridAsset).where(ShotGridAsset.asset_id == ASSET_ID).values(description='  历史说明\n')
+        )
+        await db.commit()
+    await _start(pg_sessions)
+    async with pg_sessions() as db:
+        access = await ShotGridProjectAccessService.resolve_access(db, user, PROJECT_ID)
+        result = await ShotGridAssetCrudService.update_asset(
+            db,
+            PROJECT_ID,
+            ASSET_ID,
+            ShotGridAssetUpdateModel(description='  历史说明\n', remark='只改内部备注', lockVersion=0),
+            user,
+            access,
+        )
+        assert result.description == '  历史说明\n'
+        assert result.remark == '只改内部备注'
 
 
 @pytest.mark.parametrize(
@@ -433,7 +725,7 @@ async def _snapshot(sessions: SessionFactory) -> dict[str, Any]:
             name: (await db.execute(text(statement))).mappings().all()
             for name, statement in {
                 'tasks': 'SELECT task_id, assignee_user_id, task_status, requirements, priority, due_date, expected_start_time, expected_end_time, lock_version, update_by FROM sg_task ORDER BY task_id',
-                'assets': 'SELECT asset_id, lock_version FROM sg_asset ORDER BY asset_id',
+                'assets': 'SELECT asset_id, description, sort_order, remark, lock_version FROM sg_asset ORDER BY asset_id',
                 'items': 'SELECT asset_item_id, lock_version FROM sg_asset_item ORDER BY asset_item_id',
                 'operations': 'SELECT operation_id, operation_status, attempt_count FROM sg_storage_operation ORDER BY operation_id',
                 'audit': 'SELECT oper_id, oper_param, json_result FROM sys_oper_log ORDER BY oper_id',
@@ -731,6 +1023,37 @@ async def test_asset_assignment_projection_matches_started_item(
     assert 'task.assign' in actions[FIRST_ITEM_ID + 3]
 
 
+@pytest.mark.parametrize(('shot_no', 'shot_code'), [(1, '0001'), (10000, '10000')])
+async def test_numeric_shot_search_before_directory_creation(
+    pg_sessions: SessionFactory, shot_no: int, shot_code: str
+) -> None:
+    async with pg_sessions() as db:
+        db.add(ShotGridEpisode(episode_id=940, project_id=PROJECT_ID, episode_no=1, storage_dir_name='EP001'))
+        await db.flush()
+        db.add(ShotGridScene(scene_id=941, project_id=PROJECT_ID, episode_id=940, scene_no=1))
+        await db.flush()
+        db.add(
+            ShotGridShot(
+                shot_id=950,
+                project_id=PROJECT_ID,
+                episode_id=940,
+                scene_id=941,
+                shot_no=shot_no,
+                description='编号搜索验证',
+            )
+        )
+        await db.flush()
+        statement = ShotGridShotCrudDao.build_list_statement(PROJECT_ID, ShotGridShotListQueryModel(keyword=shot_code))
+        rows = (await db.execute(statement)).mappings().all()
+        assert [row['shot_id'] for row in rows] == [950]
+        assert rows[0]['storage_dir_name'] is None
+        for user_id, expected in [(CREATOR_ID, [950]), (OUTSIDER_ID, [])]:
+            results = await ShotGridSearchDao.search_shots(
+                db, keyword=f'EP001-001-{shot_code}', limit=10, user_id=user_id, has_all_scope=False
+            )
+            assert [row['shot_id'] for row in results] == expected
+
+
 @pytest.mark.parametrize('task_kind', ['shot_video', 'asset_image'])
 async def test_batch_reassignment_rolls_back_when_later_target_has_started(
     pg_sessions: SessionFactory, task_kind: str
@@ -817,6 +1140,81 @@ async def test_start_then_reassignment_with_fresh_lock_is_rejected(pg_sessions: 
             )
     assert exc_info.value.error_key == 'SG_INVALID_STATE_TRANSITION'
     assert await _snapshot(pg_sessions) == before
+
+
+async def test_asset_time_groups_cover_all_active_items_in_list_and_detail(pg_sessions: SessionFactory) -> None:
+    start = datetime(2026, 8, 28, 12)
+    end = datetime(2026, 8, 30, 12)
+    async with pg_sessions() as db:
+        await db.execute(
+            update(ShotGridTask)
+            .where(ShotGridTask.task_id.in_([FIRST_TASK_ID, FIRST_TASK_ID + 1]))
+            .values(task_status='in_progress', expected_start_time=start, expected_end_time=end)
+        )
+        await db.execute(
+            update(ShotGridTask)
+            .where(ShotGridTask.task_id == FIRST_TASK_ID + 2)
+            .values(task_status='completed', expected_start_time=start, expected_end_time=end)
+        )
+        empty_asset_id = ASSET_ID + 1
+        db.add(
+            ShotGridAsset(
+                asset_id=empty_asset_id,
+                project_id=PROJECT_ID,
+                asset_name='无分项资产',
+                asset_name_key='无分项资产',
+                asset_type='Prop',
+                storage_dir_name='empty_asset',
+                storage_path_key=r'asset\prop\empty_asset',
+            )
+        )
+        deleted_task_item_index = 6
+        db.add(
+            ShotGridAssetItem(
+                asset_item_id=FIRST_ITEM_ID + deleted_task_item_index,
+                project_id=PROJECT_ID,
+                asset_id=ASSET_ID,
+                production_item='已删除任务的活动分项',
+                production_item_key='已删除任务的活动分项',
+            )
+        )
+        await db.flush()
+        for index in [ARCHIVED_ITEM_INDEX, DELETED_ITEM_INDEX, deleted_task_item_index]:
+            db.add(
+                ShotGridTask(
+                    task_id=FIRST_TASK_ID + index,
+                    project_id=PROJECT_ID,
+                    asset_item_id=FIRST_ITEM_ID + index,
+                    task_name=f'不可统计任务{index}',
+                    task_kind='asset_image',
+                    assignee_user_id=CREATOR_ID,
+                    expected_start_time=start,
+                    expected_end_time=end,
+                    del_flag='2' if index == deleted_task_item_index else '0',
+                )
+            )
+        await db.commit()
+        task_state_query = select(ShotGridTask.task_id, ShotGridTask.task_status, ShotGridTask.lock_version)
+        before = (await db.execute(task_state_query)).all()
+        access = await ShotGridProjectAccessService.resolve_access(db, _user(), PROJECT_ID)
+        page = await ShotGridAssetCrudService.get_asset_page(
+            db, PROJECT_ID, ShotGridAssetListQueryModel(), _user(), access
+        )
+        detail = await ShotGridAssetCrudService.get_asset_detail(db, PROJECT_ID, ASSET_ID, _user(), access)
+        assert (await db.execute(task_state_query)).all() == before
+
+    asset = next(row for row in page.rows if row.asset_id == ASSET_ID)
+    expected = {
+        ('in_progress', end, 2),
+        ('completed', end, 1),
+        (None, None, 2),
+    }
+    for result in [asset, detail]:
+        assert {
+            (group.task_status, group.expected_end_time, group.item_count) for group in result.item_time_groups
+        } == expected
+        assert sum(group.item_count for group in result.item_time_groups) == result.item_count
+    assert next(row for row in page.rows if row.asset_id == empty_asset_id).item_time_groups == []
 
 
 async def test_list_and_detail_execute_preparing_counts_projection(pg_sessions: SessionFactory) -> None:

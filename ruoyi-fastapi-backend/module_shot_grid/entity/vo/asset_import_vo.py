@@ -20,10 +20,10 @@ class AssetImportNormalizedRowModel(ShotGridApiModel):
     asset_name: str | None = Field(default=None, description='清洗后的资产名称')
     asset_name_key: str | None = Field(default=None, description='资产名称精确匹配键')
     asset_group_key: str | None = Field(default=None, description='本次文件内父资产分组键')
-    asset_description: str | None = Field(default=None, description='未来模板的资产主数据描述')
+    asset_description: str | None = Field(default=None, description='资产描述，所有制作分项共用')
     production_item: str | None = Field(default=None, description='制作分项名称')
     production_item_key: str | None = Field(default=None, description='制作分项匹配键')
-    item_description: str | None = Field(default=None, description='制作分项描述')
+    item_description: str | None = Field(default=None, description='该制作分项独有的补充要求，可为空')
     remark: str | None = Field(default=None, description='制作分项备注')
     import_row_key: str | None = Field(default=None, description='来源文件、Sheet和行号幂等键')
 

@@ -148,6 +148,7 @@ class ShotGridTaskDao:
                 ShotGridAssetItem.lifecycle_status.label('asset_item_lifecycle_status'),
                 ShotGridAsset.asset_type,
                 ShotGridAsset.asset_name,
+                ShotGridAsset.description.label('asset_description'),
                 ShotGridAsset.lifecycle_status.label('asset_lifecycle_status'),
                 func.coalesce(version_count.c.version_count, 0).label('version_count'),
                 latest_version.c.version_id.label('latest_version_id'),

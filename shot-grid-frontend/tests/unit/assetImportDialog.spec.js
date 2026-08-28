@@ -33,7 +33,7 @@ const preview = {
   },
   workbookWarnings: [{ errorKey: 'SG_IMPORT_READONLY_COLUMNS_IGNORED', message: '状态列已忽略' }],
   rows: [
-    { sheetName: 'Sheet1', rowNumber: 2, canImport: true, warnings: [], errors: [], normalized: { assetType: 'Character', assetName: '春霞', productionItem: '标准立绘', itemDescription: '正视图' } },
+    { sheetName: 'Sheet1', rowNumber: 2, canImport: true, warnings: [], errors: [], normalized: { assetType: 'Character', assetName: '春霞', productionItem: '标准立绘', assetDescription: '红衣短发角色', itemDescription: '正视图', remark: '分项备注' } },
     { sheetName: 'Sheet1', rowNumber: 3, canImport: false, warnings: [], errors: [{ errorKey: 'SG_ASSET_NAME_REQUIRED', fieldName: 'assetName', message: '资产名称不能为空' }], normalized: { assetType: 'Character', assetName: null, productionItem: '侧视图' } },
     { sheetName: '场景', rowNumber: 2, canImport: true, warnings: [{ errorKey: 'SG_ASSET_PRODUCTION_ITEM_MISSING', fieldName: 'productionItem', message: '制作分项可后补' }], errors: [], normalized: { assetType: 'Environment', assetName: '动力舱', productionItem: null, itemDescription: '冷蓝色调' } }
   ]
@@ -72,6 +72,10 @@ describe('资产 Excel 导入对话框', () => {
     expect(wrapper.text()).toContain('资产名称不能为空')
     expect(wrapper.text()).toContain('制作分项可后补')
     expect(wrapper.text()).toContain('已选择 2 条')
+    const description = wrapper.findAll('.description-cell').find(cell => cell.text().includes('正视图'))
+    expect(description.text()).toContain('资产描述：红衣短发角色')
+    expect(description.text()).toContain('分项补充要求：正视图')
+    expect(description.text()).toContain('分项备注')
     const previewTags = wrapper.findAllComponents(ElTag)
     expect(previewTags.find(tag => tag.text().includes('角色 1 资产'))?.props('type')).toBe('warning')
     expect(previewTags.find(tag => tag.text().includes('场景 1 资产'))?.props('type')).toBe('primary')

@@ -154,6 +154,11 @@ class ShotGridShotCrudDao:
             statement = statement.where(
                 or_(
                     cast(ShotGridShot.shot_no, String).ilike(f'%{keyword}%'),
+                    func.lpad(
+                        cast(ShotGridShot.shot_no, String),
+                        func.greatest(4, func.length(cast(ShotGridShot.shot_no, String))),
+                        '0',
+                    ).ilike(f'%{keyword}%'),
                     ShotGridShot.storage_dir_name.ilike(f'%{keyword}%'),
                     ShotGridShot.description.ilike(f'%{keyword}%'),
                     ShotGridShot.dialogue.ilike(f'%{keyword}%'),
@@ -858,7 +863,7 @@ class ShotGridShotCrudDao:
         actor_name: str,
         now: datetime,
     ) -> int | None:
-        """连续编号第二阶段：写入最终 Sxxx，并让排序键与编号保持一致。"""
+        """连续编号第二阶段：写入最终镜头号，并让排序键与编号保持一致。"""
 
         result = await db.execute(
             update(ShotGridShot)

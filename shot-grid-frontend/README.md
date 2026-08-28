@@ -137,7 +137,7 @@ docker compose -f docker-compose.pg.yml up -d shot-grid-frontend
 - 镜头详情聚合基础字段、关联资产、唯一任务、最新版本/反馈和后端 `allowedActions`；创建/编辑、首次分配/改派、归档均调用真实接口并保留乐观锁字段。
 - 镜头手工创建和 Excel 导入不接收制作人，只创建未分配镜头且不创建任务；首次显式委派才创建唯一 `not_started` 任务，后续改派更新同一任务。
 - 缩略图只接受 `/shot-grid/versions/{versionId}/files/{fileId}/download` 形式的受保护相对路径，通过统一请求层获取 Blob；403/404 显示安全占位，取消、切换或组件卸载时中止请求并释放临时 Object URL，不把鉴权 URL 当公开图片地址。
-- 模板由鉴权 `GET /shot-grid/imports/shots/template` 返回 XLSX 二进制和 `X-Shot-Grid-Template-Version: shot-v2`。服务端资源为 `module_shot_grid/resources/templates/shot-v2.xlsx`，冻结 SHA-256 为 `B6F24078CA56295E9E6CCE50BB3455AF198DFFFE5C08F8D85605A68C09439ECE`；主数据区固定 A:O 15 列且不含制作人。旧 `shot-v1.xlsx` 只保留为历史资源，不再由服务下载。
+- 模板由鉴权 `GET /shot-grid/imports/shots/template` 返回 XLSX 二进制和 `X-Shot-Grid-Template-Version: shot-v3`。服务端资源为 `module_shot_grid/resources/templates/shot-v3.xlsx`，冻结 SHA-256 为 `23FF46F60BD4E52A7C3B9350F89882BB18963C92823AC40AFE601AC1553204F8`；主数据区固定 A:O 15 列且不含制作人。旧 `shot-v1.xlsx`、`shot-v2.xlsx` 只保留为历史资源，不再由服务下载。
 - 上传 `.xlsx` 后先调用 preview。弹窗按 Sheet 展示工作簿级与行级错误/警告，只允许勾选 `canImport=true` 行；commit 使用 `selectedRows[{sheetName,rowNumber}]` 和当前弹窗内稳定的 `X-Idempotency-Key`，展示后端耐久提交结果。明文预检 Token 与幂等键只留在组件内存，不写 localStorage、日志或 URL。
 - 项目为 `completed` 或 `archived` 时，前端隐藏集、场次、镜头、资产、资产制作分项及两类导入写入口；后端对应路径返回 HTTP 409 / `SG_INVALID_STATE_TRANSITION`。当前终态治理覆盖项目自身、集、场次、镜头、资产、资产制作分项及两类 Excel 导入，不能外推为成员、任务、版本、审核、文件或目录操作等其余写接口均已治理。
 - 镜头创建和导入仍要求项目 `storageStatus=ready`。隔离测试中的逻辑 ready 只解除业务 Service 门禁；当目录 Worker 关闭时，它不证明真实 UNC/NAS 目录存在、可写，也不验证 Windows 服务账号或共享 ACL。
@@ -207,7 +207,7 @@ docker compose -f docker-compose.pg.yml up -d shot-grid-frontend
 
 数据库核验为 2 集、8 场、24 镜头、24 任务（三名制作人各 8）、24 待匹配需求、0 镜头资产关系、1 个 `committed` 导入批次、镜头时长合计 79000 ms；结果复用集/场均为 0、资产关系为 0。2 条集目录操作和 24 条镜头目录操作均为 `pending`；同事务审计恰 1 条且 `status=0`，`method` 字符串长度 79，未超过字段上限。Redis 预检键提交后为 0。
 
-该旅程中的“模板含制作人、导入创建 24 个任务、详情直接出现负责人”已被 v2 契约废止。当前必须重新验证 `shot-v2` 下载与摘要、A:O 15 列、24 个镜头未分配、任务创建数为 0，以及随后显式委派创建唯一任务。项目使用逻辑 `storageStatus=ready` 夹具且目录 Worker 关闭，因此仍不能证明真实 UNC/SMB/NAS、共享 ACL、写探针或故障恢复。
+该旅程中的“模板含制作人、导入创建 24 个任务、详情直接出现负责人”已被 v2 契约废止。当前必须重新验证 `shot-v3` 下载与摘要、A:O 15 列、24 个镜头未分配、任务创建数为 0，以及随后显式委派创建唯一任务。项目使用逻辑 `storageStatus=ready` 夹具且目录 Worker 关闭，因此仍不能证明真实 UNC/SMB/NAS、共享 ACL、写探针或故障恢复。
 
 ## 2026-08-11 历史 v1 资产管理与导入验证（当前契约已失效）
 

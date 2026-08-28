@@ -376,8 +376,8 @@ Shot Grid 对平台 `sys_user_role` 增量的来源标记。该表不是第三�
 | `project_id` | bigint | 是 | 所属项目，用于权限和高频查询 |
 | `episode_id` | bigint | 是 | 所属集，用于目录唯一性和高频查询 |
 | `scene_id` | bigint | 是 | 所属场次 |
-| `shot_no` | integer | 是 | 场内连续镜序；第 1 镜派生 `S001`，第 2 镜派生 `S002` |
-| `storage_dir_name` | varchar(32) | 否 | NAS 镜头目录快照；开始制作时才冻结为 `001_S001` |
+| `shot_no` | integer | 是 | 场内连续镜序；第 1 镜派生 `0001`，第 2 镜派生 `0002` |
+| `storage_dir_name` | varchar(32) | 否 | NAS 镜头目录快照；开始制作时才冻结为 `001_0001` |
 | `duration_ms` | bigint | 是 | 镜头时长，整数毫秒 |
 | `shot_size` | varchar(40) | 否 | 景别 |
 | `camera_position` | varchar(100) | 否 | 机位 |
@@ -391,16 +391,18 @@ Shot Grid 对平台 `sys_user_role` 增量的来源标记。该表不是第三�
 | `lifecycle_status` | varchar(20) | 是 | `active` 或 `archived` |
 | 通用审计字段 |  | 是 | 见 5.2 |
 
+2026-08-28 编号规则变更：`shotCode` 为至少四位数字，`0001` 对应整数 `shot_no=1`，超过四位不截断。只修改新编号生成、模板及输入输出契约；不迁移旧记录、不重命名已冻结目录或已有业务文件。任务和文件的历史名称保持原样，读路径继续使用冻结快照。版本发布路径校验必须同时识别新数字目录（如 `000_0001`）与既有 S 前缀冻结目录（如 `001_S001`）；不得因编号展示变化拒绝合法发布，也不得放宽相对路径层级、临时文件归属、路径越界或禁止覆盖校验。
+
 约束：
 
 - `shot_no > 0`。
-- `(scene_id, shot_no)` 在 `del_flag='0'` 的活动记录中唯一；同场活动镜头必须连续为 `1..N`，每个场次都重新从 `S001` 开始。符合安全删除条件的镜头设置 `del_flag='2'` 后释放编号，历史身份继续由不可复用的 `shot_id` 和审计记录追溯。
+- `(scene_id, shot_no)` 在 `del_flag='0'` 的活动记录中唯一；同场活动镜头必须连续为 `1..N`，每个场次都重新从 `0001` 开始。符合安全删除条件的镜头设置 `del_flag='2'` 后释放编号，历史身份继续由不可复用的 `shot_id` 和审计记录追溯。
 - API 派生 `shotCode = "S" + shotNo 左侧补零至至少 3 位`。
 - `duration_ms >= 0`。
 - `focal_length` 去除首尾空格后原样保存或为空，不把 `35/25` 等组合焦段强制换算为单一数值。
 - `scene_id` 必须属于同一个 `project_id`。
 - `episode_id`、`scene_id` 和 `project_id` 必须属于同一层级，建议使用组合外键保证一致。
-- 新建和导入镜头的 `storage_dir_name` 为空。镜头任务开始时才按 `{scene_no:至少3位}_S{shot_no:至少3位}` 冻结名称并投递 Outbox；`shot_id` 不嵌入路径。
+- 新建和导入镜头的 `storage_dir_name` 为空。镜头任务开始时才按 `{scene_no:至少3位}_{shot_no:至少4位}` 冻结名称并投递 Outbox；`shot_id` 不嵌入路径。
 - 排序只允许影响范围内全部镜头均未开始制作；已分配但仍为 `not_started` 可以排序，任一镜头为 `preparing/in_progress/pending_review/revision/completed` 或存在版本/文件时整个动作失败。
 - 删除后必须保持场内活动镜头连续。服务端从最早删除位置到场尾重查与排序相同的制作门禁；受影响区间存在 `storage_dir_name` 时以 `SG_SHOT_DELETE_DIRECTORY_EXISTS` 拒绝，禁止隐式改名。通过后目标镜头、其 `not_started` 任务及剩余镜头重编号在同一事务提交。
 - 镜头响应中的 `status`、`currentStage`、`assignee`、`latestVersion` 和 `thumbnail` 是只读聚合字段。
@@ -415,7 +417,7 @@ Shot Grid 对平台 `sys_user_role` 增量的来源标记。该表不是第三�
 | 1 | 集 | `episodeNo`、`episodeCode` | `sg_episode`，通过场次关联 | 修改镜头所属场次 |
 | 2 | 场次 | `sceneNo`、`sceneName` | `sg_scene`，通过 `scene_id` 关联 | 修改镜头所属场次 |
 | 3 | 本场第 N 镜 | `sequencePosition` | 与 `shotNo` 同义，均由同场稳定顺序派生 | 单场表格拖拽；编辑表单只读 |
-| 4 | 镜序代码 | `shotNo`、`shotCode` | `sg_shot.shot_no`；第 N 镜必为 `S{N:03d}` | 不单独编辑，随场内顺序自动同步 |
+| 4 | 镜序代码 | `shotNo`、`shotCode` | `sg_shot.shot_no`；第 N 镜必为 `{N:04d}` | 不单独编辑，随场内顺序自动同步 |
 | 5 | 时长(s) | `durationMs` | `sg_shot.duration_ms`，前端换算为秒显示 | 可编辑，后端保存整数毫秒 |
 | 6 | 制作人 | `assignee` | 镜头唯一任务的 `assignee_user_id` 和 `sys_user` | 通过任务分配动作修改 |
 | 7 | 镜头缩略图 | `thumbnail` | 最新版本中 `file_role = 'thumbnail'` 的平台文件 | 只读 |
@@ -488,7 +490,7 @@ Shot Grid 对平台 `sys_user_role` 增量的来源标记。该表不是第三�
 - `productionItem` 为空或全空白且允许 `assetItem.edit` 时，“补齐制作分项”替代“编辑分项”；可选说明、备注、缩略图及版本不属于该完整性门禁。保存后刷新父资产和已加载子分支，不修改其他分项；项目或查询切换使旧请求和回调失效。
 - 资产删除沿用 `asset.archive` 及现有单个/批量删除接口；阻断查询涵盖全部 `del_flag='0'` 分项（含 `archived`），不能仅检查活动分项。任一任务状态不为 `not_started`、任一分项有版本或任务存在非 `committed` 提交时，父资产不可删除；无镜头引用及原权限、项目/存储状态要求继续有效。写事务使用项目→资产→分项/任务锁并再次复核，全部未开工时只软删除活动分项、其未开始任务与父资产，保留归档历史。分项进入 `preparing` 即计为开工，其自身删除也被禁止。
 - 镜头行“分配任务/改派任务”复用既有分配 API 和 `ShotAssignDialog`；点击后重读镜头详情并核验 `task.assign`，首次分配不携带任务锁号，改派提交当前 `taskLockVersion`；不新增权限、接口或数据库字段。
-- 表格“说明”是当前主数据的组合视图：父行读取 `sg_asset.description`，子行读取同一父字段并追加自身 `sg_asset_item.description`。父子文本完全相同时只展示一次；父字段为空时不推断共有内容，保留原分项说明且提示父级尚未填写。该组合不写回字段、不修改任务 `requirements` 或版本快照，也不改变 `asset-v2` 导入映射。长文本使用 `ElText.line-clamp=3`，实际溢出时提供明确的展开/收起按钮；分项数归入父名称，版本归入子缩略图，父行显示分项状态计数，不再同时重复聚合状态标签。父资产全部可用操作以 `ElButton` 直接展示，不再使用“更多”下拉菜单；仍复用原动作、权限和确认流程，按钮可换行排列。
+- 表格“说明”按层级展示当前主数据：父行读取 `sg_asset.description`；子行隐藏资产描述，只展示自身 `sg_asset_item.description`，标为“分项补充要求”，没有补充要求时显示“—”。父字段为空显示“暂无资产描述”，不推断或回填。导入预览与详情卡片仍组合展示资产描述和分项补充要求，完全相同的可见文本只展示一次；隐藏仅作用于列表，不影响任务、分配、开工和审核的完整制作信息，不改写任务 `requirements` 或版本快照。长文本使用 `ElText.line-clamp=3`，实际溢出时提供明确的展开/收起按钮；分项数归入父名称，版本归入子缩略图，父行显示分项状态计数，不再同时重复聚合状态标签。父资产全部可用操作以 `ElButton` 直接展示，不再使用“更多”下拉菜单；仍复用原动作、权限和确认流程，按钮可换行排列。
 - 懒加载失败必须呈现错误，不能伪装成零个分项；可重试错误提供“重试分项”，权限错误不自动重试。人工刷新失效成功缓存并重新读取已展开分项；后台轮询等待当前分项请求完成，再通过公开 `updateKeyChildren` 刷新已加载分支，保留有效勾选、展开、滚动和图片预览；原空分支新增分项时才重建懒加载入口。后台不反复请求失败分支，人工刷新可重新尝试。项目、筛选、分页变化或卸载必须取消旧请求、清除旧树上下文，迟到响应不得调用失效表格的 `resolve`。
 - 资产与制作分项响应分别携带后端计算的 `allowedActions`。动作集合必须同时满足平台权限、项目访问/角色、项目非 `completed/archived`、项目存储 `ready`、资源活动状态以及任务/版本约束；前端不得自行合成。
 - 资产列表与详情返回 `itemStatusCounts`，固定包含 `unassigned/not_started/preparing/in_progress/reviewing/revision/completed` 七个非负整数键，仅统计活动且未删除分项。父级状态按 `revision → reviewing → in_progress → preparing → unassigned → not_started` 聚合；至少有一个活动分项且全部完成才为 `completed`，无活动分项为 `unassigned`。父级 `task.start` 仅表示可进入分项选择，至少存在一个实际可开工分项才返回；真正 start 必须对选中分项任务提交，不能整资产开工。
@@ -503,7 +505,7 @@ Shot Grid 对平台 `sys_user_role` 增量的来源标记。该表不是第三�
 | 1 | 类型 | `assetType` | `sg_asset.asset_type` | 创建时选择，创建后普通编辑不可修改 |
 | 2 | 名称 | `assetName` | `sg_asset.asset_name` | 创建时填写，创建后普通编辑不可修改 |
 | 3 | 制作分项 | `productionItem` | `sg_asset_item.production_item` | 草稿可空；分配负责人前必须补齐 |
-| 4 | 资产描述 | `description` | `sg_asset.description` | 可编辑 |
+| 4 | 资产描述 | `description` | `sg_asset.description` | 全部分项未开工时可编辑；任一分项开工后只读 |
 | 5 | 任务描述 | `taskDescription` | 当前制作分项唯一任务的 `requirements` | 通过任务分配或任务编辑动作修改 |
 | 6 | 备注 | `remark` | 通用审计字段 `remark` | 可编辑 |
 | 7 | 状态 | `status` | 当前制作分项唯一任务和版本聚合 | 只读 |
@@ -662,7 +664,7 @@ WHERE asset_item_id IS NOT NULL AND del_flag = '0';
 | `ai_params` | jsonb | 否 | AI 生成参数快照 |
 | `submitted_by` | bigint | 是 | 提交用户 |
 | `submitted_time` | timestamp(0) | 是 | 提交时间 |
-| `generated_at_ms` | bigint | 是 | 服务端生成版本业务文件名时的 Unix 毫秒时间戳 |
+| `generated_at_ms` | bigint | 是 | 服务端批次生成时间（Unix 毫秒），仅作元数据，不拼入新文件名 |
 | `selected_candidate_id` | bigint | 否 | 本轮最佳候选；单候选由系统设置，多候选由审核人选择 |
 | `selected_by` | bigint | 否 | 最近选择候选的审核用户；历史候选 01 回填可为空 |
 | `selected_time` | timestamp(0) | 否 | 最近选择候选时间 |
@@ -816,13 +818,13 @@ businessId   = candidateId 的字符串形式
 镜头视频：
 
 ```text
-{projectCode}_EP{episodeNo:至少3位}_{sceneNo:至少3位}_S{shotNo:至少3位}_{producerNickName}_V{versionNo:至少3位}_{candidateNo:至少2位}_{generatedAtMs}.{extension}
+{projectCode}_EP{episodeNo:至少3位}_{sceneNo:至少3位}_{shotNo:至少4位}_{producerNickName}_V{versionNo:至少3位}_{candidateNo:至少2位}.{extension}
 ```
 
 示例：
 
 ```text
-WGZR_EP001_001_S001_YJF_V001_01_1786094626499.mp4
+WGZR_EP001_001_0001_YJF_V001_01.mp4
 ```
 
 镜头业务文件名同时包含 `versionNo` 与 `candidateNo`；前者必须与 `sg_version.version_no`、`sg_version_submission.reserved_version_no` 和审核轮次一致，后者必须与 `sg_version_candidate.candidate_no` 一致。
@@ -830,13 +832,13 @@ WGZR_EP001_001_S001_YJF_V001_01_1786094626499.mp4
 资产图片：
 
 ```text
-{projectCode}_Asset_{assetType}_{safeAssetName}_{safeProductionItem}_{producerNickName}_V{versionNo:至少3位}_{candidateNo:至少2位}_{generatedAtMs}.{extension}
+{projectCode}_Asset_{assetType}_{safeAssetName}_{safeProductionItem}_{producerNickName}_V{versionNo:至少3位}_{candidateNo:至少2位}.{extension}
 ```
 
 示例：
 
 ```text
-WGZR_Asset_Environment_动力舱室内_动力舱恐怖气氛主视角_YJF_V001_01_1786094626499.jpg
+WGZR_Asset_Environment_动力舱室内_动力舱恐怖气氛主视角_YJF_V001_01.jpg
 ```
 
 生成规则：
@@ -844,12 +846,12 @@ WGZR_Asset_Environment_动力舱室内_动力舱恐怖气氛主视角_YJF_V001_0
 1. `projectCode` 取版本提交暂存时项目已保存的 `sg_project.project_code`。
 2. `producerNickName` 取任务负责人当前平台用户的 `sys_user.nick_name`；任务分配、Excel 匹配和版本文件名生成均使用该昵称，Shot Grid 不再采集项目级制作人缩写。兼容响应中的 `producerCode` 也由该昵称派生。
 3. 镜头文件只允许 `.mp4`、`.mov`；资产文件只允许 `.jpg`、`.png`。扩展名根据服务端校验后的真实文件类型确定并转为小写，不能只相信客户端文件名。
-4. 镜头文件名中的 `episodeNo`、`sceneNo`、`shotNo` 和 `versionNo` 左侧补零至至少 3 位，超过 999 时保留全部数字；候选号 `candidateNo` 左侧补零至至少 2 位。资产文件名使用相同的版本号和候选号规则。
-5. `generatedAtMs` 是服务端 Unix 毫秒批次时间戳，与 `sg_version.generated_at_ms` 一致；同一轮全部候选共享该值。
+4. 镜头文件名中的 `episodeNo`、`sceneNo` 和 `versionNo` 左侧补零至至少 3 位，`shotNo` 至少 4 位，超过位数时保留全部数字；候选号 `candidateNo` 左侧补零至至少 2 位。资产文件名使用相同的版本号和候选号规则。
+5. 新业务文件名不包含时间戳，以版本号、候选号及扩展名结尾。`generatedAtMs` 仍是服务端 Unix 毫秒批次生成时间元数据，与 `sg_version.generated_at_ms` 一致；同一轮全部候选共享该值。
 6. `safeAssetName` 和 `safeProductionItem` 都使用 Unicode NFC 规范化，去除首尾空白，把控制字符和 `<>:"/\|?*` 替换为 `_`，合并连续空白或下划线；制作分项允许在导入时为空，但版本提交时规范化后为空必须拒绝。
 7. `safeProductionItem` 取版本提交时任务所属 `sg_asset_item.production_item`，不允许上传者临时输入另一个值。
-8. 文件名超过平台或文件系统安全长度时，在保留可辨识前缀的前提下按确定性规则缩短 `safeAssetName` 和 `safeProductionItem`，并追加资产 ID 的短哈希；不得截断项目、类型、制作人昵称、版本、候选或时间戳部分。
-9. 各候选业务文件名在提交暂存事务内只生成一次并保持不可变。项目名、成员名、资产名或制作分项后续修改不追改历史版本文件名。
+8. 文件名超过平台或文件系统安全长度时，在保留可辨识前缀的前提下按确定性规则缩短 `safeAssetName` 和 `safeProductionItem`，并追加规范化资产名称与制作分项组合的 SHA-256 前 10 位摘要；不得截断项目、类型、制作人昵称、版本或候选部分。
+9. 各候选业务文件名在提交暂存事务内只生成一次并保持不可变。项目名、成员名、资产名、制作分项或命名规则后续修改不追改历史版本文件名；已有带时间戳的提交（包括失败重试）继续使用冻结的业务名和目标路径。
 10. 同一 `X-Idempotency-Key` 重试必须返回第一次创建的版本轮次、候选小编号和业务文件名，不得生成新版本号、新候选号或新时间戳。
 
 #### 6.10.2 NAS 目标路径
@@ -1194,7 +1196,7 @@ failed ──人工重试──→ 新建 reconcile_directory(pending)
 | `task_id` | bigint | 是 | 所属任务 |
 | `source_file_id` | varchar(36) | 迁移兼容 | 候选 01 的平台源文件镜像；新业务读取 `sg_version_submission_file` |
 | `reserved_version_no` | integer | 是 | 为本次提交保留的任务内版本号 |
-| `generated_at_ms` | bigint | 是 | 业务文件名时间戳，只生成一次 |
+| `generated_at_ms` | bigint | 是 | 批次生成时间元数据，只生成一次，不拼入新文件名 |
 | `business_file_name` | varchar(255) | 迁移兼容 | 候选 01 业务文件名镜像 |
 | `target_relative_path` | varchar(1200) | 迁移兼容 | 候选 01 NAS 目标路径镜像 |
 | `temporary_relative_path` | varchar(1200) | 迁移兼容 | 候选 01 临时路径镜像 |
@@ -1457,6 +1459,17 @@ ON sg_shot_asset_requirement (shot_id, asset_type, normalized_name);
 | `completed` | 已完成 | 唯一任务为 `completed` 且存在最终版本 |
 
 资产列表与详情返回 `itemStatusCounts`，固定包含 `unassigned/not_started/preparing/in_progress/reviewing/revision/completed` 七个非负整数键，仅统计活动且未删除分项。父级状态按 `revision → reviewing → in_progress → preparing → unassigned → not_started` 聚合；至少有一个活动分项且全部完成才为 `completed`，无活动分项为 `unassigned`。父级 `task.start` 仅表示可进入分项选择，至少存在一个实际可开工分项才返回；真正 start 必须对选中分项任务提交，不能整资产开工。 普通成员不能直接写入任一聚合状态。
+
+资产列表与详情另返回 `itemTimeGroups`，仅用于父资产时间状态汇总：
+
+```json
+[
+  { "taskStatus": "in_progress", "expectedEndTime": "2026-08-30T18:00:00", "itemCount": 2 },
+  { "taskStatus": null, "expectedEndTime": null, "itemCount": 1 }
+]
+```
+
+仅统计活动且未删除的分项，按任务状态和预期结束时间分组；`itemCount` 为正整数，无分项时返回空数组。未分配或唯一任务已删除的分项计入空值分组，不遗漏。列表复用当前页的批量分项引用查询，详情复用已加载分项，不返回完整分项内容，也不增加逐资产请求。前端沿用任务时间提醒计算规则，将分组合并为已延期、临近结束、正常、未设置时间、已完成五类计数，按此前后次序显示；每 30 秒及恢复可见时重算，已完成不催办。此字段不存储时间提醒状态，不改变开工、提交或审核规则。
 
 ### 7.2 任务状态流转
 
@@ -2673,7 +2686,7 @@ isAsc
 
 同一接口支持表格、卡片和故事板。前端不得为三种视图建立三套数据源。`orderByColumn=sortOrder` 时，服务端先按集的 `(sortOrder, episodeNo)` 排列，再按场次的 `(sortOrder, sceneNo)` 排列，最后按场内镜头 `(sortOrder, shotNo, shotId)` 排列，禁止仅按镜头排序键跨集或跨场交错。
 
-列表项顶层返回可空的 `expectedStartTime`、`expectedEndTime`，直接投影唯一镜头任务的预期时间，无任务或未设置时为 `null`。镜头表在“制作内容”列后展示“开始时间”“结束时间”，管理人与制作人均可读取，不额外查询每行详情。资产树表在“说明”列后展示这两个时间，从懒加载分项的 `task.expectedStartTime/expectedEndTime` 读取。两表的独立“时间状态”列使用 Element Plus `fixed="right"` 固定在“制作人”列前；父资产三列为空，不以子项时间代替。表格时间状态按预期结束时间复用第 15.2 节的 24 小时预警规则，未设置范围时不使用旧 `dueDate` 冒充精确结束时间；旧日期仍在详情明确标注。
+列表项顶层返回可空的 `expectedStartTime`、`expectedEndTime`，直接投影唯一镜头任务的预期时间，无任务或未设置时为 `null`。镜头表在“制作内容”列后展示“开始时间”“结束时间”，管理人与制作人均可读取，不额外查询每行详情。资产树表在“说明”列后展示这两个时间，从懒加载分项的 `task.expectedStartTime/expectedEndTime` 读取。两表的独立“时间状态”列使用 Element Plus `fixed="right"` 固定在“制作人”列前；父资产开始、结束两列为空，不以子项时间代替，时间状态通过 `itemTimeGroups` 汇总所有活动分项，收起与展开保持一致。表格时间状态按预期结束时间复用第 15.2 节的 24 小时预警规则，未设置范围时不使用旧 `dueDate` 冒充精确结束时间；旧日期仍在详情明确标注。
 
 列表项：
 
@@ -2689,7 +2702,7 @@ isAsc
   "sceneCode": "001",
   "sceneName": "舱室惊醒",
   "shotNo": 1,
-  "shotCode": "S001",
+  "shotCode": "0001",
   "storageDirName": null,
   "directoryStatus": "not_created",
   "durationMs": 6000,
@@ -2718,14 +2731,14 @@ isAsc
   },
   "thumbnail": {
     "fileId": "5ed39e04-2f29-45ab-a58c-4f8168f5131a",
-    "name": "WGZR_EP001_001_S001_YJF_V004_1786094626499-thumbnail.jpg",
+    "name": "WGZR_EP001_001_0001_YJF_V004-thumbnail.jpg",
     "url": "/shot-grid/versions/9004/files/5ed39e04-2f29-45ab-a58c-4f8168f5131a/download"
   },
   "latestVersion": {
     "versionId": 9004,
     "versionNumber": "V004",
     "status": "pending_review",
-    "businessFileName": "WGZR_EP001_001_S001_YJF_V004_1786094626499.mp4"
+    "businessFileName": "WGZR_EP001_001_0001_YJF_V004.mp4"
   },
   "latestFeedback": {
     "noteId": 12003,
@@ -2768,7 +2781,7 @@ Permission: shotgrid:shot:add
 事务：
 
 1. 校验项目、集、场次和资产归属。
-2. 校验 `sequencePosition` 在 `1..本场活动镜头数+1` 范围内；未提交时追加到本场末尾。服务端以位置派生 `shotNo/shotCode`，保证为 `1..N` / `S001..Snnn`。
+2. 校验 `sequencePosition` 在 `1..本场活动镜头数+1` 范围内；未提交时追加到本场末尾。服务端以位置派生 `shotNo/shotCode`，保证为 `1..N` / `0001..NNNN`。
 3. 新镜头的 `storageDirName` 保持为空，不创建 NAS 目录操作。
 4. 创建镜头。
 5. 创建镜头资产关系。
@@ -2820,7 +2833,7 @@ Project role: director
 }
 ```
 
-服务端锁定项目和目标镜头所属场次的活动镜头，校验位置范围与目标镜头乐观锁，并计算被移动区间。区间内镜头只能是未分配或任务仍为 `not_started`；任一镜头已进入 `preparing/in_progress/pending_review/revision/completed` 或已有版本/文件时整个动作拒绝。校验通过后，服务端同步场内 `sequencePosition`、`shotNo` 和 `shotCode`，保证第 N 镜始终是 `S{N:03d}`，被顺移镜头同时推进 `lockVersion`。无目录镜头在事务内直接改号；如区间内存在历史冻结目录，则投递受控 NAS 迁移 Outbox，迁移成功后再原子切换目录快照与编号。
+服务端锁定项目和目标镜头所属场次的活动镜头，校验位置范围与目标镜头乐观锁，并计算被移动区间。区间内镜头只能是未分配或任务仍为 `not_started`；任一镜头已进入 `preparing/in_progress/pending_review/revision/completed` 或已有版本/文件时整个动作拒绝。校验通过后，服务端同步场内 `sequencePosition`、`shotNo` 和 `shotCode`，保证第 N 镜始终是 `{N:04d}`，被顺移镜头同时推进 `lockVersion`。无目录镜头在事务内直接改号；如区间内存在历史冻结目录，则投递受控 NAS 迁移 Outbox，迁移成功后再原子切换目录快照与编号。
 
 拖拽只在表格已筛选到具体集和具体场次、没有关键字/状态/制作人附加筛选、使用升序排序且已加载完整场次时启用。前端按每页最多 100 条读取全部结果，单场超过 2000 条或仍在加载时禁用拖拽；完整加载后隐藏分页，提交的 `sequencePosition` 必须是整场位置。成功或失败后都重新读取完整场次。不再向用户暴露与拖拽分离的“按当前顺序重新编号”常规动作；下列接口仅保留为历史客户端兼容和人工修复通道：
 
@@ -2845,7 +2858,7 @@ Permission: shotgrid:shot:archive
 
 单条删除与批量删除先锁定所有目标镜头，再按场次锁定完整活动镜头集合。每场从最早删除位置到场尾只能包含尚无任务或唯一任务状态为 `not_started`、且没有版本/文件的镜头；任务一旦进入 `preparing`、`in_progress`、`pending_review`、`revision` 或 `completed` 就必须整批拒绝。受影响区间任一镜头已有 `storage_dir_name` 时以 `SG_SHOT_DELETE_DIRECTORY_EXISTS` 整体拒绝，删除链不得隐式迁移 NAS 目录。
 
-删除采用逻辑归档，不物理删除镜头；存在的 `not_started` 任务在同一事务中软删除。目标镜头同时设置 `lifecycle_status = 'archived'` 和 `del_flag = '2'`，随后在同一事务中把该场剩余活动镜头连续化为 `S001..Snnn` 并推进受影响行 `lockVersion`，从而既释放活动唯一索引又不留下编号空洞。`20260813_09` 只回填没有活动任务且没有正式版本的历史误删镜头，已有制作历史的归档镜头不自动释放编号。
+删除采用逻辑归档，不物理删除镜头；存在的 `not_started` 任务在同一事务中软删除。目标镜头同时设置 `lifecycle_status = 'archived'` 和 `del_flag = '2'`，随后在同一事务中把该场剩余活动镜头连续化为 `0001..NNNN` 并推进受影响行 `lockVersion`，从而既释放活动唯一索引又不留下编号空洞。`20260813_09` 只回填没有活动任务且没有正式版本的历史误删镜头，已有制作历史的归档镜头不自动释放编号。
 
 ```http
 POST /shot-grid/projects/{projectId}/shots/batch-delete
@@ -2898,15 +2911,15 @@ GET /shot-grid/imports/shots/template
 Permission: shotgrid:shot:import
 ```
 
-成功响应为 `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` 二进制，不套统一 JSON envelope；响应包含下载文件名 `镜头导入模板-shot-v2.xlsx` 和 `X-Shot-Grid-Template-Version: shot-v2`。应用层传输加密中间件只精确放行该路径的 GET，以便浏览器按 Blob 下载；POST、子路径和镜头 preview/commit JSON 不得因共同前缀被放宽。资源缺失或摘要不一致时返回 HTTP 503 / `SG_IMPORT_TEMPLATE_UNAVAILABLE`。
+成功响应为 `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` 二进制，不套统一 JSON envelope；响应包含下载文件名 `镜头导入模板-shot-v3.xlsx` 和 `X-Shot-Grid-Template-Version: shot-v3`。应用层传输加密中间件只精确放行该路径的 GET，以便浏览器按 Blob 下载；POST、子路径和镜头 preview/commit JSON 不得因共同前缀被放宽。资源缺失或摘要不一致时返回 HTTP 503 / `SG_IMPORT_TEMPLATE_UNAVAILABLE`。
 
-部署资源固定为后端包内 `module_shot_grid/resources/templates/shot-v2.xlsx`，SHA-256 为：
+部署资源固定为后端包内 `module_shot_grid/resources/templates/shot-v3.xlsx`，SHA-256 为：
 
 ```text
-B6F24078CA56295E9E6CCE50BB3455AF198DFFFE5C08F8D85605A68C09439ECE
+23FF46F60BD4E52A7C3B9350F89882BB18963C92823AC40AFE601AC1553204F8
 ```
 
-当前 v2 模板为匿名业务模板，主数据区固定为 A:O 15 列且不含“制作人”；旧 `shot-v1.xlsx` 只保留为历史资源，不再由服务下载。解析统计仍应为 total 24、valid 24、warning 0、error 0、2 集、8 场、24 镜头，但不会解析、匹配或返回制作人。摘要与内容测试同时扫描驱动器绝对路径、`file:` URI、UNC、个人/组织、应用属性和 `x15ac:absPath`，禁止部署模板重新泄露本地或网络环境信息。
+当前 v2 模板为匿名业务模板，主数据区固定为 A:O 15 列且不含“制作人”；旧 `shot-v1.xlsx`、`shot-v2.xlsx` 只保留为历史资源，不再由服务下载。解析统计仍应为 total 24、valid 24、warning 0、error 0、2 集、8 场、24 镜头，但不会解析、匹配或返回制作人。摘要与内容测试同时扫描驱动器绝对路径、`file:` URI、UNC、个人/组织、应用属性和 `x15ac:absPath`，禁止部署模板重新泄露本地或网络环境信息。
 
 ### 14.1 预检查
 
@@ -2919,7 +2932,7 @@ Permission: shotgrid:shot:import
 输入与工作簿边界：
 
 - MVP 正式模板和保证支持的格式为 `.xlsx`；当前契约以后端包内 v2 模板为准，不承诺 `.xls` 或 `.csv`；
-- 镜头模板版本固定为 `shot-v2`；资产模板版本固定为 `asset-v2`。不能把 WPS 元数据当作模板版本；
+- 镜头模板版本固定为 `shot-v3`；资产模板版本固定为 `asset-v2`。不能把 WPS 元数据当作模板版本；
 - 单文件默认上限为 10 MiB、ZIP 条目 256、解压总量 64 MiB、单条目压缩比 200；单工作簿业务数据行默认上限为 10000 行，预览 Token 默认有效 1800 秒；
 - `openpyxl` 前必须流式扫描全部 OOXML Sheet（含隐藏 Sheet）。默认上限为：物理行 12000、单元格/共享字符串条目 200000、XML 元素 1000000、单 Sheet 列号 128、合并区域 20000、合并展开单元格 200000、单格文本 10000 字符、共享字符串引用展开后的文本总量 8000000 字符；Redis Token 载荷和 HTTP 预览 JSON 的 UTF-8 大小均不得超过 16 MiB；这些阈值可由部署配置收紧，但不得由请求放宽；
 - ZIP 条目默认最多 256 个、解压后总大小默认最多 64 MiB、单条目压缩比默认最多 200；必须拒绝目录穿越、外部链接、业务单元格公式和压缩炸弹；
@@ -2935,7 +2948,7 @@ Permission: shotgrid:shot:import
 | 列 | 表头 | 规范字段 | 导入规则 |
 | --- | --- | --- | --- |
 | A | 场次 | `sceneNo`、`sceneName` | `序` 固定映射为 `0`、`000`、`序`；`01场` 等映射为正整数场次号 |
-| B | 镜头号 | `shotNo` | 接受 `S001` 等格式，规范化为正整数；在当前场次内唯一，不同场次可分别从 `S001` 开始 |
+| B | 镜头号 | `shotNo` | 文本编号如 `0001`，也接受正整数数值单元格及纯数字文本并规范化为整数；输出 `shotCode` 至少四位，超过四位不截断；拒绝 `S001`、零、负数、小数和越界值；在当前场次内唯一 |
 | C | 时长(s) | `durationMs` | 秒值精确换算为整数毫秒 |
 | D | 镜头缩略图 | — | 只读列，导入忽略 |
 | E | 制作内容描述 | `description` | 镜头制作内容 |
@@ -3088,10 +3101,10 @@ Permission: shotgrid:asset:import
 | `assetType` | 类型、资产类型 | 是 | `Character`、`Environment`、`Prop` 或角色、场景、道具 |
 | `assetName` | 名称、资产名称 | 是 | 项目内同类型规范化名称唯一 |
 | `productionItem` | 制作分项 | 否 | 允许暂缺并返回警告；只能以未分配草稿导入，分配负责人前必须补齐 |
-| `assetDescription` | 资产描述 | 否 | 资产主数据描述；当前样表没有独立列 |
-| `itemDescription` | 描述、制作分项描述 | 否 | 当前样表 C 列；按明细行写入 `sg_asset_item.description`，合并时各分项继承相同值 |
+| `assetDescription` | 描述、资产描述 | 否 | 当前样表 C 列，写入 `sg_asset.description`；纵向合并时按左上角值解析，所属分项共用该字段 |
+| `itemDescription` | 分项补充要求、制作分项描述 | 否 | 可选独立列，逐行写入 `sg_asset_item.description`，不得纵向合并；模板未提供该列时为空，不复制资产描述 |
 | `taskDescription` | — | — | 不属于导入字段；由第一次委派时的任务分配命令填写 |
-| `remark` | 备注 | 否 | 业务备注 |
+| `remark` | 备注 | 否 | 对应制作分项的备注，写入 `sg_asset_item.remark` |
 
 规则：
 
@@ -3102,6 +3115,8 @@ Permission: shotgrid:asset:import
 - 预检查返回每种类型的有效、警告、错误数量，以及预计可解决的镜头资产需求数量；
 - “状态”、缩略图、最新版本和完成度等只读列不参与写入并返回忽略警告；
 - 模板、预检响应和正式提交均不包含制作人；Token、TTL、来源摘要和数据库重新校验规则与镜头导入一致。
+- 同一资产的非空资产描述必须一致，冲突返回行级错误，不静默选择其中一份。当前修改只作用于新预览及其后续正式导入，不回填历史数据；官方工作簿列结构及文件摘要不变。
+- 任务查询的资产目标 `targetDescription` 同时投影资产描述和分项补充要求，保留中文标签并去重；不得因描述改存父资产导致制作人看不到制作信息。
 - 当前实现只按原文件摘要、Sheet 和物理行生成技术行键，尚不能识别“工作簿重新保存或移动行后的同一未命名分项”；引入稳定 `rowUid` 前，这类跨文件疑似重复提示是明确的后续缺口。
 
 ### 14.4 资产正式提交与自动匹配
@@ -3346,11 +3361,11 @@ create 不能信任预检结果。后端必须在上传后重新锁定项目与�
     "candidates": [
       {
         "candidateNumber": "V004_01",
-        "businessFileName": "WGZR_EP001_001_S001_YJF_V004_01_1786094626499.mp4"
+        "businessFileName": "WGZR_EP001_001_0001_YJF_V004_01.mp4"
       },
       {
         "candidateNumber": "V004_02",
-        "businessFileName": "WGZR_EP001_001_S001_YJF_V004_02_1786094626499.mov"
+        "businessFileName": "WGZR_EP001_001_0001_YJF_V004_02.mov"
       }
     ],
     "statusUrl": "/shot-grid/version-submissions/8004",
@@ -3617,6 +3632,10 @@ Permissions:
 资产详情返回制作分项列表、每个分项的唯一任务及最新/最终版本、后端动作集合、确定性缩略图、使用镜头数和 `directoryStatus`。资产类型、显示名称、规范键和 `storageDirName/storagePathKey` 在创建时组成不可拆分的稳定身份，普通 PUT 只接受描述、排序、备注和 `lockVersion`；该 PUT 是三项非身份主数据的完整快照，省略描述或备注表示清空，省略排序表示归零。重命名、改类型或目录迁移必须使用后续受控动作。制作分项仅在未分配或唯一任务仍为 `not_started` 且尚无版本时可补充或纠正主数据；任务进入 `preparing/in_progress/pending_review/revision/completed` 后，其名称、描述、排序和备注等主数据立即禁止普通修改。归档不能级联删除历史版本。资产和制作分项写接口均在锁内拒绝 `completed/archived` 项目；资产导入 preview 先普通读取拒绝，commit 再锁项目重检。
 
 前端展示边界：资产列表、卡片和类型看板使用父资产 `thumbnail` 作为单张代表图；资产详情头部忽略父资产代表图，按活动 `items` 的 `(sortOrder, assetItemId)` 稳定顺序逐项展示 `item.thumbnail`、制作分项名称及 `latestVersion` 状态。任一分项 `thumbnail=null` 时保留该分项独立占位，禁止回退旧版本、父资产代表图、归档分项或其他分项图片。
+
+资产描述字段冻结：详情额外返回必填只读布尔字段 `descriptionLocked`，通过当前资产全部未删除分项及其未删除任务派生，包含已归档分项。任一任务为 `preparing/in_progress/pending_review/revision/completed` 即为 `true`；没有任务或均为 `not_started` 则为 `false`。此标记不持久化，不替代平台权限、项目管理范围、项目/NAS 状态或资源生命周期门禁。
+
+锁定后 `asset.edit` 仍用于修改排序和内部备注；PUT 必须带回原资产描述，不能修改或清空该字段。省略 `description` 仍表示清空，因此有非空锁定说明时会被拒绝，不改变原完整快照契约。后端取得与开工共用的项目协调锁及资产锁后重新检查；越界修改返回 HTTP 409 / `SG_ASSET_DESCRIPTION_LOCKED`，整次写入回滚，不更新排序、备注或成功审计。规范化后与原说明相同的文本允许保存元数据，但保留锁定说明的原始存储文本。开工只增加任务锁号，旧资产锁号不能替代这次状态复核。前端用 `ElInput readonly` 显示资产描述；旧弹窗收到上述冲突时恢复原说明并保留排序和备注草稿，后续保存仍使用打开时的锁版本。独立分项和删除规则不受此字段级限制变更影响。
 
 ### 15.7 任务查询与编辑 API
 
@@ -4037,9 +4056,10 @@ NAS I/O 不得在数据库事务内执行。`sg_storage_operation`、`sg_version
 | `SG_SHOT_NO_CONFLICT` | 409 | 场内镜头号重复 |
 | `SG_SHOT_NOT_FOUND` | 404 | 镜头不存在、不属于目标项目或不可见 |
 | `SG_SHOT_SEQUENCE_POSITION_INVALID` | 409 | 场内镜头位置超出当前活动镜头范围，需刷新后重试 |
-| `SG_SHOT_SEQUENCE_NOT_CONTIGUOUS` | 409 | 创建或导入后的场内镜序不能形成 `S001..Snnn` 连续集合 |
+| `SG_SHOT_SEQUENCE_NOT_CONTIGUOUS` | 409 | 创建或导入后的场内镜序不能形成 `0001..NNNN` 连续集合 |
 | `SG_SHOT_START_CONFIRMATION_REQUIRED` | 422 | 镜头开工未确认资产齐备或缺少镜头锁版本 |
 | `SG_ASSET_START_CONFIRMATION_REQUIRED` | 422 | 资产分项开工未人工确认条件齐备或缺少资产/分项锁版本 |
+| `SG_ASSET_DESCRIPTION_LOCKED` | 409 | 任一分项已开工，资产描述不能修改或清空；排序和内部备注仍可按原权限编辑 |
 | `SG_TASK_ASSIGNEE_INVALID` | 409 | 镜头或资产分项开工时当前负责人已不是有效制作人员，应重新分配 |
 | `SG_SHOT_REORDER_PRODUCTION_STARTED` | 409 | 被移动区间内至少一个镜头已开始制作或已有版本/文件 |
 | `SG_SHOT_DELETE_DIRECTORY_EXISTS` | 409 | 删除会让后续镜头前移，但受影响区间存在已冻结目录，禁止隐式改名 |
@@ -4206,7 +4226,7 @@ NAS I/O 不得在数据库事务内执行。`sg_storage_operation`、`sg_version
 
 commit 结果中的复用集/场均为 0、资产关系为 0。数据库终态确认 2 集、8 场、24 镜头、24 任务（三名制作人各 8）、24 待匹配需求、0 镜头资产关系、1 个 `committed` 导入批次、镜头时长合计 79000 ms；2 条集目录操作和 24 条镜头目录操作均为 `pending`。同事务审计恰 1 条且 `status=0`，`method` 字符串长度 79，未超过字段上限。Redis 预检键在提交后为 0。
 
-该旅程只能证明旧 v1 实现曾经按当时契约运行；其中“模板含制作人、导入创建 24 个任务”的行为已被 v2 明确禁止，不能作为当前验收证据。当前必须重新验证 `shot-v2` 下载与摘要、15 列预检、24 个镜头未分配、任务创建数为 0，以及随后独立委派创建唯一任务。原旅程没有验证真实 UNC/NAS、Windows 服务账号、共享 ACL、写探针或故障恢复，也不是完整系统 E2E。
+该旅程只能证明旧 v1 实现曾经按当时契约运行；其中“模板含制作人、导入创建 24 个任务”的行为已被 v2 明确禁止，不能作为当前验收证据。当前必须重新验证 `shot-v3` 下载与摘要、15 列预检、24 个镜头未分配、任务创建数为 0，以及随后独立委派创建唯一任务。原旅程没有验证真实 UNC/NAS、Windows 服务账号、共享 ACL、写探针或故障恢复，也不是完整系统 E2E。
 
 ### 20.0.2 历史 v1 资产导入旅程（已被 v2 契约失效）
 
@@ -4306,9 +4326,9 @@ commit 结果中的复用集/场均为 0、资产关系为 0。数据库终态�
 - Worker 默认关闭，非 PostgreSQL、非 Leader 或开关未启用时不得消费目录操作；Leader 失锁后不能继续领取新操作。
 - 同一项目内集号不能重复。
 - 同一集内场次号不能重复。
-- 同一场次内镜头号不能重复；不同场次可以分别从 `S001` 开始。
-- 单场拖拽成功后必须自动保证“第 N 镜 = S{N:03d}”；被移动区间任一镜头已开始制作或已有版本/文件时整体拒绝。无目录镜头在事务内直接改号；历史冻结目录只在 NAS 迁移成功后原子切换数据库编号。
-- 单条或批量删除成功后必须自动保证剩余镜头仍为 `S001..Snnn`；从最早删除位置到场尾任一镜头已开始制作、已有版本/文件或冻结目录时整体拒绝，数据库和目录都不得出现半完成状态。
+- 同一场次内镜头号不能重复；不同场次可以分别从 `0001` 开始。
+- 单场拖拽成功后必须自动保证“第 N 镜 = {N:04d}”；被移动区间任一镜头已开始制作或已有版本/文件时整体拒绝。无目录镜头在事务内直接改号；历史冻结目录只在 NAS 迁移成功后原子切换数据库编号。
+- 单条或批量删除成功后必须自动保证剩余镜头仍为 `0001..NNNN`；从最早删除位置到场尾任一镜头已开始制作、已有版本/文件或冻结目录时整体拒绝，数据库和目录都不得出现半完成状态。
 - 不能将其他项目的场次或资产关联到当前镜头。
 - 相同 `lockVersion` 并发修改时只有一个成功。
 - 同一镜头或资产制作分项不能创建第二个正式任务。
@@ -4320,8 +4340,8 @@ commit 结果中的复用集/场均为 0、资产关系为 0。数据库终态�
 - NAS 发布失败时不能生成正式版本、审核单或把任务改为待审核。
 - NAS 目标文件摘要冲突时不能覆盖原文件。
 - 正式版本事务失败时不能留下半成品版本或审核单，并必须复用原保留版本号重试。
-- 业务文件名必须使用保存的项目缩写、主制作人的平台用户昵称、服务端版本号和时间戳；资产文件名还必须使用制作分项中保存的名称；镜头与资产文件名都包含对应版本号，重试时所有已生成值不得变化。
-- 资产主产出物文件名各段顺序必须为“项目、`Asset`、类型、资产名称、制作分项、制作人、版本、时间戳”，示例必须生成 `WGZR_Asset_Environment_动力舱室内_动力舱恐怖气氛主视角_YJF_V001_1786094626499.jpg`。
+- 新业务文件名必须使用保存的项目缩写、主制作人的平台用户昵称、服务端版本号和候选号，不追加时间戳；资产文件名还必须使用制作分项中保存的名称。重试复用已冻结文件名及路径，NAS 禁止覆盖规则保持不变。
+- 资产主产出物文件名各段顺序必须为“项目、`Asset`、类型、资产名称、制作分项、制作人、版本、候选号”，示例必须生成 `WGZR_Asset_Environment_动力舱室内_动力舱恐怖气氛主视角_YJF_V001_01.jpg`。
 - 导入预览不能随机生成缺失镜头号。
 - 导入预览后数据库被其他用户修改时，提交必须重新检查冲突。
 - 镜头导入引用尚不存在的资产时只能生成待匹配需求，不能生成正式资产或资产任务。
@@ -4341,7 +4361,7 @@ commit 结果中的复用集/场均为 0、资产关系为 0。数据库终态�
 4. 确认公司是否存在统一 UNC 桌面协议处理器；未确认前只提供查看和复制路径。
 5. 冻结 NAS/AD/Windows 共享 ACL 部署方案，明确网页权限之外的直接 SMB 访问边界。
 6. 决定已完成任务是否需要“重新打开”；MVP 当前禁止，未来动作必须有原因和审计。
-7. 两类样表、模板版本、默认最大行数、文件大小、预览 TTL 和资产名称规范化已冻结；当前服务只下载 `shot-v2.xlsx` 与 `asset-v2.xlsx`，冻结 SHA-256 分别为 `B6F24078CA56295E9E6CCE50BB3455AF198DFFFE5C08F8D85605A68C09439ECE`、`B551AC1D1D5EDC20A025B0ED90157412E1365006108816F08CB2C59AE4301696`，两类模板均不含制作人。旧 v1 文件只保留为历史资源。上传原文件仅临时解析、不长期留存，确需留存时必须另走受保护文件引用。
+7. 两类样表、模板版本、默认最大行数、文件大小、预览 TTL 和资产名称规范化已冻结；当前服务只下载 `shot-v3.xlsx` 与 `asset-v2.xlsx`，冻结 SHA-256 分别为 `23FF46F60BD4E52A7C3B9350F89882BB18963C92823AC40AFE601AC1553204F8`、`B551AC1D1D5EDC20A025B0ED90157412E1365006108816F08CB2C59AE4301696`，两类模板均不含制作人。旧镜头 v1/v2、资产 v1 文件只保留为历史资源。上传原文件仅临时解析、不长期留存，确需留存时必须另走受保护文件引用。
 8. 决定资产模板是否增加跨重新保存仍保留的稳定 `sourceRowId/rowUid`；未引入前需冻结人工去重治理流程。
 9. 基础表、`20260810_01 → 20260814_10` 迁移链、种子、项目/成员/集/场次/镜头/资产/制作分项普通管理、两类导入、资产需求、独立任务、版本发布、跨版本修改问题闭环、人工批量审核，以及默认关闭的 NAS 目录和媒体派生 Worker 已转化为代码；独立业务前端也已实现制作人逐条处理说明、审核人逐条确认、审核缩略图、网页代理优先和原媒体降级。导入后未分配、首次委派创建唯一任务和六阶段生产履历已进入本轮重构，但既有 v1 浏览器旅程不能作为这些新规则的验收证据；真实 FFmpeg 视频派生、Range 真分段、审核/文件浏览器旅程、UNC/NAS 部署验收和完整系统 E2E 继续按本契约分批验收。
 

@@ -39,6 +39,7 @@ from module_shot_grid.service.asset_task_rules import (
 )
 from module_shot_grid.service.project_access_service import ShotGridProjectAccessService
 from module_shot_grid.service.project_service import ShotGridProjectService
+from module_shot_grid.shot_number import format_shot_code
 
 MAX_TASK_NAME_LENGTH = 240
 INTERNAL_WORKER_ACTOR_PATTERN = re.compile(
@@ -571,7 +572,7 @@ class ShotGridTaskService:
                     shot.shot_id,
                 )
                 if shot.storage_dir_name is None:
-                    shot.storage_dir_name = f'{scene.scene_no:03d}_S{shot.shot_no:03d}'
+                    shot.storage_dir_name = f'{scene.scene_no:03d}_{format_shot_code(shot.shot_no)}'
                     latest_directory_status = None
                 if latest_directory_status == 'succeeded':
                     task.task_status = 'in_progress'
@@ -919,11 +920,16 @@ class ShotGridTaskService:
             )
         else:
             production_item = row['production_item']
+            asset_description = str(row.get('asset_description') or '').strip()
+            item_description = str(row.get('asset_item_description') or '').strip()
+            description_parts = [f'资产描述：{asset_description}'] if asset_description else []
+            if item_description and item_description != asset_description:
+                description_parts.append(f'分项补充要求：{item_description}')
             target = ShotGridTaskTargetModel(
                 targetType='asset_item',
                 targetId=row['asset_item_id'],
                 targetName=f'{row["asset_name"]} - {production_item or "待补制作分项"}',
-                targetDescription=row['asset_item_description'],
+                targetDescription='\n'.join(description_parts) or None,
                 lifecycleStatus=row['asset_item_lifecycle_status'],
                 assetId=row['asset_id'],
                 assetType=row['asset_type'],
@@ -1157,7 +1163,7 @@ class ShotGridTaskService:
 
     @staticmethod
     def _shot_code(shot_no: int) -> str:
-        return f'S{shot_no:03d}'
+        return format_shot_code(shot_no)
 
     @staticmethod
     def _now() -> datetime:

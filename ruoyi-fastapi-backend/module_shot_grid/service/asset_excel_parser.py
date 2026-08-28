@@ -44,7 +44,8 @@ class AssetExcelParser:
         '资产类型': 'asset_type',
         '名称': 'asset_name',
         '资产名称': 'asset_name',
-        '描述': 'item_description',
+        '描述': 'asset_description',
+        '分项补充要求': 'item_description',
         '制作分项描述': 'item_description',
         '资产描述': 'asset_description',
         '制作分项': 'production_item',
@@ -63,7 +64,7 @@ class AssetExcelParser:
         'prop': 'Prop',
         '道具': 'Prop',
     }
-    MERGED_PARENT_FIELDS = {'asset_type', 'asset_name', 'item_description'}
+    MERGED_PARENT_FIELDS = {'asset_type', 'asset_name', 'asset_description'}
 
     def __init__(self, config: ShotGridImportConfig = SHOT_GRID_IMPORT_CONFIG) -> None:
         self.config = config

@@ -85,7 +85,7 @@ def _shot_projection_row(*, operation_status: str | None = 'succeeded') -> dict[
         'scene_no': 1,
         'scene_name': '舱室惊醒',
         'shot_no': 1,
-        'storage_dir_name': '001_S001',
+        'storage_dir_name': '001_0001',
         'directory_operation_status': operation_status,
         'duration_ms': 6000,
         'shot_size': '中近景',
@@ -125,11 +125,11 @@ def _latest_read_projection() -> dict[str, Any]:
         'latest_version_id': 9004,
         'latest_version_no': 4,
         'latest_version_status': 'pending_review',
-        'latest_business_file_name': 'WGZR_EP001_001_S001_YJF_V004_1786094626499.mp4',
+        'latest_business_file_name': 'WGZR_EP001_001_0001_YJF_V004_1786094626499.mp4',
         'thumbnail_file_id': '5ed39e04-2f29-45ab-a58c-4f8168f5131a',
-        'thumbnail_business_file_name': 'WGZR_EP001_001_S001_YJF_V004_thumbnail.jpg',
+        'thumbnail_business_file_name': 'WGZR_EP001_001_0001_YJF_V004_thumbnail.jpg',
         'proxy_media_file_id': '5ed39e04-2f29-45ab-a58c-4f8168f5131b',
-        'proxy_media_business_file_name': 'WGZR_EP001_001_S001_YJF_V004_proxy.mp4',
+        'proxy_media_business_file_name': 'WGZR_EP001_001_0001_YJF_V004_proxy.mp4',
         'latest_feedback_note_id': LATEST_FEEDBACK_NOTE_ID,
         'latest_feedback_content': '人物起身动作需要更快',
         'latest_feedback_status': 'open',
@@ -172,7 +172,7 @@ def test_read_projection_does_not_fall_back_when_latest_version_has_no_thumbnail
 
 def test_pending_review_projection_can_display_candidate_before_best_selection() -> None:
     projection = _latest_read_projection()
-    projection['latest_business_file_name'] = 'WGZR_EP001_001_S001_YJF_V004_01.mp4'
+    projection['latest_business_file_name'] = 'WGZR_EP001_001_0001_YJF_V004_01.mp4'
 
     item = ShotGridShotCrudService._build_list_item(_shot_projection_row(), [], projection)
 
@@ -193,8 +193,10 @@ def test_read_projection_missing_directory_operation_uses_frozen_not_found_error
     assert exc_info.value.error_key == 'SG_STORAGE_OPERATION_NOT_FOUND'
 
 
-def test_unstarted_shot_without_directory_is_reported_as_not_created() -> None:
+@pytest.mark.parametrize(('number', 'code'), [(1, '0001'), (12, '0012'), (1000, '1000'), (10000, '10000')])
+def test_unstarted_shot_without_directory_is_reported_as_not_created(number: int, code: str) -> None:
     row = _shot_projection_row(operation_status=None)
+    row['shot_no'] = number
     row['storage_dir_name'] = None
     row['task_id'] = None
     row['task_status'] = None
@@ -205,7 +207,7 @@ def test_unstarted_shot_without_directory_is_reported_as_not_created() -> None:
 
     assert item.directory_status == 'not_created'
     assert item.storage_dir_name is None
-    assert item.shot_code == 'S001'
+    assert item.shot_code == code
 
 
 @pytest.mark.parametrize('project_status', ['completed', 'archived'])
@@ -536,14 +538,14 @@ async def test_scene_renumber_freezes_directory_mapping_and_audit_before_commit(
         {
             'shot_id': SHOT_ID,
             'shot_no': 2,
-            'storage_dir_name': '001_S002',
+            'storage_dir_name': '001_0002',
             'lock_version': 4,
             'directory_operation_status': 'succeeded',
         },
         {
             'shot_id': SECOND_SHOT_ID,
             'shot_no': 1,
-            'storage_dir_name': '001_S001',
+            'storage_dir_name': '001_0001',
             'lock_version': 7,
             'directory_operation_status': 'succeeded',
         },
@@ -589,8 +591,8 @@ async def test_scene_renumber_freezes_directory_mapping_and_audit_before_commit(
     assert operation.target_relative_path == r'VIDEO\EP001'
     assert operation.operation_payload['sceneId'] == SOURCE_SCENE_ID
     assert [item['targetDirName'] for item in operation.operation_payload['items']] == [
-        '001_S001',
-        '001_S002',
+        '001_0001',
+        '001_0002',
     ]
     assert storage.storage_status == 'migrating'
     audit.assert_awaited_once()
@@ -980,7 +982,7 @@ async def test_archive_rejects_when_resequence_would_touch_frozen_directory(monk
                 {
                     'shot_id': THIRD_SHOT_ID,
                     'shot_no': 3,
-                    'storage_dir_name': '001_S003',
+                    'storage_dir_name': '001_0003',
                     'lock_version': 6,
                 },
             ]

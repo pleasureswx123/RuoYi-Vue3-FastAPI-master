@@ -38,6 +38,7 @@ from module_shot_grid.entity.vo.shot_crud_vo import (
     ShotGridShotUpdateModel,
 )
 from module_shot_grid.exceptions import ShotGridDomainException, shot_grid_error
+from module_shot_grid.shot_number import format_shot_code
 
 
 class ShotGridShotCrudService:
@@ -657,7 +658,7 @@ class ShotGridShotCrudService:
         actor_name: str,
         now: datetime,
     ) -> tuple[ShotGridShotRenumberResultModel, dict[int, int]]:
-        """让 Sxxx 与场内位置保持一致；仅存量目录需要异步迁移。"""
+        """让数字镜头号与场内位置保持一致；仅存量目录需要异步迁移。"""
 
         if not rows:
             raise shot_grid_error(409, 'SG_SHOT_RENUMBER_EMPTY', '当前场次没有可编号的活动镜头')
@@ -1528,7 +1529,7 @@ class ShotGridShotCrudService:
 
     @staticmethod
     def _shot_code(shot_no: int) -> str:
-        return f'S{shot_no:03d}'
+        return format_shot_code(shot_no)
 
     @classmethod
     def _shot_storage_dir_name(cls, scene_no: int, shot_no: int) -> str:

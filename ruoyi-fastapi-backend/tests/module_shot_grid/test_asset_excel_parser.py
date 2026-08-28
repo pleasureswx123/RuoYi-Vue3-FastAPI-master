@@ -58,15 +58,41 @@ def test_merged_parent_cells_are_inherited_without_blind_forward_fill() -> None:
     by_row = {row.row_number: row for row in result.rows}
 
     assert by_row[2].normalized.asset_name == by_row[3].normalized.asset_name
-    assert by_row[2].normalized.item_description == by_row[3].normalized.item_description
+    assert by_row[2].normalized.asset_description
+    assert by_row[2].normalized.asset_description == by_row[3].normalized.asset_description
     assert by_row[4].normalized.asset_name == by_row[5].normalized.asset_name
-    assert by_row[4].normalized.item_description == by_row[5].normalized.item_description
+    assert by_row[4].normalized.asset_description
+    assert by_row[4].normalized.asset_description == by_row[5].normalized.asset_description
+    assert all(row.normalized.item_description is None for row in result.rows)
 
     workbook = _minimal_workbook()
     workbook.active.append([None, None, None, '第二分项'])
     parsed = AssetExcelParser().parse(_save_workbook(workbook))
     assert parsed.rows[1].normalized.asset_name is None
     assert {'SG_ASSET_TYPE_INVALID', 'SG_ASSET_NAME_REQUIRED'} <= {issue.error_key for issue in parsed.rows[1].errors}
+
+
+@pytest.mark.parametrize('description_header', ['描述', '资产描述'])
+def test_asset_description_is_inherited_but_item_requirements_stay_separate(description_header: str) -> None:
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.append(['类型', '名称', description_header, '制作分项', '分项补充要求', '备注'])
+    sheet.append(['场景', '测试舱室', '斑驳铁皮墙和狭小舱室', '主视角', '从门口看向睡袋', '主视角备注'])
+    sheet.append([None, None, None, '反打视角', '从睡袋看向铁皮门', '反打备注'])
+    for column in ('A', 'B', 'C'):
+        sheet.merge_cells(f'{column}2:{column}3')
+    result = AssetExcelParser().parse(_save_workbook(workbook))
+    assert result.summary.error_rows == 0
+    assert [row.normalized.asset_description for row in result.rows] == ['斑驳铁皮墙和狭小舱室'] * 2
+    assert [row.normalized.item_description for row in result.rows] == ['从门口看向睡袋', '从睡袋看向铁皮门']
+    assert [row.normalized.remark for row in result.rows] == ['主视角备注', '反打备注']
+
+
+def test_different_asset_descriptions_for_one_asset_are_rejected() -> None:
+    workbook = _minimal_workbook()
+    workbook.active.append(['场景', '控制室', '冲突的资产描述', '反打视角'])
+    result = AssetExcelParser().parse(_save_workbook(workbook))
+    assert all(any(issue.field_name == 'assetDescription' for issue in row.errors) for row in result.rows)
 
 
 def test_status_formula_and_columns_after_first_blank_header_are_ignored() -> None:

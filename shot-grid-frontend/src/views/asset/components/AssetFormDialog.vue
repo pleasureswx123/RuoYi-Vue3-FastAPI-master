@@ -1,5 +1,5 @@
 <script setup>
-import { computed, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, reactive, ref } from 'vue'
 import { Plus } from '@element-plus/icons-vue'
 
 import { createAsset, updateAsset } from '@/api/shot-grid/assets'
@@ -13,6 +13,14 @@ const props = defineProps({
 })
 const emit = defineEmits(['close', 'saved', 'refresh'])
 const isEdit = computed(() => Boolean(props.asset?.assetId))
+const originalDescription = props.asset?.description ?? null
+const descriptionLockedByConflict = ref(false)
+const descriptionLocked = computed(() => isEdit.value && (
+  descriptionLockedByConflict.value || props.asset?.descriptionLocked !== false
+))
+const descriptionLockHint = computed(() => descriptionLockedByConflict.value || props.asset?.descriptionLocked === true
+  ? '已有制作分项开工，资产描述已锁定；仍可调整排序和备注。'
+  : '暂无法确认资产描述是否可编辑，请刷新后重试。')
 const operationContext = Object.freeze({
   projectId: Number(props.projectId),
   assetId: props.asset?.assetId ? Number(props.asset.assetId) : null,
@@ -30,6 +38,8 @@ const form = reactive({
 const assetForm = ref(null)
 const saving = ref(false)
 const requestError = ref(null)
+let disposed = false
+onBeforeUnmount(() => { disposed = true })
 const assetFormRules = {
   assetType: [{ required: true, message: '请选择资产类型', trigger: 'change' }],
   assetName: [{
@@ -127,25 +137,30 @@ function buildCreatePayload() {
 }
 
 async function submit() {
-  if (saving.value) return
-  requestError.value = null
-  const isValid = await assetForm.value?.validate().catch(() => false)
-  if (!isValid) return
+  if (saving.value || disposed) return
   saving.value = true
+  requestError.value = null
   try {
+    const isValid = await assetForm.value?.validate().catch(() => false)
+    if (!isValid || disposed) return
     const response = isEdit.value
       ? await updateAsset(operationContext.projectId, operationContext.assetId, {
-          description: optionalText(form.description),
+          description: optionalText(descriptionLocked.value ? originalDescription : form.description),
           sortOrder: Number(form.sortOrder),
           remark: optionalText(form.remark),
           lockVersion: Number(props.asset.lockVersion)
         })
       : await createAsset(operationContext.projectId, buildCreatePayload())
-    emit('saved', response.data, operationContext)
+    if (!disposed) emit('saved', response.data, operationContext)
   } catch (error) {
+    if (disposed) return
     requestError.value = assetErrorState(error, isEdit.value ? '资产修改失败' : '资产创建失败')
+    if (requestError.value.status === 409 && requestError.value.errorKey === 'SG_ASSET_DESCRIPTION_LOCKED') {
+      descriptionLockedByConflict.value = true
+      form.description = originalDescription || ''
+    }
   } finally {
-    saving.value = false
+    if (!disposed) saving.value = false
   }
 }
 
@@ -159,7 +174,7 @@ function closeDialog() {
 </script>
 
 <template>
-  <ProjectModal :title="isEdit ? `编辑资产 · ${asset.assetName}` : '新建资产'" :description="isEdit ? '资产类型和名称创建后不可直接修改；可在此更新排序、说明和备注。' : '先创建未分配资产及制作分项；保存后再通过“分配任务”完成委派。'" :busy="saving" wide @close="closeDialog">
+  <ProjectModal :title="isEdit ? `编辑资产 · ${asset.assetName}` : '新建资产'" :description="isEdit ? '资产类型和名称创建后不可直接修改；资产描述仅在全部分项未开工时可改，排序和备注仍可编辑。' : '先创建未分配资产及制作分项；保存后再通过“分配任务”完成委派。'" :busy="saving" wide @close="closeDialog">
     <el-form ref="assetForm" :model="form" :rules="assetFormRules" class="asset-form" size="large" label-position="top" aria-label="资产信息表单">
       <el-alert v-if="requestError" :title="requestError.title" type="error" show-icon :closable="false"><span>{{ requestError.message }}</span><el-button v-if="requestError.status === 409" link type="danger" @click="emit('refresh')">刷新后重试</el-button></el-alert>
 
@@ -167,7 +182,10 @@ function closeDialog() {
         <el-form-item label="资产类型" prop="assetType"><el-select v-model="form.assetType" class="sg-select" :disabled="isEdit || saving"><el-option label="角色" value="Character" /><el-option label="场景" value="Environment" /><el-option label="道具" value="Prop" /></el-select></el-form-item>
         <el-form-item label="资产名称" prop="assetName"><el-input v-model="form.assetName" maxlength="200" show-word-limit :disabled="isEdit || saving" placeholder="例如：动力舱室内" /></el-form-item>
         <el-form-item label="项目内排序" prop="sortOrder"><el-input-number v-model="form.sortOrder" :min="0" :step="1" step-strictly controls-position="right" :disabled="saving" /></el-form-item>
-        <el-form-item class="asset-form__wide" label="资产说明" prop="description"><el-input v-model="form.description" type="textarea" :rows="3" :disabled="saving" placeholder="填写资产用途、视觉要求等说明" /></el-form-item>
+        <el-form-item class="asset-form__wide" label="资产描述" prop="description">
+          <el-input v-model="form.description" type="textarea" :rows="3" :readonly="descriptionLocked" :disabled="saving" placeholder="填写所有制作分项共用的资产描述" />
+          <p v-if="descriptionLocked" class="asset-form__lock-hint">{{ descriptionLockHint }}</p>
+        </el-form-item>
         <el-form-item class="asset-form__wide" label="备注" prop="remark"><el-input v-model="form.remark" type="textarea" :rows="2" maxlength="500" show-word-limit :disabled="saving" placeholder="内部备注，可留空" /></el-form-item>
       </section>
 
@@ -178,7 +196,7 @@ function closeDialog() {
           <div class="asset-items-editor__grid">
             <el-form-item label="制作分项" :prop="`items.${index}.productionItem`" :rules="item.formRules.productionItem"><el-input v-model="item.productionItem" maxlength="240" :disabled="saving" placeholder="允许稍后补齐" /></el-form-item>
             <el-form-item label="排序" :prop="`items.${index}.sortOrder`" :rules="item.formRules.sortOrder"><el-input-number v-model="item.sortOrder" :min="0" :step="1" step-strictly controls-position="right" :disabled="saving" /></el-form-item>
-            <el-form-item class="asset-items-editor__wide" label="分项说明" :prop="`items.${index}.description`"><el-input v-model="item.description" type="textarea" :rows="2" :disabled="saving" /></el-form-item>
+            <el-form-item class="asset-items-editor__wide" label="分项补充要求" :prop="`items.${index}.description`"><el-input v-model="item.description" type="textarea" :rows="2" :disabled="saving" /></el-form-item>
             <el-form-item class="asset-items-editor__wide" label="备注" :prop="`items.${index}.remark`"><el-input v-model="item.remark" maxlength="500" :disabled="saving" /></el-form-item>
           </div>
         </el-card>
@@ -191,5 +209,6 @@ function closeDialog() {
 </template>
 
 <style scoped>
+.asset-form__lock-hint{margin:6px 0 0;color:var(--sg-text-muted);font-size:12px;line-height:1.5}
 .asset-form{display:grid;gap:18px}.asset-form :deep(.el-alert__description){display:grid;gap:4px}.asset-form :deep(.el-alert code){font-size:10px}.asset-form__grid,.asset-items-editor__grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}.asset-form:deep(.el-form-item){min-width:0;margin-bottom:0}.asset-form:deep(.el-form-item__label){color:var(--sg-text-muted);font-size:11px}.asset-form:deep(.el-select),.asset-form:deep(.el-input-number){width:100%}.asset-form:deep(.el-textarea__inner){resize:vertical}.asset-form__wide,.asset-items-editor__wide{grid-column:1/-1}.asset-items-editor{background:rgba(255,255,255,.015);border-color:var(--sg-border)}.asset-items-editor:deep(>.el-card__header){padding:14px 16px;border-bottom-color:var(--sg-border)}.asset-items-editor:deep(>.el-card__body){display:grid;gap:12px;padding:14px}.asset-items-editor header,.asset-items-editor__heading,footer{display:flex;gap:12px;align-items:center;justify-content:space-between}.asset-items-editor header p{margin:4px 0 0;color:var(--sg-text-muted);font-size:11px}.asset-item-editor{background:rgba(255,255,255,.025);border-color:var(--sg-border);border-radius:11px}.asset-item-editor:deep(.el-card__header){padding:10px 14px;border-bottom-color:var(--sg-border)}.asset-item-editor:deep(.el-card__body){padding:14px}.asset-items-editor__heading{width:100%}footer{justify-content:flex-end}@media(max-width:760px){.asset-form__grid,.asset-items-editor__grid{grid-template-columns:1fr}.asset-form__wide,.asset-items-editor__wide{grid-column:auto}}
 </style>

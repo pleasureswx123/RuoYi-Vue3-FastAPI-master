@@ -8,7 +8,7 @@ EXPECTED_LATERAL_JOIN_COUNT = 6
 
 def test_list_statement_uses_status_asset_filters_and_latest_directory_operation() -> None:
     query = ShotGridShotListQueryModel(
-        keyword='S001',
+        keyword='0001',
         episodeId=10,
         sceneId=20,
         shotStatus='reviewing',
@@ -40,6 +40,10 @@ def test_list_statement_uses_status_asset_filters_and_latest_directory_operation
         'sg_scene.scene_no, sg_shot.sort_order ASC'
     ) in sql
     assert "sg_shot.lifecycle_status = 'active'" in sql
+    assert (
+        "lpad(CAST(sg_shot.shot_no AS VARCHAR), greatest(4, length(CAST(sg_shot.shot_no AS VARCHAR))), '0') ILIKE '%%0001%%'"
+        in sql
+    )
 
 
 def test_detail_statement_can_read_archived_shot_without_weakening_project_scope() -> None:

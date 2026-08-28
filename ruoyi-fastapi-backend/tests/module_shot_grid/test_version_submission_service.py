@@ -76,7 +76,7 @@ def _shot_context() -> dict[str, object]:
         'scene_no': 1,
         'shot_no': 1,
         'episode_storage_dir_name': 'EP01',
-        'shot_storage_dir_name': '001_S001',
+        'shot_storage_dir_name': '001_0001',
     }
 
 
@@ -174,9 +174,9 @@ def _submission_file(**overrides: object) -> SimpleNamespace:
         'client_file_key': 'candidate-1',
         'candidate_no': 1,
         'source_file_id': FILE_ID,
-        'business_file_name': 'WGZR_EP001_001_S001_YJF_V001_01_1786094626499.mp4',
-        'target_relative_path': 'VIDEO\\EP01\\001_S001\\WGZR_EP001_001_S001_YJF_V001_01_1786094626499.mp4',
-        'temporary_relative_path': 'VIDEO\\EP01\\001_S001\\.sgtmp-30-01-a1-temp.part',
+        'business_file_name': 'WGZR_EP001_001_0001_YJF_V001_01_1786094626499.mp4',
+        'target_relative_path': 'VIDEO\\EP01\\001_0001\\WGZR_EP001_001_0001_YJF_V001_01_1786094626499.mp4',
+        'temporary_relative_path': 'VIDEO\\EP01\\001_0001\\.sgtmp-30-01-a1-temp.part',
         'source_sha256': FILE_HASH,
         'source_file_size': 123,
         'candidate_note': None,
@@ -534,15 +534,29 @@ async def test_submit_preflight_validates_declared_extension_and_target_snapshot
     assert exc_info.value.error_key == error_key
 
 
-def test_business_filename_uses_frozen_shot_rule() -> None:
+@pytest.mark.parametrize(
+    ('context', 'extension', 'prefix'),
+    [
+        (_shot_context(), 'mp4', 'WGZR_EP001_001_0001_YJF'),
+        (_shot_context(), 'mov', 'WGZR_EP001_001_0001_YJF'),
+        (_asset_context(), 'jpg', 'WGZR_Asset_Environment_动力舱室内_动力舱恐怖气氛主视角_YJF'),
+        (_asset_context(), 'png', 'WGZR_Asset_Environment_动力舱室内_动力舱恐怖气氛主视角_YJF'),
+    ],
+)
+@pytest.mark.parametrize(
+    ('version_no', 'candidate_no', 'suffix'), [(1, 1, 'V001_01'), (1, 2, 'V001_02'), (2, 1, 'V002_01')]
+)
+def test_business_filename_uses_version_and_candidate_without_timestamp(
+    context: dict[str, object], extension: str, prefix: str, version_no: int, candidate_no: int, suffix: str
+) -> None:
     result = ShotGridVersionSubmissionService.build_business_file_name(
-        _shot_context(),
-        version_no=1,
-        generated_at_ms=1_786_094_626_499,
-        extension='mp4',
+        context,
+        version_no=version_no,
+        candidate_no=candidate_no,
+        extension=extension,
     )
 
-    assert result == 'WGZR_EP001_001_S001_YJF_V001_01_1786094626499.mp4'
+    assert result == f'{prefix}_{suffix}.{extension}'
 
 
 def test_asset_filename_contains_production_item_and_stably_shortens_long_values() -> None:
@@ -552,20 +566,18 @@ def test_asset_filename_contains_production_item_and_stably_shortens_long_values
     first = ShotGridVersionSubmissionService.build_business_file_name(
         context,
         version_no=12,
-        generated_at_ms=1_786_094_626_499,
         extension='png',
     )
     second = ShotGridVersionSubmissionService.build_business_file_name(
         context,
         version_no=12,
-        generated_at_ms=1_786_094_626_499,
         extension='png',
     )
 
     assert first == second
     assert len(first) <= MAX_BUSINESS_FILENAME_LENGTH
     assert first.startswith('WGZR_Asset_Environment_')
-    assert first.endswith('_YJF_V012_01_1786094626499.png')
+    assert first.endswith('_YJF_V012_01.png')
 
 
 def test_asset_filename_fails_closed_without_production_item() -> None:
@@ -573,7 +585,6 @@ def test_asset_filename_fails_closed_without_production_item() -> None:
         ShotGridVersionSubmissionService.build_business_file_name(
             _asset_context(production_item=None),
             version_no=1,
-            generated_at_ms=1,
             extension='jpg',
         )
 
@@ -887,7 +898,7 @@ async def test_current_submission_status_restores_refreshable_unresolved_submiss
         'source_file_id': FILE_ID,
         'submission_status': 'failed',
         'reserved_version_no': 1,
-        'business_file_name': 'WGZR_EP001_001_S001_YJF_V001_1786094626499.mp4',
+        'business_file_name': 'WGZR_EP001_001_0001_YJF_V001_1786094626499.mp4',
         'attempt_count': 2,
         'last_error_key': 'SG_VERSION_SUBMISSION_FAILED',
         'last_error_message': '发布失败',
@@ -1051,8 +1062,13 @@ def test_inactive_existing_assignee_is_state_conflict() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    'business_file_name',
+    ['WGZR_EP001_001_0001_YJF_V001_01_1786094626499.mp4', 'WGZR_EP001_001_0001_YJF_V001_01.mp4'],
+)
 async def test_concurrent_idempotency_unique_conflict_replays_same_command(
     monkeypatch: pytest.MonkeyPatch,
+    business_file_name: str,
 ) -> None:
     db = AsyncMock()
     task = SimpleNamespace(task_status='in_progress', assignee_user_id=USER_ID)
@@ -1064,7 +1080,7 @@ async def test_concurrent_idempotency_unique_conflict_replays_same_command(
         open_issue_snapshot_hash=EMPTY_ISSUE_SNAPSHOT_HASH,
         submission_status='pending',
         reserved_version_no=1,
-        business_file_name='WGZR_EP001_001_S001_YJF_V001_1786094626499.mp4',
+        business_file_name=business_file_name,
     )
     command = _create_command(changelog='修改完成', aiParams={'seed': 1})
     monkeypatch.setattr(
@@ -1073,7 +1089,7 @@ async def test_concurrent_idempotency_unique_conflict_replays_same_command(
     )
     monkeypatch.setattr(
         'module_shot_grid.service.version_submission_service.ShotGridVersionSubmissionDao.get_submission_files',
-        AsyncMock(return_value=[_submission_file()]),
+        AsyncMock(return_value=[_submission_file(business_file_name=business_file_name)]),
     )
     monkeypatch.setattr(
         'module_shot_grid.service.version_submission_service.ShotGridVersionSubmissionDao.lock_project',
@@ -1111,6 +1127,8 @@ async def test_concurrent_idempotency_unique_conflict_replays_same_command(
 
     assert result.replayed
     assert result.submission_id == SUBMISSION_ID
+    assert result.business_file_name == business_file_name
+    assert result.candidates[0].business_file_name == business_file_name
     db.commit.assert_awaited_once()
     db.rollback.assert_not_awaited()
 
@@ -1140,9 +1158,9 @@ async def test_formal_commit_creates_all_candidates_and_commits_whole_review_cha
         source_file_id=FILE_ID,
         reserved_version_no=3,
         generated_at_ms=1_786_094_626_499,
-        business_file_name='WGZR_EP001_001_S001_YJF_V003_1786094626499.mp4',
-        target_relative_path='VIDEO\\EP01\\001_S001\\WGZR_EP001_001_S001_YJF_V003_1786094626499.mp4',
-        temporary_relative_path='VIDEO\\EP01\\001_S001\\.sgtmp-30-a1-temp.part',
+        business_file_name='WGZR_EP001_001_0001_YJF_V003_1786094626499.mp4',
+        target_relative_path='VIDEO\\EP01\\001_0001\\WGZR_EP001_001_0001_YJF_V003_1786094626499.mp4',
+        temporary_relative_path='VIDEO\\EP01\\001_0001\\.sgtmp-30-a1-temp.part',
         source_sha256=FILE_HASH,
         source_file_size=123,
         changelog='按意见修改',
@@ -1199,9 +1217,9 @@ async def test_formal_commit_creates_all_candidates_and_commits_whole_review_cha
         client_file_key='candidate-2',
         candidate_no=2,
         source_file_id=SECOND_FILE_ID,
-        business_file_name='WGZR_EP001_001_S001_YJF_V003_02_1786094626499.mov',
-        target_relative_path='VIDEO\\EP01\\001_S001\\WGZR_EP001_001_S001_YJF_V003_02_1786094626499.mov',
-        temporary_relative_path='VIDEO\\EP01\\001_S001\\.sgtmp-30-02-a1-temp.part',
+        business_file_name='WGZR_EP001_001_0001_YJF_V003_02_1786094626499.mov',
+        target_relative_path='VIDEO\\EP01\\001_0001\\WGZR_EP001_001_0001_YJF_V003_02_1786094626499.mov',
+        temporary_relative_path='VIDEO\\EP01\\001_0001\\.sgtmp-30-02-a1-temp.part',
         source_sha256=SECOND_FILE_HASH,
         source_file_size=456,
         candidate_note='动作节奏更快',

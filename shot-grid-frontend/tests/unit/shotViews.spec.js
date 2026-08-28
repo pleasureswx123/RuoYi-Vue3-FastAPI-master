@@ -77,8 +77,8 @@ const shotRow = {
   sceneCode: '001',
   sceneName: '动力舱',
   shotNo: 1,
-  shotCode: 'S001',
-  storageDirName: '001_S001',
+  shotCode: '0001',
+  storageDirName: '001_0001',
   directoryStatus: 'ready',
   durationMs: 3500,
   shotSize: '近景',
@@ -212,7 +212,7 @@ describe('镜头管理真实列表页', () => {
     getScenePage.mockResolvedValue({ rows: [{ sceneId: 31, sceneNo: 1, sceneCode: '001', sceneName: '动力舱', sortOrder: 10 }], total: 1, hasNext: false })
     listShotAssignees.mockResolvedValue({ rows: [{ userId: 7, userName: '杨景锋', nickName: 'YJF', projectRole: 'creator', producerCode: 'YJF' }], total: 1, hasNext: false })
     getShotPage.mockResolvedValue({ rows: [shotRow], total: 1, hasNext: false })
-    getShotDetail.mockResolvedValue({ data: shotDetail(8, 41, 'S001', '镜头缓慢推进动力舱') })
+    getShotDetail.mockResolvedValue({ data: shotDetail(8, 41, '0001', '镜头缓慢推进动力舱') })
     batchAssignShotTasks.mockResolvedValue({ data: { assignedShotIds: [41], assignedCount: 1 } })
     batchDeleteShots.mockResolvedValue({ data: { deletedShotIds: [41], deletedCount: 1 } })
     createEpisode.mockReset()
@@ -329,8 +329,8 @@ describe('镜头管理真实列表页', () => {
   it('原生表格选择同步批量操作，表头全选跳过不能操作的镜头', async () => {
     getShotPage.mockResolvedValue({ rows: [
       assignableShotRow,
-      { ...assignableShotRow, shotId: 42, shotCode: 'S002' },
-      { ...shotRow, shotId: 43, shotCode: 'S003', status: 'completed' }
+      { ...assignableShotRow, shotId: 42, shotCode: '0002' },
+      { ...shotRow, shotId: 43, shotCode: '0003', status: 'completed' }
     ], total: 3 })
     const { wrapper } = await mountView(['shotgrid:shot:list', 'shotgrid:task:assign'])
     try {
@@ -399,12 +399,12 @@ describe('镜头管理真实列表页', () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     getShotPage.mockResolvedValueOnce({ rows: [
       { ...shotRow, status: 'preparing' },
-      { ...assignableShotRow, shotId: 42, shotCode: 'S002' },
-      { ...assignableShotRow, shotId: 43, shotCode: 'S003' }
+      { ...assignableShotRow, shotId: 42, shotCode: '0002' },
+      { ...assignableShotRow, shotId: 43, shotCode: '0003' }
     ], total: 3 })
     getShotPage.mockResolvedValue({ rows: [
       { ...shotRow, description: '轮询后的最新镜头内容' },
-      { ...assignableShotRow, shotId: 42, shotCode: 'S002' }
+      { ...assignableShotRow, shotId: 42, shotCode: '0002' }
     ], total: 2 })
     const { wrapper } = await mountView(['shotgrid:shot:list', 'shotgrid:task:assign'])
     try {
@@ -510,7 +510,7 @@ describe('镜头管理真实列表页', () => {
       getShotDetail.mockImplementationOnce(() => new Promise(resolve => { resolveDetail = resolve }))
       await wrapper.findAllComponents(ElButton).find(button => buttonLabel(button) === '编辑').trigger('click')
       expect(signal.aborted).toBe(true)
-      resolveDetail({ data: { ...shotDetail(8, 41, 'S001', '正在编辑的内容'), status: 'not_started', lockVersion: 3 } })
+      resolveDetail({ data: { ...shotDetail(8, 41, '0001', '正在编辑的内容'), status: 'not_started', lockVersion: 3 } })
       await flushPromises()
       const calls = getShotPage.mock.calls.length
       resolvePoll({ rows: [{ ...shotRow, lockVersion: 4 }], total: 1 })
@@ -716,7 +716,7 @@ describe('镜头管理真实列表页', () => {
     await flushPromises()
     expect(getShotPage).toHaveBeenCalledWith(8, expect.objectContaining({ pageNum: 1 }), expect.anything())
     expect(wrapper.text()).toContain('LCFR · 罗刹夫人')
-    expect(wrapper.find('.shot-identity strong').text()).toBe('EP001 / 001 / S001')
+    expect(wrapper.find('.shot-identity strong').text()).toBe('EP001 / 001 / 0001')
     expect(wrapper.find('.shot-identity small').text()).toBe('本场第 1 镜 · 3.5 秒')
     expect(wrapper.text()).toContain('镜头缓慢推进动力舱')
     expect(wrapper.text()).toContain('台词 / 对白')
@@ -741,13 +741,13 @@ describe('镜头管理真实列表页', () => {
     viewSwitch.vm.$emit('update:modelValue', 'card')
     await flushPromises()
     expect(wrapper.find('.shot-card').exists()).toBe(true)
-    expect(wrapper.find('.shot-card h3').text()).toBe('S001 · 第 1 镜')
+    expect(wrapper.find('.shot-card h3').text()).toBe('0001 · 第 1 镜')
     expect(wrapper.find('.shot-card header small').text()).toBe('EP001 / 001')
     viewSwitch.vm.$emit('update:modelValue', 'storyboard')
     await flushPromises()
     expect(wrapper.find('.story-frame').exists()).toBe(true)
     expect(wrapper.find('.story-frame__index').text()).toBe('01')
-    expect(wrapper.find('.story-frame strong').text()).toBe('EP001 · 001 · S001')
+    expect(wrapper.find('.story-frame strong').text()).toBe('EP001 · 001 · 0001')
     expect(wrapper.find('.story-frame small').text()).toContain('本场第 1 镜 · 3.5 秒')
     wrapper.unmount()
   })
@@ -781,7 +781,7 @@ describe('镜头管理真实列表页', () => {
       directoryStatus: 'not_created',
       latestVersion: null
     }
-    const secondShot = { ...mutableShot, shotId: 42, shotNo: 2, shotCode: 'S002', sequencePosition: 2 }
+    const secondShot = { ...mutableShot, shotId: 42, shotNo: 2, shotCode: '0002', sequencePosition: 2 }
     getShotPage.mockResolvedValue({ rows: [mutableShot, secondShot], total: 2, hasNext: false })
     const { wrapper } = await mountView([
       'shotgrid:shot:list',
@@ -818,8 +818,8 @@ describe('镜头管理真实列表页', () => {
   it('历史镜头号不连续时失败关闭排序入口', async () => {
     getShotPage.mockResolvedValue({
       rows: [
-        { ...shotRow, status: 'unassigned', shotNo: 2, shotCode: 'S002', sequencePosition: 2 },
-        { ...shotRow, shotId: 42, status: 'unassigned', shotNo: 4, shotCode: 'S004', sequencePosition: 4 }
+        { ...shotRow, status: 'unassigned', shotNo: 2, shotCode: '0002', sequencePosition: 2 },
+        { ...shotRow, shotId: 42, status: 'unassigned', shotNo: 4, shotCode: '0004', sequencePosition: 4 }
       ],
       total: 2,
       hasNext: false
@@ -856,12 +856,12 @@ describe('镜头管理真实列表页', () => {
       ...firstShot,
       shotId: 42,
       shotNo: 2,
-      shotCode: 'S002',
+      shotCode: '0002',
       sequencePosition: 2,
-      storageDirName: '001_S002',
+      storageDirName: '001_0002',
       directoryStatus: 'ready'
     }
-    const thirdShot = { ...firstShot, shotId: 43, shotNo: 3, shotCode: 'S003', sequencePosition: 3 }
+    const thirdShot = { ...firstShot, shotId: 43, shotNo: 3, shotCode: '0003', sequencePosition: 3 }
     getShotPage.mockResolvedValue({ rows: [firstShot, frozenShot, thirdShot], total: 3, hasNext: false })
     const { wrapper } = await mountView([
       'shotgrid:shot:list',
@@ -880,8 +880,12 @@ describe('镜头管理真实列表页', () => {
     await options.onEnd({ oldIndex: 0, newIndex: 2 })
 
     expect(reorderShot).not.toHaveBeenCalled()
-    expect(wrapper.findAll('.shot-drag-handle')[1].classes()).toContain('is-disabled')
-    expect(wrapper.findAll('.shot-drag-handle')[1].attributes('title')).toBe('该镜头目录已冻结，不能调整顺序')
+    expect(document.body.textContent).toContain('0002：该镜头目录已冻结，不能调整顺序')
+    expect(wrapper.findAll('.shot-identity').map(row => row.text())).toEqual([
+      expect.stringContaining('0001'),
+      expect.stringContaining('0002'),
+      expect.stringContaining('0003')
+    ])
     wrapper.unmount()
   })
 
@@ -890,7 +894,7 @@ describe('镜头管理真实列表页', () => {
       ...shotRow,
       shotId: 100 + index,
       shotNo: index + 1,
-      shotCode: `S${String(index + 1).padStart(3, '0')}`,
+      shotCode: String(index + 1).padStart(4, '0'),
       sequencePosition: index + 1,
       sortOrder: (index + 1) * 10,
       storageDirName: null,
@@ -1097,7 +1101,7 @@ describe('镜头管理真实列表页', () => {
     await flushPromises()
 
     expect(router.currentRoute.value.path).toBe('/shots')
-    expect(document.body.textContent).toContain('镜头详情 · S001')
+    expect(document.body.textContent).toContain('镜头详情 · 0001')
     expect(document.body.textContent).toContain('制作信息')
     const productionSection = document.body.querySelector('.shot-overview .shot-overview__production')
     expect(productionSection).not.toBeNull()
@@ -1112,7 +1116,7 @@ describe('镜头管理真实列表页', () => {
   it('未开始镜头可勾选、编辑和批量删除，已开始镜头禁止编辑和删除', async () => {
     const notStartedShot = { ...shotRow, status: 'not_started' }
     getShotPage.mockResolvedValue({ rows: [notStartedShot], total: 1, hasNext: false })
-    getShotDetail.mockResolvedValue({ data: shotDetail(8, 41, 'S001', '镜头缓慢推进动力舱') })
+    getShotDetail.mockResolvedValue({ data: shotDetail(8, 41, '0001', '镜头缓慢推进动力舱') })
     const confirmSpy = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm')
     const { wrapper } = await mountView([
       'shotgrid:shot:list',
@@ -1289,7 +1293,7 @@ describe('镜头管理真实列表页', () => {
       expiresAt: '2026-08-11T14:00:00',
       summary: { totalRows: 1, validRows: 1, warningRows: 0, errorRows: 0, distinctEpisodes: 1, distinctScenes: 1, distinctShots: 1 },
       workbookWarnings: [],
-      rows: [{ sheetName: 'EP001', rowNumber: 2, canImport: true, warnings: [], errors: [], normalized: { sceneCode: '001', shotCode: 'S001', durationMs: 3000, description: '旧项目镜头', assetRequirements: [] } }]
+      rows: [{ sheetName: 'EP001', rowNumber: 2, canImport: true, warnings: [], errors: [], normalized: { sceneCode: '001', shotCode: '0001', durationMs: 3000, description: '旧项目镜头', assetRequirements: [] } }]
     } })
     const { wrapper } = await mountView()
 
@@ -1410,7 +1414,7 @@ describe('镜头 Element Plus 表单契约', () => {
       hasNext: false
     })
     createShot.mockReset()
-    createShot.mockResolvedValue({ data: { ...shotRow, shotId: 45, shotCode: 'S005' } })
+    createShot.mockResolvedValue({ data: { ...shotRow, shotId: 45, shotCode: '0005' } })
     updateShot.mockReset()
     assignShotTask.mockReset()
     assignShotTask.mockResolvedValue({ data: { taskId: 71 } })
@@ -1479,8 +1483,8 @@ describe('镜头 Element Plus 表单契约', () => {
   it('历史镜头号不连续时禁止新建并清空场内位置', async () => {
     getShotPage.mockResolvedValue({
       rows: [
-        { ...shotRow, status: 'unassigned', shotNo: 2, shotCode: 'S002', sequencePosition: 2 },
-        { ...shotRow, shotId: 42, status: 'unassigned', shotNo: 4, shotCode: 'S004', sequencePosition: 4 }
+        { ...shotRow, status: 'unassigned', shotNo: 2, shotCode: '0002', sequencePosition: 2 },
+        { ...shotRow, shotId: 42, status: 'unassigned', shotNo: 4, shotCode: '0004', sequencePosition: 4 }
       ],
       total: 2,
       hasNext: false
@@ -1509,8 +1513,8 @@ describe('镜头 Element Plus 表单契约', () => {
   it('新建镜头只展示不会推动冻结目录的安全插入位置', async () => {
     getShotPage.mockResolvedValue({
       rows: [
-        { ...shotRow, status: 'unassigned', shotNo: 1, shotCode: 'S001', sequencePosition: 1 },
-        { ...shotRow, shotId: 42, status: 'unassigned', assignee: null, shotNo: 2, shotCode: 'S002', sequencePosition: 2, storageDirName: null, directoryStatus: 'not_created' }
+        { ...shotRow, status: 'unassigned', shotNo: 1, shotCode: '0001', sequencePosition: 1 },
+        { ...shotRow, shotId: 42, status: 'unassigned', assignee: null, shotNo: 2, shotCode: '0002', sequencePosition: 2, storageDirName: null, directoryStatus: 'not_created' }
       ],
       total: 2,
       hasNext: false
@@ -1531,6 +1535,10 @@ describe('镜头 Element Plus 表单契约', () => {
     const sequenceField = wrapper.findAllComponents(ElFormItem).find(item => item.props('prop') === 'sequencePosition')
     const values = sequenceField.findAllComponents(ElOption).map(option => option.props('value'))
     expect(values).toEqual([2, 3])
+    expect(sequenceField.findAllComponents(ElOption).map(option => option.props('label'))).toEqual([
+      expect.stringContaining('0002'),
+      expect.stringContaining('0003')
+    ])
     expect(wrapper.findComponent(ElForm).props('model').sequencePosition).toBe(3)
     wrapper.unmount()
   })
@@ -1629,7 +1637,7 @@ describe('镜头详情跨项目请求隔离', () => {
     [{}, ['时间：未设置时间']]
   ])('镜头详情显示预期时间范围并兼容历史日期 %#', async (timeFields, expectedTexts) => {
     getShotDetail.mockResolvedValueOnce({ data: {
-      ...shotDetail(8, 41, 'S001', '动力舱推进镜头'),
+      ...shotDetail(8, 41, '0001', '动力舱推进镜头'),
       task: { assignee: { userId: 7, userName: '杨景锋' }, taskStatus: 'in_progress', priority: 'normal', ...timeFields }
     } })
     const { wrapper } = await mountDetailView()
@@ -1643,7 +1651,7 @@ describe('镜头详情跨项目请求隔离', () => {
 
   it('镜头详情的状态、目录、优先级、版本和关联资产使用 ElTag 动态类型', async () => {
     getShotDetail.mockResolvedValueOnce({ data: {
-      ...shotDetail(8, 41, 'S001', '动力舱推进镜头'),
+      ...shotDetail(8, 41, '0001', '动力舱推进镜头'),
       status: 'revision',
       directoryStatus: 'failed',
       task: {
@@ -1653,7 +1661,7 @@ describe('镜头详情跨项目请求隔离', () => {
         dueDate: '2026-09-01',
         lockVersion: 3
       },
-      latestVersion: { versionNumber: 'V002', businessFileName: 'LCFR_S001_V002.mp4', status: 'rejected' },
+      latestVersion: { versionNumber: 'V002', businessFileName: 'LCFR_0001_V002.mp4', status: 'rejected' },
       assets: [
         { assetId: 2, assetName: '动力舱', assetType: 'Environment' },
         { assetId: 3, assetName: '女主', assetType: 'Character' },
@@ -1678,9 +1686,9 @@ describe('镜头详情跨项目请求隔离', () => {
   it('快速切换项目和镜头时立即清理旧详情并丢弃过期响应', async () => {
     let resolveProject9
     getShotDetail.mockImplementation((projectId, _shotId) => {
-      if (projectId === 8) return Promise.resolve({ data: shotDetail(8, 41, 'S001', '旧项目镜头') })
+      if (projectId === 8) return Promise.resolve({ data: shotDetail(8, 41, '0001', '旧项目镜头') })
       if (projectId === 9) return new Promise(resolve => { resolveProject9 = resolve })
-      return Promise.resolve({ data: shotDetail(10, 61, 'S003', '当前项目镜头') })
+      return Promise.resolve({ data: shotDetail(10, 61, '0003', '当前项目镜头') })
     })
     const { wrapper, router } = await mountDetailView()
     expect(wrapper.text()).toContain('旧项目镜头')
@@ -1700,7 +1708,7 @@ describe('镜头详情跨项目请求隔离', () => {
     await flushPromises()
     expect(wrapper.text()).toContain('当前项目镜头')
 
-    resolveProject9({ data: shotDetail(9, 51, 'S002', '过期项目镜头') })
+    resolveProject9({ data: shotDetail(9, 51, '0002', '过期项目镜头') })
     await flushPromises()
     expect(wrapper.text()).toContain('当前项目镜头')
     expect(wrapper.text()).not.toContain('过期项目镜头')
@@ -1711,7 +1719,7 @@ describe('镜头详情跨项目请求隔离', () => {
     getShotDetail.mockImplementation((projectId, shotId) => Promise.resolve({ data: shotDetail(
       projectId,
       shotId,
-      projectId === 8 ? 'S001' : 'S002',
+      projectId === 8 ? '0001' : '0002',
       projectId === 8 ? '旧镜头' : '当前镜头'
     ) }))
     const { wrapper, router } = await mountDetailView()
@@ -1740,7 +1748,7 @@ describe('镜头详情跨项目请求隔离', () => {
     getShotDetail.mockImplementation((targetProjectId, targetShotId) => Promise.resolve({ data: shotDetail(
       targetProjectId,
       targetShotId,
-      targetProjectId === 8 ? 'S001' : 'S002',
+      targetProjectId === 8 ? '0001' : '0002',
       targetProjectId === 8 ? '同一目标镜头' : '中转镜头'
     ) }))
     const { wrapper, router } = await mountDetailView()

@@ -28,6 +28,7 @@ from module_shot_grid.entity.vo.production_history_vo import (
     ShotGridProductionHistoryVersionRefModel,
 )
 from module_shot_grid.exceptions import shot_grid_error
+from module_shot_grid.shot_number import format_shot_code
 
 
 class ShotGridProductionHistoryService:
@@ -650,7 +651,7 @@ class ShotGridProductionHistoryService:
 
     @staticmethod
     def _shot_code(row: dict[str, Any]) -> str:
-        return f'EP{int(row["episode_no"]):03d} / {int(row["scene_no"]):03d} / S{int(row["shot_no"]):03d}'
+        return f'EP{int(row["episode_no"]):03d} / {int(row["scene_no"]):03d} / {format_shot_code(int(row["shot_no"]))}'
 
     @staticmethod
     def _version_number(version_no: int) -> str:

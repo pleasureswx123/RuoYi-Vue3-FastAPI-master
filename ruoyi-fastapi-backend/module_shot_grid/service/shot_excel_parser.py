@@ -19,6 +19,7 @@ from module_shot_grid.entity.vo.shot_import_vo import (
     ShotImportPreviewSummaryModel,
 )
 from module_shot_grid.exceptions import shot_grid_error
+from module_shot_grid.shot_number import format_shot_code
 
 
 class ShotExcelParser:
@@ -43,7 +44,7 @@ class ShotExcelParser:
         '镜头状态',
     )
     SHEET_PATTERN = re.compile(r'^EP(\d{3,})$')
-    SHOT_PATTERN = re.compile(r'^S(\d{3,})$')
+    SHOT_PATTERN = re.compile(r'^([0-9]+)$')
     SCENE_PATTERN = re.compile(r'^(\d+)场?$')
     READONLY_COLUMNS = frozenset({4, 15})
 
@@ -205,7 +206,7 @@ class ShotExcelParser:
                 sceneName=scene_name,
                 sortOrder=sort_ordinal * 10,
                 shotNo=shot_no,
-                shotCode=f'S{shot_no:03d}',
+                shotCode=format_shot_code(shot_no),
                 durationMs=duration_ms,
                 description=description,
                 shotSize=self._bounded_optional(cells[5].value, 40, 'shotSize', sheet_name, row_number, errors),
@@ -307,7 +308,7 @@ class ShotExcelParser:
         errors.append(
             self._issue(
                 'SG_IMPORT_SHOT_NO_INVALID',
-                '镜头号必须使用 S 加至少三位数字，例如 S001',
+                '镜头号必须是正整数，例如 0001、0002；不再使用 S 前缀',
                 'shotNo',
                 sheet_name,
                 row_number,

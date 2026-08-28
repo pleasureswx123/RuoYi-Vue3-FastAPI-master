@@ -738,9 +738,42 @@ onBeforeUnmount(() => {
           </template>
         </AssetTreeTable>
 
-        <div v-else-if="viewMode === 'card'" class="asset-grid" v-loading="assetsLoading"><el-card v-for="asset in assets" :key="asset.assetId" class="asset-card" shadow="hover" tabindex="0" @click="openAsset(asset)" @keydown.enter="openAsset(asset)"><ProtectedAssetThumbnail class="asset-thumb" :thumbnail="resolveAssetThumbnail(asset)" :alt="`${asset.assetName} 缩略图`" /><header><el-tag size="small" effect="plain" round :type="tagTypeFromTone(assetTypeMeta(asset.assetType).tone)">{{ assetTypeMeta(asset.assetType).label }}</el-tag><el-tag class="asset-status-tag" :class="assetStatusTagClass(asset.assetStatus)" size="small" effect="light" round :type="tagTypeFromTone(assetStatusMeta(asset.assetStatus).tone)">{{ assetStatusMeta(asset.assetStatus).label }}</el-tag></header><h3>{{ asset.assetName }}</h3><p>{{ asset.description || '暂无资产说明' }}</p><div v-if="itemStatusEntries(asset).length" class="asset-item-status-counts asset-item-status-counts--card"><el-tag v-for="entry in itemStatusEntries(asset)" :key="entry.status" size="small" effect="plain" round :type="tagTypeFromTone(assetStatusMeta(entry.status).tone)">{{ entry.label }} {{ entry.count }}</el-tag></div><footer><span>{{ asset.itemCount }} 个制作分项</span><span>{{ asset.usageShotCount }} 个使用镜头</span><el-button v-if="canOpenItemStart(asset)" size="small" type="primary" :icon="VideoPlay" @click.stop="openAssetItemStart(asset)">选择分项开工</el-button></footer></el-card></div>
+        <div v-else-if="viewMode === 'card'" class="asset-grid" v-loading="assetsLoading"><el-card v-for="asset in assets" :key="asset.assetId" class="asset-card" shadow="hover" tabindex="0" @click="openAsset(asset)" @keydown.enter="openAsset(asset)"><ProtectedAssetThumbnail class="asset-thumb" :thumbnail="resolveAssetThumbnail(asset)" :alt="`${asset.assetName} 缩略图`" /><header><el-tag size="small" effect="plain" round :type="tagTypeFromTone(assetTypeMeta(asset.assetType).tone)">{{ assetTypeMeta(asset.assetType).label }}</el-tag><el-tag class="asset-status-tag" :class="assetStatusTagClass(asset.assetStatus)" size="small" effect="light" round :type="tagTypeFromTone(assetStatusMeta(asset.assetStatus).tone)">{{ assetStatusMeta(asset.assetStatus).label }}</el-tag></header><h3>{{ asset.assetName }}</h3><p>{{ asset.description || '暂无资产描述' }}</p><div v-if="itemStatusEntries(asset).length" class="asset-item-status-counts asset-item-status-counts--card"><el-tag v-for="entry in itemStatusEntries(asset)" :key="entry.status" size="small" effect="plain" round :type="tagTypeFromTone(assetStatusMeta(entry.status).tone)">{{ entry.label }} {{ entry.count }}</el-tag></div><footer><span>{{ asset.itemCount }} 个制作分项</span><span>{{ asset.usageShotCount }} 个使用镜头</span><el-button v-if="canOpenItemStart(asset)" size="small" type="primary" :icon="VideoPlay" @click.stop="openAssetItemStart(asset)">选择分项开工</el-button></footer></el-card></div>
 
-        <div v-else class="type-board" v-loading="assetsLoading"><el-card v-for="group in groupedAssets" :key="group.type" class="type-board__column" shadow="never"><header><div><el-tag size="small" effect="plain" round :type="tagTypeFromTone(assetTypeMeta(group.type).tone)">{{ assetTypeMeta(group.type).label }}</el-tag><strong>{{ group.assets.length }}</strong></div><small>当前分页结果</small></header><div v-if="group.assets.length" class="type-board__items"><div v-for="asset in group.assets" :key="asset.assetId" class="type-board__asset-row"><el-button text class="type-board__asset" @click="openAsset(asset)"><ProtectedAssetThumbnail class="asset-thumb asset-thumb--board" :thumbnail="resolveAssetThumbnail(asset)" :alt="`${asset.assetName} 缩略图`" /><span><strong>{{ asset.assetName }}</strong><small>{{ asset.itemCount }} 分项</small><el-tag class="asset-status-tag" :class="assetStatusTagClass(asset.assetStatus)" size="small" effect="light" round :type="tagTypeFromTone(assetStatusMeta(asset.assetStatus).tone)">{{ assetStatusMeta(asset.assetStatus).label }}</el-tag><small v-if="itemStatusEntries(asset).length">{{ itemStatusEntries(asset).map(entry => `${entry.label} ${entry.count}`).join(' · ') }}</small></span></el-button><el-button v-if="canOpenItemStart(asset)" size="small" type="primary" :icon="VideoPlay" @click="openAssetItemStart(asset)">选择分项开工</el-button></div></div><el-empty v-else :image-size="48" :description="`本页暂无${assetTypeMeta(group.type).label}资产`" /></el-card></div>
+        <div v-else class="type-board" v-loading="assetsLoading">
+          <el-card v-for="group in groupedAssets" :key="group.type" class="type-board__column" shadow="never">
+            <template #header>
+              <div class="type-board__header">
+                <div class="type-board__heading">
+                  <el-tag size="small" effect="plain" round :type="tagTypeFromTone(assetTypeMeta(group.type).tone)">{{ assetTypeMeta(group.type).label }}</el-tag>
+                  <strong>{{ group.assets.length }} 个资产</strong>
+                </div>
+                <small>当前分页结果</small>
+              </div>
+            </template>
+            <div v-if="group.assets.length" class="type-board__items">
+              <div v-for="asset in group.assets" :key="asset.assetId" class="type-board__asset-row">
+                <el-button class="type-board__asset" :aria-label="`查看${asset.assetName}资产详情`" @click="openAsset(asset)">
+                  <span class="type-board__content">
+                    <ProtectedAssetThumbnail class="asset-thumb--board" :thumbnail="resolveAssetThumbnail(asset)" :alt="`${asset.assetName} 缩略图`" />
+                    <span class="type-board__summary">
+                      <el-text tag="strong" class="type-board__name" :line-clamp="2">{{ asset.assetName }}</el-text>
+                      <span class="type-board__count">{{ asset.itemCount }} 个制作分项</span>
+                      <span class="type-board__statuses">
+                        <template v-if="itemStatusEntries(asset).length">
+                          <el-tag v-for="entry in itemStatusEntries(asset)" :key="entry.status" class="asset-status-tag" :class="assetStatusTagClass(entry.status)" size="small" effect="light" round :type="tagTypeFromTone(assetStatusMeta(entry.status).tone)">{{ entry.label }} {{ entry.count }}</el-tag>
+                        </template>
+                        <el-tag v-else class="asset-status-tag" :class="assetStatusTagClass(asset.assetStatus)" size="small" effect="light" round :type="tagTypeFromTone(assetStatusMeta(asset.assetStatus).tone)">{{ assetStatusMeta(asset.assetStatus).label }}</el-tag>
+                      </span>
+                    </span>
+                  </span>
+                </el-button>
+                <el-button v-if="canOpenItemStart(asset)" class="type-board__start" size="small" type="primary" :icon="VideoPlay" @click="openAssetItemStart(asset)">选择分项开工</el-button>
+              </div>
+            </div>
+            <el-empty v-else :image-size="48" :description="`本页暂无${assetTypeMeta(group.type).label}资产`" />
+          </el-card>
+        </div>
 
         <el-pagination v-if="total" class="asset-pagination" background layout="prev, pager, next, total" :current-page="query.pageNum" :page-size="query.pageSize" :total="total" :disabled="assetsLoading" aria-label="资产分页" @current-change="changePage" />
       </template>
@@ -782,8 +815,37 @@ onBeforeUnmount(() => {
 .asset-card p { min-height: 38px; margin-top: 6px; color: var(--sg-text-muted); font-size: 11px; line-height: 1.55; }
 .asset-card footer { margin-top: 12px; padding: 10px 14px; color: var(--sg-text-muted); font-size: 10px; border-top: 1px solid var(--sg-border); }
 .type-board { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 13px; min-height: 120px; }
-.type-board header div { display: flex; gap: 8px; align-items: center; }
-.type-board header small { color: var(--sg-text-muted); font-size: 10px; }
+.type-board__column { min-width: 0; background: var(--sg-surface); border-color: var(--sg-border); border-radius: var(--sg-radius-md); }
+.type-board__column :deep(.el-card__header) { padding: 14px; border-bottom-color: var(--sg-border); }
+.type-board__column :deep(.el-card__body) { padding: 12px; }
+.type-board__header, .type-board__heading { display: flex; gap: 8px; align-items: center; }
+.type-board__header { justify-content: space-between; flex-wrap: wrap; }
+.type-board__heading strong { color: var(--sg-text-secondary); font-size: 12px; font-weight: 500; }
+.type-board__header small { color: var(--sg-text-muted); font-size: 11px; }
+.type-board__items { display: grid; gap: 10px; }
+.type-board__asset-row { display: flex; min-width: 0; flex-direction: column; gap: 8px; align-items: stretch; }
+.type-board__asset {
+  --el-button-bg-color: var(--sg-surface-raised);
+  --el-button-border-color: var(--sg-border);
+  --el-button-text-color: var(--sg-text);
+  --el-button-hover-bg-color: var(--sg-surface-soft);
+  --el-button-hover-border-color: var(--sg-border-strong);
+  --el-button-hover-text-color: var(--sg-text);
+  --el-button-active-bg-color: var(--sg-surface-soft);
+  --el-button-active-border-color: var(--sg-border-strong);
+  --el-button-active-text-color: var(--sg-text);
+  width: 100%; height: auto; min-width: 0; margin: 0; padding: 12px;
+  border-radius: 8px; text-align: left; white-space: normal; line-height: 1.5;
+}
+.type-board__asset :deep(> span) { width: 100%; min-width: 0; }
+.type-board__content { display: grid; width: 100%; min-width: 0; grid-template-columns: 88px minmax(0, 1fr); gap: 14px; align-items: center; }
+.type-board__content .asset-thumb--board { width: 88px; height: 76px; border-radius: 8px; }
+.type-board__summary { display: flex; min-width: 0; flex-direction: column; align-items: flex-start; gap: 6px; }
+.type-board__name { align-self: stretch; margin: 0; color: var(--sg-text); font-size: 14px; font-weight: 600; line-height: 1.5; white-space: normal; overflow-wrap: anywhere; }
+.type-board__count { color: var(--sg-text-secondary); font-size: 12px; line-height: 1.5; }
+.type-board__statuses { display: flex; max-width: 100%; gap: 6px; align-items: center; flex-wrap: wrap; }
+.type-board__statuses .el-tag { margin: 0; flex-shrink: 0; }
+.type-board__start { align-self: flex-end; margin: 0; }
 .asset-empty, .asset-context-loading { min-height: 260px; background: var(--sg-surface); border-color: var(--sg-border); border-radius: var(--sg-radius-md); }
 .asset-empty :deep(.el-empty__image .el-icon) { color: var(--sg-text-muted); font-size: 34px; }
 .asset-empty p { margin: 8px 0 0; color: var(--sg-text-muted); font-size: 11px; }
@@ -791,12 +853,12 @@ onBeforeUnmount(() => {
 @media (max-width: 1100px) { .asset-filters { grid-template-columns: 1fr 1fr 1fr; } .type-board { grid-template-columns: 1fr; } }
 @media (max-width: 700px) { .asset-heading { flex-direction: column; } .asset-filters { grid-template-columns: 1fr; } .project-context__meta { justify-content: flex-start; } .asset-grid { grid-template-columns: 1fr; } }
 .asset-toolbar{gap:12px}.asset-toolbar__summary{display:flex!important;gap:8px!important;align-items:center!important;flex-wrap:wrap}.asset-row-actions{display:flex;align-items:center;flex-wrap:wrap;gap:4px}.asset-row-actions :deep(.el-button){margin-left:0}.asset-batch-assign-dialog{display:grid;gap:16px}.asset-batch-assign-dialog p{margin:0;color:var(--sg-text-secondary);font-size:12px;line-height:1.65}.asset-batch-assign-dialog:deep(.el-form-item){margin-bottom:0}.asset-batch-assign-dialog:deep(.el-form-item__label){color:var(--sg-text-muted);font-size:11px}.asset-batch-assign-dialog:deep(.el-select){width:100%}
-.project-context:deep(.el-form-item){min-width:240px;margin:0}.project-context:deep(.el-form-item__label){height:auto;padding-bottom:6px;color:var(--sg-text-muted);font-size:10px;line-height:1}.asset-filters .asset-search{padding:0;background:transparent;border:0}.view-switch{padding:0;background:transparent}.view-switch:deep(.el-radio-button__inner){display:flex;gap:6px;align-items:center;color:var(--sg-text-muted);background:var(--sg-surface);border-color:var(--sg-border);box-shadow:none}.view-switch:deep(.el-radio-button__original-radio:checked+.el-radio-button__inner){color:var(--sg-accent);background:var(--sg-accent-soft);border-color:rgba(255,182,87,.32);box-shadow:-1px 0 0 0 rgba(255,182,87,.32)}.asset-card:deep(.el-card__body){padding:0}.asset-card>.asset-thumb,.asset-card:deep(.el-card__body>.asset-thumb){height:150px}.type-board__column{min-width:0;background:var(--sg-surface);border-color:var(--sg-border)}.type-board__column:deep(.el-card__body){padding:13px}.type-board__column header{display:flex;align-items:center;justify-content:space-between;margin-bottom:11px}.type-board__items{display:grid;gap:8px}.type-board .type-board__asset{display:block;width:100%;height:auto;margin:0;padding:8px;color:var(--sg-text);text-align:left;background:rgba(255,255,255,.025);border:1px solid transparent}.type-board .type-board__asset:hover{background:rgba(255,255,255,.04);border-color:var(--sg-border-strong)}.type-board .type-board__asset:deep(>span){display:grid;min-width:0;grid-template-columns:68px minmax(0,1fr);gap:9px;align-items:center}.type-board .type-board__asset:deep(>span>span){display:block;min-width:0}.type-board__asset:deep(>span>span strong),.type-board__asset:deep(>span>span small){display:block;overflow:hidden;text-overflow:ellipsis}.type-board__asset:deep(.el-tag){margin-top:5px}.asset-pagination{margin-top:2px}.asset-pagination:deep(.el-pager li),.asset-pagination:deep(button){background:var(--sg-surface)!important}.asset-pagination:deep(.is-active){color:#17130d!important;background:var(--sg-accent)!important}
+.project-context:deep(.el-form-item){min-width:240px;margin:0}.project-context:deep(.el-form-item__label){height:auto;padding-bottom:6px;color:var(--sg-text-muted);font-size:10px;line-height:1}.asset-filters .asset-search{padding:0;background:transparent;border:0}.view-switch{padding:0;background:transparent}.view-switch:deep(.el-radio-button__inner){display:flex;gap:6px;align-items:center;color:var(--sg-text-muted);background:var(--sg-surface);border-color:var(--sg-border);box-shadow:none}.view-switch:deep(.el-radio-button__original-radio:checked+.el-radio-button__inner){color:var(--sg-accent);background:var(--sg-accent-soft);border-color:rgba(255,182,87,.32);box-shadow:-1px 0 0 0 rgba(255,182,87,.32)}.asset-card:deep(.el-card__body){padding:0}.asset-card>.asset-thumb,.asset-card:deep(.el-card__body>.asset-thumb){height:150px}.asset-pagination{margin-top:2px}.asset-pagination:deep(.el-pager li),.asset-pagination:deep(button){background:var(--sg-surface)!important}.asset-pagination:deep(.is-active){color:#17130d!important;background:var(--sg-accent)!important}
 .asset-filters{grid-template-columns:minmax(220px,1fr) repeat(3,minmax(130px,180px)) auto}
 .asset-filters:deep(.el-form-item){min-width:0;margin-bottom:0}
 .asset-filter-item:deep(.el-form-item__content),.asset-filter-item:deep(.el-select),.asset-filter-item:deep(.el-input){width:100%;min-width:0}
 .asset-filter-actions:deep(.el-form-item__content){flex-wrap:nowrap;justify-content:flex-end}
 @media(max-width:1100px){.asset-filters{grid-template-columns:1fr 1fr 1fr}.asset-filter-actions:deep(.el-form-item__content){justify-content:flex-start}}
 @media(max-width:700px){.asset-filters{grid-template-columns:1fr}}
-.asset-item-status-counts{display:flex;gap:4px;align-items:center;justify-content:center;flex-wrap:wrap;font-size:10px}.asset-item-status-counts--card{padding:0 14px;justify-content:flex-start}.type-board__asset-row{display:flex;gap:8px;align-items:center}.type-board__asset-row>.type-board__asset{flex:1}
+.asset-item-status-counts{display:flex;gap:4px;align-items:center;justify-content:center;flex-wrap:wrap;font-size:10px}.asset-item-status-counts--card{padding:0 14px;justify-content:flex-start}
 </style>

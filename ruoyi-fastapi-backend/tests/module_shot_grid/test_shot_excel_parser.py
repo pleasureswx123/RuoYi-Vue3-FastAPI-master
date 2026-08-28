@@ -32,7 +32,7 @@ def _minimal_workbook() -> Workbook:
     sheet = workbook.active
     sheet.title = 'EP001'
     sheet.append(list(ShotExcelParser.EXPECTED_HEADERS))
-    sheet.append(['序', 'S001', 1.5, None, '镜头描述', None, None, None, '35/25', '太空'])
+    sheet.append(['序', '0001', 1.5, None, '镜头描述', None, None, None, '35/25', '太空'])
     return workbook
 
 
@@ -53,7 +53,7 @@ def test_real_sample_has_frozen_structure_and_exact_counts() -> None:
     assert first is not None
     assert (first.episode_no, first.episode_code) == (1, 'EP001')
     assert (first.scene_no, first.scene_code, first.scene_name) == (0, '000', '序')
-    assert (first.shot_no, first.shot_code, first.duration_ms, first.focal_length) == (1, 'S001', 8000, '135')
+    assert (first.shot_no, first.shot_code, first.duration_ms, first.focal_length) == (1, '0001', 8000, '135')
     assert first.sort_order == FIRST_SORT_ORDER
     assert first.asset_requirements[0].raw_name == '示例场景01'
     assert result.rows[2].normalized is not None
@@ -113,7 +113,7 @@ def test_parser_ignores_readonly_values_and_formulas() -> None:
 def test_same_shot_number_can_restart_in_another_scene() -> None:
     workbook = _minimal_workbook()
     sheet = workbook.active
-    sheet.append(['01场', 'S001', 1, None, '第二个镜头'])
+    sheet.append(['01场', '0001', 1, None, '第二个镜头'])
 
     result = ShotExcelParser().parse(_save_workbook(workbook))
 
@@ -124,13 +124,37 @@ def test_same_shot_number_can_restart_in_another_scene() -> None:
 
 def test_duplicate_shot_number_in_same_scene_is_row_error() -> None:
     workbook = _minimal_workbook()
-    workbook.active.append(['序', 'S001', 1, None, '同场重复镜头'])
+    workbook.active.append(['序', '0001', 1, None, '同场重复镜头'])
 
     result = ShotExcelParser().parse(_save_workbook(workbook))
 
     assert result.summary.valid_rows == 1
     assert result.summary.error_rows == 1
     assert result.rows[1].errors[0].error_key == 'SG_SHOT_NO_CONFLICT'
+
+
+@pytest.mark.parametrize(
+    ('value', 'expected_code'),
+    [('0001', '0001'), (1, '0001'), ('12', '0012'), ('0100', '0100'), (1000, '1000'), (10000, '10000')],
+)
+def test_numeric_shot_codes_preserve_leading_zeroes_and_normalize_excel_numbers(
+    value: object, expected_code: str
+) -> None:
+    workbook = _minimal_workbook()
+    workbook.active['B2'] = value
+    result = ShotExcelParser().parse(_save_workbook(workbook))
+    assert result.rows[0].can_import is True
+    assert result.rows[0].normalized.shot_code == expected_code
+    assert result.rows[0].normalized.shot_no == int(expected_code)
+
+
+@pytest.mark.parametrize('value', ['S001', '0000', 0, -1, 1.5, '1.5', '1e3', True])
+def test_invalid_or_legacy_shot_codes_are_rejected(value: object) -> None:
+    workbook = _minimal_workbook()
+    workbook.active['B2'] = value
+    result = ShotExcelParser().parse(_save_workbook(workbook))
+    assert result.rows[0].can_import is False
+    assert any(issue.error_key == 'SG_IMPORT_SHOT_NO_INVALID' for issue in result.rows[0].errors)
 
 
 @pytest.mark.parametrize('duration', ['1.2345', -1, 'abc'])
@@ -177,7 +201,7 @@ def test_header_mismatch_is_workbook_error() -> None:
 
 def test_row_limit_uses_frozen_error_key() -> None:
     workbook = _minimal_workbook()
-    workbook.active.append(['01场', 'S002', 1, None, '第二个镜头'])
+    workbook.active.append(['01场', '0002', 1, None, '第二个镜头'])
 
     with pytest.raises(ShotGridDomainException) as exc_info:
         ShotExcelParser(ShotGridImportConfig(max_rows_per_workbook=1)).parse(_save_workbook(workbook))
@@ -209,7 +233,7 @@ def test_episode_number_must_fit_database_integer() -> None:
     ('column', 'value', 'error_key'),
     [
         ('A', str(SQL_INTEGER_OVERFLOW), 'SG_IMPORT_SCENE_INVALID'),
-        ('B', f'S{SQL_INTEGER_OVERFLOW}', 'SG_IMPORT_SHOT_NO_INVALID'),
+        ('B', str(SQL_INTEGER_OVERFLOW), 'SG_IMPORT_SHOT_NO_INVALID'),
         ('C', SQL_BIGINT_MILLISECONDS_OVERFLOW_SECONDS, 'SG_IMPORT_DURATION_INVALID'),
         ('F', '大' * 41, 'SG_IMPORT_FIELD_TOO_LONG'),
     ],

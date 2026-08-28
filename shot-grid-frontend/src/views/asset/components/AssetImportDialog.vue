@@ -7,6 +7,7 @@ import { createIdempotencyState } from '@/utils/idempotency'
 import { tagTypeFromTone } from '@/utils/tag'
 import { assetErrorState, assetTypeMeta, groupAssetPreviewRows } from '@/views/asset/assetPresentation'
 import ProjectModal from '@/views/project/components/ProjectModal.vue'
+import AssetDescriptionCell from '@/views/asset/components/AssetDescriptionCell.vue'
 
 const props = defineProps({
   projectId: { type: Number, required: true },
@@ -293,7 +294,7 @@ onBeforeUnmount(() => {
               <el-table-column label="类型" width="88"><template #default="{ row }"><el-tag v-if="row.normalized?.assetType" size="small" effect="plain" round :type="tagTypeFromTone(assetTypeMeta(row.normalized.assetType).tone)">{{ assetTypeMeta(row.normalized.assetType).label }}</el-tag><span v-else>—</span></template></el-table-column>
               <el-table-column label="资产" min-width="160"><template #default="{ row }">{{ row.normalized?.assetName || '—' }}</template></el-table-column>
               <el-table-column label="制作分项" min-width="190"><template #default="{ row }">{{ row.normalized?.productionItem || '待补充' }}</template></el-table-column>
-              <el-table-column label="描述 / 备注" min-width="280"><template #default="{ row }"><div class="description-cell">{{ row.normalized?.itemDescription || row.normalized?.assetDescription || '—' }}<small>{{ row.normalized?.remark || '' }}</small></div></template></el-table-column>
+              <el-table-column label="资产描述 / 分项补充要求" min-width="280"><template #default="{ row }"><div class="description-cell"><AssetDescriptionCell :common-description="row.normalized?.assetDescription" :item-description="row.normalized?.itemDescription" is-item /><small v-if="row.normalized?.remark">备注：{{ row.normalized.remark }}</small></div></template></el-table-column>
               <el-table-column label="数据状态" min-width="260"><template #default="{ row }"><div class="issue-list"><el-tag v-if="row.canImport && !row.warnings.length" size="small" type="success" effect="plain" round>正常</el-tag><el-tag v-for="issue in visibleWarnings(row)" :key="`w-${issue.errorKey}-${issue.fieldName}`" size="small" type="warning" effect="plain" round>{{ issueText(issue) }}</el-tag><el-tag v-for="issue in visibleErrors(row)" :key="`e-${issue.errorKey}-${issue.fieldName}`" size="small" type="danger" effect="plain" round>{{ issueText(issue) }}</el-tag></div></template></el-table-column>
             </el-table>
           </div>

@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 
 import { createShot, getScenePage, getShotPage, updateShot } from '@/api/shot-grid/shots'
-import { secondsToDurationMs, shotErrorState } from '@/views/shot/shotPresentation'
+import { formatShotCode, secondsToDurationMs, shotErrorState } from '@/views/shot/shotPresentation'
 import ProjectModal from '@/views/project/components/ProjectModal.vue'
 
 const props = defineProps({
@@ -223,7 +223,7 @@ function isSceneSequenceConsistent(rows) {
     return (
       Number(shot?.sequencePosition) === expected &&
       Number(shot?.shotNo) === expected &&
-      shot?.shotCode === `S${String(expected).padStart(3, '0')}`
+      shot?.shotCode === formatShotCode(expected)
     )
   })
 }
@@ -306,7 +306,7 @@ onBeforeUnmount(() => {
 <template>
   <ProjectModal
     :title="isEdit ? `编辑 ${shot.shotCode}` : '新建镜头'"
-    :description="isEdit ? 'Sxxx 就是本场第几镜；顺序请回到列表拖拽调整。已有任务的负责人改派必须使用任务分配动作。' : '选择场内位置后，系统自动生成同值的 Sxxx；先创建未分配镜头，管理人员确认开工时再创建 NAS 镜头目录。'"
+    :description="isEdit ? '镜头号由本场顺序生成，例如第 1 镜为 0001；顺序请回到列表拖拽调整。已有任务的负责人改派必须使用任务分配动作。' : '选择场内位置后，系统自动生成至少四位的数字镜头号；先创建未分配镜头，管理人员确认开工时再创建 NAS 镜头目录。'"
     :busy="busy"
     wide
     @close="closeDialog"
@@ -315,14 +315,14 @@ onBeforeUnmount(() => {
       <div class="shot-form__grid">
         <el-form-item label="所属集" prop="episodeId" required><el-select v-model="form.episodeId" class="sg-select" placeholder="请选择集" :disabled="isEdit || busy"><el-option label="请选择集" value="" /><el-option v-for="episode in episodes" :key="episode.episodeId" :label="`${episode.episodeCode} ${episode.episodeName || ''}`" :value="String(episode.episodeId)" /></el-select></el-form-item>
         <el-form-item label="所属场次" prop="sceneId" required><el-select v-model="form.sceneId" class="sg-select" :placeholder="scenesLoading ? '正在加载…' : '请选择场次'" :disabled="isEdit || scenesLoading || busy" @change="changeScene"><el-option :label="scenesLoading ? '正在加载…' : '请选择场次'" value="" /><el-option v-for="scene in scenes" :key="scene.sceneId" :label="`${scene.sceneCode} ${scene.sceneName || ''}`" :value="String(scene.sceneId)" /></el-select></el-form-item>
-        <el-form-item label="场内镜头序号" prop="sequencePosition" :required="!isEdit"><el-select v-model="form.sequencePosition" class="sg-select" placeholder="请选择序号" :loading="positionsLoading" :disabled="isEdit || !form.sceneId || positionsLoading || Boolean(positionBlockedReason) || busy"><el-option v-for="option in sequenceOptions" :key="option.value" :label="`${option.label} · S${String(option.value).padStart(3, '0')}`" :value="option.value" /></el-select><small class="shot-form__field-hint">本场第 1 镜就是 S001，第 2 镜就是 S002；仅显示不会推动已冻结镜头的安全位置。</small></el-form-item>
+        <el-form-item label="场内镜头序号" prop="sequencePosition" :required="!isEdit"><el-select v-model="form.sequencePosition" class="sg-select" placeholder="请选择序号" :loading="positionsLoading" :disabled="isEdit || !form.sceneId || positionsLoading || Boolean(positionBlockedReason) || busy"><el-option v-for="option in sequenceOptions" :key="option.value" :label="`${option.label} · ${formatShotCode(option.value)}`" :value="option.value" /></el-select><small class="shot-form__field-hint">本场第 1 镜就是 0001，第 2 镜就是 0002；仅显示不会推动已冻结镜头的安全位置。</small></el-form-item>
         <el-form-item label="时长（秒）" prop="durationSeconds"><el-input-number v-model="form.durationSeconds" :min="0" :step="0.001" :precision="3" controls-position="right" :disabled="busy" /></el-form-item>
         <el-form-item label="景别" prop="shotSize"><el-input v-model="form.shotSize" maxlength="40" placeholder="如：近景" :disabled="busy" /></el-form-item>
         <el-form-item label="机位" prop="cameraPosition"><el-input v-model="form.cameraPosition" maxlength="100" :disabled="busy" /></el-form-item>
         <el-form-item label="镜头运动" prop="cameraMovement"><el-input v-model="form.cameraMovement" maxlength="100" :disabled="busy" /></el-form-item>
         <el-form-item label="焦段" prop="focalLength"><el-input v-model="form.focalLength" maxlength="50" placeholder="支持 35/25 等文本" :disabled="busy" /></el-form-item>
       </div>
-      <p class="shot-form__hint">Sxxx 只表达本场顺序，不承担数据库主键或 NAS 身份；镜头开始制作后顺序将被冻结。</p>
+      <p class="shot-form__hint">镜头号只表达本场顺序，不承担数据库主键或 NAS 身份；镜头开始制作后顺序将被冻结。</p>
       <el-alert v-if="positionBlockedReason" :title="positionBlockedReason" type="warning" show-icon :closable="false" />
       <el-alert v-if="!isEdit" title="创建后状态：未分配" description="创建镜头不会同时创建制作任务；请返回镜头列表或详情，通过“分配任务”完成委派。" type="info" show-icon :closable="false" />
       <el-form-item class="shot-form__full" label="制作内容描述" prop="description" required><el-input v-model="form.description" type="textarea" :rows="4" :disabled="busy" /></el-form-item>

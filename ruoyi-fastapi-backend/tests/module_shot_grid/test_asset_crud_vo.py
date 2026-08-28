@@ -28,6 +28,10 @@ def test_asset_status_counts_keep_all_seven_snake_case_keys_and_reject_negative_
         'lockVersion': 0,
         'updateTime': '2026-08-27T10:00:00',
         'itemStatusCounts': {'in_progress': 1, 'not_started': 1, 'preparing': 1},
+        'itemTimeGroups': [
+            {'taskStatus': 'in_progress', 'expectedEndTime': '2026-08-30T12:00:00', 'itemCount': 2},
+            {'taskStatus': None, 'expectedEndTime': None, 'itemCount': 1},
+        ],
     }
     model = ShotGridAssetListItemModel.model_validate(payload)
     assert model.model_dump(by_alias=True)['itemStatusCounts'] == {
@@ -41,6 +45,9 @@ def test_asset_status_counts_keep_all_seven_snake_case_keys_and_reject_negative_
     }
     with pytest.raises(ValidationError):
         ShotGridAssetListItemModel.model_validate({**payload, 'itemStatusCounts': {'not_started': -1}})
+    assert model.model_dump(mode='json', by_alias=True)['itemTimeGroups'] == payload['itemTimeGroups']
+    with pytest.raises(ValidationError):
+        ShotGridAssetListItemModel.model_validate({**payload, 'itemTimeGroups': [{'itemCount': 0}]})
 
 
 def _asset_create(**changes: object) -> ShotGridAssetCreateModel:

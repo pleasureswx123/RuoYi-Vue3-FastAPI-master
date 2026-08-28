@@ -43,7 +43,7 @@ def _payload(rows: list[ShotImportPreviewRowModel]) -> ImportPreviewTokenPayload
         importType='shot',
         previewedBy=3,
         fileSha256='a' * 64,
-        templateVersion='shot-v2',
+        templateVersion='shot-v3',
         expiresAt='2999-01-01T00:00:00',
         rows=[row.model_dump(mode='json', by_alias=True) for row in rows],
     )
@@ -231,7 +231,7 @@ async def test_successful_commit_audits_before_commit_then_deletes_preview_token
         import_type='shot',
         preview_token_hash=ImportPreviewStore.token_hash(token),
         file_sha256='a' * 64,
-        template_version='shot-v2',
+        template_version='shot-v3',
         preview_expires_time=payload.expires_at,
         previewed_by=3,
     )

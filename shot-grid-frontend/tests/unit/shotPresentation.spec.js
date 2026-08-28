@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   directoryStatusMeta,
+  formatShotCode,
   formatShotDuration,
   groupPreviewRows,
   secondsToDurationMs,
@@ -14,6 +15,10 @@ import {
 } from '@/views/shot/shotPresentation'
 
 describe('镜头展示规则', () => {
+  it.each([[1, '0001'], [12, '0012'], [100, '0100'], [1000, '1000'], [10000, '10000']])('镜头号 %i 补齐四位且不截断', (number, code) => {
+    expect(formatShotCode(number)).toBe(code)
+  })
+
   it('集中映射任务聚合状态和时长', () => {
     expect(shotStatusMeta('reviewing')).toMatchObject({ label: '待审核', tone: 'purple' })
     expect(shotStatusMeta('unassigned')).toMatchObject({ label: '待分配', tone: 'warning' })

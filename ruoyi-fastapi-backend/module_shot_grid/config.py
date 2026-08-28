@@ -3,7 +3,7 @@ from pathlib import PurePosixPath, PureWindowsPath
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-SHOT_TEMPLATE_VERSION = 'shot-v2'
+SHOT_TEMPLATE_VERSION = 'shot-v3'
 ASSET_TEMPLATE_VERSION = 'asset-v2'
 
 

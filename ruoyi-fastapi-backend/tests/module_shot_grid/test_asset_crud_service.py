@@ -1,3 +1,4 @@
+from datetime import datetime
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
@@ -32,6 +33,19 @@ def test_preparing_item_and_mixed_asset_status_keep_directory_preparation_visibl
     assert ShotGridAssetCrudService._item_status(task, False) == 'preparing'
     assert ShotGridAssetCrudService._aggregate_asset_status(['unassigned', 'not_started', 'preparing']) == 'preparing'
     assert ShotGridAssetCrudService._aggregate_asset_status(['preparing', 'in_progress']) == 'in_progress'
+
+
+def test_item_time_groups_compress_equal_task_inputs_without_changing_time_or_status() -> None:
+    end = datetime(2026, 8, 30, 12)
+    groups = ShotGridAssetCrudService._item_time_groups(
+        [('in_progress', end), (None, None), ('in_progress', end), ('completed', end), (None, None)]
+    )
+    assert [group.model_dump(by_alias=True) for group in groups] == [
+        {'taskStatus': 'in_progress', 'expectedEndTime': end, 'itemCount': 2},
+        {'taskStatus': None, 'expectedEndTime': None, 'itemCount': 2},
+        {'taskStatus': 'completed', 'expectedEndTime': end, 'itemCount': 1},
+    ]
+    assert ShotGridAssetCrudService._item_time_groups([]) == []
 
 
 @pytest.mark.parametrize(
@@ -218,6 +232,10 @@ def test_asset_write_service_revalidates_project_role_and_scope() -> None:
 async def test_asset_update_changes_only_non_identity_metadata(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(
+        'module_shot_grid.service.asset_crud_service.ShotGridAssetCrudDao.has_started_tasks_for_asset',
+        AsyncMock(return_value=False),
+    )
     asset = SimpleNamespace(
         asset_id=ASSET_ID,
         project_id=PROJECT_ID,

@@ -12,13 +12,16 @@ from module_shot_grid.service.final_delivery_path_adapter import (
 from module_shot_grid.service.version_publish_path_adapter import VersionPublishPathAdapterError
 
 
-def _prepare_context(tmp_path: Path) -> tuple[FinalDeliveryPathContext, Path, bytes]:
+def _prepare_context(
+    tmp_path: Path,
+    shot_directory: str = '001_S001',
+    business_name: str = 'TSXK_EP001_000_S001_QZF_V001_02_1787731393547.mp4',
+) -> tuple[FinalDeliveryPathContext, Path, bytes]:
     content = b'approved-candidate-content'
     nas_root = tmp_path / 'nas'
     project_path = nas_root / 'AI影视短片' / '罗刹夫人'
-    source_directory = project_path / 'VIDEO' / 'EP01' / '001_S001'
+    source_directory = project_path / 'VIDEO' / 'EP01' / shot_directory
     source_directory.mkdir(parents=True)
-    business_name = 'TSXK_EP001_000_S001_QZF_V001_02_1787731393547.mp4'
     (source_directory / business_name).write_bytes(content)
     context = FinalDeliveryPathContext(
         final_delivery_id=19,
@@ -32,9 +35,9 @@ def _prepare_context(tmp_path: Path) -> tuple[FinalDeliveryPathContext, Path, by
         approved_by=7,
         approved_time_iso='2026-08-26T18:30:00',
         business_file_name=business_name,
-        source_nas_relative_path=f'VIDEO\\EP01\\001_S001\\{business_name}',
-        final_nas_relative_path=f'VIDEO\\EP01\\001_S001\\FINAL\\{business_name}',
-        manifest_nas_relative_path='VIDEO\\EP01\\001_S001\\FINAL\\FINAL.json',
+        source_nas_relative_path=f'VIDEO\\EP01\\{shot_directory}\\{business_name}',
+        final_nas_relative_path=f'VIDEO\\EP01\\{shot_directory}\\FINAL\\{business_name}',
+        manifest_nas_relative_path=f'VIDEO\\EP01\\{shot_directory}\\FINAL\\FINAL.json',
         source_sha256=hashlib.sha256(content).hexdigest(),
         source_file_size=len(content),
         storage_status='ready',
@@ -49,8 +52,17 @@ def _prepare_context(tmp_path: Path) -> tuple[FinalDeliveryPathContext, Path, by
 
 
 @pytest.mark.asyncio
-async def test_final_delivery_publishes_file_and_manifest_without_changing_candidate(tmp_path: Path) -> None:
-    context, project_path, content = _prepare_context(tmp_path)
+@pytest.mark.parametrize(
+    ('shot_directory', 'business_name'),
+    [
+        ('001_S001', 'TSXK_EP001_000_S001_QZF_V001_02_1787731393547.mp4'),
+        ('000_0001', 'TSXK_EP001_000_0001_QZF_V001_02.mp4'),
+    ],
+)
+async def test_final_delivery_publishes_file_and_manifest_without_changing_candidate(
+    tmp_path: Path, shot_directory: str, business_name: str
+) -> None:
+    context, project_path, content = _prepare_context(tmp_path, shot_directory, business_name)
     adapter = ShotGridFinalDeliveryPathAdapter(allow_local_root=True)
     source = project_path / Path(context.source_nas_relative_path.replace('\\', '/'))
     target = project_path / Path(context.final_nas_relative_path.replace('\\', '/'))

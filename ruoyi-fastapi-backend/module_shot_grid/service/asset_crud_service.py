@@ -1,4 +1,5 @@
-from collections import defaultdict
+from collections import Counter, defaultdict
+from collections.abc import Iterable
 from datetime import datetime
 from typing import Any
 
@@ -26,6 +27,7 @@ from module_shot_grid.entity.vo.asset_crud_vo import (
     ShotGridAssetItemDeleteModel,
     ShotGridAssetItemDeleteResultModel,
     ShotGridAssetItemModel,
+    ShotGridAssetItemTimeGroupModel,
     ShotGridAssetItemUpdateModel,
     ShotGridAssetListItemModel,
     ShotGridAssetListQueryModel,
@@ -74,7 +76,11 @@ class ShotGridAssetCrudService:
             project_id,
             asset_ids,
         )
-        task_refs = await ShotGridAssetCrudDao.get_active_asset_task_refs(db, project_id, asset_ids)
+        item_refs = await ShotGridAssetCrudDao.get_active_asset_item_refs(db, project_id, asset_ids)
+        task_refs = [row for row in item_refs if row['task_id'] is not None]
+        time_inputs: dict[int, list[tuple[str | None, datetime | None]]] = defaultdict(list)
+        for item in item_refs:
+            time_inputs[int(item['asset_id'])].append((item['task_status'], item['expected_end_time']))
         version_rows = await ShotGridAssetCrudDao.get_versions_for_tasks(
             db,
             [int(row['task_id']) for row in task_refs],
@@ -87,6 +93,7 @@ class ShotGridAssetCrudService:
             row['assignee_user_ids'] = assignees.get(asset_id, [])
             row['thumbnail'] = thumbnails.get(asset_id)
             row['item_status_counts'] = {status: int(row[f'{status}_count']) for status in ASSET_ITEM_STATUSES}
+            row['item_time_groups'] = cls._item_time_groups(time_inputs[asset_id])
             row['allowed_actions'] = cls._asset_allowed_actions(
                 current_user,
                 access,
@@ -246,9 +253,20 @@ class ShotGridAssetCrudService:
             asset = await cls._lock_active_asset(db, project_id, asset_id)
             cls._require_lock_version(asset.lock_version, command.lock_version)
 
+            # 与开工共用项目协调锁；开工只递增任务锁号，不能仅依赖资产乐观锁。
+            description_locked = await ShotGridAssetCrudDao.has_started_tasks_for_asset(db, project_id, asset_id)
+            stored_description = (asset.description or '').strip() or None
+            if description_locked and command.description != stored_description:
+                raise shot_grid_error(
+                    409,
+                    'SG_ASSET_DESCRIPTION_LOCKED',
+                    '已有制作分项开工，资产描述已锁定；仍可修改排序和内部备注。',
+                )
+
             now = datetime.now().replace(microsecond=0)
             new_lock_version = asset.lock_version + 1
-            asset.description = command.description
+            if not description_locked:
+                asset.description = command.description
             asset.sort_order = command.sort_order
             asset.remark = command.remark
             asset.update_by = actor_name
@@ -736,11 +754,22 @@ class ShotGridAssetCrudService:
             assetType=asset.asset_type,
             assetName=asset.asset_name,
             description=asset.description,
+            descriptionLocked=await ShotGridAssetCrudDao.has_started_tasks_for_asset(
+                db, asset.project_id, asset.asset_id
+            ),
             sortOrder=asset.sort_order,
             lifecycleStatus=asset.lifecycle_status,
             assetStatus=cls._aggregate_asset_status(active_statuses),
             itemCount=len(active_statuses),
             itemStatusCounts={status: active_statuses.count(status) for status in ASSET_ITEM_STATUSES},
+            itemTimeGroups=cls._item_time_groups(
+                (
+                    item.task.task_status if item.task else None,
+                    item.task.expected_end_time if item.task else None,
+                )
+                for item in items
+                if item.lifecycle_status == 'active'
+            ),
             usageShotCount=usage_count,
             assigneeUserIds=assignees,
             thumbnail=cls._representative_thumbnail(items),
@@ -873,10 +902,19 @@ class ShotGridAssetCrudService:
             url=f'/shot-grid/versions/{version_id}/files/{file_id}/download',
         )
 
+    @staticmethod
+    def _item_time_groups(
+        time_inputs: Iterable[tuple[str | None, datetime | None]],
+    ) -> list[ShotGridAssetItemTimeGroupModel]:
+        return [
+            ShotGridAssetItemTimeGroupModel(taskStatus=status, expectedEndTime=end, itemCount=count)
+            for (status, end), count in Counter(time_inputs).items()
+        ]
+
     @classmethod
     def _representative_thumbnail_map(
         cls,
-        task_refs: list[dict[str, int]],
+        task_refs: list[dict[str, Any]],
         version_rows: list[dict[str, Any]],
     ) -> dict[int, ShotGridAssetThumbnailModel]:
         versions_by_task: dict[int, list[dict[str, Any]]] = defaultdict(list)

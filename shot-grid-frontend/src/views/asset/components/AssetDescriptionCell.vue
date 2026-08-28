@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId, watch } fro
 
 const props = defineProps({
   commonDescription: { type: String, default: '' },
+  showCommonDescription: { type: Boolean, default: true },
   itemDescription: { type: String, default: '' },
   isItem: { type: Boolean, default: false }
 })
@@ -14,12 +15,12 @@ const contentId = useId()
 let observer
 
 const parts = computed(() => {
-  const common = String(props.commonDescription || '').trim()
+  const common = props.showCommonDescription ? String(props.commonDescription || '').trim() : ''
   const item = String(props.itemDescription || '').trim()
-  const result = common ? [{ label: props.isItem ? '共有说明' : '', text: common }] : []
-  // 只在展示时去掉完全相同的重复内容，不推断共有说明，也不改写历史字段。
+  const result = common ? [{ label: props.isItem ? '资产描述' : '', text: common }] : []
+  // 只对当前显示的内容去重；隐藏资产描述时仍保留分项补充要求，不改写数据。
   if (props.isItem && item && item !== common) {
-    result.push({ label: common ? '分项补充' : '分项说明', text: item })
+    result.push({ label: '分项补充要求', text: item })
   }
   return result
 })
@@ -57,7 +58,7 @@ onBeforeUnmount(() => observer?.disconnect())
         <strong v-if="part.label" class="asset-description-label">{{ part.label }}：</strong>{{ part.text }}
       </template>
     </el-text>
-    <el-text v-else type="info" size="small">{{ isItem ? '暂无分项说明' : '共有说明未填写' }}</el-text>
+    <el-text v-else type="info" size="small">{{ isItem ? (showCommonDescription ? '暂无制作说明' : '—') : '暂无资产描述' }}</el-text>
     <el-button v-if="overflowing || expanded" link type="primary" size="small" :aria-controls="contentId" :aria-expanded="expanded" @click="expanded = !expanded">
       {{ expanded ? '收起说明' : '展开说明' }}
     </el-button>

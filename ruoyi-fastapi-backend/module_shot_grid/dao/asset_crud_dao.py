@@ -371,13 +371,13 @@ class ShotGridAssetCrudDao:
         return [dict(row) for row in rows]
 
     @classmethod
-    async def get_active_asset_task_refs(
+    async def get_active_asset_item_refs(
         cls,
         db: AsyncSession,
         project_id: int,
         asset_ids: list[int],
-    ) -> list[dict[str, int]]:
-        """批量返回资产活动制作分项与其唯一任务，用于代表缩略图聚合。"""
+    ) -> list[dict[str, Any]]:
+        """批量返回活动分项及可选任务，用于缩略图和时间提醒汇总。"""
 
         if not asset_ids:
             return []
@@ -388,10 +388,14 @@ class ShotGridAssetCrudDao:
                     ShotGridAssetItem.asset_item_id,
                     ShotGridAssetItem.sort_order,
                     ShotGridTask.task_id,
+                    ShotGridTask.task_status,
+                    ShotGridTask.expected_end_time,
                 )
-                .join(
+                .outerjoin(
                     ShotGridTask,
-                    (ShotGridTask.asset_item_id == ShotGridAssetItem.asset_item_id) & (ShotGridTask.del_flag == '0'),
+                    (ShotGridTask.asset_item_id == ShotGridAssetItem.asset_item_id)
+                    & (ShotGridTask.project_id == ShotGridAssetItem.project_id)
+                    & (ShotGridTask.del_flag == '0'),
                 )
                 .where(
                     ShotGridAssetItem.project_id == project_id,
@@ -495,6 +499,26 @@ class ShotGridAssetCrudDao:
             )
         ).scalars()
         return {int(asset_id) for asset_id in rows}
+
+    @classmethod
+    async def has_started_tasks_for_asset(cls, db: AsyncSession, project_id: int, asset_id: int) -> bool:
+        """检查共有说明是否已被开工任务使用，归档分项仍保留冻结约束。"""
+        statement = select(
+            exists(
+                select(1)
+                .select_from(ShotGridAssetItem)
+                .join(ShotGridTask, ShotGridTask.asset_item_id == ShotGridAssetItem.asset_item_id)
+                .where(
+                    ShotGridAssetItem.project_id == project_id,
+                    ShotGridAssetItem.asset_id == asset_id,
+                    ShotGridAssetItem.del_flag == '0',
+                    ShotGridTask.project_id == project_id,
+                    ShotGridTask.del_flag == '0',
+                    ShotGridTask.task_status != 'not_started',
+                )
+            )
+        )
+        return bool((await db.execute(statement)).scalar_one())
 
     @classmethod
     async def get_assets_with_delete_blockers(

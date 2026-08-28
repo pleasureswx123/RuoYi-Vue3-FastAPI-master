@@ -8,6 +8,7 @@ from module_shot_grid.entity.vo.search_vo import (
     ShotGridSearchQueryModel,
     ShotGridSearchResultModel,
 )
+from module_shot_grid.shot_number import format_shot_code
 
 
 class ShotGridSearchService:
@@ -67,7 +68,7 @@ class ShotGridSearchService:
                 projectId=row['project_id'],
                 projectCode=row['project_code'],
                 projectName=row['project_name'],
-                title=f'EP{row["episode_no"]:03d}-{row["scene_no"]:03d}-S{row["shot_no"]:03d}',
+                title=f'EP{row["episode_no"]:03d}-{row["scene_no"]:03d}-{format_shot_code(row["shot_no"])}',
                 subtitle=row['scene_name'] or row['description'],
                 status=row['lifecycle_status'],
                 targetPath=f'/projects/{row["project_id"]}/shots/{row["shot_id"]}',

@@ -32,7 +32,7 @@ class ShotImportNormalizedRowModel(ShotGridApiModel):
     scene_name: str | None = Field(default=None, max_length=200)
     sort_order: int = Field(ge=0, le=SQL_INTEGER_MAX)
     shot_no: int = Field(gt=0, le=SQL_INTEGER_MAX)
-    shot_code: str = Field(pattern=r'^S\d{3,}$')
+    shot_code: str = Field(pattern=r'^[0-9]{4,}$')
     duration_ms: int = Field(ge=0, le=SQL_BIGINT_MAX)
     description: str = Field(min_length=1)
     shot_size: str | None = Field(default=None, max_length=40)

@@ -45,6 +45,10 @@ export function shotAssigneeOptionLabel(member) {
   return userName || nickName || `用户 ${member.userId}`
 }
 
+export function formatShotCode(shotNo) {
+  return String(shotNo).padStart(4, '0')
+}
+
 export function formatShotDuration(durationMs) {
   const value = Number(durationMs)
   if (!Number.isFinite(value) || value < 0) return '—'

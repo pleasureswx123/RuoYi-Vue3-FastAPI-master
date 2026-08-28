@@ -119,6 +119,7 @@ function assetDetail(targetProjectId = 8, targetAssetId = 31, name = '动力舱�
     projectId: targetProjectId,
     assetId: targetAssetId,
     assetName: name,
+    descriptionLocked: false,
     storageDirName: '动力舱室内',
     remark: '保持冷蓝色调',
     items: [{ ...assetItem, projectId: targetProjectId, assetId: targetAssetId }],
@@ -189,6 +190,8 @@ function mountAssetDialog(component, props) {
         ElButton,
         ElCard,
         ElDatePicker,
+        ElDescriptions,
+        ElDescriptionsItem,
         ElDialog,
         ElForm,
         ElFormItem,
@@ -222,9 +225,15 @@ describe('资产管理真实列表页', () => {
     getAssetItems.mockReset().mockResolvedValue({ data: [assetItem] })
   })
 
-  it('资产树表按分项显示双时间与独立时间状态，父行不冒用子项时间', async () => {
+  it('资产树表收起即汇总时间状态，展开仍按分项显示双时间', async () => {
     vi.useFakeTimers({ toFake: ['Date'] })
     vi.setSystemTime(new Date('2026-08-28T12:00:00'))
+    getAssetPage.mockResolvedValue({ rows: [{ ...assetRow, itemCount: 4, itemTimeGroups: [
+      { taskStatus: 'in_progress', expectedEndTime: '2026-08-30T18:00:00', itemCount: 1 },
+      { taskStatus: 'in_progress', expectedEndTime: '2026-08-29T12:00:00', itemCount: 1 },
+      { taskStatus: 'in_progress', expectedEndTime: '2026-08-28T12:00:00', itemCount: 1 },
+      { taskStatus: null, expectedEndTime: null, itemCount: 1 }
+    ] }], total: 1, hasNext: false })
     getAssetItems.mockResolvedValue({ data: [
       { ...assetItem, task: { taskStatus: 'in_progress', expectedStartTime: '2026-08-28T09:30:00', expectedEndTime: '2026-08-30T18:00:00' } },
       { ...assetItem, assetItemId: 42, task: { taskStatus: 'in_progress', expectedStartTime: '2026-08-28T10:00:00', expectedEndTime: '2026-08-29T12:00:00' } },
@@ -238,7 +247,8 @@ describe('资产管理真实列表页', () => {
       const parent = wrapper.find('.el-table__row--level-0')
       expect(parent.find('.task-expected-start').text()).toBe('—')
       expect(parent.find('.task-expected-end').text()).toBe('—')
-      expect(parent.find('.task-time-state').text()).toBe('—')
+      const summaryLabels = () => wrapper.findAll('.el-table__row--level-0 .task-time-state .el-tag').map(tag => tag.text())
+      expect(summaryLabels()).toEqual(['已延期 1', '临近结束 1', '正常 1', '未设置时间 1'])
       await wrapper.find('.el-table__expand-icon').trigger('click')
       await flushPromises()
       const rows = wrapper.findAll('.el-table__row--level-1')
@@ -248,10 +258,43 @@ describe('资产管理真实列表页', () => {
       expect(rows.map(row => row.find('.task-time-state').text())).toEqual(['正常', '临近结束', '已延期', '未设置时间'])
       expect(rows[3].find('.task-expected-start').text()).toBe('—')
       expect(rows[3].find('.task-expected-end').text()).toBe('—')
+      expect(summaryLabels()).toEqual(['已延期 1', '临近结束 1', '正常 1', '未设置时间 1'])
+      await wrapper.find('.el-table__expand-icon').trigger('click')
+      expect(summaryLabels()).toEqual(['已延期 1', '临近结束 1', '正常 1', '未设置时间 1'])
     } finally { wrapper?.unmount(); vi.useRealTimers() }
   })
 
-  it('树表说明在每个子项中组合共有内容与各自补充', async () => {
+  it('父资产时间汇总随本地时钟和刷新更新，无分项显示横线且不预取子项', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] })
+    vi.setSystemTime(new Date('2026-08-28T11:59:45'))
+    const timedAsset = { ...assetRow, itemCount: 2, itemTimeGroups: [
+      { taskStatus: 'in_progress', expectedEndTime: '2026-08-29T12:00:00', itemCount: 2 }
+    ] }
+    const emptyAsset = { ...assetRow, assetId: 32, assetName: '无分项资产', itemCount: 0, itemTimeGroups: [] }
+    getAssetPage.mockResolvedValue({ rows: [timedAsset, emptyAsset], total: 2, hasNext: false })
+    let wrapper
+    try {
+      ;({ wrapper } = await mountList(['shotgrid:asset:list', 'shotgrid:asset:query']))
+      const cells = () => wrapper.findAll('.asset-data-table .el-table__row .task-time-state').map(cell => cell.text())
+      expect(cells()).toEqual(['正常 2', '—'])
+      await vi.advanceTimersByTimeAsync(30000)
+      expect(cells()).toEqual(['临近结束 2', '—'])
+      vi.setSystemTime(new Date('2026-08-29T12:00:00'))
+      document.dispatchEvent(new Event('visibilitychange'))
+      await flushPromises()
+      expect(cells()).toEqual(['已延期 2', '—'])
+      getAssetPage.mockResolvedValue({ rows: [{ ...timedAsset, itemTimeGroups: [
+        { taskStatus: 'completed', expectedEndTime: '2026-08-29T12:00:00', itemCount: 2 }
+      ] }, emptyAsset], total: 2, hasNext: false })
+      await wrapper.findAll('button').find(button => buttonLabel(button) === '刷新').trigger('click')
+      await flushPromises()
+      expect(cells()).toEqual(['已完成 2', '—'])
+      expect(getAssetItems).not.toHaveBeenCalled()
+      expect(startTask).not.toHaveBeenCalled()
+    } finally { wrapper?.unmount(); vi.useRealTimers() }
+  })
+
+  it('树表父行保留资产描述，分项行只显示各自补充要求', async () => {
     getAssetItems.mockResolvedValue({ data: [assetItem, { ...assetItem, assetItemId: 42, productionItem: '反打视角', description: '反打补充要求' }] })
     const { wrapper } = await mountList(['shotgrid:asset:list', 'shotgrid:asset:query'])
     try {
@@ -259,9 +302,10 @@ describe('资产管理真实列表页', () => {
       await flushPromises()
       const descriptions = wrapper.findAll('.el-table__row--level-1 .asset-description')
       expect(descriptions).toHaveLength(2)
-      for (const description of descriptions) expect(description.text()).toContain(`共有说明：${assetRow.description}`)
-      expect(descriptions[0].text()).toContain(`分项补充：${assetItem.description}`)
-      expect(descriptions[1].text()).toContain('分项补充：反打补充要求')
+      expect(wrapper.find('.el-table__row--level-0 .asset-description').text()).toContain(assetRow.description)
+      for (const description of descriptions) expect(description.text()).not.toContain(assetRow.description)
+      expect(descriptions[0].text()).toContain(`分项补充要求：${assetItem.description}`)
+      expect(descriptions[1].text()).toContain('分项补充要求：反打补充要求')
     } finally { wrapper.unmount() }
   })
 
@@ -391,21 +435,21 @@ describe('资产管理真实列表页', () => {
   })
 
   it.each([
-    { common: '同一段说明', item: '同一段说明', expected: '共有说明：同一段说明', absent: '分项补充' },
-    { common: '资产共有说明', item: '', expected: '共有说明：资产共有说明', absent: '分项补充' },
-    { common: '', item: '历史分项说明', expected: '分项说明：历史分项说明', absent: '共有说明：历史分项说明' }
-  ])('树表说明兼容相同、空白与旧数据：$common / $item', async ({ common, item, expected, absent }) => {
+    { common: '同一段说明', item: '同一段说明', expected: '分项补充要求：同一段说明' },
+    { common: '资产描述内容', item: '', expected: '—' },
+    { common: '', item: '分项独有要求', expected: '分项补充要求：分项独有要求' },
+    { common: '', item: '  ', expected: '—' }
+  ])('树表分项说明仅展示补充要求，空值显示横线：$common / $item', async ({ common, item, expected }) => {
     getAssetPage.mockResolvedValue({ rows: [{ ...assetRow, description: common }], total: 1 })
     getAssetItems.mockResolvedValue({ data: [{ ...assetItem, description: item }] })
     const { wrapper } = await mountList(['shotgrid:asset:list', 'shotgrid:asset:query'])
     try {
       await wrapper.find('.el-table__expand-icon').trigger('click')
       await flushPromises()
-      const description = wrapper.find('.el-table__row--level-1 .asset-description').text()
-      expect(description).toContain(expected)
-      expect(description).not.toContain(absent)
-      if (common === item) expect(description.split(common)).toHaveLength(2)
-      if (!common) expect(wrapper.find('.el-table__body-wrapper tr .asset-description').text()).toContain('共有说明未填写')
+      const cell = wrapper.find('.el-table__row--level-1 .asset-description')
+      expect(cell.text()).toBe(expected)
+      if (expected === '—') expect(cell.find('button').exists()).toBe(false)
+      if (!common) expect(wrapper.find('.el-table__body-wrapper tr .asset-description').text()).toContain('暂无资产描述')
     } finally { wrapper.unmount() }
   })
 
@@ -839,7 +883,29 @@ describe('资产管理真实列表页', () => {
     viewSwitch.vm.$emit('update:modelValue', 'type')
     await flushPromises()
     expect(wrapper.find('.type-board').text()).toContain('场景')
+    expect(wrapper.find('.type-board__asset').findAllComponents(ElTag).map(tag => tag.text())).toEqual(['制作中'])
     wrapper.unmount()
+  })
+
+  it.each([
+    { status: 'unassigned', counts: { unassigned: 6 }, labels: ['待分配 6'] },
+    { status: 'in_progress', counts: { not_started: 4, in_progress: 2 }, labels: ['待开工 4', '制作中 2'] }
+  ])('类型看板按分项计数展示状态，不重复聚合状态：$status', async ({ status, counts, labels }) => {
+    getAssetPage.mockResolvedValue({ rows: [{ ...assetRow, assetStatus: status, itemCount: 6, itemStatusCounts: counts }], total: 1 })
+    const { wrapper, router } = await mountList()
+    try {
+      wrapper.findComponent(ElRadioGroup).vm.$emit('update:modelValue', 'type')
+      await flushPromises()
+      const card = wrapper.find('.type-board__asset')
+      expect(card.text()).toContain(assetRow.assetName)
+      expect(card.text()).toContain('6 个制作分项')
+      expect(card.findAllComponents(ElTag).map(tag => tag.text())).toEqual(labels)
+      await card.trigger('click')
+      await flushPromises()
+      expect(wrapper.findComponent(AssetDetailView).exists()).toBe(true)
+      expect(router.currentRoute.value.path).toBe('/assets')
+      expect(startTask).not.toHaveBeenCalled()
+    } finally { wrapper.unmount() }
   })
 
   it('资产下拉筛选 change 后立即查询第一页', async () => {
@@ -895,6 +961,9 @@ describe('资产管理真实列表页', () => {
     expect(detail.exists()).toBe(true)
     expect(detail.props()).toMatchObject({ embedded: true, targetProjectId: 8, targetAssetId: 31 })
     expect(detail.text()).toContain('动力舱室内')
+    const itemDescription = detail.find('.item-card .asset-description').text()
+    expect(itemDescription).toContain(`资产描述：${assetRow.description}`)
+    expect(itemDescription).toContain(`分项补充要求：${assetItem.description}`)
     expect(router.currentRoute.value.path).toBe('/assets')
     wrapper.unmount()
   })
@@ -1425,6 +1494,13 @@ describe('资产详情动作镜像与路由隔离', () => {
     })
 
     const { wrapper } = await mountDetail()
+    const hero = wrapper.find('.asset-hero')
+    const header = hero.find('.el-card__header')
+    expect(header.exists()).toBe(true)
+    expect(header.text()).toContain('动力舱室内')
+    expect(header.find('.asset-hero__actions').exists()).toBe(true)
+    expect(header.text()).not.toContain(assetRow.description)
+    expect(hero.find('.asset-hero__main').text()).toContain(assetRow.description)
     const gallery = wrapper.find('.asset-hero__gallery')
     const thumbnails = gallery.findAllComponents(ProtectedAssetThumbnail)
     expect(thumbnails).toHaveLength(2)
@@ -1672,6 +1748,82 @@ describe('资产表单统一使用 Element Plus 校验链路', () => {
     wrapper.unmount()
   })
 
+  it('开工后共有说明只读，仍能保存排序和内部备注', async () => {
+    updateAsset.mockReset().mockResolvedValue({ data: assetDetail() })
+    const wrapper = mountAssetDialog(AssetFormDialog, {
+      projectId: 8, operationGeneration: 1, asset: { ...assetDetail(), descriptionLocked: true }
+    })
+    const [description, remark] = wrapper.findAll('textarea')
+    expect(description.element.readOnly).toBe(true)
+    expect(remark.element.readOnly).toBe(false)
+    expect(wrapper.text()).toContain('已有制作分项开工，资产描述已锁定')
+    const sort = wrapper.findComponent(ElInputNumber).get('input')
+    await sort.setValue('18')
+    await sort.trigger('change')
+    await remark.setValue('调整内部协作备注')
+    const save = wrapper.findAllComponents(ElButton).find(button => buttonLabel(button) === '保存资产')
+    await save.trigger('click')
+    await flushPromises()
+    expect(updateAsset).toHaveBeenCalledWith(8, 31, {
+      description: assetRow.description, sortOrder: 18, remark: '调整内部协作备注', lockVersion: 0
+    })
+    expect(wrapper.emitted('saved')).toHaveLength(1)
+    wrapper.unmount()
+  })
+
+  it('未开工共有说明可编辑，保存期间阻止重复提交', async () => {
+    let finishUpdate
+    updateAsset.mockReset().mockImplementation(() => new Promise(resolve => { finishUpdate = resolve }))
+    const wrapper = mountAssetDialog(AssetFormDialog, {
+      projectId: 8, operationGeneration: 1, asset: assetDetail()
+    })
+    const description = wrapper.findAll('textarea')[0]
+    expect(description.element.readOnly).toBe(false)
+    await description.setValue('修改共有制作要求')
+    const save = wrapper.findAllComponents(ElButton).find(button => buttonLabel(button) === '保存资产')
+    await Promise.all([save.trigger('click'), save.trigger('click')])
+    await flushPromises()
+    expect(updateAsset).toHaveBeenCalledTimes(1)
+    expect(updateAsset).toHaveBeenCalledWith(8, 31, expect.objectContaining({ description: '修改共有制作要求' }))
+    expect(save.props('loading')).toBe(true)
+    expect(wrapper.findAllComponents(ElButton).find(button => buttonLabel(button) === '取消').props('disabled')).toBe(true)
+    wrapper.unmount()
+    finishUpdate({ data: assetDetail() })
+    await flushPromises()
+    expect(wrapper.emitted('saved')).toBeUndefined()
+  })
+
+  it('旧弹窗遇到共有说明锁定时恢复原说明并保留其他草稿供重试', async () => {
+    updateAsset.mockReset().mockRejectedValueOnce({
+      httpStatus: 409, errorKey: 'SG_ASSET_DESCRIPTION_LOCKED', message: '共有说明已锁定，仍可修改排序和备注'
+    }).mockResolvedValue({ data: assetDetail() })
+    const wrapper = mountAssetDialog(AssetFormDialog, {
+      projectId: 8, operationGeneration: 1, asset: assetDetail()
+    })
+    const [description, remark] = wrapper.findAll('textarea')
+    await description.setValue('开工前打开的草稿')
+    await remark.setValue('保留这份内部备注')
+    const sort = wrapper.findComponent(ElInputNumber).get('input')
+    await sort.setValue('18')
+    await sort.trigger('change')
+    const save = wrapper.findAllComponents(ElButton).find(button => buttonLabel(button) === '保存资产')
+    await save.trigger('click')
+    await flushPromises()
+    expect(wrapper.emitted('saved')).toBeUndefined()
+    expect(description.element.readOnly).toBe(true)
+    expect(description.element.value).toBe(assetRow.description)
+    expect(remark.element.value).toBe('保留这份内部备注')
+    expect(sort.element.value).toBe('18')
+    expect(wrapper.text()).toContain('共有说明已锁定，仍可修改排序和备注')
+    await save.trigger('click')
+    await flushPromises()
+    expect(updateAsset).toHaveBeenLastCalledWith(8, 31, {
+      description: assetRow.description, sortOrder: 18, remark: '保留这份内部备注', lockVersion: 0
+    })
+    expect(wrapper.emitted('saved')).toHaveLength(1)
+    wrapper.unmount()
+  })
+
   it('资产创建表单在名称校验通过后由点击按钮创建资产', async () => {
     const wrapper = mountAssetDialog(AssetFormDialog, {
       projectId: 8,
@@ -1711,6 +1863,8 @@ describe('资产表单统一使用 Element Plus 校验链路', () => {
     expect(form.props('model')).not.toHaveProperty('assigneeUserId')
     expect(form.props('model')).not.toHaveProperty('taskDescription')
     expect(wrapper.text()).toContain('保存后状态：未分配')
+    expect(wrapper.text()).toContain(assetRow.description)
+    expect(form.findAllComponents(ElFormItem).find(item => item.props('prop') === 'description').props('label')).toBe('分项补充要求')
 
     form.props('model').productionItem = '恐怖气氛主视角'
     form.props('model').sortOrder = 2

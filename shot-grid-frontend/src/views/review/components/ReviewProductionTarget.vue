@@ -43,8 +43,8 @@ const assetTypeLabel = computed(() => ({
       <el-descriptions-item label="资产名称" :span="2">{{ asset.assetName || '—' }}</el-descriptions-item>
       <el-descriptions-item label="资产类型">{{ assetTypeLabel }}</el-descriptions-item>
       <el-descriptions-item label="制作分项">{{ asset.productionItem || '—' }}</el-descriptions-item>
-      <el-descriptions-item label="分项说明" :span="4">{{ asset.itemDescription || '—' }}</el-descriptions-item>
-      <el-descriptions-item label="资产说明" :span="4">{{ asset.assetDescription || '—' }}</el-descriptions-item>
+      <el-descriptions-item label="资产描述" :span="4">{{ asset.assetDescription || '—' }}</el-descriptions-item>
+      <el-descriptions-item label="分项补充要求" :span="4">{{ asset.itemDescription || '—' }}</el-descriptions-item>
       <el-descriptions-item label="分项备注" :span="2">{{ asset.itemRemark || '—' }}</el-descriptions-item>
       <el-descriptions-item label="资产备注" :span="2">{{ asset.assetRemark || '—' }}</el-descriptions-item>
     </el-descriptions>
