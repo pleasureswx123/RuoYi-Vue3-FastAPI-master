@@ -2305,6 +2305,8 @@ CREATE TABLE sg_task (
 	task_status VARCHAR(20) DEFAULT 'not_started' NOT NULL,
 	priority VARCHAR(10) DEFAULT 'normal' NOT NULL,
 	due_date DATE,
+	expected_start_time TIMESTAMP(0) WITHOUT TIME ZONE,
+	expected_end_time TIMESTAMP(0) WITHOUT TIME ZONE,
 	requirements TEXT,
 	create_by VARCHAR(64) DEFAULT '' NOT NULL,
 	create_time TIMESTAMP(0) WITHOUT TIME ZONE NOT NULL,
@@ -2322,6 +2324,7 @@ CREATE TABLE sg_task (
 	CONSTRAINT ck_sg_task_owner_kind CHECK (((shot_id is not null and asset_item_id is null and task_kind = 'shot_video') or (shot_id is null and asset_item_id is not null and task_kind = 'asset_image'))),
 	CONSTRAINT ck_sg_task_status CHECK (task_status in ('not_started', 'preparing', 'in_progress', 'pending_review', 'revision', 'completed')),
 	CONSTRAINT ck_sg_task_priority CHECK (priority in ('low', 'normal', 'high', 'urgent')),
+	CONSTRAINT ck_sg_task_expected_time_range CHECK ((expected_start_time IS NULL AND expected_end_time IS NULL) OR (expected_start_time IS NOT NULL AND expected_end_time IS NOT NULL AND expected_end_time > expected_start_time)),
 	CONSTRAINT ck_sg_task_lock_version CHECK (lock_version >= 0),
 	CONSTRAINT ck_sg_task_del_flag CHECK (del_flag in ('0', '2'))
 );
@@ -2340,6 +2343,8 @@ COMMENT ON COLUMN sg_task.assignee_user_id IS '负责人用户ID';
 COMMENT ON COLUMN sg_task.task_status IS '任务状态';
 COMMENT ON COLUMN sg_task.priority IS '任务优先级';
 COMMENT ON COLUMN sg_task.due_date IS '截止日期';
+COMMENT ON COLUMN sg_task.expected_start_time IS '预期开始时间，仅供制作人参考';
+COMMENT ON COLUMN sg_task.expected_end_time IS '预期结束时间，仅供制作人参考';
 COMMENT ON COLUMN sg_task.requirements IS '制作要求';
 COMMENT ON COLUMN sg_task.create_by IS '创建者';
 COMMENT ON COLUMN sg_task.create_time IS '创建时间';
@@ -3188,7 +3193,7 @@ create table if not exists alembic_version (
     constraint alembic_version_pkc primary key (version_num)
 );
 delete from alembic_version;
-insert into alembic_version(version_num) values ('20260827_23');
+insert into alembic_version(version_num) values ('20260828_24');
 
 
 CREATE OR REPLACE FUNCTION "find_in_set"(int8, varchar)

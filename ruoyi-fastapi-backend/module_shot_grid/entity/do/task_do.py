@@ -12,7 +12,7 @@ from sqlalchemy import (
 )
 
 from config.database import Base
-from module_shot_grid.entity.do.base_do import ShotGridMutableAuditMixin
+from module_shot_grid.entity.do.base_do import SHOT_GRID_DATETIME, ShotGridMutableAuditMixin
 
 
 class ShotGridTask(ShotGridMutableAuditMixin, Base):
@@ -32,6 +32,8 @@ class ShotGridTask(ShotGridMutableAuditMixin, Base):
     task_status = Column(String(20), nullable=False, server_default='not_started', comment='任务状态')
     priority = Column(String(10), nullable=False, server_default='normal', comment='任务优先级')
     due_date = Column(Date, nullable=True, comment='截止日期')
+    expected_start_time = Column(SHOT_GRID_DATETIME, nullable=True, comment='预期开始时间，仅供制作人参考')
+    expected_end_time = Column(SHOT_GRID_DATETIME, nullable=True, comment='预期结束时间，仅供制作人参考')
     requirements = Column(Text, nullable=True, comment='制作要求')
 
     __table_args__ = (
@@ -69,6 +71,11 @@ class ShotGridTask(ShotGridMutableAuditMixin, Base):
             name='ck_sg_task_priority',
         ),
         CheckConstraint('lock_version >= 0', name='ck_sg_task_lock_version'),
+        CheckConstraint(
+            '(expected_start_time IS NULL AND expected_end_time IS NULL) OR '
+            '(expected_start_time IS NOT NULL AND expected_end_time IS NOT NULL AND expected_end_time > expected_start_time)',
+            name='ck_sg_task_expected_time_range',
+        ),
         CheckConstraint("del_flag in ('0', '2')", name='ck_sg_task_del_flag'),
         Index(
             'uk_sg_task_shot',

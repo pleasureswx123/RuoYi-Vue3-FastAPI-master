@@ -252,6 +252,8 @@ class ShotGridShotTaskSummaryModel(ShotGridApiModel):
     assignee: ShotGridShotAssigneeModel
     priority: Literal['low', 'normal', 'high', 'urgent']
     due_date: date | None = None
+    expected_start_time: datetime | None = None
+    expected_end_time: datetime | None = None
     lock_version: int
 
 
@@ -322,6 +324,8 @@ class ShotGridShotListItemModel(ShotGridApiModel):
     status: ShotStatus
     task_id: int | None = None
     task_lock_version: int | None = Field(default=None, ge=0)
+    expected_start_time: datetime | None = None
+    expected_end_time: datetime | None = None
     allowed_actions: list[str] = Field(default_factory=list)
     assignee: ShotGridShotAssigneeModel | None = None
     thumbnail: ShotGridShotThumbnailModel | None = None

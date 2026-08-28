@@ -13,10 +13,11 @@ import { tagTypeFromTone } from '@/utils/tag'
 import ProjectStatePanel from '@/views/project/components/ProjectStatePanel.vue'
 import ShotProductionInfo from '@/views/shot/components/ShotProductionInfo.vue'
 import TaskEditDialog from '@/views/task/components/TaskEditDialog.vue'
+import TaskTimeReminder from '@/views/task/components/TaskTimeReminder.vue'
+import { useCurrentTime } from '@/composables/useCurrentTime'
 import {
   formatTaskDateTime,
   taskAssigneeLabel,
-  taskDueState,
   taskErrorState,
   taskKindMeta,
   taskPriorityMeta,
@@ -33,6 +34,7 @@ const route = useRoute()
 const router = useRouter()
 const sessionStore = useSessionStore()
 const task = ref(null)
+const currentTime = useCurrentTime()
 const openIssues = ref([])
 const loading = ref(false)
 const errorState = ref(null)
@@ -391,7 +393,7 @@ onBeforeUnmount(() => {
           <p v-else class="task-requirements">{{ task.requirements || '暂无额外制作要求。' }}</p>
           <el-descriptions class="task-fields" :column="4" border>
             <el-descriptions-item label="主制作人">{{ taskAssigneeLabel(task.assignee) }}</el-descriptions-item>
-            <el-descriptions-item label="截止日期"><el-tag :type="tagTypeFromTone(taskDueState(task.dueDate).tone)" size="small" effect="plain" round>{{ taskDueState(task.dueDate).label }}</el-tag></el-descriptions-item>
+            <el-descriptions-item label="预期制作时间" :span="2"><TaskTimeReminder :task="task" :now="currentTime" /></el-descriptions-item>
             <el-descriptions-item label="已提交版本">{{ task.versionCount }}</el-descriptions-item>
           </el-descriptions>
         </el-card>

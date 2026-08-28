@@ -1,12 +1,15 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import { ArrowLeft, Delete, Edit, Lock, Plus, Refresh, UserFilled, VideoPlay } from '@element-plus/icons-vue'
 
 import { getAssetDetail, listAssetAssignees } from '@/api/shot-grid/assets'
 import { assertPositiveId, getProjectDetail } from '@/api/shot-grid/projects'
-import { startTask } from '@/api/shot-grid/tasks'
+import { useAssetItemStart } from './useAssetItemStart'
+import TaskStartDialog from '@/views/task/components/TaskStartDialog.vue'
+import TaskTimeReminder from '@/views/task/components/TaskTimeReminder.vue'
+import { useCurrentTime } from '@/composables/useCurrentTime'
 import { useTaskStatePolling } from '@/composables/useTaskStatePolling'
 import { useSessionStore } from '@/store/modules/session'
 import { tagTypeFromTone } from '@/utils/tag'
@@ -32,6 +35,7 @@ const route = useRoute()
 const router = useRouter()
 const sessionStore = useSessionStore()
 const asset = ref(null)
+const currentTime = useCurrentTime()
 const project = ref(null)
 const members = ref([])
 const loading = ref(false)
@@ -42,7 +46,6 @@ const assignContext = ref(null)
 const archiveContext = ref(null)
 const deleteItemContext = ref(null)
 const historyRefreshKey = ref(0)
-const startingOperation = ref(null)
 const itemElements = new Map()
 
 watch([() => props.targetAssetItemId, loading], async () => {
@@ -85,8 +88,21 @@ const assetAllowedActions = computed(() => new Set(asset.value?.allowedActions |
 const canEditAsset = computed(() => assetAllowedActions.value.has('asset.edit') && hasPermission('shotgrid:asset:edit'))
 const canArchiveAsset = computed(() => assetAllowedActions.value.has('asset.archive') && hasPermission('shotgrid:asset:archive'))
 const canAddItem = computed(() => assetAllowedActions.value.has('assetItem.add') && hasPermission('shotgrid:asset:add'))
-const canStartItems = computed(() => assetAllowedActions.value.has('task.start') && hasPermission('shotgrid:task:start'))
-const startDisabled = computed(() => loading.value || Boolean(startingOperation.value))
+const { startDialog, closeStartDialog, finishStartDialog, failStartDialog, startingOperation, startDisabled, itemCanStart, confirmStartItem, invalidateStart } = useAssetItemStart({
+  getAsset: () => asset.value,
+  getContextKey: () => `${projectId.value}:${assetId.value}`,
+  isLoading: () => loading.value,
+  hasPermission,
+  assigneeName: taskAssigneeName,
+  refresh: () => loadDetail(),
+  onStarted: async operation => {
+    const expectedGeneration = contextGeneration
+    await loadDetail()
+    if (!disposed && expectedGeneration === contextGeneration && stillOnTarget(operation)) {
+      emit('changed', { projectId: operation.projectId, assetId: operation.assetId })
+    }
+  }
+})
 
 const activeThumbnailItems = computed(() => [...(asset.value?.items || [])]
   .filter(item => item.lifecycleStatus === 'active')
@@ -103,16 +119,6 @@ function visibleItemStatusEntries(counts) {
   return assetItemStatusEntries(counts).filter(entry => entry.count > 0)
 }
 
-function itemCanStart(item) {
-  const task = item?.task
-  return Boolean(
-    canStartItems.value && new Set(item?.allowedActions || []).has('task.start') &&
-    Number.isSafeInteger(Number(task?.taskId)) && Number(task.taskId) > 0 &&
-    Number.isSafeInteger(Number(task?.lockVersion)) && Number(task.lockVersion) >= 0 &&
-    Number.isSafeInteger(Number(asset.value?.lockVersion)) && Number(asset.value.lockVersion) >= 0 &&
-    Number.isSafeInteger(Number(item?.lockVersion)) && Number(item.lockVersion) >= 0
-  )
-}
 async function fetchAllMembers(targetProjectId, signal) {
   const rows = []
   let pageNum = 1
@@ -127,6 +133,7 @@ async function fetchAllMembers(targetProjectId, signal) {
 }
 
 function closeDialogs() {
+  invalidateStart()
   editAssetContext.value = null
   itemFormContext.value = null
   assignContext.value = null
@@ -341,64 +348,6 @@ function itemCanAssign(item) {
   return new Set(item.allowedActions || []).has('task.assign') && hasPermission('shotgrid:task:assign')
 }
 
-function isCurrentStart(operation) {
-  return !disposed && startingOperation.value === operation &&
-    projectId.value === operation.projectId && assetId.value === operation.assetId &&
-    contextGeneration === operation.contextGeneration
-}
-
-async function confirmStartItem(item) {
-  if (!itemCanStart(item) || startDisabled.value) return
-  const task = item.task
-  const operation = Object.freeze({
-    projectId: projectId.value,
-    assetId: assetId.value,
-    assetItemId: Number(item.assetItemId),
-    taskId: Number(task.taskId),
-    lockVersion: Number(task.lockVersion),
-    assetLockVersion: Number(asset.value.lockVersion),
-    assetItemLockVersion: Number(item.lockVersion),
-    contextGeneration
-  })
-  startingOperation.value = operation
-  try {
-    await ElMessageBox.confirm(
-      `资产：${asset.value.assetName}；制作分项：${item.productionItem || '未命名制作分项'}；当前负责人：${taskAssigneeName(task)}。请确认线下制作条件已齐备。确认后将允许该负责人开始制作。`,
-      '确认分项开工',
-      { confirmButtonText: '确认开工', cancelButtonText: '暂不开工', type: 'warning' }
-    )
-    if (!isCurrentStart(operation)) return
-    const currentItem = asset.value?.items?.find(candidate => Number(candidate.assetItemId) === operation.assetItemId)
-    if (!itemCanStart(currentItem) || Number(currentItem.task?.taskId) !== operation.taskId ||
-      Number(currentItem.task?.lockVersion) !== operation.lockVersion || Number(asset.value?.lockVersion) !== operation.assetLockVersion ||
-      Number(currentItem.lockVersion) !== operation.assetItemLockVersion) {
-      ElMessage.warning('资产、制作分项或任务已发生变化，请刷新后重新确认开工。')
-      return
-    }
-    const response = await startTask(operation.taskId, {
-      lockVersion: operation.lockVersion,
-      assetLockVersion: operation.assetLockVersion,
-      assetItemLockVersion: operation.assetItemLockVersion,
-      startConfirmed: true
-    })
-    if (!isCurrentStart(operation)) {
-      ElMessage.success('原制作分项已确认开工，请返回原资产查看。')
-      return
-    }
-    ElMessage.success(response.data?.taskStatus === 'preparing'
-      ? '已确认开工，正在准备制作目录'
-      : '已确认开工，负责人可以开始制作')
-    await loadDetail()
-    if (!isCurrentStart(operation)) return
-    emit('changed', { projectId: operation.projectId, assetId: operation.assetId })
-  } catch (error) {
-    if (error === 'cancel' || error === 'close' || !isCurrentStart(operation)) return
-    ElMessage.error(error?.message || '确认开工失败，请刷新后重试')
-    if (Number(error?.httpStatus || error?.status) === 409) await loadDetail()
-  } finally {
-    if (startingOperation.value === operation) startingOperation.value = null
-  }
-}
 
 const { pollingError } = useTaskStatePolling({
   getDelay: () => {
@@ -424,6 +373,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
+  <TaskStartDialog v-if="startDialog" :context="startDialog" @close="closeStartDialog" @started="finishStartDialog" @failed="failStartDialog" />
   <section class="sg-page asset-detail-page" :class="{ 'asset-detail-page--embedded': embedded }">
     <el-button v-if="!embedded" class="back-link" link :icon="ArrowLeft" @click="router.push({ path: '/assets', query: { projectId: String(projectId || '') } })">返回资产库</el-button>
 
@@ -474,8 +424,25 @@ onBeforeUnmount(() => {
         <div v-else class="item-list">
           <el-card v-for="item in asset.items" :key="item.assetItemId" :ref="element => element ? itemElements.set(Number(item.assetItemId), element) : itemElements.delete(Number(item.assetItemId))" class="item-card" :class="{ 'is-archived': item.lifecycleStatus === 'archived', 'is-targeted': Number(targetAssetItemId) === Number(item.assetItemId) }" tabindex="-1" shadow="never">
             <ProtectedAssetThumbnail class="item-card__thumbnail" :thumbnail="item.thumbnail" :alt="`${item.productionItem || '未命名制作分项'} 缩略图`" />
-            <div class="item-card__body"><header><div><span class="item-card__id">分项 #{{ item.assetItemId }}</span><h4>{{ item.productionItem || '未命名制作分项' }}</h4></div><el-tag size="small" effect="plain" round :type="tagTypeFromTone(assetStatusMeta(item.assetStatus).tone)">{{ assetStatusMeta(item.assetStatus).label }}</el-tag></header><p>{{ item.description || '暂无分项说明' }}</p><el-descriptions class="item-card__details" :column="4" border><el-descriptions-item label="负责人">{{ taskAssigneeName(item.task) }}</el-descriptions-item><el-descriptions-item label="任务"><span v-if="item.task" class="detail-tag-group"><el-tag size="small" effect="plain" round :type="tagTypeFromTone(taskStatusMeta(item.task.taskStatus).tone)">{{ taskStatusMeta(item.task.taskStatus).label }}</el-tag><el-tag size="small" effect="plain" round :type="tagTypeFromTone(taskPriorityMeta(item.task.priority).tone)">{{ taskPriorityMeta(item.task.priority).label }}优先级</el-tag></span><el-tag v-else type="info" size="small" effect="plain" round>未分配</el-tag></el-descriptions-item><el-descriptions-item label="最新版本"><span v-if="item.latestVersion" class="detail-tag-group"><span>V{{ String(item.latestVersion.versionNo).padStart(3, '0') }}</span><el-tag size="small" effect="plain" round :type="tagTypeFromTone(taskVersionStatusMeta(item.latestVersion.versionStatus).tone)">{{ taskVersionStatusMeta(item.latestVersion.versionStatus).label }}</el-tag></span><span v-else>—</span></el-descriptions-item><el-descriptions-item label="最终版本"><span v-if="item.finalVersion" class="detail-tag-group"><span>V{{ String(item.finalVersion.versionNo).padStart(3, '0') }}</span><el-tag size="small" effect="plain" round :type="tagTypeFromTone(taskVersionStatusMeta(item.finalVersion.versionStatus).tone)">{{ taskVersionStatusMeta(item.finalVersion.versionStatus).label }}</el-tag></span><span v-else>—</span></el-descriptions-item></el-descriptions><small>{{ item.remark || '无备注' }} · 更新于 {{ formatAssetDateTime(item.updateTime) }}</small></div>
-            <div class="item-card__actions"><el-button v-if="itemCanStart(item)" size="small" type="primary" :icon="VideoPlay" :loading="startingOperation?.assetItemId === item.assetItemId" :disabled="startDisabled" @click="confirmStartItem(item)">开始任务</el-button><el-button v-if="itemCanAssign(item)" text type="primary" :icon="UserFilled" :disabled="startDisabled" @click="openAssign(item)">{{ item.task ? '改派任务' : '分配任务' }}</el-button><el-button v-if="itemCanEdit(item)" text :type="item.productionItem ? 'default' : 'warning'" :icon="Edit" :disabled="startDisabled" @click="openItemForm(item)">{{ item.productionItem ? '编辑分项' : '补齐制作分项' }}</el-button><el-button v-if="itemCanDelete(item)" text type="danger" :icon="Delete" :disabled="startDisabled" @click="openDeleteItem(item)">删除分项</el-button><el-button v-else-if="itemCanArchive(item)" text type="danger" :icon="Lock" :disabled="startDisabled" @click="openArchive(item)">归档分项</el-button></div>
+            <div class="item-card__body">
+              <header><div><span class="item-card__id">分项 #{{ item.assetItemId }}</span><h4>{{ item.productionItem || '未命名制作分项' }}</h4></div><el-tag size="small" effect="plain" round :type="tagTypeFromTone(assetStatusMeta(item.assetStatus).tone)">{{ assetStatusMeta(item.assetStatus).label }}</el-tag></header>
+              <p>{{ item.description || '暂无分项说明' }}</p>
+              <el-descriptions class="item-card__details" :column="4" border>
+                <el-descriptions-item label="负责人">{{ taskAssigneeName(item.task) }}</el-descriptions-item>
+                <el-descriptions-item label="任务"><span v-if="item.task" class="detail-tag-group"><el-tag size="small" effect="plain" round :type="tagTypeFromTone(taskStatusMeta(item.task.taskStatus).tone)">{{ taskStatusMeta(item.task.taskStatus).label }}</el-tag><el-tag size="small" effect="plain" round :type="tagTypeFromTone(taskPriorityMeta(item.task.priority).tone)">{{ taskPriorityMeta(item.task.priority).label }}优先级</el-tag></span><el-tag v-else type="info" size="small" effect="plain" round>未分配</el-tag></el-descriptions-item>
+                <el-descriptions-item label="最新版本"><span v-if="item.latestVersion" class="detail-tag-group"><span>V{{ String(item.latestVersion.versionNo).padStart(3, '0') }}</span><el-tag size="small" effect="plain" round :type="tagTypeFromTone(taskVersionStatusMeta(item.latestVersion.versionStatus).tone)">{{ taskVersionStatusMeta(item.latestVersion.versionStatus).label }}</el-tag></span><span v-else>—</span></el-descriptions-item>
+                <el-descriptions-item label="最终版本"><span v-if="item.finalVersion" class="detail-tag-group"><span>V{{ String(item.finalVersion.versionNo).padStart(3, '0') }}</span><el-tag size="small" effect="plain" round :type="tagTypeFromTone(taskVersionStatusMeta(item.finalVersion.versionStatus).tone)">{{ taskVersionStatusMeta(item.finalVersion.versionStatus).label }}</el-tag></span><span v-else>—</span></el-descriptions-item>
+                <el-descriptions-item v-if="item.task" label="预期制作时间" :span="4"><TaskTimeReminder :task="item.task" :now="currentTime" compact /></el-descriptions-item>
+              </el-descriptions>
+              <small>{{ item.remark || '无备注' }} · 更新于 {{ formatAssetDateTime(item.updateTime) }}</small>
+            </div>
+            <div class="item-card__actions">
+              <el-button v-if="itemCanStart(item)" size="small" type="primary" :icon="VideoPlay" :loading="startingOperation?.assetItemId === item.assetItemId" :disabled="startDisabled" @click="confirmStartItem(item)">开始任务</el-button>
+              <el-button v-if="itemCanAssign(item)" size="small" text type="primary" :icon="UserFilled" :disabled="startDisabled" @click="openAssign(item)">{{ item.task ? '改派任务' : '分配任务' }}</el-button>
+              <el-button v-if="itemCanEdit(item)" size="small" text :type="item.productionItem ? 'default' : 'warning'" :icon="Edit" :disabled="startDisabled" @click="openItemForm(item)">{{ item.productionItem ? '编辑分项' : '补齐制作分项' }}</el-button>
+              <el-button v-if="itemCanDelete(item)" size="small" text type="danger" :icon="Delete" :disabled="startDisabled" @click="openDeleteItem(item)">删除分项</el-button>
+              <el-button v-else-if="itemCanArchive(item)" size="small" text type="danger" :icon="Lock" :disabled="startDisabled" @click="openArchive(item)">归档分项</el-button>
+            </div>
           </el-card>
         </div>
       </el-card>

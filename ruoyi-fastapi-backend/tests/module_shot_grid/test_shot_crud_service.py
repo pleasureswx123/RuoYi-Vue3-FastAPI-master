@@ -223,14 +223,14 @@ def test_completed_or_archived_project_hides_all_shot_actions(project_status: st
     [
         (None, True),
         ('not_started', True),
-        ('preparing', True),
-        ('in_progress', True),
-        ('pending_review', True),
-        ('revision', True),
+        ('preparing', False),
+        ('in_progress', False),
+        ('pending_review', False),
+        ('revision', False),
         ('completed', False),
     ],
 )
-def test_shot_detail_exposes_assignment_only_for_unfinished_tasks(task_status: str | None, *, can_assign: bool) -> None:
+def test_shot_detail_exposes_assignment_only_before_start(task_status: str | None, *, can_assign: bool) -> None:
     row = _shot_projection_row()
     row['task_status'] = task_status
     if task_status is None:
@@ -255,7 +255,7 @@ def test_shot_detail_exposes_assignment_only_for_unfinished_tasks(task_status: s
     ],
 )
 def test_shot_detail_hides_assignment_when_workflow_is_blocked(blocked_state: dict[str, Any]) -> None:
-    row = {**_shot_projection_row(), 'task_status': 'in_progress', **blocked_state}
+    row = {**_shot_projection_row(), 'task_status': 'not_started', **blocked_state}
     current_user = _current_user()
     current_user.permissions.append('shotgrid:task:assign')
 
@@ -276,7 +276,7 @@ def test_shot_detail_hides_assignment_when_workflow_is_blocked(blocked_state: di
 def test_shot_assignment_requires_platform_permission_and_project_management_access(
     project_role: str, *, has_all_scope: bool, has_permission: bool, can_assign: bool
 ) -> None:
-    row = {**_shot_projection_row(), 'task_status': 'in_progress'}
+    row = {**_shot_projection_row(), 'task_status': 'not_started'}
     current_user = _current_user()
     current_user.user = UserInfoModel(userId=MANAGER_USER_ID, userName='manager')
     if has_permission:
@@ -376,8 +376,15 @@ async def test_completed_or_archived_project_rejects_shot_writes(
 
 
 @pytest.mark.asyncio
-async def test_list_reads_versions_files_and_feedback_in_one_batch_query(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    ('expected_start', 'expected_end'),
+    [(datetime(2026, 9, 1, 9, 30), datetime(2026, 9, 4, 18)), (None, None)],
+)
+async def test_list_reads_versions_files_and_feedback_in_one_batch_query(
+    monkeypatch: pytest.MonkeyPatch, expected_start: datetime | None, expected_end: datetime | None
+) -> None:
     row = _shot_projection_row()
+    row.update(expected_start_time=expected_start, expected_end_time=expected_end)
     get_page = AsyncMock(return_value=([row], 1))
     list_assets = AsyncMock(return_value=[])
     list_projections = AsyncMock(return_value=[_latest_read_projection()])
@@ -404,6 +411,9 @@ async def test_list_reads_versions_files_and_feedback_in_one_batch_query(monkeyp
 
     assert page.total == 1
     assert page.rows[0].latest_version is not None
+    payload = page.rows[0].model_dump(mode='json', by_alias=True)
+    assert payload.get('expectedStartTime', 'missing') == (expected_start.isoformat() if expected_start else None)
+    assert payload.get('expectedEndTime', 'missing') == (expected_end.isoformat() if expected_end else None)
     list_projections.assert_awaited_once()
     assert list_projections.await_args.args[2] == [SHOT_ID]
 

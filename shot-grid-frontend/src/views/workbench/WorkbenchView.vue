@@ -6,13 +6,15 @@ import { Refresh, Right, Search } from '@element-plus/icons-vue'
 import { getMineTaskPage } from '@/api/shot-grid/tasks'
 import { getMineReviewListPage, getRecentMineVersions } from '@/api/shot-grid/reviews'
 import { useTaskStatePolling } from '@/composables/useTaskStatePolling'
+import { useCurrentTime } from '@/composables/useCurrentTime'
+import TaskTimeReminder from '@/views/task/components/TaskTimeReminder.vue'
 import { useSessionStore } from '@/store/modules/session'
 import { tagTypeFromTone } from '@/utils/tag'
 import ProjectStatePanel from '@/views/project/components/ProjectStatePanel.vue'
 import { reviewModeMeta } from '@/views/review/reviewPresentation'
 import {
   taskAssigneeLabel,
-  taskDueState,
+  taskTimeReminder,
   taskErrorState,
   taskKindMeta,
   taskPriorityMeta,
@@ -23,6 +25,7 @@ import {
 const router = useRouter()
 const sessionStore = useSessionStore()
 const tasks = ref([])
+const currentTime = useCurrentTime()
 const total = ref(0)
 const loading = ref(false)
 const errorState = ref(null)
@@ -79,7 +82,7 @@ const pageSummary = computed(() => ({
   inProgress: tasks.value.filter(task => task.taskStatus === 'in_progress').length,
   pendingReview: tasks.value.filter(task => task.taskStatus === 'pending_review').length,
   revision: tasks.value.filter(task => task.taskStatus === 'revision').length,
-  overdue: tasks.value.filter(task => task.taskStatus !== 'completed' && taskDueState(task.dueDate).overdue).length
+  overdue: tasks.value.filter(task => taskTimeReminder(task, currentTime.value).state === 'overdue').length
 }))
 const { pollingError } = useTaskStatePolling({
   getDelay: () => {
@@ -367,9 +370,7 @@ onBeforeUnmount(() => {
               }}</small>
             <span>{{ item.requirements || '暂无额外制作要求' }}</span>
           </span>
-          <span class="task-row__meta"><span>{{ taskAssigneeLabel(item.assignee) }}</span><span class="task-row__due"><el-tag
-              :type="tagTypeFromTone(taskDueState(item.dueDate).tone)" size="small" effect="light"
-              round>{{ taskDueState(item.dueDate).label }}</el-tag></span></span>
+          <span class="task-row__meta"><span>{{ taskAssigneeLabel(item.assignee) }}</span><TaskTimeReminder :task="item" :now="currentTime" compact /></span>
           <span class="task-row__version"><strong>{{
               item.latestVersion?.versionNumber || '—'
             }}</strong><small>{{ item.versionCount }} 个版本</small></span>
@@ -697,6 +698,11 @@ onBeforeUnmount(() => {
 .task-row__meta > span {
   color: var(--sg-text-secondary);
   font-size: 11px;
+}
+
+.task-row__meta {
+  white-space: normal;
+  overflow: visible;
 }
 
 .task-row__meta .el-tag {

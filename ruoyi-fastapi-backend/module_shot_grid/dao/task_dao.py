@@ -102,6 +102,8 @@ class ShotGridTaskDao:
                 ShotGridTask.task_status,
                 ShotGridTask.priority,
                 ShotGridTask.due_date,
+                ShotGridTask.expected_start_time,
+                ShotGridTask.expected_end_time,
                 ShotGridTask.requirements,
                 ShotGridTask.remark,
                 ShotGridTask.lock_version,

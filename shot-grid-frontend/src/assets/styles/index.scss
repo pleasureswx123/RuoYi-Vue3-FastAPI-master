@@ -184,13 +184,28 @@ html.sg-theme-transitioning *::after {
   background: var(--el-table-header-bg-color);
 }
 
+.sg-table-assignee {
+  color: var(--sg-text);
+  font-weight: 500;
+}
+
+.sg-table-assignee.is-unassigned {
+  color: var(--sg-text-secondary);
+  font-weight: 400;
+}
+
 .shot-status-tag.el-tag,
 .asset-status-tag.el-tag {
   --sg-shot-status-color: var(--sg-text-muted);
   --el-tag-bg-color: color-mix(in srgb, var(--sg-shot-status-color) 12%, transparent);
   --el-tag-border-color: color-mix(in srgb, var(--sg-shot-status-color) 38%, transparent);
-  --el-tag-text-color: var(--sg-shot-status-color);
+  --el-tag-text-color: color-mix(in srgb, var(--sg-shot-status-color) 86%, black);
   font-weight: 650;
+}
+
+html.dark .shot-status-tag.el-tag,
+html.dark .asset-status-tag.el-tag {
+  --el-tag-text-color: var(--sg-shot-status-color);
 }
 
 .shot-status-tag--unassigned.el-tag,
@@ -204,6 +219,8 @@ html.sg-theme-transitioning *::after {
 .shot-status-tag--reviewing.el-tag,
 .asset-status-tag--reviewing.el-tag { --sg-shot-status-color: var(--sg-shot-status-reviewing); }
 .shot-status-tag--revision.el-tag,
+.shot-status-tag--directory-failed.el-tag,
+.asset-status-tag--directory-failed.el-tag,
 .asset-status-tag--revision.el-tag { --sg-shot-status-color: var(--sg-shot-status-revision); }
 .shot-status-tag--completed.el-tag,
 .asset-status-tag--completed.el-tag { --sg-shot-status-color: var(--sg-shot-status-completed); }

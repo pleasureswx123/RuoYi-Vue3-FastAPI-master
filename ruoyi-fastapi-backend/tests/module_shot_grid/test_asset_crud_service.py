@@ -461,7 +461,17 @@ def test_directory_status_is_read_only_mapping(operation_status: str | None, dir
 
 
 @pytest.mark.asyncio
-async def test_asset_archive_rejects_started_item_task_and_rolls_back(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    ('blocker', 'error_key'),
+    [
+        ('started', 'SG_ASSET_TASK_ALREADY_STARTED'),
+        ('version', 'SG_ASSET_HAS_VERSION'),
+        ('submission', 'SG_ASSET_ITEM_SUBMISSION_IN_PROGRESS'),
+    ],
+)
+async def test_asset_archive_rejects_item_blockers_and_rolls_back(
+    monkeypatch: pytest.MonkeyPatch, blocker: str, error_key: str
+) -> None:
     asset = SimpleNamespace(
         asset_id=ASSET_ID,
         project_id=PROJECT_ID,
@@ -481,12 +491,24 @@ async def test_asset_archive_rejects_started_item_task_and_rolls_back(monkeypatc
         AsyncMock(return_value=0),
     )
     monkeypatch.setattr(
-        'module_shot_grid.service.asset_crud_service.ShotGridAssetCrudDao.get_active_items_for_update',
+        'module_shot_grid.service.asset_crud_service.ShotGridAssetCrudDao.get_items_for_update',
         AsyncMock(return_value=[SimpleNamespace(asset_item_id=ASSET_ITEM_ID)]),
     )
     monkeypatch.setattr(
         'module_shot_grid.service.asset_crud_service.ShotGridAssetCrudDao.get_task_for_item',
-        AsyncMock(return_value=SimpleNamespace(task_status='in_progress')),
+        AsyncMock(
+            return_value=SimpleNamespace(
+                task_id=71, task_status='in_progress' if blocker == 'started' else 'not_started'
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.asset_crud_service.ShotGridAssetCrudDao.has_versions_for_item',
+        AsyncMock(return_value=blocker == 'version'),
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.dao.task_dao.ShotGridTaskDao.get_uncommitted_submission_for_update',
+        AsyncMock(return_value=SimpleNamespace(submission_status='failed') if blocker == 'submission' else None),
     )
     db = AsyncMock()
 
@@ -500,7 +522,8 @@ async def test_asset_archive_rejects_started_item_task_and_rolls_back(monkeypatc
             _access(),
         )
 
-    assert exc_info.value.error_key == 'SG_ASSET_TASK_ALREADY_STARTED'
+    assert exc_info.value.error_key == error_key
+    assert asset.lifecycle_status == 'active'
     db.commit.assert_not_awaited()
     db.rollback.assert_awaited_once()
 
@@ -818,6 +841,35 @@ def test_item_delete_action_is_limited_to_unstarted_items_without_versions_or_su
     assert ('assetItem.delete' in actions) is can_delete
 
 
+@pytest.mark.parametrize(
+    ('task_status', 'can_assign'),
+    [
+        (None, True),
+        ('not_started', True),
+        ('preparing', False),
+        ('in_progress', False),
+        ('pending_review', False),
+        ('revision', False),
+        ('completed', False),
+    ],
+)
+def test_item_assignment_action_is_only_available_before_start(task_status: str | None, *, can_assign: bool) -> None:
+    actions = ShotGridAssetCrudService._item_allowed_actions(
+        _current_user(),
+        _access(),
+        project_id=PROJECT_ID,
+        project_status='active',
+        storage_status='ready',
+        asset_lifecycle_status='active',
+        item_lifecycle_status='active',
+        production_item='主视角',
+        has_versions=False,
+        task_status=task_status,
+        has_uncommitted_submission=False,
+    )
+    assert ('task.assign' in actions) is can_assign
+
+
 def test_asset_and_item_allowed_actions_are_server_side_state_mirrors() -> None:
     asset_actions = ShotGridAssetCrudService._asset_allowed_actions(
         _current_user(),
@@ -845,19 +897,22 @@ def test_asset_and_item_allowed_actions_are_server_side_state_mirrors() -> None:
 
     assert asset_actions == ['asset.edit', 'asset.archive', 'assetItem.add', 'task.assign']
     assert item_actions == ['assetItem.edit', 'assetItem.archive', 'assetItem.delete', 'task.assign']
-    assert ShotGridAssetCrudService._item_allowed_actions(
-        _current_user(),
-        _access(),
-        project_id=PROJECT_ID,
-        project_status='active',
-        storage_status='ready',
-        asset_lifecycle_status='active',
-        item_lifecycle_status='active',
-        production_item='主视角',
-        has_versions=False,
-        task_status='in_progress',
-        has_uncommitted_submission=False,
-    ) == ['task.assign']
+    assert (
+        ShotGridAssetCrudService._item_allowed_actions(
+            _current_user(),
+            _access(),
+            project_id=PROJECT_ID,
+            project_status='active',
+            storage_status='ready',
+            asset_lifecycle_status='active',
+            item_lifecycle_status='active',
+            production_item='主视角',
+            has_versions=False,
+            task_status='in_progress',
+            has_uncommitted_submission=False,
+        )
+        == []
+    )
 
     assert (
         ShotGridAssetCrudService._asset_allowed_actions(

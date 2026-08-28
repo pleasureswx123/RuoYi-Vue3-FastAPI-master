@@ -120,6 +120,8 @@ def test_schema_repair_migration_extends_member_lifecycle_and_covers_metadata() 
     assert {item for item in repaired_timestamp_columns if item[0] in surviving_initial_tables} == timestamp_columns - {
         ('sg_project_member', 'removed_time'),
         ('sg_version', 'selected_time'),
+        ('sg_task', 'expected_start_time'),
+        ('sg_task', 'expected_end_time'),
     }
     assert repaired_timestamp_columns - {
         item for item in repaired_timestamp_columns if item[0] in surviving_initial_tables

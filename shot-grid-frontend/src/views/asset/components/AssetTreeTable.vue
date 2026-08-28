@@ -1,11 +1,15 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { View } from '@element-plus/icons-vue'
 
 import { getAssetItems } from '@/api/shot-grid/assets'
+import { useCurrentTime } from '@/composables/useCurrentTime'
+import { formatTaskDateTime, taskTimeReminder } from '@/views/task/taskPresentation'
 import { tagTypeFromTone } from '@/utils/tag'
+import TableActionButton from '@/components/TableActionButton.vue'
 import ProtectedAssetThumbnail from './ProtectedAssetThumbnail.vue'
 import AssetDescriptionCell from './AssetDescriptionCell.vue'
-import { assetAssigneeSummary, assetDirectoryStatusMeta, assetErrorState, assetItemStatusEntries, assetStatusMeta, assetTypeMeta, memberUserName, resolveAssetThumbnail } from '../assetPresentation'
+import { assetAssigneeSummary, assetDirectoryStatusMeta, assetErrorState, assetItemStatusEntries, assetStatusMeta, assetStatusTagClass, assetTypeMeta, memberUserName, resolveAssetThumbnail } from '../assetPresentation'
 
 const props = defineProps({
   assets: { type: Array, required: true },
@@ -21,6 +25,7 @@ const props = defineProps({
 })
 const emit = defineEmits(['selection-change', 'open-item'])
 const table = ref(null)
+const currentTime = useCurrentTime()
 const tableGeneration = ref(0)
 const errors = reactive(new Map())
 const childrenCache = reactive(new Map())
@@ -214,6 +219,10 @@ function statusEntries(row) {
   return row.rowKind === 'asset' ? assetItemStatusEntries(row.itemStatusCounts).filter(entry => entry.count > 0) : []
 }
 
+function itemTimeState(row) {
+  return taskTimeReminder({ taskStatus: row.task?.taskStatus, expectedEndTime: row.task?.expectedEndTime }, currentTime.value)
+}
+
 watch([() => props.assets, () => props.contextKey, () => props.canQuery], (next, previous) => {
   if (props.backgroundRefresh && next[1] === previous[1] && next[2] === previous[2]) {
     const validKeys = new Set(rows.value.filter(row => row.hasChildren).map(row => row.rowKey))
@@ -282,24 +291,38 @@ defineExpose({ waitForLoads, refreshLoadedChildren })
                                 :item-description="row.rowKind === 'item' ? row.description : ''" :is-item="row.rowKind === 'item'" />
         </template>
       </el-table-column>
-      <el-table-column label="制作人" fixed="right" width="112">
-        <template #default="{ row }"><span class="asset-assignee">{{ assigneeName(row) }}</span></template>
+      <el-table-column prop="task.expectedStartTime" label="开始时间" width="150" class-name="task-expected-start">
+        <template #default="{ row }"><span class="task-date-cell">{{ formatTaskDateTime(row.rowKind === 'item' ? row.task?.expectedStartTime : null) }}</span></template>
       </el-table-column>
-      <el-table-column label="状态" fixed="right" width="132">
+      <el-table-column prop="task.expectedEndTime" label="结束时间" width="150" class-name="task-expected-end">
+        <template #default="{ row }"><span class="task-date-cell">{{ formatTaskDateTime(row.rowKind === 'item' ? row.task?.expectedEndTime : null) }}</span></template>
+      </el-table-column>
+      <el-table-column label="时间状态" fixed="right" width="120" class-name="task-time-state">
+        <template #default="{ row }">
+          <el-tag v-if="row.rowKind === 'item'" :type="tagTypeFromTone(itemTimeState(row).tone)" size="small" effect="light" round>{{ itemTimeState(row).label }}</el-tag>
+          <span v-else>—</span>
+        </template>
+      </el-table-column>
+      <el-table-column label="制作人" fixed="right" width="112">
+        <template #default="{ row }"><span class="asset-assignee sg-table-assignee" :class="{ 'is-unassigned': row.rowKind === 'asset' ? !row.assigneeUserIds?.length : !row.task?.assigneeUserId }">{{ assigneeName(row) }}</span></template>
+      </el-table-column>
+      <el-table-column label="状态" fixed="right" width="200">
         <template #default="{ row }">
           <div class="asset-status">
             <template v-if="statusEntries(row).length">
-              <el-tag v-for="entry in statusEntries(row)" :key="entry.status" size="small" effect="light" round :type="tagTypeFromTone(assetStatusMeta(entry.status).tone)">{{ entry.label }} {{ entry.count }}</el-tag>
+              <el-tag v-for="entry in statusEntries(row)" :key="entry.status" class="asset-status-tag" :class="assetStatusTagClass(entry.status)" size="small" effect="light" round :type="tagTypeFromTone(assetStatusMeta(entry.status).tone)">{{ entry.label }} {{ entry.count }}</el-tag>
             </template>
-            <el-tag v-else :type="tagTypeFromTone(assetStatusMeta(row.assetStatus).tone)" size="small" effect="dark" round>{{ assetStatusMeta(row.assetStatus).label }}</el-tag>
-            <el-tag v-if="row.rowKind === 'asset' && row.directoryStatus === 'failed'" type="danger" size="small" effect="light" round>{{ assetDirectoryStatusMeta(row.directoryStatus).label }}</el-tag>
+            <el-tag v-else class="asset-status-tag" :class="assetStatusTagClass(row.assetStatus)" :type="tagTypeFromTone(assetStatusMeta(row.assetStatus).tone)" size="small" effect="light" round>{{ assetStatusMeta(row.assetStatus).label }}</el-tag>
+            <el-tag v-if="row.rowKind === 'asset' && row.directoryStatus === 'failed'" class="asset-status-tag asset-status-tag--directory-failed" type="danger" size="small" effect="light" round>{{ assetDirectoryStatusMeta(row.directoryStatus).label }}</el-tag>
           </div>
         </template>
       </el-table-column>
-      <el-table-column label="操作" fixed="right" width="184">
+      <el-table-column label="操作" fixed="right" width="480">
         <template #default="{ row }">
           <slot v-if="row.rowKind === 'asset'" name="asset-actions" :row="row" />
-          <el-button v-else text type="primary" @click="emit('open-item', row)">分项详情</el-button>
+          <slot v-else-if="row.rowKind === 'item'" name="item-actions" :row="row" :asset="assetById.get(Number(row.assetId))">
+            <TableActionButton label="分项详情" :icon="View" @click="emit('open-item', row)" />
+          </slot>
         </template>
       </el-table-column>
     </el-table>
@@ -316,8 +339,9 @@ defineExpose({ waitForLoads, refreshLoadedChildren })
 .asset-identity strong, .asset-assignee, .asset-items-error { white-space: normal; overflow-wrap: anywhere; }
 .asset-thumbnail-cell { display: grid; justify-items: center; gap: 4px; }
 .asset-thumb--small { width: 78px; height: 52px; border-radius: 7px; }
-.asset-status { display: flex; flex-direction: column; align-items: flex-start; gap: 5px; }
+.asset-status { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
 .asset-items-error { display: grid; gap: 4px; margin-top: 6px; color: var(--el-color-danger); }
 .asset-items-error .el-button { justify-self: start; }
 .asset-data-table :deep(.el-table__row--level-1) { --el-table-tr-bg-color: var(--sg-surface-raised, var(--sg-surface)); }
+.task-date-cell { white-space: nowrap; font-variant-numeric: tabular-nums; }
 </style>

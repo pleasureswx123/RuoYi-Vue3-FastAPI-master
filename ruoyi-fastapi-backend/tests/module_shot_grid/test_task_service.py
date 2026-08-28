@@ -25,6 +25,7 @@ SHOT_ID = 30
 ASSET_ID = 40
 ASSET_ITEM_ID = 50
 ASSIGNEE_USER_ID = 2
+NEW_ASSIGNEE_USER_ID = 3
 INITIAL_TASK_LOCK_VERSION = 3
 UPDATED_TASK_LOCK_VERSION = 4
 SHOT_DURATION_MS = 8000
@@ -711,21 +712,85 @@ async def test_assign_asset_item_rechecks_director_after_project_lock_and_rolls_
     db.rollback.assert_awaited_once()
 
 
+@pytest.mark.parametrize('task_kind', ['shot_video', 'asset_image'])
+@pytest.mark.parametrize(
+    ('task_status', 'can_assign'),
+    [
+        ('not_started', True),
+        ('preparing', False),
+        ('in_progress', False),
+        ('pending_review', False),
+        ('revision', False),
+        ('completed', False),
+    ],
+)
+def test_task_assignment_action_is_only_available_before_start(
+    task_kind: str, task_status: str, *, can_assign: bool
+) -> None:
+    row = _task_row(
+        task_kind=task_kind,
+        task_status=task_status,
+        production_item='主视角',
+        asset_item_lifecycle_status='active',
+    )
+    assert ('task.assign' in ShotGridTaskService._allowed_actions(row, _current_user(), _access())) is can_assign
+
+
+@pytest.mark.parametrize('task_kind', ['shot_video', 'asset_image'])
+@pytest.mark.asyncio
+async def test_reassignment_before_start_preserves_task_identity_and_requirements(
+    monkeypatch: pytest.MonkeyPatch, task_kind: str
+) -> None:
+    monkeypatch.setattr(
+        'module_shot_grid.service.task_service.ShotGridTaskDao.get_uncommitted_submission_for_update',
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.task_service.ShotGridTaskDao.get_assignable_member',
+        AsyncMock(return_value={'producer_code': 'NEW'}),
+    )
+    task = _task()
+    assigned, old_assignee = await ShotGridTaskService._assign_task(
+        AsyncMock(),
+        project_id=PROJECT_ID,
+        command=ShotGridTaskAssignModel(assigneeUserId=NEW_ASSIGNEE_USER_ID, taskLockVersion=INITIAL_TASK_LOCK_VERSION),
+        current_task=task,
+        task_kind=task_kind,
+        task_name='改派前的任务',
+        shot_id=SHOT_ID if task_kind == 'shot_video' else None,
+        asset_item_id=ASSET_ITEM_ID if task_kind == 'asset_image' else None,
+        actor_name='director',
+    )
+    assert assigned is task
+    assert assigned.task_id == TASK_ID
+    assert old_assignee == ASSIGNEE_USER_ID
+    assert assigned.assignee_user_id == NEW_ASSIGNEE_USER_ID
+    assert assigned.task_status == 'not_started'
+    assert assigned.requirements == '原要求'
+    assert assigned.lock_version == UPDATED_TASK_LOCK_VERSION
+
+
 @pytest.mark.parametrize(
     ('task_status', 'error_key'),
     [
         ('not_started', 'SG_TASK_REASSIGN_SUBMISSION_CONFLICT'),
+        ('preparing', 'SG_INVALID_STATE_TRANSITION'),
+        ('in_progress', 'SG_INVALID_STATE_TRANSITION'),
+        ('pending_review', 'SG_INVALID_STATE_TRANSITION'),
+        ('revision', 'SG_INVALID_STATE_TRANSITION'),
         ('completed', 'SG_INVALID_STATE_TRANSITION'),
     ],
 )
+@pytest.mark.parametrize('task_kind', ['shot_video', 'asset_image'])
 @pytest.mark.asyncio
-async def test_reassignment_is_blocked_by_completed_task_or_uncommitted_submission(
+async def test_reassignment_is_blocked_after_start_or_by_uncommitted_submission(
     monkeypatch: pytest.MonkeyPatch,
     task_status: str,
     error_key: str,
+    task_kind: str,
 ) -> None:
-    uncommitted = AsyncMock(return_value=901)
-    member = AsyncMock()
+    uncommitted = AsyncMock(return_value=901 if task_status == 'not_started' else None)
+    member = AsyncMock(return_value={'producer_code': 'NEW'})
     monkeypatch.setattr(
         'module_shot_grid.service.task_service.ShotGridTaskDao.get_uncommitted_submission_for_update',
         uncommitted,
@@ -747,16 +812,18 @@ async def test_reassignment_is_blocked_by_completed_task_or_uncommitted_submissi
                 taskLockVersion=INITIAL_TASK_LOCK_VERSION,
             ),
             current_task=task,
-            task_kind='shot_video',
+            task_kind=task_kind,
             task_name='镜头任务',
-            shot_id=SHOT_ID,
-            asset_item_id=None,
+            shot_id=SHOT_ID if task_kind == 'shot_video' else None,
+            asset_item_id=ASSET_ITEM_ID if task_kind == 'asset_image' else None,
             actor_name='director',
         )
 
     assert exc_info.value.error_key == error_key
     assert exc_info.value.http_status == CONFLICT_STATUS
-    if task_status == 'completed':
+    assert task.assignee_user_id == ASSIGNEE_USER_ID
+    assert task.lock_version == INITIAL_TASK_LOCK_VERSION
+    if task_status != 'not_started':
         uncommitted.assert_not_awaited()
     else:
         uncommitted.assert_awaited_once_with(db, TASK_ID)
@@ -769,6 +836,7 @@ async def test_start_shot_allows_manager_and_increments_lock_in_same_transaction
     monkeypatch: pytest.MonkeyPatch,
     all_scope: bool,
 ) -> None:
+    monkeypatch.setattr(ShotGridTaskService, '_now', staticmethod(lambda: datetime(2026, 8, 28, 10)))
     task = _task(assignee_user_id=ASSIGNEE_USER_ID, lock_version=INITIAL_TASK_LOCK_VERSION)
     access = _access(user_id=3, all_scope=all_scope)
     monkeypatch.setattr(
@@ -838,16 +906,29 @@ async def test_start_shot_allows_manager_and_increments_lock_in_same_transaction
     result = await ShotGridTaskService.start_task(
         db,
         TASK_ID,
-        ShotGridTaskStartModel(lockVersion=INITIAL_TASK_LOCK_VERSION, shotLockVersion=0, assetsConfirmed=True),
+        ShotGridTaskStartModel(
+            lockVersion=INITIAL_TASK_LOCK_VERSION,
+            shotLockVersion=0,
+            assetsConfirmed=True,
+            priority='urgent',
+            expectedStartTime='2026-08-29T09:00:00',
+            expectedEndTime='2026-08-30T18:00:00',
+        ),
         _current_user(user_id=3),
     )
 
     assert result is expected
     assert task.task_status == 'preparing'
+    assert task.expected_start_time == datetime(2026, 8, 29, 9)
+    assert task.expected_end_time == datetime(2026, 8, 30, 18)
+    assert task.due_date == date(2026, 8, 30)
+    assert task.priority == 'urgent'
     assert shot.storage_dir_name == '001_S001'
     assert task.lock_version == UPDATED_TASK_LOCK_VERSION
     audit.assert_awaited_once()
     assert audit.await_args.kwargs['payload']['assetsConfirmed'] is True
+    assert audit.await_args.kwargs['payload']['expectedStartTime'] == '2026-08-29T09:00:00'
+    assert audit.await_args.kwargs['payload']['expectedEndTime'] == '2026-08-30T18:00:00'
     assert audit.await_args.kwargs['payload']['confirmationMethod'] == 'manual'
     assert audit.await_args.kwargs['result']['operatedBy'] == access.user_id
     assert task.assignee_user_id == ASSIGNEE_USER_ID
@@ -859,6 +940,7 @@ async def test_start_shot_allows_manager_and_increments_lock_in_same_transaction
 async def test_start_asset_task_creates_shared_directory_outbox_and_enters_preparing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(ShotGridTaskService, '_now', staticmethod(lambda: datetime(2026, 8, 28, 10)))
     task = _task(assignee_user_id=ASSIGNEE_USER_ID, lock_version=INITIAL_TASK_LOCK_VERSION)
     task.task_kind = 'asset_image'
     task.shot_id = None
@@ -933,7 +1015,13 @@ async def test_start_asset_task_creates_shared_directory_outbox_and_enters_prepa
         db,
         TASK_ID,
         ShotGridTaskStartModel(
-            lockVersion=INITIAL_TASK_LOCK_VERSION, assetLockVersion=4, assetItemLockVersion=5, startConfirmed=True
+            lockVersion=INITIAL_TASK_LOCK_VERSION,
+            assetLockVersion=4,
+            assetItemLockVersion=5,
+            startConfirmed=True,
+            priority='high',
+            expectedStartTime='2026-08-29T09:00:00',
+            expectedEndTime='2026-08-30T18:00:00',
         ),
         _current_user(user_id=ASSIGNEE_USER_ID),
     )
@@ -945,6 +1033,9 @@ async def test_start_asset_task_creates_shared_directory_outbox_and_enters_prepa
     assert operation.aggregate_id == ASSET_ID
     assert operation.target_relative_path == 'ASSET\\Environment\\动力舱室内'
     assert operation.idempotency_key == f'asset-directory:{PROJECT_ID}:{ASSET_ID}'
+    assert task.expected_start_time == datetime(2026, 8, 29, 9)
+    assert task.expected_end_time == datetime(2026, 8, 30, 18)
+    assert task.priority == 'high'
     lock_asset.assert_awaited_once_with(db, PROJECT_ID, ASSET_ID)
     db.commit.assert_awaited_once()
     db.rollback.assert_not_awaited()

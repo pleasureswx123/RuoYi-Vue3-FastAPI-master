@@ -180,6 +180,25 @@ class ShotGridTaskStartModel(ShotGridLockVersionModel):
     asset_lock_version: int | None = Field(default=None, ge=0)
     asset_item_lock_version: int | None = Field(default=None, ge=0)
     start_confirmed: StrictBool = False
+    priority: TaskPriority | None = Field(default=None, description='开工时确认的优先级，省略保留原值')
+    expected_start_time: datetime | None = Field(default=None, description='预期开始时间；业务本地时间，仅供展示')
+    expected_end_time: datetime | None = Field(default=None, description='预期结束时间；不限制逾期提交')
+
+    @model_validator(mode='after')
+    def validate_expected_times(self) -> 'ShotGridTaskStartModel':
+        start, end = self.expected_start_time, self.expected_end_time
+        if (start is None) != (end is None):
+            raise ValueError('请同时选择预期开始时间与结束时间')
+        if start is not None and end is not None:
+            if start.tzinfo is not None or end.tzinfo is not None:
+                raise ValueError('预期制作时间请使用业务本地时间，不附加时区')
+            if start.microsecond or end.microsecond:
+                raise ValueError('预期制作时间最多精确到秒')
+            if end <= start:
+                raise ValueError('预期结束时间必须晚于开始时间')
+        if 'priority' in self.model_fields_set and self.priority is None:
+            raise ValueError('priority 不能显式为空')
+        return self
 
 
 class ShotGridTaskProjectSummaryModel(ShotGridApiModel):
@@ -245,6 +264,8 @@ class ShotGridTaskListItemModel(ShotGridApiModel):
     task_status: TaskStatus
     priority: TaskPriority
     due_date: date | None = None
+    expected_start_time: datetime | None = None
+    expected_end_time: datetime | None = None
     requirements: str | None = None
     project: ShotGridTaskProjectSummaryModel
     assignee: ShotGridTaskAssigneeModel

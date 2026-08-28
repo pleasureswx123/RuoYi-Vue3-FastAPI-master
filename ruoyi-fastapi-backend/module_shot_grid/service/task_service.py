@@ -502,6 +502,10 @@ class ShotGridTaskService:
             if task.task_status != 'not_started':
                 raise shot_grid_error(409, 'SG_INVALID_STATE_TRANSITION', '只有未开始任务可以执行开始动作')
             cls._require_lock_version(task.lock_version, command.lock_version)
+            # 必须在等到项目/任务锁后检查，不能信任浏览器打开时的时间。
+            now = cls._now()
+            if command.expected_start_time is not None and command.expected_start_time < now:
+                raise shot_grid_error(422, 'SG_TASK_EXPECTED_TIME_INVALID', '预期开始时间不能早于当前时间，请重新选择')
             asset = None
             if task.task_kind == 'asset_image':
                 asset_item_context = await ShotGridTaskDao.get_asset_item_project_context(
@@ -539,7 +543,6 @@ class ShotGridTaskService:
                         '当前负责人已不是有效制作人员，请重新分配任务',
                     )
 
-            now = cls._now()
             directory_operation_id: int | None = None
             if storage is None or storage.storage_status != 'ready':
                 raise shot_grid_error(409, 'SG_PROJECT_NOT_READY', '项目 NAS 存储尚未就绪，不能开始制作')
@@ -621,6 +624,13 @@ class ShotGridTaskService:
                         db.add(operation)
                         await db.flush()
                         directory_operation_id = operation.operation_id
+            if command.priority is not None:
+                task.priority = command.priority
+            if command.expected_start_time is not None:
+                task.expected_start_time = command.expected_start_time
+                task.expected_end_time = command.expected_end_time
+                # 截止日期仅保留为既有工作台筛选/排序的日期投影，不参与状态或提交门禁。
+                task.due_date = command.expected_end_time.date()
             task.update_by = actor_name
             task.update_time = now
             task.lock_version += 1
@@ -636,6 +646,11 @@ class ShotGridTaskService:
                 payload={
                     'taskId': task_id,
                     'lockVersion': command.lock_version,
+                    'priority': task.priority,
+                    'expectedStartTime': command.expected_start_time.isoformat()
+                    if command.expected_start_time
+                    else None,
+                    'expectedEndTime': command.expected_end_time.isoformat() if command.expected_end_time else None,
                     **(
                         {
                             'projectId': project_id,
@@ -703,7 +718,7 @@ class ShotGridTaskService:
             old_assignee = current_task.assignee_user_id
             if command.task_lock_version is None or current_task.lock_version != command.task_lock_version:
                 raise shot_grid_error(409, 'SG_OPTIMISTIC_LOCK_CONFLICT', '任务已被其他用户修改，请刷新后重试')
-            cls._require_task_active(current_task)
+            cls._require_task_not_started_for_assign(current_task)
             if await ShotGridTaskDao.get_uncommitted_submission_for_update(db, current_task.task_id) is not None:
                 raise shot_grid_error(
                     409,
@@ -813,6 +828,11 @@ class ShotGridTaskService:
             raise shot_grid_error(409, 'SG_INVALID_STATE_TRANSITION', '已完成任务不可普通编辑或改派')
 
     @staticmethod
+    def _require_task_not_started_for_assign(task: ShotGridTask) -> None:
+        if task.task_status != 'not_started':
+            raise shot_grid_error(409, 'SG_INVALID_STATE_TRANSITION', '任务已开工，不能普通改派；仅待开工任务可改派')
+
+    @staticmethod
     def _require_task_not_started_for_edit(task: ShotGridTask) -> None:
         if task.task_status != 'not_started':
             raise shot_grid_error(409, 'SG_INVALID_STATE_TRANSITION', '任务开始制作后不可编辑')
@@ -918,6 +938,8 @@ class ShotGridTaskService:
             taskStatus=row['task_status'],
             priority=row['priority'],
             dueDate=row['due_date'],
+            expectedStartTime=row.get('expected_start_time'),
+            expectedEndTime=row.get('expected_end_time'),
             requirements=row['requirements'],
             project=ShotGridTaskProjectSummaryModel(
                 projectId=row['project_id'],
@@ -1026,6 +1048,7 @@ class ShotGridTaskService:
             actions.append('task.edit')
         if (
             director
+            and row['task_status'] == 'not_started'
             and target_ready
             and not row['has_uncommitted_submission']
             and cls._has_permission(current_user, 'shotgrid:task:assign')

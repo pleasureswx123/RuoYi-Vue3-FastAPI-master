@@ -370,6 +370,35 @@ async def test_submit_preflight_returns_stable_ready_contract_without_writes(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('asset_task', [False, True])
+@pytest.mark.parametrize(
+    'start,end',
+    [
+        ('2000-01-01T09:00:00', '2000-01-02T18:00:00'),
+        ('2099-01-01T09:00:00', '2099-01-02T18:00:00'),
+    ],
+)
+async def test_expected_times_never_block_producer_submission(
+    monkeypatch: pytest.MonkeyPatch,
+    asset_task: bool,
+    start: str,
+    end: str,
+) -> None:
+    context = _ready_asset_context() if asset_task else _ready_shot_context()
+    context.update(expected_start_time=start, expected_end_time=end, due_date=end[:10])
+    _patch_submit_preflight(monkeypatch, context=context)
+    result = await ShotGridVersionSubmissionService.preflight_submission(
+        AsyncMock(),
+        TASK_ID,
+        _preflight_command('result.png' if asset_task else 'result.mov'),
+        _current_user(),
+    )
+    assert result.ready is True
+    assert result.task_status == 'in_progress'
+    assert 'version.add' in result.allowed_actions
+
+
+@pytest.mark.asyncio
 async def test_submit_preflight_numbers_multiple_candidates_inside_one_version_round(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

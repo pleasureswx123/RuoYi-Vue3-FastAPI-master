@@ -86,6 +86,8 @@ class ShotGridShotCrudDao:
                 has_uncommitted_submission.label('has_uncommitted_submission'),
                 task.priority,
                 task.due_date,
+                task.expected_start_time,
+                task.expected_end_time,
                 task.lock_version.label('task_lock_version'),
                 task.assignee_user_id,
                 assignee.nick_name.label('assignee_nick_name'),

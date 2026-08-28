@@ -276,6 +276,8 @@ class ShotGridAssetCrudDao:
                     ShotGridTask.task_status,
                     ShotGridTask.priority,
                     ShotGridTask.due_date,
+                    ShotGridTask.expected_start_time,
+                    ShotGridTask.expected_end_time,
                     ShotGridTask.requirements,
                     ShotGridTask.lock_version.label('task_lock_version'),
                     exists(
@@ -501,7 +503,7 @@ class ShotGridAssetCrudDao:
         project_id: int,
         asset_ids: list[int],
     ) -> set[int]:
-        """返回存在已开始任务或版本的活动制作分项资产。"""
+        """检查全部未删除分项，归档历史不能绕过开工、版本及提交保护。"""
 
         if not asset_ids:
             return set()
@@ -513,12 +515,17 @@ class ShotGridAssetCrudDao:
                 .where(
                     ShotGridAssetItem.project_id == project_id,
                     ShotGridAssetItem.asset_id.in_(asset_ids),
-                    ShotGridAssetItem.lifecycle_status == 'active',
                     ShotGridAssetItem.del_flag == '0',
                     ShotGridTask.del_flag == '0',
                     or_(
                         ShotGridTask.task_status != 'not_started',
                         ShotGridVersion.version_id.is_not(None),
+                        exists(
+                            select(1).where(
+                                ShotGridVersionSubmission.task_id == ShotGridTask.task_id,
+                                ShotGridVersionSubmission.submission_status != 'committed',
+                            )
+                        ),
                     ),
                 )
                 .distinct()
@@ -533,7 +540,7 @@ class ShotGridAssetCrudDao:
         project_id: int,
         asset_ids: list[int],
     ) -> set[int]:
-        """返回包含未命名分项、已完成任务或未完成版本提交的资产。"""
+        """返回包含未命名分项、已开工任务或未完成版本提交的资产。"""
 
         if not asset_ids:
             return set()
@@ -558,7 +565,7 @@ class ShotGridAssetCrudDao:
                     or_(
                         ShotGridAssetItem.production_item.is_(None),
                         func.btrim(ShotGridAssetItem.production_item) == '',
-                        ShotGridTask.task_status == 'completed',
+                        ShotGridTask.task_status != 'not_started',
                         has_uncommitted_submission,
                     ),
                 )
@@ -655,7 +662,7 @@ class ShotGridAssetCrudDao:
         return (await db.execute(statement)).scalar_one_or_none()
 
     @staticmethod
-    async def get_active_items_for_update(
+    async def get_items_for_update(
         db: AsyncSession,
         project_id: int,
         asset_id: int,
@@ -667,7 +674,6 @@ class ShotGridAssetCrudDao:
                     .where(
                         ShotGridAssetItem.project_id == project_id,
                         ShotGridAssetItem.asset_id == asset_id,
-                        ShotGridAssetItem.lifecycle_status == 'active',
                         ShotGridAssetItem.del_flag == '0',
                     )
                     .order_by(ShotGridAssetItem.asset_item_id)

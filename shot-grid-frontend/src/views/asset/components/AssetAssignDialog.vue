@@ -2,6 +2,7 @@
 import { computed, reactive, ref } from 'vue'
 import { assignAssetItemTask } from '@/api/shot-grid/assets'
 import ProjectModal from '@/views/project/components/ProjectModal.vue'
+import AssetProductionInfo from './AssetProductionInfo.vue'
 import { assetErrorState, memberLabel } from '@/views/asset/assetPresentation'
 
 const props = defineProps({
@@ -22,9 +23,7 @@ const operationContext = Object.freeze({
 })
 const form = reactive({
   assigneeUserId: props.item.task?.assigneeUserId ? String(props.item.task.assigneeUserId) : '',
-  taskDescription: props.item.task?.requirements || '',
-  priority: props.item.task?.priority || 'normal',
-  dueDate: props.item.task?.dueDate || ''
+  taskDescription: props.item.task?.requirements || ''
 })
 const assignForm = ref(null)
 const saving = ref(false)
@@ -43,8 +42,7 @@ const assignRules = {
       callback()
     },
     trigger: 'change'
-  }],
-  priority: [{ required: true, message: '请选择任务优先级', trigger: 'change' }]
+  }]
 }
 
 async function submit() {
@@ -57,8 +55,6 @@ async function submit() {
     const response = await assignAssetItemTask(operationContext.projectId, operationContext.assetItemId, {
       assigneeUserId: Number(form.assigneeUserId),
       taskDescription: form.taskDescription.trim() || null,
-      priority: form.priority,
-      dueDate: form.dueDate || null,
       taskLockVersion: props.item.task ? Number(props.item.task.lockVersion) : null
     })
     emit('assigned', response.data, operationContext)
@@ -84,8 +80,8 @@ function closeDialog() {
       <el-alert v-if="requestError" :title="requestError.title" type="error" show-icon :closable="false"><span>{{ requestError.message }}</span><el-button v-if="requestError.status === 409" link type="danger" @click="emit('refresh')">刷新后重试</el-button></el-alert>
       <el-form-item label="唯一主制作人" prop="assigneeUserId"><el-select v-model="form.assigneeUserId" class="sg-select" placeholder="请选择" :disabled="saving"><el-option label="请选择" value="" /><el-option v-for="member in members" :key="member.userId" :label="memberLabel(member)" :value="String(member.userId)" /></el-select></el-form-item>
       <el-form-item label="任务要求" prop="taskDescription"><el-input v-model="form.taskDescription" type="textarea" :rows="4" :disabled="saving" placeholder="说明图片交付要求" /></el-form-item>
-      <div class="assign-form__grid"><el-form-item label="优先级" prop="priority"><el-select v-model="form.priority" class="sg-select" :disabled="saving"><el-option label="低" value="low" /><el-option label="普通" value="normal" /><el-option label="高" value="high" /><el-option label="紧急" value="urgent" /></el-select></el-form-item><el-form-item label="截止日期" prop="dueDate"><el-date-picker v-model="form.dueDate" type="date" value-format="YYYY-MM-DD" placeholder="请选择截止日期" :disabled="saving" /></el-form-item></div>
-      <el-alert v-if="isReassign" title="改派限制" description="改派前会核对任务最新状态；如有尚未完成的版本提交，则暂时不能改派。" type="warning" show-icon :closable="false" />
+      <AssetProductionInfo :asset="asset" :item="item" />
+      <el-alert v-if="isReassign" title="改派限制" description="仅待开工任务可改派。目录准备中及后续状态均不可普通改派；存在待处理版本提交时也不能改派。" type="warning" show-icon :closable="false" />
       <footer><el-button :disabled="saving" @click="closeDialog">取消</el-button><el-button type="primary" :loading="saving" @click="submit">{{ isReassign ? '确认改派' : '确认分配' }}</el-button></footer>
     </el-form>
   </ProjectModal>

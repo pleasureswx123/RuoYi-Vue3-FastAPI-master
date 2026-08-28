@@ -2,6 +2,7 @@ import {
   ElAlert,
   ElButton,
   ElCard,
+  ElCheckbox,
   ElDatePicker,
   ElDescriptions,
   ElDescriptionsItem,
@@ -27,9 +28,10 @@ import { getMineTaskPage, getTaskDetail, startTask, updateTask } from '@/api/sho
 import { getMineReviewListPage, getRecentMineVersions } from '@/api/shot-grid/reviews'
 import { createApiError } from '@/utils/apiError'
 import { useSessionStore } from '@/store/modules/session'
-import { setElSelectValue } from '../helpers/elementPlus'
+import { buttonLabel, completeTaskStartForm, expectedTaskTimes, setElSelectValue } from '../helpers/elementPlus'
 import TaskDetailView from '@/views/task/TaskDetailView.vue'
 import TaskEditDialog from '@/views/task/components/TaskEditDialog.vue'
+import TaskStartDialog from '@/views/task/components/TaskStartDialog.vue'
 import WorkbenchView from '@/views/workbench/WorkbenchView.vue'
 
 vi.mock('@/api/shot-grid/tasks', () => ({
@@ -198,6 +200,26 @@ describe('真实任务工作台', () => {
     getMineTaskPage.mockResolvedValue({ rows: [taskFixture()], total: 1, hasNext: false })
     getMineReviewListPage.mockResolvedValue({ rows: [], total: 0 })
     getRecentMineVersions.mockResolvedValue({ rows: [], total: 0 })
+  })
+
+  it('制作人停留在工作台时，时间提醒从正常更新为临近结束和延期，不改变制作状态', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] })
+    vi.setSystemTime(new Date('2026-08-29T17:59:45'))
+    getMineTaskPage.mockResolvedValue({ rows: [taskFixture(31, {
+      taskStatus: 'in_progress', expectedStartTime: '2026-08-28T09:00:00', expectedEndTime: '2026-08-30T18:00:00'
+    })], total: 1 })
+    const { wrapper } = await mountWorkbench()
+    try {
+      expect(wrapper.find('.task-row').text()).toContain('时间：正常')
+      await vi.advanceTimersByTimeAsync(30000)
+      expect(wrapper.find('.task-row').text()).toContain('时间：临近结束')
+      expect(wrapper.find('.task-row').text()).toContain('请优先处理这个任务')
+      vi.setSystemTime(new Date('2026-08-30T18:00:00'))
+      await vi.advanceTimersByTimeAsync(30000)
+      expect(wrapper.find('.task-row').text()).toContain('时间：已延期')
+      expect(wrapper.find('.task-row').text()).toContain('仍可提交作品')
+      expect(wrapper.find('.task-row').text()).toContain('制作中')
+    } finally { wrapper.unmount(); vi.useRealTimers() }
   })
 
   it('列表自动刷新管理人员开工和目录准备结果，同步制作中摘要', async () => {
@@ -409,7 +431,7 @@ describe('真实任务工作台', () => {
     expect(findTag(wrapper, '1 项我的任务').props()).toMatchObject({ type: 'info', size: 'small', effect: 'plain', round: true })
     expect(findTag(wrapper, '资产').props()).toMatchObject({ type: 'primary', size: 'small', effect: 'plain', round: true })
     expect(findTag(wrapper, '待修订').props()).toMatchObject({ type: 'danger', effect: 'dark', round: true })
-    expect(findTag(wrapper, '2020-01-01 · 已逾期').props()).toMatchObject({ type: 'danger', effect: 'light', round: true })
+    expect(findTag(wrapper, '时间：已延期').props()).toMatchObject({ type: 'danger', effect: 'light', round: true })
     expect(findTag(wrapper, '紧急').props()).toMatchObject({ type: 'danger', effect: 'plain', round: true })
     expect(findTag(wrapper, '最终版本').props()).toMatchObject({ type: 'success', effect: 'plain', round: true })
     expect(findTag(wrapper, '人工批量').props()).toMatchObject({ type: 'primary', size: 'small', effect: 'plain', round: true })
@@ -901,5 +923,85 @@ describe('任务详情、状态动作与异步上下文', () => {
     expect(wrapper.findComponent(TaskEditDialog).props('operationGeneration')).toBe(newDialog.props('operationGeneration'))
     expect(getTaskDetail).toHaveBeenCalledTimes(callsBefore)
     wrapper.unmount()
+  })
+})
+
+
+describe('开工时间表单', () => {
+  function mountStart(validateContext = () => true, contextOverrides = {}) {
+    return mount(TaskStartDialog, {
+      props: { context: {
+        taskId: 71, name: '动力舱 · 主视角', assigneeName: '杨景锋',
+        asset: { assetName: '动力舱', description: '共有要求' },
+        item: { productionItem: '主视角', description: '视角要求' },
+        task: { priority: 'high' }, command: { lockVersion: 4, assetLockVersion: 2, assetItemLockVersion: 3, startConfirmed: true },
+        validateContext, ...contextOverrides
+      } }, global: { components: pageComponents }
+    })
+  }
+
+  it.each([
+    ['资产', {}],
+    ['镜头', { shot: { shotCode: 'S001', description: '镜头制作内容' }, command: { lockVersion: 4, shotLockVersion: 2, assetsConfirmed: true } }]
+  ])('%s开工默认勾选且不显示时间说明，取消勾选后仍阻断提交', async (_kind, contextOverrides) => {
+    startTask.mockReset().mockResolvedValue({ data: { taskStatus: 'preparing' } })
+    const wrapper = mountStart(() => true, contextOverrides)
+    try {
+      await flushPromises()
+      const checkbox = wrapper.findComponent(ElCheckbox).find('input')
+      expect(checkbox.element.checked).toBe(true)
+      expect(document.body.textContent).not.toContain('仅用于告知制作人预期时间')
+      expect(startTask).not.toHaveBeenCalled()
+      wrapper.findComponent(ElDatePicker).vm.$emit('update:modelValue', [expectedTaskTimes.expectedStartTime, expectedTaskTimes.expectedEndTime])
+      await checkbox.setValue(false)
+      const submit = () => wrapper.findAllComponents(ElButton).find(button => buttonLabel(button) === '确认开工').trigger('click')
+      await submit(); await flushPromises()
+      await vi.waitFor(() => expect(document.body.textContent).toContain('请先确认开工条件'))
+      expect(startTask).not.toHaveBeenCalled()
+      await checkbox.setValue(true)
+      await submit(); await flushPromises()
+      expect(startTask).toHaveBeenCalledTimes(1)
+      expect(startTask).toHaveBeenCalledWith(71, expect.objectContaining(contextOverrides.command || { startConfirmed: true }))
+    } finally { wrapper.unmount() }
+  })
+
+  it('过去时间与倒置范围阻断提交，修正后携带双时间和三份版本保存', async () => {
+    startTask.mockReset().mockResolvedValue({ data: { taskStatus: 'preparing' } })
+    const wrapper = mountStart()
+    try {
+      await flushPromises()
+      await wrapper.findComponent(ElCheckbox).find('input').setValue(true)
+      const picker = wrapper.findComponent(ElDatePicker)
+      const submit = () => wrapper.findAllComponents(ElButton).find(button => buttonLabel(button) === '确认开工').trigger('click')
+      picker.vm.$emit('update:modelValue', ['2000-01-01T09:00:00', '2099-09-02T18:00:00'])
+      await submit(); await flushPromises()
+      await vi.waitFor(() => expect(document.body.textContent).toContain('开始时间不能早于当前时间'))
+      expect(startTask).not.toHaveBeenCalled()
+      picker.vm.$emit('update:modelValue', ['2099-09-03T09:00:00', '2099-09-02T18:00:00'])
+      await submit(); await flushPromises()
+      await vi.waitFor(() => expect(document.body.textContent).toContain('结束时间必须晚于开始时间'))
+      expect(startTask).not.toHaveBeenCalled()
+      await completeTaskStartForm(wrapper)
+      expect(startTask).toHaveBeenCalledWith(71, { lockVersion: 4, assetLockVersion: 2, assetItemLockVersion: 3, startConfirmed: true, ...expectedTaskTimes })
+      expect(wrapper.emitted('started')[0][0].data.taskStatus).toBe('preparing')
+    } finally { wrapper.unmount() }
+  })
+
+  it('旧上下文不提交；服务端时间校验失败后保留输入允许修正', async () => {
+    startTask.mockReset()
+    const stale = mountStart(() => false)
+    try {
+      await completeTaskStartForm(stale)
+      expect(startTask).not.toHaveBeenCalled()
+      expect(stale.emitted('failed')[0][0].httpStatus).toBe(409)
+    } finally { stale.unmount() }
+    const wrapper = mountStart()
+    startTask.mockRejectedValue({ httpStatus: 422, message: '预期开始时间不能早于当前时间，请重新选择' })
+    try {
+      await completeTaskStartForm(wrapper)
+      expect(document.body.textContent).toContain('预期开始时间不能早于当前时间')
+      expect(wrapper.findComponent(ElDatePicker).props('modelValue')).toEqual([expectedTaskTimes.expectedStartTime, expectedTaskTimes.expectedEndTime])
+      expect(wrapper.emitted('started')).toBeUndefined()
+    } finally { wrapper.unmount() }
   })
 })

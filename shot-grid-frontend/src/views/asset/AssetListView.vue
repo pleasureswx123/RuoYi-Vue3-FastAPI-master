@@ -2,16 +2,19 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Box, Collection, Delete, Edit, Grid, List, Plus, Refresh, RefreshLeft, Search, Upload, VideoPlay } from '@element-plus/icons-vue'
+import { Box, Collection, Delete, Edit, Grid, List, Plus, Refresh, RefreshLeft, Search, Switch, Upload, User, VideoPlay, View } from '@element-plus/icons-vue'
 
 import { archiveAsset, batchAssignAssetItemTasks, batchDeleteAssets, getAssetDetail, getAssetPage, listAssetAssignees } from '@/api/shot-grid/assets'
 import { assertPositiveId, getProjectDetail, getProjectPage } from '@/api/shot-grid/projects'
 import { useTaskStatePolling } from '@/composables/useTaskStatePolling'
 import { useSessionStore } from '@/store/modules/session'
 import { tagTypeFromTone } from '@/utils/tag'
+import TableActionButton from '@/components/TableActionButton.vue'
 import ProjectStatePanel from '@/views/project/components/ProjectStatePanel.vue'
 import AssetFormDialog from '@/views/asset/components/AssetFormDialog.vue'
 import AssetTreeTable from '@/views/asset/components/AssetTreeTable.vue'
+import AssetItemOperationHost from '@/views/asset/components/AssetItemOperationHost.vue'
+import { canAssetItemAction } from '@/views/asset/assetItemActions'
 import AssetImportDialog from '@/views/asset/components/AssetImportDialog.vue'
 import AssetRequirementDialog from '@/views/asset/components/AssetRequirementDialog.vue'
 import AssetDetailView from '@/views/asset/AssetDetailView.vue'
@@ -31,6 +34,8 @@ const total = ref(0)
 const projectsLoading = ref(false)
 const assetsLoading = ref(false)
 const assetTable = ref(null)
+const itemOperations = ref(null)
+const itemActionBusy = ref(false)
 const backgroundAssetRefresh = ref(false)
 const projectsError = ref(null)
 const assetsError = ref(null)
@@ -348,7 +353,7 @@ const { pollingError } = useTaskStatePolling({
   getDelay: () => {
     if (!currentProjectId.value || assetsLoading.value || assetsError.value || showDetail.value || showCreate.value ||
       showImport.value || showRequirements.value || showEdit.value || editingAssetId.value || showBatchAssign.value ||
-      assigning.value || deleting.value || appliedAssetQuery.value !== currentAssetQueryKey()) return null
+      assigning.value || deleting.value || itemActionBusy.value || appliedAssetQuery.value !== currentAssetQueryKey()) return null
     if (assets.value.some(asset => Number(asset?.itemStatusCounts?.preparing) > 0)) return 1500
     return assets.value.some(asset => Number(asset?.itemStatusCounts?.not_started) > 0) ? 5000 : null
   },
@@ -357,6 +362,14 @@ const { pollingError } = useTaskStatePolling({
 
 function updateAssetSelection(rows) {
   selectedAssetIds.value = new Set(rows.filter(canSelectAsset).map(asset => Number(asset.assetId)))
+}
+
+function itemCan(asset, item, action) {
+  return canAssetItemAction(asset, item, action, hasPermission)
+}
+
+async function handleItemOperationChanged(operation) {
+  if (!disposed && currentProjectId.value === Number(operation?.projectId)) await loadAssets()
 }
 
 function handleAssetCommand(command, asset) {
@@ -409,7 +422,7 @@ async function confirmBatchAssign() {
     }
     const blockedItem = activeItems.find(item => !(item.allowedActions || []).includes('task.assign'))
     if (blockedItem) {
-      ElMessage.warning(`${blockedItem.productionItem || '待补制作分项'} 已完成或存在待处理提交，不能改派`)
+      ElMessage.warning(`${blockedItem.productionItem || '待补制作分项'} 当前不能分配或改派，请刷新状态；仅未开工任务可改派`)
       return
     }
     if (!activeItems.length) {
@@ -650,6 +663,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
+  <AssetItemOperationHost v-if="currentProjectId" ref="itemOperations" :project-id="currentProjectId" :context-key="`${currentProjectId}:${appliedAssetQuery}`" :members="members" @busy-change="itemActionBusy = $event" @changed="handleItemOperationChanged" />
   <section class="sg-page asset-page">
     <header class="sg-page-heading asset-heading">
       <div><p class="sg-eyebrow">ASSETS</p>
@@ -703,21 +717,23 @@ onBeforeUnmount(() => {
         <AssetTreeTable v-else-if="viewMode === 'table'" ref="assetTable" :assets="assets" :project-id="currentProjectId"
                         :context-key="`${currentProjectId}:${appliedAssetQuery}`" :members="members"
                         :selected-asset-ids="selectedAssetIds" :selectable="canSelectAsset"
-                        :can-query="hasPermission('shotgrid:asset:query')" :loading="assetsLoading" :background-refresh="backgroundAssetRefresh" :selection-disabled="assigning || deleting"
+                        :can-query="hasPermission('shotgrid:asset:query')" :loading="assetsLoading" :background-refresh="backgroundAssetRefresh" :selection-disabled="assigning || deleting || itemActionBusy"
                         @selection-change="updateAssetSelection" @open-item="openAsset">
           <template #asset-actions="{ row }">
             <div class="asset-row-actions">
-              <el-button v-if="canOpenItemStart(row)" text type="primary" :icon="VideoPlay" @click="openAssetItemStart(row)">选择分项开工</el-button>
-              <el-button text type="primary" @click="openAsset(row)">详情</el-button>
-              <el-dropdown v-if="canEditAsset(row) || canDeleteAsset(row)" trigger="click" :persistent="false" :disabled="deleting || assigning || editingAssetId !== null" @command="command => handleAssetCommand(command, row)">
-                <el-button text type="primary" :loading="editingAssetId === Number(row.assetId)" :disabled="deleting || assigning || editingAssetId !== null" :aria-label="`${row.assetName} 更多操作`">更多</el-button>
-                <template #dropdown>
-                  <el-dropdown-menu>
-                    <el-dropdown-item v-if="canEditAsset(row)" command="edit" :icon="Edit" :disabled="deleting || assigning || editingAssetId !== null">编辑资产</el-dropdown-item>
-                    <el-dropdown-item v-if="canDeleteAsset(row)" command="delete" :icon="Delete" :disabled="deleting || assigning || editingAssetId !== null" class="asset-delete-action">删除资产</el-dropdown-item>
-                  </el-dropdown-menu>
-                </template>
-              </el-dropdown>
+              <TableActionButton v-if="canOpenItemStart(row)" label="选择分项开工" type="primary" :plain="false" :icon="VideoPlay" @click="openAssetItemStart(row)" />
+              <TableActionButton label="详情" :icon="View" @click="openAsset(row)" />
+              <TableActionButton v-if="canEditAsset(row)" label="编辑资产" :icon="Edit" :loading="editingAssetId === Number(row.assetId)" :disabled="deleting || assigning || editingAssetId !== null" @click="handleAssetCommand('edit', row)" />
+              <TableActionButton v-if="canDeleteAsset(row)" label="删除资产" type="danger" :icon="Delete" :disabled="deleting || assigning || editingAssetId !== null" @click="handleAssetCommand('delete', row)" />
+            </div>
+          </template>
+          <template #item-actions="{ row, asset }">
+            <div class="asset-row-actions">
+              <TableActionButton v-if="itemCan(asset, row, 'task.start')" label="开始任务" type="primary" :plain="false" :icon="VideoPlay" :disabled="assetsLoading || itemActionBusy || assigning || deleting" @click="itemOperations.run('task.start', asset, row)" />
+              <TableActionButton v-if="itemCan(asset, row, 'task.assign')" :label="row.task ? '改派任务' : '分配任务'" type="info" :icon="row.task ? Switch : User" :disabled="assetsLoading || itemActionBusy || assigning || deleting" @click="itemOperations.run('task.assign', asset, row)" />
+              <TableActionButton v-if="itemCan(asset, row, 'assetItem.edit')" :label="String(row.productionItem || '').trim() ? '编辑分项' : '补齐制作分项'" :icon="Edit" :type="String(row.productionItem || '').trim() ? '' : 'warning'" :dashed="!String(row.productionItem || '').trim()" :disabled="assetsLoading || itemActionBusy || assigning || deleting" @click="itemOperations.run('assetItem.edit', asset, row)" />
+              <TableActionButton v-if="itemCan(asset, row, 'assetItem.delete')" label="删除分项" type="danger" :icon="Delete" :disabled="assetsLoading || itemActionBusy || assigning || deleting" @click="itemOperations.run('assetItem.delete', asset, row)" />
+              <TableActionButton label="分项详情" :icon="View" :disabled="itemActionBusy" @click="openAsset(row)" />
             </div>
           </template>
         </AssetTreeTable>
@@ -746,7 +762,6 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.asset-delete-action { color: var(--el-color-danger); }
 .asset-page { display: grid; gap: 18px; }
 .asset-heading { display: flex; gap: 20px; align-items: flex-start; justify-content: space-between; }
 .asset-heading__actions { display: flex; gap: 9px; flex-wrap: wrap; }
@@ -775,7 +790,7 @@ onBeforeUnmount(() => {
 .asset-pagination { justify-content: center; }
 @media (max-width: 1100px) { .asset-filters { grid-template-columns: 1fr 1fr 1fr; } .type-board { grid-template-columns: 1fr; } }
 @media (max-width: 700px) { .asset-heading { flex-direction: column; } .asset-filters { grid-template-columns: 1fr; } .project-context__meta { justify-content: flex-start; } .asset-grid { grid-template-columns: 1fr; } }
-.asset-toolbar{gap:12px}.asset-toolbar__summary{display:flex!important;gap:8px!important;align-items:center!important;flex-wrap:wrap}.asset-row-actions{display:flex;align-items:center;flex-wrap:wrap;gap:2px}.asset-row-actions :deep(.el-button){margin-left:0}.asset-batch-assign-dialog{display:grid;gap:16px}.asset-batch-assign-dialog p{margin:0;color:var(--sg-text-secondary);font-size:12px;line-height:1.65}.asset-batch-assign-dialog:deep(.el-form-item){margin-bottom:0}.asset-batch-assign-dialog:deep(.el-form-item__label){color:var(--sg-text-muted);font-size:11px}.asset-batch-assign-dialog:deep(.el-select){width:100%}
+.asset-toolbar{gap:12px}.asset-toolbar__summary{display:flex!important;gap:8px!important;align-items:center!important;flex-wrap:wrap}.asset-row-actions{display:flex;align-items:center;flex-wrap:wrap;gap:4px}.asset-row-actions :deep(.el-button){margin-left:0}.asset-batch-assign-dialog{display:grid;gap:16px}.asset-batch-assign-dialog p{margin:0;color:var(--sg-text-secondary);font-size:12px;line-height:1.65}.asset-batch-assign-dialog:deep(.el-form-item){margin-bottom:0}.asset-batch-assign-dialog:deep(.el-form-item__label){color:var(--sg-text-muted);font-size:11px}.asset-batch-assign-dialog:deep(.el-select){width:100%}
 .project-context:deep(.el-form-item){min-width:240px;margin:0}.project-context:deep(.el-form-item__label){height:auto;padding-bottom:6px;color:var(--sg-text-muted);font-size:10px;line-height:1}.asset-filters .asset-search{padding:0;background:transparent;border:0}.view-switch{padding:0;background:transparent}.view-switch:deep(.el-radio-button__inner){display:flex;gap:6px;align-items:center;color:var(--sg-text-muted);background:var(--sg-surface);border-color:var(--sg-border);box-shadow:none}.view-switch:deep(.el-radio-button__original-radio:checked+.el-radio-button__inner){color:var(--sg-accent);background:var(--sg-accent-soft);border-color:rgba(255,182,87,.32);box-shadow:-1px 0 0 0 rgba(255,182,87,.32)}.asset-card:deep(.el-card__body){padding:0}.asset-card>.asset-thumb,.asset-card:deep(.el-card__body>.asset-thumb){height:150px}.type-board__column{min-width:0;background:var(--sg-surface);border-color:var(--sg-border)}.type-board__column:deep(.el-card__body){padding:13px}.type-board__column header{display:flex;align-items:center;justify-content:space-between;margin-bottom:11px}.type-board__items{display:grid;gap:8px}.type-board .type-board__asset{display:block;width:100%;height:auto;margin:0;padding:8px;color:var(--sg-text);text-align:left;background:rgba(255,255,255,.025);border:1px solid transparent}.type-board .type-board__asset:hover{background:rgba(255,255,255,.04);border-color:var(--sg-border-strong)}.type-board .type-board__asset:deep(>span){display:grid;min-width:0;grid-template-columns:68px minmax(0,1fr);gap:9px;align-items:center}.type-board .type-board__asset:deep(>span>span){display:block;min-width:0}.type-board__asset:deep(>span>span strong),.type-board__asset:deep(>span>span small){display:block;overflow:hidden;text-overflow:ellipsis}.type-board__asset:deep(.el-tag){margin-top:5px}.asset-pagination{margin-top:2px}.asset-pagination:deep(.el-pager li),.asset-pagination:deep(button){background:var(--sg-surface)!important}.asset-pagination:deep(.is-active){color:#17130d!important;background:var(--sg-accent)!important}
 .asset-filters{grid-template-columns:minmax(220px,1fr) repeat(3,minmax(130px,180px)) auto}
 .asset-filters:deep(.el-form-item){min-width:0;margin-bottom:0}

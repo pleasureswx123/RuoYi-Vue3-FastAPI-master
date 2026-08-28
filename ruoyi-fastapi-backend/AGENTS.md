@@ -232,13 +232,13 @@ PostgreSQL 迁移是当前项目的必需交付物。只有插件清单继续声
 
 ### 7.4 Shot Grid 当前数据库边界
 
-> 2026-08-27 后以 `20260827_23` 为当前 PostgreSQL head：20 在既有场内镜序、延迟目录、审核草稿和永久删除边界上新增“一个版本轮次包含多个候选文件”；21 新增审核通过后的最终版本 NAS 交付 Outbox；22 将单候选版本自动设为本轮最佳并回填历史数据。`approve` 必须在审核事务创建唯一 `sg_final_delivery(pending)`，版本 Worker 在事务外把最佳候选无覆盖发布到同任务目录的 `FINAL/` 并写 `FINAL.json`。候选原文件保持不变。部署必须先执行 `upgrade 20260827_23` 再启动对应新代码。
+> 2026-08-28 后以 `20260828_24` 为当前 PostgreSQL head：20 在既有场内镜序、延迟目录、审核草稿和永久删除边界上新增“一个版本轮次包含多个候选文件”；21 新增审核通过后的最终版本 NAS 交付 Outbox；22 将单候选版本自动设为本轮最佳并回填历史数据；24 增加任务预期制作时间范围。`approve` 必须在审核事务创建唯一 `sg_final_delivery(pending)`，版本 Worker 在事务外把最佳候选无覆盖发布到同任务目录的 `FINAL/` 并写 `FINAL.json`。候选原文件保持不变。部署必须先执行 `upgrade 20260828_24` 再启动对应新代码。
 
 - Shot Grid 领域模块位于 `module_shot_grid/`，包含 26 张 `sg_` 表 DO、项目访问依赖、范围导航、项目创建/存储状态/成员/范围查询、项目角色到固定平台角色的受管增量绑定、镜头与资产委派候选、v2 镜头/资产模板下载、两类 Excel 预检与正式提交、独立任务管理、版本提交/NAS 发布、`auto_single` 自动审核闭环，以及 NAS 目录 Outbox Worker、目录操作查询和人工重试接口。
 - 首个增量迁移为 `20260810_01`，并已同步 `sql/ruoyi-fastapi-pg.sql`、菜单、权限和字典种子。
 - `20260810_04` 是无版本历史库的采用/向前修复迁移：统一秒级时间精度和空字符串审计默认值，补强序场次、资产制作分项、主文件及集/场次编号约束；不得改写历史 01/02/03 代替修复。无 `alembic_version` 的历史库只能在备份和克隆核验后 stamp 01，再执行 upgrade head。04 必须在任何 ALTER 前预检冲突并整体失败，不能猜测修复业务数据；downgrade 不恢复从未被正式 revision 声明的旧弱漂移，秒以下精度只能从升级前备份恢复。
-- 当前 head `20260827_23` 是 PostgreSQL-only 增量链：15 至 19 保持镜头/资产延迟目录、连续编号、审核草稿和项目永久删除语义；20 增加候选级提交、文件、媒体与选择边界；21 增加与最终版本一对一的 `sg_final_delivery`，使用租约、`SKIP LOCKED` 和 owner + attempt fencing 发布 `FINAL/` 文件与清单；22 规范化单候选版本的系统默认选择和主审核媒体；23 仅将标准 `shotgrid:task:start` 菜单更名为“开始任务”，保留自定义标题和角色授权。
-- PostgreSQL 部署必须先执行 `upgrade 20260827_23`，再启动包含多候选审核和最终交付的新代码。固定角色配置完成后，由同时具有 `shotgrid:project:all` 和 `system:user:edit` 的管理员调用 `POST /shot-grid/platform-role-bindings/reconcile` 对账存量成员；对账失败必须整体回滚。
+- 当前 head `20260828_24` 是 PostgreSQL-only 增量链：15 至 19 保持镜头/资产延迟目录、连续编号、审核草稿和项目永久删除语义；20 增加候选级提交、文件、媒体与选择边界；21 增加与最终版本一对一的 `sg_final_delivery`，使用租约、`SKIP LOCKED` 和 owner + attempt fencing 发布 `FINAL/` 文件与清单；22 规范化单候选版本的系统默认选择和主审核媒体；23 仅将标准 `shotgrid:task:start` 菜单更名为“开始任务”，保留自定义标题和角色授权；24 增加成对预期时间，仅作展示与提醒，不改变任务状态或限制提交。
+- PostgreSQL 部署必须先执行 `upgrade 20260828_24`，再启动对应新代码。固定角色配置完成后，由同时具有 `shotgrid:project:all` 和 `system:user:edit` 的管理员调用 `POST /shot-grid/platform-role-bindings/reconcile` 对账存量成员；对账失败必须整体回滚。
 - 一次提交创建一个版本轮次和 `1..N` 个候选，候选不得拆成多个版本。只有全部候选完成无覆盖 NAS 发布，才允许在短事务中创建正式版本、候选、候选文件、一个自动审核单并把任务改为 `pending_review`；任一文件失败时不得暴露半个正式版本。
 - 单候选新轮次由系统在正式版本事务内直接设置 `selected_candidate_id` 和主审核文件，`selected_by/selected_time` 保持为空且不写审核人选择历史；多候选新轮次初始不选择，审核人显式选择后才能记录问题或提交结论。问题草稿、正式问题、历史问题确认和审核动作都必须校验并保存同一候选；存在草稿时禁止切换候选，禁止静默迁移批注。
 - 镜头与资产列表、详情、卡片和故事板的最新版本只读投影不得把“尚未选择最佳候选”误判为缺少审核媒体或无缩略图。存在 `selected_candidate_id` 时展示该候选；待审核且尚未选择时按 `sort_order/candidate_no/candidate_id` 稳定展示候选 01，并让缩略图、代理媒体和业务文件名使用同一展示候选。
@@ -265,7 +265,7 @@ PostgreSQL 迁移是当前项目的必需交付物。只有插件清单继续声
 - 任务列表提供项目范围与跨项目 `GET /shot-grid/tasks/mine`；独立业务前端的 `/workbench` 使用该跨项目真实数据源，`/tasks/:taskId` 使用任务详情和编辑真实接口，等待管理端开工。镜头任务详情额外返回详情专用 `shotProduction`，投影当前镜头的时长、制作内容、景别、机位、镜头运动、焦段、台词/对白、音效、色调参考和备注；任务列表仍只返回目标摘要，不把完整制作信息扩入列表响应。动作必须同时满足平台权限与后端 `allowedActions`。任务编辑继续按项目管理权限复核。镜头任务仅允许具备 `shotgrid:task:start` 的项目 `director` 或 `has_all_scope` 管理人员确认开工；制作人只能等待，不能自行开始。管理人线下确认依赖资产齐备后提交 `{ lockVersion, shotLockVersion, assetsConfirmed: true }`，服务端在锁内复核管理范围、任务与镜头版本、状态及当前负责人仍为有效 `creator`，并在同一事务审计人工确认。资产任务同样由具备上述权限和范围的管理人员按制作分项确认，以 `{ lockVersion, assetLockVersion, assetItemLockVersion, startConfirmed: true }` 提交；锁内复核任务、父资产和分项三份版本、分项内容及有效负责人，同事务审计。只递增任务版本，不修改父资产和分项元数据版本；其他分项不随本分项或共享目录开工；版本 preflight/create 和失败提交重试仍只允许当前受派的活动制作人员本人，管理人不得代提交或代重试。首次分配的 `taskLockVersion` 必须为空，已有任务改派时必须携带当前 `taskLockVersion`，开始任务必须携带 `lockVersion`。任务存在任何非 `committed` 提交（包括 `failed`）时禁止改派，只允许当前活动负责人重试原提交或走后续明确治理动作。
 - 资产列表与详情返回 `itemStatusCounts`，固定包含 `unassigned/not_started/preparing/in_progress/reviewing/revision/completed` 七个非负整数键，仅统计活动且未删除分项。父级状态按 `revision → reviewing → in_progress → preparing → unassigned → not_started` 聚合；至少有一个活动分项且全部完成才为 `completed`，无活动分项为 `unassigned`。父级 `task.start` 仅表示可进入分项选择，至少存在一个实际可开工分项才返回；真正 start 必须对选中分项任务提交，不能整资产开工。
 - 目录成功回写必须先锁项目，再锁目录操作及任务/存储行，与开工事务使用同一项目协调锁；等待后仍复核 owner + attempt fencing。该锁仅在 NAS I/O 结束后的短事务持有，保证共享目录完成与新分项开工交错时不会遗漏已开工分项。
-- 镜头详情的 `allowedActions` 必须排除已完成任务和存在非 `committed` 版本提交（包括 `failed`）的改派入口，并保留平台权限、项目管理范围、项目状态、NAS 就绪和镜头生命周期门禁。未完成任务的 `not_started/preparing/in_progress/pending_review/revision` 状态本身不禁止改派；变更该策略必须同时调整正式契约、动作投影和写入校验。
+- 镜头和资产制作分项统一“未开工可改派，开工后禁止普通改派”：无任务时可首次分配；已有任务只有 `not_started` 且不存在非 `committed` 提交（包括 `failed`）时可改派。`preparing/in_progress/pending_review/revision/completed` 均不返回 `task.assign`，管理人员亦不可绕过。单个和批量分配必须在既有项目、目标和任务锁内核对状态与乐观锁，已开工返回 HTTP 409 / `SG_INVALID_STATE_TRANSITION`；批量任一目标不满足条件整批回滚，不重置任务或修改历史。任务、镜头、分项和父资产列表/详情投影须一致，父资产只有全部活动分项均可分配才返回该动作；保留平台权限、管理范围、项目状态、NAS 就绪、生命周期和成员有效性门禁。
 - 版本提交当前实现固定为“本地候选文件校验 → `POST /shot-grid/tasks/{taskId}/version-submissions/preflight` → 逐候选 `POST /common/files/upload` 平台私有上传 → `POST /shot-grid/tasks/{taskId}/version-submissions` 创建提交并返回 HTTP 202”。preflight 接收有序 `candidates[]`（`clientFileKey/fileName/fileSize/sortOrder/candidateNote`），create 按同一顺序接收对应 `clientFileKey/fileId/sortOrder/candidateNote`；两者同时携带 `issueResponses`，首版为空，修订版精确覆盖锁内重查的全部 open 问题，并纳入幂等命令哈希。候选顺序、文件或问题集合变化必须冲突，不能静默接受过期命令。preflight、create 与失败提交 retry 都必须校验当前用户就是任务当前委派的活动 `creator` 本人，不接受 `director`、管理员或全项目范围代提交。其余 NAS 无覆盖发布、逐候选文件引用切换、`committed` 反查版本和逐候选唯一临时文件规则保持不变。
 - `GET /shot-grid/tasks/{taskId}/version-submissions/current` 用于刷新后的未解决提交恢复；状态查询只把 `committed` 视为成功，`failed` 保留原提交行并通过 retry 接口重置原行，不能另建一条绕过占用约束。前端自动轮询每轮最多 30 次，连续 3 次查询错误后暂停，使用有上限的指数退避，并在 401/403/404 时停止；到达边界后只允许人工刷新或合法重试。版本历史、版本详情和受保护 Range 下载分别使用独立的 `shotgrid:version:list`、`shotgrid:version:query`、`shotgrid:file:download` 权限，失败重试使用 `shotgrid:version:retry`；`/versions/:versionId` 深链归属 `reviews` 路由域。
 - 版本创建的稳定幂等键与命令指纹只保存在当前前端内存上下文；创建响应不明时，同一文件、同一命令重放必须复用已上传 `fileId` 和幂等键，并跳过重复 preflight/upload。任务、操作和文件切换使用 generation/abort 防止同 ID 往返的 ABA 迟到响应继续提交；上传或下载返回 Blob 时，统一请求层只在 JSON Content-Type 且响应不超过 64 KiB 时解析错误体，并保留 `httpStatus/code/errorKey/details`，不得把二进制正文误解码或把 401/403/404/409/413/416/5xx 抹平成同一提示。
@@ -278,9 +278,17 @@ PostgreSQL 迁移是当前项目的必需交付物。只有插件清单继续声
 - Worker 必须先提交领取短事务，再在线程中执行路径校验、幂等建目录和写探针，最后以短事务回写结果；软超时只做诊断并继续心跳续租，不能声称能够硬终止仍在运行的 SMB I/O。APScheduler 的 AsyncIOExecutor 不会等待已取消 Job，因此正常关机和 Leader 失锁必须显式 drain 已登记的 NAS Job，完成当前 I/O 与租约收尾后才能关闭数据库或重新竞争。当前单轮批次串行消费，尚未启用批内并发。
 - 项目初始化成功才把项目存储改为 `ready`；项目级最终失败改为 `failed`。动态目录失败只记录安全错误，不得把已经就绪的项目根存储降级为初始化失败。人工重试不覆盖旧操作：项目和动态目录都新建 `reconcile_directory`，要求原因、幂等键和重新校验后的路径快照，并在同事务写操作日志。
 - 自动化测试只允许通过显式 `allow_local_root=True` 使用临时本地目录。生产适配器只接受 Windows 直接 UNC、`SHOT_GRID_NAS_UNC_MOUNT_MAP` 的精确根映射，或 `SHOT_GRID_NAS_SERVER_MOUNT_MAP` 明确允许服务器后的动态共享映射；Linux 每次真实 I/O 前都必须验证解析到的共享挂载根为 `cifs/smb3`，不得把动态命名空间本身或任意本地绝对路径当成 NAS。配置了服务器白名单后，未命中的 UNC 服务器在 Windows 和 Linux 均失败关闭。源码、迁移、Mock/临时目录测试和服务启动均不能替代正式服务账号、NAS/AD/共享 ACL 及隔离 UNC 根目录 E2E。
+- 资产删除（单个及批量）必须在项目、资产和分项/任务锁内检查全部未删除分项，包括已归档历史；任一任务不是 `not_started`（含 `preparing`），或任一分项已有版本、任务存在非 `committed` 提交，均禁止删除父资产。列表与详情的 `asset.archive` 使用相同阻断条件，不能通过先归档分项绕过开工保护。仍须无镜头引用并满足原权限与状态约束；全部未开工时只软删除活动分项及其未开始任务和父资产，不改写已归档分项历史，不删除 NAS 文件。分项删除同样禁止已开工任务。
 - 镜头、资产及制作分项的手工创建和 Excel 导入只创建生产对象与关系，聚合状态必须为 `unassigned`，不得创建对象目录 Outbox、接收制作人或创建任务；集目录 Outbox 仍按集契约处理。资产创建时只冻结稳定目录身份，第一次实际目录操作由管理人员确认某个资产制作分项开工触发。Excel 正式提交仅使用 `selectedRows[{sheetName,rowNumber}]`，不能只用跨 Sheet 不唯一的物理行号，也不得包含 `assigneeUserId`；预览明文 Token 和行明细只短期存 Redis，PostgreSQL `sg_import_batch.selection_hash/result_summary` 负责跨 Redis 生命周期的幂等重放。
 - 第一次委派必须走独立任务分配 Service，创建 `assignee_user_id` 非空、`task_status='not_started'` 的唯一 `shot_video` 或 `asset_image` 任务；后续改派只更新同一任务。镜头与资产制作分项的 `not_started` 均展示为“待开工”，由管理人员逐项确认。新目录尚未就绪时，开工进入 `preparing`，沿用现有 NAS 目录 Outbox；目录成功后才进入 `in_progress`。已有成功目录可直接进入 `in_progress`；未开工和目录准备中均不得提交版本。正式提交不可变版本后进入 `pending_review`，审核通过时版本进入 `final` 且任务进入 `completed`，退回时任务进入 `revision` 并通过新版本循环。
 - 生产履历顶部固定投影“创建/导入、委派、制作、提交版本、审核、完成”六阶段，下方版本循环返回审核动作、来源问题、处理说明和确认结果。阶段投影不是审计事件；`sg_task.create_time` 只能证明任务记录建立，不能作为确认的委派、改派或开始事件，无法由正式记录证明的历史必须返回 `evidenceLevel='inferred'` 或缺省。
+
+### 7.1 任务预期制作时间
+
+- Shot Grid PostgreSQL head 为 `20260828_24`。`sg_task.expected_start_time/expected_end_time` 为可空、成对、秒级业务本地时间，沿用 `SHOT_GRID_DATETIME`，不回填历史任务；DB 约束结束严格晚于开始，不能使用随时间变动的 CHECK。
+- 管理人员开工命令可携带 `priority/expectedStartTime/expectedEndTime`；前端新开工表单要求完整时间范围，旧调用省略时保留原值。带时区、半个范围、反序/相等时间拒绝；取得项目和任务锁后按服务端当前时间再拒绝过去的开始时间（422 / `SG_TASK_EXPECTED_TIME_INVALID`）。时间与原状态、版本、目录 Outbox、审计同事务保存，失败整体回滚。`due_date` 同步为预期结束的日期，仅兼容既有筛选/排序。
+- 预期时间仅供制作人参考。任务是否开工/完成由原有管理员确认、目录、提交和审核链决定；禁止定时到期完成，禁止把预期时间加入 preflight/create/retry 或普通改派门禁。制作人在合法状态下可提前或逾期提交。
+- 任务列表/详情、镜头列表顶层、镜头任务摘要和资产分项摘要返回两项预期时间；镜头列表直接复用原查询已有的任务时间投影，不额外逐行读取详情。正常/临近结束/延期是前端展示提醒，不新增任务状态或调度任务。旧日期保留、迁移前备份，降级遇到已填写时间时必须拒绝，避免静默丢失安排。
 
 ## 8. Redis、缓存和日志
 

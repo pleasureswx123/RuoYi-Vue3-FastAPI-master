@@ -205,7 +205,7 @@ sg_project / sg_shot / sg_asset / sg_version / sg_note
 
 只新增 DO、只修改初始化 SQL 或只写设计文档，都不算数据库交付完成。JSONB、部分唯一索引等 PostgreSQL 专用实现必须明确限制在 PostgreSQL 路径，不得无意影响仓库保留的 MySQL 兼容模块。
 
-当前 Shot Grid Alembic head 为 `20260827_23`。06 增加任务/版本/审核完整性约束；07 增加媒体派生；08 至 19 依次补齐 NAS 管理、镜头号治理、跨版本问题、媒体引用、受管角色、排序、延迟目录、审核草稿和项目永久删除；20 增加版本轮次内多候选文件、候选级媒体派生与审核选择审计，并把既有每个版本回填为候选 01，历史 NAS 路径和业务文件名不改名；21 增加审核通过后的最终版本 NAS 交付 Outbox，由 Leader Worker 异步发布 `FINAL/` 文件和 `FINAL.json`；22 将单候选版本自动设为本轮最佳并回填历史数据；23 仅更名标准任务开工菜单，不自动扩大角色权限。媒体 Worker 默认关闭：图片使用 Pillow 生成 JPEG 缩略图和网页代理，视频使用显式配置的 FFmpeg 生成 JPEG 缩略图和 H.264/AAC faststart MP4；工具缺失或解码失败必须持久化安全错误并让前端降级原媒体，不得将原文件登记为代理。生成物继续进入 `sys_file_info`、`sys_file_reference` 和候选级 `sg_version_file`，成功提交前清理半成品。该增量链仍不是完整 RuoYi 空库 Alembic baseline。
+当前 Shot Grid Alembic head 为 `20260828_24`。24 新增任务预期制作时间，不回填历史任务；06 增加任务/版本/审核完整性约束；07 增加媒体派生；08 至 19 依次补齐 NAS 管理、镜头号治理、跨版本问题、媒体引用、受管角色、排序、延迟目录、审核草稿和项目永久删除；20 增加版本轮次内多候选文件、候选级媒体派生与审核选择审计，并把既有每个版本回填为候选 01，历史 NAS 路径和业务文件名不改名；21 增加审核通过后的最终版本 NAS 交付 Outbox，由 Leader Worker 异步发布 `FINAL/` 文件和 `FINAL.json`；22 将单候选版本自动设为本轮最佳并回填历史数据；23 仅更名标准任务开工菜单，不自动扩大角色权限。媒体 Worker 默认关闭：图片使用 Pillow 生成 JPEG 缩略图和网页代理，视频使用显式配置的 FFmpeg 生成 JPEG 缩略图和 H.264/AAC faststart MP4；工具缺失或解码失败必须持久化安全错误并让前端降级原媒体，不得将原文件登记为代理。生成物继续进入 `sys_file_info`、`sys_file_reference` 和候选级 `sg_version_file`，成功提交前清理半成品。该增量链仍不是完整 RuoYi 空库 Alembic baseline。
 
 媒体派生配置使用 `SHOT_GRID_MEDIA_WORKER_` 前缀；至少需要显式设置 `ENABLED=true` 才注册 Application Leader 内部任务，视频环境还需通过 `FFMPEG_PATH` 提供可执行文件。默认缩略图最长边 480、图片代理最长边 1920、视频代理最大宽度 1280；转换期间按 `HEARTBEAT_SECONDS` 续租，数据库回写继续使用 version + owner + attempt fencing。审核列表返回 `thumbnail` 和 `mediaDerivationStatus`，版本详情返回完整派生文件角色及同名状态；前端只能优先使用真实 `proxy_media`，代理加载失败时回退主 `review_media`。
 
@@ -482,8 +482,13 @@ Shot Grid 对平台 `sys_user_role` 增量的来源标记。该表不是第三�
 - 资产列表的表格视图使用 Element Plus 原生树形懒加载（`lazy/load/row-key/tree-props`），父行为资产、子行为其活动制作分项；分页数量、筛选和批量选择仍以父资产为单位。子行不改变父资产的服务端聚合状态，不把某个分项状态作为整资产状态。
 - 首次展开通过现有鉴权 `GET /shot-grid/projects/{projectId}/assets/{assetId}/items` 获取 `data: ShotGridAssetItemModel[]`，保留 `shotgrid:asset:query` 和项目访问依赖；前端过滤 `lifecycleStatus=active` 并按 `sortOrder/assetItemId` 排序，归档历史从详情查看。此变更不新增后端接口或数据库字段。
 - 树节点键分别为 `asset:{projectId}:{assetId}` 和 `item:{projectId}:{assetItemId}`；`tree-props` 声明 `children/hasChildren`，并使用 `checkStrictly=true`。标准选择列只允许父资产进入原有批量业务链，分项行不能误传为资产或自动联动勾选。
-- 子行展示自身 `productionItem/description/thumbnail/task/assetStatus/latestVersion`；制作人优先使用平台 `userName`，无任务为未分配。点击“分项详情”打开原资产抽屉并定位对应分项，不直接执行开工或绕过现有分项动作确认。
-- 表格“说明”是当前主数据的组合视图：父行读取 `sg_asset.description`，子行读取同一父字段并追加自身 `sg_asset_item.description`。父子文本完全相同时只展示一次；父字段为空时不推断共有内容，保留原分项说明且提示父级尚未填写。该组合不写回字段、不修改任务 `requirements` 或版本快照，也不改变 `asset-v2` 导入映射。长文本使用 `ElText.line-clamp=3`，实际溢出时提供明确的展开/收起按钮；分项数归入父名称，版本归入子缩略图，父行显示分项状态计数，不再同时重复聚合状态标签。编辑/删除收进 `ElDropdown`，仍复用原动作和确认流程。
+- 子行展示自身 `productionItem/description/thumbnail/task/assetStatus/latestVersion`；制作人优先使用平台 `userName`，无任务为未分配。操作列按分项 `allowedActions` 与平台权限交集提供开始任务、分配/改派任务、编辑分项、删除分项和分项详情。写操作先重读原资产详情并冻结目标及锁版本，复用原表单和确认流程；开工仍逐分项提交三份锁版本。详情入口打开原资产抽屉并定位对应分项。
+- 镜头、父资产及制作分项的操作列统一使用 `ElButton size="small" round`，所有动作同时显示图标与中文文字，并保留 `aria-label`；不显示悬停提示，必要的禁用原因通过 `aria-description` 提供给辅助技术。开工使用主色实底；分配/改派使用蓝色 `plain`；详情/编辑使用中性 `plain`；补齐制作分项使用警告色 `plain dashed`；删除使用危险色 `plain`。自定义颜色复用已有主题变量，`dark` 绑定 Pinia 主题状态，并校验明暗主题下普通、悬停、按下、焦点及禁用样式。资产操作列加宽至 480px，镜头操作列加宽至 420px，保留换行及横向滚动，完整呈现可用操作。该展示调整不改变任何服务端动作、任务状态或接口契约。
+- 制作人以主文字显示，无负责人时弱化；状态使用统一的七色主题变量和 `ElTag size="small" effect="light" round`，父资产计数与子分项、镜头同状态同色，目录失败另外显示红色异常标签。明亮模式为淡底深字，暗黑模式为深底亮字；状态名称和数量始终保留。资产状态列宽度为 200px，优先同排，空间不足时换行。
+- `productionItem` 为空或全空白且允许 `assetItem.edit` 时，“补齐制作分项”替代“编辑分项”；可选说明、备注、缩略图及版本不属于该完整性门禁。保存后刷新父资产和已加载子分支，不修改其他分项；项目或查询切换使旧请求和回调失效。
+- 资产删除沿用 `asset.archive` 及现有单个/批量删除接口；阻断查询涵盖全部 `del_flag='0'` 分项（含 `archived`），不能仅检查活动分项。任一任务状态不为 `not_started`、任一分项有版本或任务存在非 `committed` 提交时，父资产不可删除；无镜头引用及原权限、项目/存储状态要求继续有效。写事务使用项目→资产→分项/任务锁并再次复核，全部未开工时只软删除活动分项、其未开始任务与父资产，保留归档历史。分项进入 `preparing` 即计为开工，其自身删除也被禁止。
+- 镜头行“分配任务/改派任务”复用既有分配 API 和 `ShotAssignDialog`；点击后重读镜头详情并核验 `task.assign`，首次分配不携带任务锁号，改派提交当前 `taskLockVersion`；不新增权限、接口或数据库字段。
+- 表格“说明”是当前主数据的组合视图：父行读取 `sg_asset.description`，子行读取同一父字段并追加自身 `sg_asset_item.description`。父子文本完全相同时只展示一次；父字段为空时不推断共有内容，保留原分项说明且提示父级尚未填写。该组合不写回字段、不修改任务 `requirements` 或版本快照，也不改变 `asset-v2` 导入映射。长文本使用 `ElText.line-clamp=3`，实际溢出时提供明确的展开/收起按钮；分项数归入父名称，版本归入子缩略图，父行显示分项状态计数，不再同时重复聚合状态标签。父资产全部可用操作以 `ElButton` 直接展示，不再使用“更多”下拉菜单；仍复用原动作、权限和确认流程，按钮可换行排列。
 - 懒加载失败必须呈现错误，不能伪装成零个分项；可重试错误提供“重试分项”，权限错误不自动重试。人工刷新失效成功缓存并重新读取已展开分项；后台轮询等待当前分项请求完成，再通过公开 `updateKeyChildren` 刷新已加载分支，保留有效勾选、展开、滚动和图片预览；原空分支新增分项时才重建懒加载入口。后台不反复请求失败分支，人工刷新可重新尝试。项目、筛选、分页变化或卸载必须取消旧请求、清除旧树上下文，迟到响应不得调用失效表格的 `resolve`。
 - 资产与制作分项响应分别携带后端计算的 `allowedActions`。动作集合必须同时满足平台权限、项目访问/角色、项目非 `completed/archived`、项目存储 `ready`、资源活动状态以及任务/版本约束；前端不得自行合成。
 - 资产列表与详情返回 `itemStatusCounts`，固定包含 `unassigned/not_started/preparing/in_progress/reviewing/revision/completed` 七个非负整数键，仅统计活动且未删除分项。父级状态按 `revision → reviewing → in_progress → preparing → unassigned → not_started` 聚合；至少有一个活动分项且全部完成才为 `completed`，无活动分项为 `unassigned`。父级 `task.start` 仅表示可进入分项选择，至少存在一个实际可开工分项才返回；真正 start 必须对选中分项任务提交，不能整资产开工。
@@ -582,7 +587,9 @@ CHECK (
 | `assignee_user_id` | bigint | 是 | 负责人 |
 | `task_status` | varchar(20) | 是 | 任务状态 |
 | `priority` | varchar(10) | 是 | 优先级 |
-| `due_date` | date | 否 | 截止日期 |
+| `due_date` | date | 否 | 兼容截止日期；填写预期范围时同步为结束日期，不限制提交 |
+| `expected_start_time` | timestamp(0) without time zone | 否 | 管理员预期开始时间，仅供展示 |
+| `expected_end_time` | timestamp(0) without time zone | 否 | 管理员预期结束时间，仅供展示 |
 | `requirements` | text | 否 | 制作要求 |
 | 通用审计字段 |  | 是 | 见 5.2 |
 
@@ -1943,6 +1950,8 @@ Shot Grid 模块内的错误响应遵守：
 
 独立业务前端统一把失败转换为 `ApiError`，并保留 `status`、`httpStatus`、`code`、`errorKey`、`data`、`details` 和原始响应。401 必须清除本地 `Admin-Token` 与身份/导航状态并回登录；403、404 和 5xx 分别进入无权限、页面不存在和服务异常路径，5xx 不得回退为空数据；409、413 和 416 保留为可区分的业务提示。
 
+账号或导航初始化失败进入 `/service-unavailable?retry=...` 后，“重新加载”须使用既有站内地址校验和 Vue Router 返回原目标，再由路由守卫重试初始化；不能只刷新公开的异常页。保留目标的项目等查询参数，缺失、站外或异常页自身目标回退 `/`；重试期间禁止重复点击且不主动退出登录，服务持续失败仍保留恢复入口，401/403 继续按原权限规则处理。
+
 现有 `ServiceException` 会进入平台通用异常处理并返回 HTTP 200，不能直接承载上述状态语义。后端实现必须新增 Shot Grid 领域异常及处理器，例如：
 
 ```text
@@ -2664,6 +2673,8 @@ isAsc
 
 同一接口支持表格、卡片和故事板。前端不得为三种视图建立三套数据源。`orderByColumn=sortOrder` 时，服务端先按集的 `(sortOrder, episodeNo)` 排列，再按场次的 `(sortOrder, sceneNo)` 排列，最后按场内镜头 `(sortOrder, shotNo, shotId)` 排列，禁止仅按镜头排序键跨集或跨场交错。
 
+列表项顶层返回可空的 `expectedStartTime`、`expectedEndTime`，直接投影唯一镜头任务的预期时间，无任务或未设置时为 `null`。镜头表在“制作内容”列后展示“开始时间”“结束时间”，管理人与制作人均可读取，不额外查询每行详情。资产树表在“说明”列后展示这两个时间，从懒加载分项的 `task.expectedStartTime/expectedEndTime` 读取。两表的独立“时间状态”列使用 Element Plus `fixed="right"` 固定在“制作人”列前；父资产三列为空，不以子项时间代替。表格时间状态按预期结束时间复用第 15.2 节的 24 小时预警规则，未设置范围时不使用旧 `dueDate` 冒充精确结束时间；旧日期仍在详情明确标注。
+
 列表项：
 
 ```json
@@ -3168,10 +3179,11 @@ Permission: shotgrid:task:assign
 - 镜头首次分配不接收前端编辑的制作要求：首次分配和已有任务改派弹窗都只读展示当前镜头的制作内容、景别、机位、镜头运动、焦段、台词/对白、音效、色调参考和备注，且不提交 `taskDescription`；后端在锁定镜头后以 `sg_shot.description` 建立任务 `requirements` 快照，即使旧客户端传入该字段也不得覆盖。首次分配前调整内容走镜头编辑，任务建立后的要求调整走独立任务编辑动作。
 - 镜头已有任务时，改派命令只保留 `assigneeUserId/taskLockVersion`，不得借改派修改制作要求、优先级或截止日期。
 - 资产制作分项名称为空时不得首次分配或改派；后端返回 HTTP 422 / `SG_ASSET_PRODUCTION_ITEM_REQUIRED`，批量分配任一目标不完整时整批回滚。
-- 目标尚无任务时创建 `not_started` 任务，此时 `taskLockVersion` 必须为空；已有未完成任务时必须携带当前 `taskLockVersion`，执行受控改派并记录审计，不创建第二个任务。
+- 目标尚无任务时创建 `not_started` 任务，此时 `taskLockVersion` 必须为空；已有任务只有仍为 `not_started` 时可普通改派，必须携带当前 `taskLockVersion`，更新原任务并记录审计，不创建第二个任务。
 - 已有任务存在任何非 `committed` 版本提交时禁止改派，`failed` 也属于未解决提交；必须重试原提交或使用后续明确治理动作。
-- 已完成任务默认禁止改派；如需返工，必须新增明确的重新开启动作。
-- 镜头详情的 `allowedActions` 必须与改派写入门禁一致：未分配时可返回首次分配；已有 `not_started/preparing/in_progress/pending_review/revision` 任务且不存在非 `committed` 提交时，才可返回 `task.assign`。已完成任务不得返回该动作；所有状态仍同时要求平台分配权限、项目管理范围、项目可写、NAS 就绪和镜头未归档。前端按唯一任务是否存在区分“分配任务”和“改派任务”，不能仅凭已存在任务就展示入口。
+- `preparing/in_progress/pending_review/revision/completed` 均视为已开工，禁止普通改派，包括管理人员和全项目范围管理员；写入在锁内校验并返回 HTTP 409 / `SG_INVALID_STATE_TRANSITION`。不重置任务、不改变历史负责人或版本；任务交接与重新开启属于后续独立能力，不在本次提供。
+- 镜头、制作分项和任务列表/详情的 `allowedActions` 必须与写入门禁一致：无任务时可返回首次分配；已有任务仅 `not_started` 且不存在非 `committed` 提交时可返回 `task.assign`。所有入口仍保留平台分配权限、项目管理范围、项目可写、NAS 就绪和资源生命周期门禁。前端按唯一任务是否存在区分“分配任务”和“改派任务”，缺少动作投影不得放行。
+- 父资产仅在全部活动制作分项均可分配时返回 `task.assign`；镜头和制作分项批量分配必须复用相同的锁内校验，任一已开工目标导致整批回滚，不能自动跳过并部分成功。弹窗打开后开工或改派导致的过期锁版本仍按乐观锁冲突处理，即使提交最新锁版本也不能普通改派已开工任务。
 
 ### 15.2 开始任务
 
@@ -3181,6 +3193,13 @@ Permission: shotgrid:task:start
 ```
 
 开工统一由管理人员确认，请求按任务类型区分；分配不自动开工：
+
+两类命令共同支持 `priority`（省略保留）、`expectedStartTime` 与 `expectedEndTime`（成对，示例 `"2026-09-01T09:00:00"`、`"2026-09-02T18:00:00"`）。新开工窗口要求完整时间范围；旧客户端省略时保留原值。时间沿用业务本地时区和秒精度，不接收偏移时区或小数秒；结束必须严格晚于开始。服务端在取得项目/任务锁后检查开始时间不得早于当前时间，过期返回 HTTP 422 / `SG_TASK_EXPECTED_TIME_INVALID`，不得写入部分状态。开工优先级、双时间、状态、Outbox 与审计为同一事务；`dueDate` 是结束日期的兼容查询投影。任务列表/详情、镜头任务摘要、分项任务摘要均返回双时间。
+
+**时间是期望，不是状态机门禁。** 确认开工依然立即进入原有 `preparing/in_progress` 流程，未来开始日期不延迟放行；到期不自动完成或关闭，早于预期开始和逾期均可按原权限、状态和文件条件提交/重试。分配窗口移除优先级和日期，只选择制作人并核对制作内容。现有任务不补造开始时间，也不据此重置状态。
+
+制作人工作台和任务详情将时间单独标为正常（剩余大于 24 小时）、临近结束（0 至 24 小时，含 24 小时）、已延期（到达结束时间）；已完成停止催办，无日期显示未设置。提醒每 30 秒及页面恢复可见时本地重算，不新增调度器、推送或业务状态。旧 `dueDate` 按当地当天 23:59:59 兼容提醒。
+
 
 | 任务类型 | 操作人 | 请求体 |
 | --- | --- | --- |
@@ -3557,7 +3576,7 @@ Permissions:
 列表支持 `assetType`、`assetStatus`、`assigneeUserId`、`keyword`、分页和白名单排序。资产列表、详情和制作分项响应分别包含：
 
 - 资产 `allowedActions`：可选 `asset.edit`、`assetItem.add`、`asset.archive`；资产归档只在不存在活动制作分项和活动任务时返回。
-- 制作分项 `allowedActions`：可选 `assetItem.edit`、`assetItem.archive`、`assetItem.delete`、`task.assign`；已有正式版本后不返回普通编辑，活动任务阻止归档，任务已完成或存在任何非 `committed` 版本提交时不返回分配/改派。
+- 制作分项 `allowedActions`：可选 `assetItem.edit`、`assetItem.archive`、`assetItem.delete`、`task.assign`；已有正式版本后不返回普通编辑，活动任务阻止归档，任务已开工（`preparing` 及后续状态）或存在任何非 `committed` 版本提交时不返回分配/改派。
 
 - `assetItem.delete` 仅在任务未分配或仍为 `not_started`、没有正式版本且没有非 `committed` 版本提交时返回；`failed` 提交同样阻止删除。项目可写、NAS 就绪、父资产/分项活动状态、平台 `shotgrid:asset:archive` 权限及项目管理范围仍是共同前提。
 
@@ -3952,7 +3971,7 @@ failed
 | 开始镜头任务 | 锁定项目/任务/镜头，冻结 `storage_dir_name`，任务进入 `preparing`，创建幂等目录 Outbox 并写操作审计；Worker 成功后单独回写 `in_progress` |
 | 导入资产 | 导入批次、去重资产、逐行未分配制作分项、稳定目录快照、待匹配需求解析、镜头资产关系、操作审计；资产目录 Outbox 与任务创建数均固定为 0 |
 | 确认资产分项开工 | 管理人员在项目/任务/父资产/分项锁内复核三版本及人工确认，只开始选中任务；创建或复用共享目录 Outbox，同事务审计，失败全回滚。目录未就绪进入 `preparing`，已成功则 `in_progress`；Worker 只推进已 `preparing` 分项 |
-| 分配目标 | 锁定项目和目标；新建唯一任务，或携带任务锁版本受控改派现有任务；存在任何非 committed 提交时整体拒绝 |
+| 分配目标 | 锁定项目和目标；新建唯一任务，或携带任务锁版本改派 not_started 任务；已开工或存在任何非 committed 提交时整体拒绝，批量整批回滚 |
 | 暂存版本提交 | 锁定项目与任务、重查全部 open 问题、校验逐条处理说明覆盖、保留版本号、生成业务文件名和 NAS 目标、创建 `sg_version_submission` 与 `sg_version_issue_response`、建立 `shotgrid_version_submission` 临时文件引用 |
 | 正式提交版本 | 版本、版本文件及 NAS 摘要、切换为 `shotgrid_version` 主文件引用、自动审核单、任务状态、提交状态；版本通过 `submission_id` 反向关联 |
 | 保存/修改/删除问题草稿 | 当前待审核版本与活动自动审核单、草稿乐观锁、文字/标注至少一项门禁、操作审计；草稿不进入制作人问题查询 |

@@ -2,22 +2,27 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Delete, Edit, Grid, List, Plus, Refresh, RefreshLeft, Search, Upload, VideoCamera, VideoPlay } from '@element-plus/icons-vue'
+import { Delete, Edit, Grid, List, Plus, Refresh, RefreshLeft, Search, Switch, Upload, User, VideoCamera, VideoPlay, View } from '@element-plus/icons-vue'
 import Sortable from 'sortablejs'
 
 import { getProjectDetail, getProjectPage } from '@/api/shot-grid/projects'
-import { startTask } from '@/api/shot-grid/tasks'
+import { useTaskStartDialog } from '@/views/task/useTaskStartDialog'
+import TaskStartDialog from '@/views/task/components/TaskStartDialog.vue'
 import { batchAssignShotTasks, batchDeleteShots, getEpisodePage, getScenePage, getShotDetail, getShotPage, listShotAssignees, reorderShot } from '@/api/shot-grid/shots'
 import { assertPositiveId } from '@/api/shot-grid/projects'
 import { useTaskStatePolling } from '@/composables/useTaskStatePolling'
+import { useCurrentTime } from '@/composables/useCurrentTime'
+import { formatTaskDateTime, taskTimeReminder } from '@/views/task/taskPresentation'
 import { useSessionStore } from '@/store/modules/session'
 import { tagTypeFromTone } from '@/utils/tag'
+import TableActionButton from '@/components/TableActionButton.vue'
 import { projectRoleMeta, storageMeta } from '@/views/project/projectPresentation'
 import ProjectStatePanel from '@/views/project/components/ProjectStatePanel.vue'
 import ProtectedThumbnail from '@/views/shot/components/ProtectedThumbnail.vue'
 import EpisodeSceneCreateDialog from '@/views/shot/components/EpisodeSceneCreateDialog.vue'
 import ShotDetailView from '@/views/shot/ShotDetailView.vue'
 import ShotFormDialog from '@/views/shot/components/ShotFormDialog.vue'
+import ShotAssignDialog from '@/views/shot/components/ShotAssignDialog.vue'
 import ShotImportDialog from '@/views/shot/components/ShotImportDialog.vue'
 import { directoryStatusMeta, formatShotDuration, shotAssigneeName, shotAssigneeOptionLabel, shotErrorState, shotStatusMeta, shotStatusTagClass } from '@/views/shot/shotPresentation'
 
@@ -49,12 +54,17 @@ const editContext = ref(null)
 const deleting = ref(false)
 const assigning = ref(false)
 const startingOperation = ref(null)
+const currentTime = useCurrentTime()
+const { startDialog, requestStartDialog, closeStartDialog, finishStartDialog, failStartDialog } = useTaskStartDialog()
 const reordering = ref(false)
 const sceneOrderFullyLoaded = ref(false)
 const showHierarchyCreate = ref(false)
 const hierarchyCreateMode = ref('episode')
 const showBatchAssign = ref(false)
 const editingShotId = ref(null)
+const singleAssignContext = ref(null)
+const assigningShotId = ref(null)
+let singleAssignController = null
 const createProjectId = ref(null)
 const createInitialEpisodeId = ref('')
 const createInitialSceneId = ref('')
@@ -153,7 +163,7 @@ const { pollingError } = useTaskStatePolling({
   getDelay: () => {
     if (!projectAllowsWrites.value || shotsLoading.value || scenesLoading.value || shotsError.value ||
         showDetail.value || showCreate.value || showImport.value || showEdit.value || editingShotId.value ||
-        showHierarchyCreate.value || showBatchAssign.value || startingOperation.value ||
+        showHierarchyCreate.value || showBatchAssign.value || startingOperation.value || singleAssignContext.value || assigningShotId.value ||
         deleting.value || assigning.value || reordering.value || appliedQuery.value !== JSON.stringify(query)) return null
     if (shots.value.some(shot => shot.status === 'preparing')) return 1500
     return shots.value.some(shot => shot.status === 'not_started') ? 5000 : null
@@ -219,9 +229,13 @@ const batchAssignRules = {
   }]
 }
 
+function shotTimeState(shot) {
+  return taskTimeReminder({ taskStatus: shot.status, expectedEndTime: shot.expectedEndTime }, currentTime.value)
+}
+
 function canStartShot(shot) {
   return Boolean(
-    canStart.value && shot?.status === 'not_started' &&
+    canStart.value && hasPermission('shotgrid:shot:query') && shot?.status === 'not_started' &&
     shot.allowedActions?.includes('task.start') &&
     Number.isSafeInteger(shot.taskId) && shot.taskId > 0 &&
     Number.isSafeInteger(shot.taskLockVersion) && shot.taskLockVersion >= 0 &&
@@ -243,24 +257,25 @@ async function confirmStartShot(shot) {
   })
   startingOperation.value = operation
   try {
-    await ElMessageBox.confirm(
-      '镜头：' + [shot.episodeCode, shot.sceneCode, shot.shotCode].join(' / ') +
-      '；负责人：' + shotAssigneeName(shot.assignee, members.value) +
-      '。请确认该镜头制作所需资产已在线下核对齐备。确认后将允许负责人开始制作。',
-      '确认开工',
-      { confirmButtonText: '确认开工', cancelButtonText: '暂不开工', type: 'warning' }
-    )
+    const detailResponse = await getShotDetail(operation.projectId, operation.shotId)
     if (!isCurrentStart(operation)) return
-    const currentShot = shots.value.find(item => item.shotId === operation.shotId)
-    if (!canStartShot(currentShot) || currentShot.taskId !== operation.taskId ||
-      currentShot.taskLockVersion !== operation.lockVersion || currentShot.lockVersion !== operation.shotLockVersion) {
+    const detail = detailResponse.data
+    if (!detail?.allowedActions?.includes('task.start') || detail.task?.taskId !== operation.taskId ||
+      detail.task.lockVersion !== operation.lockVersion || detail.lockVersion !== operation.shotLockVersion) {
       ElMessage.warning('镜头或任务已发生变化，请刷新后重新确认开工。')
+      await loadShots()
       return
     }
-    const response = await startTask(operation.taskId, {
-      lockVersion: operation.lockVersion,
-      shotLockVersion: operation.shotLockVersion,
-      assetsConfirmed: true
+    const response = await requestStartDialog({
+      name: [detail.episodeCode, detail.sceneCode, detail.shotCode].join(' / '),
+      assigneeName: shotAssigneeName(detail.task.assignee || shot.assignee, members.value),
+      shot: detail, task: detail.task, taskId: operation.taskId,
+      command: { lockVersion: operation.lockVersion, shotLockVersion: operation.shotLockVersion, assetsConfirmed: true },
+      validateContext: () => {
+        const currentShot = shots.value.find(item => item.shotId === operation.shotId)
+        return isCurrentStart(operation) && canStartShot(currentShot) && currentShot.taskId === operation.taskId &&
+          currentShot.taskLockVersion === operation.lockVersion && currentShot.lockVersion === operation.shotLockVersion
+      }
     })
     if (!isCurrentStart(operation)) {
       ElMessage.success('原镜头任务已确认开工，请返回原项目查看。')
@@ -289,7 +304,62 @@ function canEditShot(shot) {
 }
 
 function canAssignShot(shot) {
-  return canAssign.value && shot?.status !== 'completed'
+  return canAssign.value && Boolean(shot?.allowedActions?.includes('task.assign'))
+}
+
+function canOpenShotAssign(shot) {
+  return canAssignShot(shot) && hasPermission('shotgrid:shot:query')
+}
+
+function closeSingleAssign() {
+  singleAssignController?.abort()
+  singleAssignContext.value = null
+  assigningShotId.value = null
+}
+
+async function openSingleAssign(shot) {
+  if (!canOpenShotAssign(shot) || shotsLoading.value || assigningShotId.value || singleAssignContext.value ||
+    deleting.value || assigning.value || startingOperation.value) return
+  const projectId = currentProjectId.value
+  const shotId = Number(shot.shotId)
+  const generation = ++operationGeneration
+  const request = new AbortController()
+  singleAssignController = request
+  assigningShotId.value = shotId
+  try {
+    const response = await getShotDetail(projectId, shotId, { signal: request.signal })
+    if (disposed || request.signal.aborted || singleAssignController !== request || currentProjectId.value !== projectId) return
+    const current = response.data
+    if (Number(current?.projectId) !== projectId || Number(current?.shotId) !== shotId ||
+      !canOpenShotAssign(current) || !current.allowedActions?.includes('task.assign')) {
+      ElMessage.warning('镜头状态或权限已变化，当前不能分配任务。')
+      await loadShots()
+      return
+    }
+    singleAssignContext.value = Object.freeze({
+      projectId, shotId, operationGeneration: generation,
+      shot: Object.freeze({ ...current, task: current.task ? Object.freeze({ ...current.task }) : null })
+    })
+  } catch (error) {
+    if (!disposed && !request.signal.aborted) ElMessage.error(error?.message || '镜头任务信息加载失败')
+  } finally {
+    if (singleAssignController === request) assigningShotId.value = null
+  }
+}
+
+async function handleSingleAssigned(_result, operation) {
+  const context = singleAssignContext.value
+  if (disposed || !context || context.projectId !== Number(operation?.projectId) ||
+    context.shotId !== Number(operation?.shotId) || context.operationGeneration !== Number(operation?.operationGeneration)) return
+  closeSingleAssign()
+  ElMessage.success(operation.wasReassign ? '镜头任务已改派' : '镜头任务已分配')
+  await loadShots()
+}
+
+async function refreshSingleAssign() {
+  closeSingleAssign()
+  ElMessage.info('请从刷新后的镜头重新打开分配操作。')
+  await loadShots()
 }
 
 function canSelectShot(shot) {
@@ -341,6 +411,7 @@ async function loadProjects(preferredId = null) {
 
 async function loadProjectContext() {
   projectGeneration += 1
+  closeStartDialog()
   startingOperation.value = null
   const projectId = currentProjectId.value
   closeDetailDrawer()
@@ -705,7 +776,7 @@ async function confirmBatchAssign() {
   }
   const blocked = selectedShots.value.find(shot => !canAssignShot(shot))
   if (blocked) {
-    ElMessage.warning(`${blocked.shotCode} 已完成，不能改派`)
+    ElMessage.warning(`${blocked.shotCode} 当前不能分配或改派，请刷新状态；仅未开工任务可改派`)
     return
   }
   const targetProjectId = currentProjectId.value
@@ -923,6 +994,7 @@ watch(() => projectContext.projectId, (next, previous) => {
     closeCreateDialog()
     closeImportDialog()
     closeEditDialog()
+    closeSingleAssign()
     closeDetailDrawer()
     closeBatchAssignDialog(true)
     operationGeneration += 1
@@ -934,6 +1006,7 @@ watch(() => projectContext.projectId, (next, previous) => {
     loadProjectContext()
   }
 })
+watch(() => appliedQuery.value, closeSingleAssign)
 watch(() => projectContext.scope, () => loadProjects())
 watch(viewMode, () => {
   query.pageNum = 1
@@ -945,10 +1018,11 @@ watch(
   { flush: 'post' }
 )
 onMounted(() => loadProjects(route.query.projectId))
-onBeforeUnmount(() => { disposed = true; destroyRowSortable(); projectController?.abort(); shotController?.abort(); sceneController?.abort(); episodeRefreshController?.abort() })
+onBeforeUnmount(() => { disposed = true; closeSingleAssign(); destroyRowSortable(); projectController?.abort(); shotController?.abort(); sceneController?.abort(); episodeRefreshController?.abort() })
 </script>
 
 <template>
+  <TaskStartDialog v-if="startDialog" :context="startDialog" @close="closeStartDialog" @started="finishStartDialog" @failed="failStartDialog" />
   <section class="sg-page shot-page">
     <header class="sg-page-heading shot-heading">
       <div><p class="sg-eyebrow">SHOTS</p><h2 class="sg-page-title">镜头管理</h2><p class="sg-page-description">按项目查看和维护镜头，可在表格、卡片与故事板之间灵活切换。</p></div>
@@ -1010,6 +1084,12 @@ onBeforeUnmount(() => { disposed = true; destroyRowSortable(); projectController
             <el-table-column label="制作内容" width="280">
               <template #default="scope"><div v-if="scope?.row" class="shot-description">{{ scope.row.description }}</div></template>
             </el-table-column>
+            <el-table-column prop="expectedStartTime" label="开始时间" width="150" class-name="task-expected-start">
+              <template #default="{ row }"><span class="task-date-cell">{{ formatTaskDateTime(row.expectedStartTime) }}</span></template>
+            </el-table-column>
+            <el-table-column prop="expectedEndTime" label="结束时间" width="150" class-name="task-expected-end">
+              <template #default="{ row }"><span class="task-date-cell">{{ formatTaskDateTime(row.expectedEndTime) }}</span></template>
+            </el-table-column>
             <el-table-column label="镜头参数" width="190">
               <template #default="scope"><div v-if="scope?.row" class="shot-parameters"><span>{{ scope.row.shotSize || '—' }}</span><small>{{ [scope.row.cameraPosition, scope.row.cameraMovement, scope.row.focalLength].filter(Boolean).join(' · ') || '暂无参数' }}</small></div></template>
             </el-table-column>
@@ -1031,26 +1111,35 @@ onBeforeUnmount(() => { disposed = true; destroyRowSortable(); projectController
             <!-- <el-table-column label="最新反馈" width="120">
               <template #default="scope"><div v-if="scope?.row" class="feedback-cell">{{ scope.row.latestFeedback?.content || '—' }}</div></template>
             </el-table-column> -->
+            <el-table-column label="时间状态" fixed="right" width="120" class-name="task-time-state">
+              <template #default="{ row }"><el-tag :type="tagTypeFromTone(shotTimeState(row).tone)" size="small" effect="light" round>{{ shotTimeState(row).label }}</el-tag></template>
+            </el-table-column>
             <el-table-column label="制作人" fixed="right" width="110">
-              <template #default="scope"><span v-if="scope?.row">{{ shotAssigneeName(scope.row.assignee, members) }}</span></template>
+              <template #default="scope"><span v-if="scope?.row" class="sg-table-assignee" :class="{ 'is-unassigned': !scope.row.assignee }">{{ shotAssigneeName(scope.row.assignee, members) }}</span></template>
             </el-table-column>
             <el-table-column label="状态" fixed="right" width="125">
               <template #default="scope">
                 <div v-if="scope?.row">
-                  <el-tag
-                          :type="tagTypeFromTone(shotStatusMeta(scope.row.status).tone)" size="small" effect="dark"
+                  <el-tag class="shot-status-tag" :class="shotStatusTagClass(scope.row.status)"
+                          :type="tagTypeFromTone(shotStatusMeta(scope.row.status).tone)" size="small" effect="light"
                           round>{{ shotStatusMeta(scope.row.status).label }}
                   </el-tag>
-                  <el-tag v-if="scope.row.directoryStatus === 'failed'"
+                  <el-tag v-if="scope.row.directoryStatus === 'failed'" class="shot-status-tag shot-status-tag--directory-failed"
                           :type="tagTypeFromTone(directoryStatusMeta(scope.row.directoryStatus).tone)" size="small"
                           effect="light" round>{{ directoryStatusMeta(scope.row.directoryStatus).label }}
                   </el-tag>
                 </div>
               </template>
             </el-table-column>
-            <el-table-column label="操作" fixed="right" width="350">
+            <el-table-column label="操作" fixed="right" width="420">
               <template #default="scope">
-                <div v-if="scope?.row" class="shot-row-actions"><el-button v-if="canStartShot(scope.row)" size="small" type="primary" :icon="VideoPlay" :loading="startingOperation?.shotId === scope.row.shotId" :disabled="startDisabled" @click="confirmStartShot(scope.row)">开始任务</el-button><el-button text type="primary" @click="openShot(scope.row)">详情</el-button><el-button v-if="canEditShot(scope.row)" text type="warning" :icon="Edit" :loading="editingShotId === Number(scope.row.shotId)" :disabled="deleting" @click="openEditDialog(scope.row)">编辑</el-button><el-button v-if="canDelete" text type="danger" :icon="Delete" :disabled="!canDeleteShot(scope.row) || deleting" :title="canDeleteShot(scope.row) ? '删除镜头' : '任务已经开始，不能删除'" @click="confirmDeleteShots([scope.row])">删除</el-button></div>
+                <div v-if="scope?.row" class="shot-row-actions">
+                  <TableActionButton v-if="canStartShot(scope.row)" label="开始任务" type="primary" :plain="false" :icon="VideoPlay" :loading="startingOperation?.shotId === scope.row.shotId" :disabled="startDisabled" @click="confirmStartShot(scope.row)" />
+                  <TableActionButton v-if="canOpenShotAssign(scope.row)" :label="scope.row.task || scope.row.taskLockVersion != null ? '改派任务' : '分配任务'" type="info" :icon="scope.row.task || scope.row.taskLockVersion != null ? Switch : User" :loading="assigningShotId === Number(scope.row.shotId)" :disabled="shotsLoading || assigning || deleting || Boolean(startingOperation) || Boolean(singleAssignContext) || Boolean(assigningShotId)" @click="openSingleAssign(scope.row)" />
+                  <TableActionButton label="详情" :icon="View" @click="openShot(scope.row)" />
+                  <TableActionButton v-if="canEditShot(scope.row)" label="编辑" :icon="Edit" :loading="editingShotId === Number(scope.row.shotId)" :disabled="deleting" @click="openEditDialog(scope.row)" />
+                  <TableActionButton v-if="canDelete" label="删除" :hint="canDeleteShot(scope.row) ? '删除镜头' : '任务已经开始，不能删除'" type="danger" :icon="Delete" :disabled="!canDeleteShot(scope.row) || deleting" @click="confirmDeleteShots([scope.row])" />
+                </div>
               </template>
             </el-table-column>
           </el-table>
@@ -1066,6 +1155,7 @@ onBeforeUnmount(() => { disposed = true; destroyRowSortable(); projectController
 
     <ShotFormDialog v-if="showCreate && createProjectId && createOperationGeneration" :project-id="createProjectId" :operation-generation="createOperationGeneration" :episodes="episodes" :initial-episode-id="createInitialEpisodeId" :initial-scene-id="createInitialSceneId" @close="closeCreateDialog" @saved="handleSaved" @refresh="loadProjectContext" />
     <ShotFormDialog v-if="showEdit && editContext && editingShot" :project-id="editContext.projectId" :operation-generation="editContext.operationGeneration" :episodes="episodes" :shot="editingShot" @close="closeEditDialog" @saved="handleEdited" @refresh="handleEditRefresh" />
+    <ShotAssignDialog v-if="singleAssignContext" :key="singleAssignContext.operationGeneration" :project-id="singleAssignContext.projectId" :operation-generation="singleAssignContext.operationGeneration" :shot="singleAssignContext.shot" :members="members" @close="closeSingleAssign" @assigned="handleSingleAssigned" @refresh="refreshSingleAssign" />
     <ShotImportDialog v-if="showImport && importProjectId && importOperationGeneration" :project-id="importProjectId" :operation-generation="importOperationGeneration" :project-name="project?.projectName" @close="closeImportDialog" @imported="handleImported" />
     <EpisodeSceneCreateDialog v-if="showHierarchyCreate && currentProjectId" :project-id="currentProjectId" :mode="hierarchyCreateMode" :episodes="episodes" :initial-episode-id="query.episodeId" @close="closeHierarchyCreate" @saved="handleHierarchySaved" />
     <el-dialog v-model="showBatchAssign" class="shot-batch-assign-dialog" :title="batchAssignLabel" width="520px" append-to-body :close-on-click-modal="!assigning" :close-on-press-escape="!assigning" :show-close="!assigning" @closed="resetBatchAssignForm">
@@ -1126,4 +1216,7 @@ onBeforeUnmount(() => { disposed = true; destroyRowSortable(); projectController
 .shot-data-table:deep(.shot-row--chosen td.el-table__cell) {
   box-shadow: inset 0 1px 0 rgba(255,182,87,.35), inset 0 -1px 0 rgba(255,182,87,.35);
 }
+.shot-row-actions { flex-wrap: wrap; gap: 4px; white-space: normal; }
+.shot-row-actions :deep(.el-button) { margin-left: 0; }
+.task-date-cell { white-space: nowrap; font-variant-numeric: tabular-nums; }
 </style>

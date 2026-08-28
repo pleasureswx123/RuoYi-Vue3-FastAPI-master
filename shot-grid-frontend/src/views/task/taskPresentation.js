@@ -65,6 +65,16 @@ export function taskDueState(value, now = new Date()) {
   return Object.freeze({ label: overdue ? `${value} · 已逾期` : value, tone: overdue ? 'danger' : 'neutral', overdue })
 }
 
+export function taskTimeReminder(task, now = new Date()) {
+  if (task?.taskStatus === 'completed') return { state: 'completed', label: '已完成', tone: 'success', message: '任务已完成，不再进行时间预警。' }
+  const end = task?.expectedEndTime || (task?.dueDate ? `${task.dueDate}T23:59:59` : null)
+  const remaining = end ? new Date(end).getTime() - now.getTime() : NaN
+  if (!Number.isFinite(remaining)) return { state: 'unset', label: '未设置时间', tone: 'neutral', message: '管理员尚未设置预期制作时间。' }
+  if (remaining <= 0) return { state: 'overdue', label: '已延期', tone: 'danger', message: '已超过预期结束时间，请尽快处理；仍可提交作品。' }
+  if (remaining <= 24 * 60 * 60 * 1000) return { state: 'warning', label: '临近结束', tone: 'warning', message: '距预期结束不足 24 小时，请优先处理这个任务。' }
+  return { state: 'normal', label: '正常', tone: 'success', message: '请按管理员期望的时间安排制作。' }
+}
+
 export function taskAssigneeLabel(assignee) {
   if (!assignee) return '未分配'
   const name = assignee.userName || assignee.nickName || `用户 ${assignee.userId || '—'}`

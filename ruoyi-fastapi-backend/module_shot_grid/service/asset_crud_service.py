@@ -725,10 +725,10 @@ class ShotGridAssetCrudService:
             }
         )
         active_statuses = [item.asset_status for item in items if item.lifecycle_status == 'active']
-        has_archive_blockers = bool(usage_count) or any(
-            item.latest_version is not None or (item.task is not None and item.task.task_status != 'not_started')
-            for item in items
-            if item.lifecycle_status == 'active'
+        has_archive_blockers = bool(
+            usage_count
+        ) or asset.asset_id in await ShotGridAssetCrudDao.get_assets_with_delete_blockers(
+            db, asset.project_id, [asset.asset_id]
         )
         return ShotGridAssetDetailModel(
             assetId=asset.asset_id,
@@ -805,6 +805,8 @@ class ShotGridAssetCrudService:
                     taskStatus=row['task_status'],
                     priority=row['priority'],
                     dueDate=row['due_date'],
+                    expectedStartTime=row.get('expected_start_time'),
+                    expectedEndTime=row.get('expected_end_time'),
                     requirements=row['requirements'],
                     lockVersion=row['task_lock_version'],
                 )
@@ -1035,7 +1037,7 @@ class ShotGridAssetCrudService:
         ):
             actions.append('assetItem.delete')
         if (
-            task_status != 'completed'
+            task_status in {None, 'not_started'}
             and is_asset_production_item_ready(production_item)
             and not has_uncommitted_submission
             and cls._has_permission(current_user, 'shotgrid:task:assign')
@@ -1284,12 +1286,12 @@ class ShotGridAssetCrudService:
         actor_name: str,
         now: datetime,
     ) -> None:
-        """在资产锁保护下删除未开始任务，并归档资产及其活动制作分项。"""
+        """检查所有未删除分项后，仅删除未开始任务及活动分项，保留归档历史。"""
 
         if await ShotGridAssetCrudDao.get_usage_shot_count(db, project_id, asset.asset_id):
             raise shot_grid_error(409, 'SG_ASSET_IN_USE', '资产仍被镜头使用，不能删除')
 
-        items = await ShotGridAssetCrudDao.get_active_items_for_update(db, project_id, asset.asset_id)
+        items = await ShotGridAssetCrudDao.get_items_for_update(db, project_id, asset.asset_id)
         task_by_item: dict[int, ShotGridTask | None] = {}
         for item in items:
             task = await ShotGridAssetCrudDao.get_task_for_item(
@@ -1302,9 +1304,18 @@ class ShotGridAssetCrudService:
                 raise shot_grid_error(409, 'SG_ASSET_TASK_ALREADY_STARTED', '制作任务已经开始，资产不能删除')
             if await ShotGridAssetCrudDao.has_versions_for_item(db, project_id, item.asset_item_id):
                 raise shot_grid_error(409, 'SG_ASSET_HAS_VERSION', '资产制作分项已有版本，不能删除')
+            if (
+                task is not None
+                and await ShotGridTaskDao.get_uncommitted_submission_for_update(db, task.task_id) is not None
+            ):
+                raise shot_grid_error(
+                    409, 'SG_ASSET_ITEM_SUBMISSION_IN_PROGRESS', '资产分项存在尚未处理完成的版本提交，不能删除'
+                )
             task_by_item[item.asset_item_id] = task
 
         for item in items:
+            if item.lifecycle_status != 'active':
+                continue
             task = task_by_item[item.asset_item_id]
             if task is not None and not await ShotGridAssetCrudDao.delete_not_started_task(
                 db,

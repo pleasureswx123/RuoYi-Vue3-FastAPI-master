@@ -23,9 +23,7 @@ const assignFormRef = ref(null)
 const busy = ref(false)
 const requestError = ref(null)
 const form = reactive({
-  assigneeUserId: props.shot.task?.assignee?.userId ? String(props.shot.task.assignee.userId) : '',
-  priority: props.shot.task?.priority || 'normal',
-  dueDate: props.shot.task?.dueDate || ''
+  assigneeUserId: props.shot.task?.assignee?.userId ? String(props.shot.task.assignee.userId) : ''
 })
 const candidates = computed(() => props.members.filter(member => member.projectRole === 'creator'))
 const isReassign = computed(() => Boolean(props.shot.task))
@@ -35,26 +33,6 @@ const assignFormRules = {
       const userId = Number(value)
       if (!Number.isSafeInteger(userId) || userId <= 0) {
         callback(new Error('请选择制作人员'))
-        return
-      }
-      callback()
-    },
-    trigger: 'change'
-  }],
-  priority: [{
-    validator: (_rule, value, callback) => {
-      if (!isReassign.value && !['low', 'normal', 'high', 'urgent'].includes(value)) {
-        callback(new Error('请选择有效的任务优先级'))
-        return
-      }
-      callback()
-    },
-    trigger: 'change'
-  }],
-  dueDate: [{
-    validator: (_rule, value, callback) => {
-      if (value && !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
-        callback(new Error('请选择有效的截止日期'))
         return
       }
       callback()
@@ -76,9 +54,6 @@ async function submit() {
   }
   if (isReassign.value) {
     payload.taskLockVersion = props.shot.task.lockVersion
-  } else {
-    payload.priority = form.priority
-    payload.dueDate = form.dueDate || null
   }
   busy.value = true
   try {
@@ -105,15 +80,11 @@ function closeDialog() {
         <el-select v-model="form.assigneeUserId" class="sg-select" placeholder="请选择项目成员" :disabled="busy || !candidates.length"><el-option label="请选择项目成员" value="" /><el-option v-for="member in candidates" :key="member.userId" :label="member.userName ? `${member.nickName}（${member.userName}）` : member.nickName" :value="String(member.userId)" /></el-select>
         <small v-if="!candidates.length">当前项目暂无有效制作人员。</small>
       </el-form-item>
-      <template v-if="!isReassign">
-        <el-form-item label="任务优先级" prop="priority"><el-select v-model="form.priority" class="sg-select" :disabled="busy"><el-option label="低" value="low" /><el-option label="普通" value="normal" /><el-option label="高" value="high" /><el-option label="紧急" value="urgent" /></el-select></el-form-item>
-        <el-form-item label="截止日期" prop="dueDate"><el-date-picker v-model="form.dueDate" type="date" value-format="YYYY-MM-DD" format="YYYY-MM-DD" placeholder="请选择截止日期" :disabled="busy" /></el-form-item>
-      </template>
       <section class="assign-form__production" aria-labelledby="assign-production-title">
         <header><strong id="assign-production-title">完整制作信息</strong><small>只读；如需调整，请先编辑镜头。</small></header>
         <ShotProductionInfo :shot="shot" layout="dialog" />
       </section>
-      <p v-if="isReassign" class="assign-form__warning">本次只调整主制作人，原任务要求、优先级和截止日期保持不变。若任务正在提交版本或状态已经变化，将无法改派。</p>
+      <p v-if="isReassign" class="assign-form__warning">仅待开工任务可改派，原任务要求、优先级和截止日期保持不变。目录准备中及后续状态均不可普通改派；存在待处理版本提交时也不能改派。</p>
       <el-alert v-if="requestError" class="assign-form__alert" type="error" :closable="false" show-icon :title="requestError.title"><div class="form-alert-content"><p>{{ requestError.message }}</p><el-button v-if="requestError.status === 409" link type="primary" @click="emit('refresh')">刷新任务后重试</el-button></div></el-alert>
       <footer><el-button :disabled="busy" @click="closeDialog">取消</el-button><el-button type="primary" :loading="busy" :disabled="busy || !candidates.length" @click="submit">{{ isReassign ? '确认改派' : '创建并分配任务' }}</el-button></footer>
     </el-form>

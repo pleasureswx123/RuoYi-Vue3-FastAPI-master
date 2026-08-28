@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 
 import pytest
 from pydantic import ValidationError
@@ -113,3 +113,33 @@ def test_asset_start_carries_three_versions_and_strict_manual_confirmation() -> 
     for field in ['assetLockVersion', 'assetItemLockVersion']:
         with pytest.raises(ValidationError):
             ShotGridTaskStartModel(**{**payload, field: -1})
+
+
+def test_start_accepts_expected_time_range_without_changing_confirmation_contract() -> None:
+    command = ShotGridTaskStartModel(
+        lockVersion=3,
+        shotLockVersion=7,
+        assetsConfirmed=True,
+        priority='high',
+        expectedStartTime='2026-08-29T09:00:00',
+        expectedEndTime='2026-08-30T18:00:00',
+    )
+    assert command.expected_start_time == datetime(2026, 8, 29, 9)
+    assert command.expected_end_time == datetime(2026, 8, 30, 18)
+    assert command.priority == 'high'
+    assert command.assets_confirmed is True
+
+
+@pytest.mark.parametrize(
+    'start,end',
+    [
+        ('2026-08-29T09:00:00', None),
+        (None, '2026-08-30T18:00:00'),
+        ('2026-08-30T18:00:00', '2026-08-29T09:00:00'),
+        ('2026-08-29T09:00:00', '2026-08-29T09:00:00'),
+        ('2026-08-29T09:00:00+08:00', '2026-08-30T18:00:00+08:00'),
+    ],
+)
+def test_start_rejects_incomplete_reversed_or_timezone_ambiguous_range(start: str | None, end: str | None) -> None:
+    with pytest.raises(ValidationError):
+        ShotGridTaskStartModel(lockVersion=0, expectedStartTime=start, expectedEndTime=end)

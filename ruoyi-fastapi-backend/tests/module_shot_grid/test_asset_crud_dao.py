@@ -178,6 +178,23 @@ async def test_item_query_projects_uncommitted_submission_state_for_allowed_acti
 
 
 @pytest.mark.asyncio
+async def test_asset_delete_blockers_include_archived_items_and_uncommitted_submissions() -> None:
+    db = _SequenceDb([_ScalarsResult([20])])
+
+    result = await ShotGridAssetCrudDao.get_assets_with_delete_blockers(db, 10, [20, 21])  # type: ignore[arg-type]
+
+    compiled = _sql(db.statements[0])
+    assert result == {20}
+    assert 'sg_asset_item.project_id = 10' in compiled
+    assert 'sg_asset_item.asset_id IN (20, 21)' in compiled
+    assert "sg_asset_item.del_flag = '0'" in compiled
+    assert "sg_asset_item.lifecycle_status = 'active'" not in compiled
+    assert "sg_task.task_status != 'not_started'" in compiled
+    assert 'sg_version_submission.task_id = sg_task.task_id' in compiled
+    assert "sg_version_submission.submission_status != 'committed'" in compiled
+
+
+@pytest.mark.asyncio
 async def test_active_task_asset_projection_matches_archive_guard() -> None:
     db = _SequenceDb([_ScalarsResult([20])])
 

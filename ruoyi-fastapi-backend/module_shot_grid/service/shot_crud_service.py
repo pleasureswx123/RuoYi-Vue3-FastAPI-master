@@ -1316,6 +1316,8 @@ class ShotGridShotCrudService:
                 assignee=assignee,
                 priority=row['priority'],
                 dueDate=row['due_date'],
+                expectedStartTime=row.get('expected_start_time'),
+                expectedEndTime=row.get('expected_end_time'),
                 lockVersion=row['task_lock_version'],
             )
         scene = ShotGridShotSceneSummaryModel(
@@ -1439,7 +1441,7 @@ class ShotGridShotCrudService:
         candidates = []
         if row.get('task_id') is not None and row.get('task_status') == 'not_started':
             candidates.append(('task.start', 'shotgrid:task:start'))
-        if row.get('task_status') != 'completed' and not row['has_uncommitted_submission']:
+        if row.get('task_status') in {None, 'not_started'} and not row['has_uncommitted_submission']:
             candidates.append(('task.assign', 'shotgrid:task:assign'))
         if row.get('task_status') in {None, 'not_started'}:
             candidates.append(('shot.edit', 'shotgrid:shot:edit'))

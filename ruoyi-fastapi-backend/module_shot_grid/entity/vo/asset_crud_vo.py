@@ -224,6 +224,8 @@ class ShotGridTaskSummaryModel(ShotGridApiModel):
     task_status: TaskStatus
     priority: Literal['low', 'normal', 'high', 'urgent']
     due_date: date | None = None
+    expected_start_time: datetime | None = None
+    expected_end_time: datetime | None = None
     requirements: str | None = None
     lock_version: int
 

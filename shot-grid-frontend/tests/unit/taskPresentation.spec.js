@@ -3,12 +3,27 @@ import { describe, expect, it } from 'vitest'
 import {
   taskAssigneeLabel,
   taskDueState,
+  taskTimeReminder,
   taskErrorState,
   taskKindMeta,
   taskPriorityMeta,
   taskStatusMeta,
   taskVersionStatusMeta
 } from '@/views/task/taskPresentation'
+
+describe('预期制作时间提醒不改变业务状态', () => {
+  const task = { taskStatus: 'in_progress', expectedStartTime: '2026-08-28T09:00:00', expectedEndTime: '2026-08-30T18:00:00' }
+  it('按剩余时间显示正常、临近结束和延期，结束时刻立即延期', () => {
+    expect(taskTimeReminder(task, new Date('2026-08-29T17:59:59')).state).toBe('normal')
+    expect(taskTimeReminder(task, new Date('2026-08-29T18:00:00')).state).toBe('warning')
+    expect(taskTimeReminder(task, new Date('2026-08-30T18:00:00')).state).toBe('overdue')
+    expect(task.taskStatus).toBe('in_progress')
+  })
+  it('完成任务不再催办；无时间的历史任务不伪造预期时间', () => {
+    expect(taskTimeReminder({ ...task, taskStatus: 'completed' }, new Date('2026-09-01')).state).toBe('completed')
+    expect(taskTimeReminder({ taskStatus: 'in_progress' }).state).toBe('unset')
+  })
+})
 
 describe('任务展示契约', () => {
   it('集中映射稳定英文状态码，未知值不影响渲染', () => {
