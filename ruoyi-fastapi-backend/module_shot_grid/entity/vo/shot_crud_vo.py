@@ -320,7 +320,9 @@ class ShotGridShotListItemModel(ShotGridApiModel):
     sort_order: int
     sequence_position: int = Field(ge=1)
     status: ShotStatus
+    task_id: int | None = None
     task_lock_version: int | None = Field(default=None, ge=0)
+    allowed_actions: list[str] = Field(default_factory=list)
     assignee: ShotGridShotAssigneeModel | None = None
     thumbnail: ShotGridShotThumbnailModel | None = None
     proxy_media: ShotGridShotProxyMediaModel | None = None

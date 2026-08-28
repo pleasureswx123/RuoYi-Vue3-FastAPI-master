@@ -1,6 +1,6 @@
 from typing import Any
 
-from sqlalchemy import asc, case, desc, exists, func, or_, select, update
+from sqlalchemy import and_, asc, case, desc, exists, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from module_admin.entity.do.user_do import SysUser
@@ -14,12 +14,13 @@ from module_shot_grid.entity.do.version_do import (
     ShotGridVersionFile,
     ShotGridVersionSubmission,
 )
-from module_shot_grid.entity.vo.asset_crud_vo import ShotGridAssetListQueryModel
+from module_shot_grid.entity.vo.asset_crud_vo import ASSET_ITEM_STATUSES, ShotGridAssetListQueryModel
 
 ACTIVE_TASK_STATUSES = ('not_started', 'preparing', 'in_progress', 'pending_review', 'revision')
-STATUS_RANK_REVISION = 5
-STATUS_RANK_REVIEWING = 4
-STATUS_RANK_IN_PROGRESS = 3
+STATUS_RANK_REVISION = 6
+STATUS_RANK_REVIEWING = 5
+STATUS_RANK_IN_PROGRESS = 4
+STATUS_RANK_PREPARING = 3
 STATUS_RANK_UNASSIGNED = 2
 
 
@@ -39,6 +40,7 @@ class ShotGridAssetCrudDao:
             (ShotGridTask.task_status == 'revision', 'revision'),
             (ShotGridTask.task_status == 'pending_review', 'reviewing'),
             (ShotGridTask.task_status == 'in_progress', 'in_progress'),
+            (ShotGridTask.task_status == 'preparing', 'preparing'),
             (
                 (ShotGridTask.task_status == 'completed') & (func.coalesce(final_versions.c.final_count, 0) > 0),
                 'completed',
@@ -52,12 +54,23 @@ class ShotGridAssetCrudDao:
                 ShotGridAssetItem.asset_item_id,
                 ShotGridTask.assignee_user_id,
                 item_state,
+                and_(
+                    ShotGridTask.task_status == 'not_started',
+                    func.length(func.trim(ShotGridAssetItem.production_item)) > 0,
+                    cls._assignee_valid_expression(),
+                ).label('startable'),
             )
             .outerjoin(
                 ShotGridTask,
                 (ShotGridTask.asset_item_id == ShotGridAssetItem.asset_item_id) & (ShotGridTask.del_flag == '0'),
             )
             .outerjoin(final_versions, final_versions.c.task_id == ShotGridTask.task_id)
+            .outerjoin(SysUser, SysUser.user_id == ShotGridTask.assignee_user_id)
+            .outerjoin(
+                ShotGridProjectMember,
+                (ShotGridProjectMember.project_id == ShotGridTask.project_id)
+                & (ShotGridProjectMember.user_id == ShotGridTask.assignee_user_id),
+            )
             .where(
                 ShotGridAssetItem.lifecycle_status == 'active',
                 ShotGridAssetItem.del_flag == '0',
@@ -72,12 +85,17 @@ class ShotGridAssetCrudDao:
             select(
                 item_state.c.asset_id,
                 func.count(item_state.c.asset_item_id).label('item_count'),
-                func.count().filter(item_state.c.item_status == 'completed').label('completed_count'),
+                *[
+                    func.count().filter(item_state.c.item_status == status).label(f'{status}_count')
+                    for status in ASSET_ITEM_STATUSES
+                ],
+                func.count().filter(item_state.c.startable).label('startable_item_count'),
                 func.max(
                     case(
-                        (item_state.c.item_status == 'revision', 5),
-                        (item_state.c.item_status == 'reviewing', 4),
-                        (item_state.c.item_status == 'in_progress', 3),
+                        (item_state.c.item_status == 'revision', STATUS_RANK_REVISION),
+                        (item_state.c.item_status == 'reviewing', STATUS_RANK_REVIEWING),
+                        (item_state.c.item_status == 'in_progress', STATUS_RANK_IN_PROGRESS),
+                        (item_state.c.item_status == 'preparing', STATUS_RANK_PREPARING),
                         (item_state.c.item_status == 'unassigned', 2),
                         (item_state.c.item_status == 'not_started', 1),
                         else_=0,
@@ -92,12 +110,15 @@ class ShotGridAssetCrudDao:
             (rollup.c.priority_rank == STATUS_RANK_REVISION, 'revision'),
             (rollup.c.priority_rank == STATUS_RANK_REVIEWING, 'reviewing'),
             (rollup.c.priority_rank == STATUS_RANK_IN_PROGRESS, 'in_progress'),
+            (rollup.c.priority_rank == STATUS_RANK_PREPARING, 'preparing'),
             (rollup.c.priority_rank == STATUS_RANK_UNASSIGNED, 'unassigned'),
             else_='not_started',
         ).label('asset_status')
         return select(
             rollup.c.asset_id,
             rollup.c.item_count,
+            *[rollup.c[f'{status}_count'] for status in ASSET_ITEM_STATUSES],
+            rollup.c.startable_item_count,
             asset_status,
         ).subquery('asset_status_rollup')
 
@@ -130,6 +151,11 @@ class ShotGridAssetCrudDao:
                 ShotGridAsset.lifecycle_status,
                 effective_status.label('asset_status'),
                 func.coalesce(rollup.c.item_count, 0).label('item_count'),
+                *[
+                    func.coalesce(rollup.c[f'{status}_count'], 0).label(f'{status}_count')
+                    for status in ASSET_ITEM_STATUSES
+                ],
+                func.coalesce(rollup.c.startable_item_count, 0).label('startable_item_count'),
                 func.coalesce(usage.c.usage_shot_count, 0).label('usage_shot_count'),
                 ShotGridAsset.lock_version,
                 ShotGridAsset.update_time,
@@ -244,6 +270,7 @@ class ShotGridAssetCrudDao:
                     ShotGridAssetItem.update_time,
                     ShotGridTask.task_id,
                     ShotGridTask.assignee_user_id,
+                    cls._assignee_valid_expression().label('assignee_valid'),
                     SysUser.nick_name.label('assignee_name'),
                     func.upper(SysUser.nick_name).label('producer_code'),
                     ShotGridTask.task_status,
@@ -744,3 +771,12 @@ class ShotGridAssetCrudDao:
         db.add(item)
         await db.flush()
         return item
+
+    @staticmethod
+    def _assignee_valid_expression() -> Any:
+        return and_(
+            ShotGridProjectMember.member_status == 'active',
+            ShotGridProjectMember.project_role == 'creator',
+            SysUser.status == '0',
+            SysUser.del_flag == '0',
+        )

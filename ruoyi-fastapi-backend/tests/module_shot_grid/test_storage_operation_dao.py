@@ -145,13 +145,47 @@ async def test_lease_renewal_is_fenced_by_owner_and_attempt_count() -> None:
 
 
 @pytest.mark.asyncio
-async def test_initialize_success_updates_operation_and_project_storage_atomically() -> None:
+@pytest.mark.parametrize('project_exists', [True, False])
+async def test_success_coordinates_with_task_start_before_locking_and_rechecks_owner(*, project_exists: bool) -> None:
+    class FakeDb:
+        def __init__(self) -> None:
+            self.statements: list[object] = []
+
+        async def execute(self, statement: object) -> _ScalarResult:
+            self.statements.append(statement)
+            selected_table = statement.selected_columns[0].table.name
+            return _ScalarResult(10 if project_exists and selected_table == 'sg_project' else None)
+
+    db = FakeDb()
+    updated = await ShotGridStorageOperationDao.mark_succeeded(
+        db,
+        operation_id=16,
+        worker_id='stale-worker',
+        expected_attempt_count=1,
+        now=datetime(2026, 8, 27, 20, 0, 0),
+    )
+    assert updated is False
+    sql = [
+        str(statement.compile(dialect=postgresql.dialect(), compile_kwargs={'literal_binds': True}))
+        for statement in db.statements
+    ]
+    assert 'FOR UPDATE OF sg_project' in sql[0]
+    assert len(sql) == (2 if project_exists else 1)
+    if project_exists:
+        assert "lease_owner = 'stale-worker'" in sql[1]
+        assert 'attempt_count = 1' in sql[1]
+        assert 'FOR UPDATE' in sql[1]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('operation_type', ['initialize_project', 'ensure_episode_directory'])
+async def test_project_and_episode_success_update_storage_without_changing_task_semantics(operation_type: str) -> None:
     now = datetime(2026, 8, 10, 12, 0, 0)
     operation = ShotGridStorageOperation(
         operation_id=1,
         project_id=10,
-        operation_type='initialize_project',
-        aggregate_type='project',
+        operation_type=operation_type,
+        aggregate_type='project' if operation_type == 'initialize_project' else 'episode',
         aggregate_id=10,
         target_relative_path='AI影视短片\\罗刹夫人',
         operation_status='processing',
@@ -170,11 +204,12 @@ async def test_initialize_success_updates_operation_and_project_storage_atomical
         project_relative_path='AI影视短片\\罗刹夫人',
         project_path_snapshot=r'\\server\share\AI影视短片\罗刹夫人',
         project_path_key='path-key',
-        storage_status='initializing',
+        storage_status='initializing' if operation_type == 'initialize_project' else 'ready',
         lock_version=0,
     )
     db = AsyncMock()
-    db.execute.side_effect = [_ScalarResult(operation), _ScalarResult(storage)]
+    db.scalar.return_value = 0
+    db.execute.side_effect = [_ScalarResult(10), _ScalarResult(operation), _ScalarResult(storage)]
 
     updated = await ShotGridStorageOperationDao.mark_succeeded(
         db,
@@ -189,7 +224,7 @@ async def test_initialize_success_updates_operation_and_project_storage_atomical
     assert operation.lease_owner is None
     assert operation.completed_time == now
     assert storage.storage_status == 'ready'
-    assert storage.initialized_time == now
+    assert storage.initialized_time == (now if operation_type == 'initialize_project' else None)
     assert storage.lock_version == 1
     assert storage.update_by == '管理员'
     db.flush.assert_awaited_once()
@@ -213,7 +248,7 @@ async def test_shot_directory_success_advances_only_preparing_shot_task() -> Non
         create_by='杨景锋',
     )
     db = AsyncMock()
-    db.execute.side_effect = [_ScalarResult(operation), _RowCountResult(), _ScalarResult(None)]
+    db.execute.side_effect = [_ScalarResult(10), _ScalarResult(operation), _RowCountResult(), _ScalarResult(None)]
 
     updated = await ShotGridStorageOperationDao.mark_succeeded(
         db,
@@ -223,7 +258,7 @@ async def test_shot_directory_success_advances_only_preparing_shot_task() -> Non
         now=now,
     )
 
-    task_update = db.execute.await_args_list[1].args[0]
+    task_update = db.execute.await_args_list[2].args[0]
     sql = str(task_update.compile(dialect=postgresql.dialect(), compile_kwargs={'literal_binds': True}))
     assert updated
     assert "sg_task.task_status = 'preparing'" in sql
@@ -252,7 +287,7 @@ async def test_asset_directory_success_advances_only_preparing_tasks_of_same_ass
         create_by='杨景锋',
     )
     db = AsyncMock()
-    db.execute.side_effect = [_ScalarResult(operation), _RowCountResult(), _ScalarResult(None)]
+    db.execute.side_effect = [_ScalarResult(10), _ScalarResult(operation), _RowCountResult(), _ScalarResult(None)]
 
     updated = await ShotGridStorageOperationDao.mark_succeeded(
         db,
@@ -262,7 +297,7 @@ async def test_asset_directory_success_advances_only_preparing_tasks_of_same_ass
         now=now,
     )
 
-    task_update = db.execute.await_args_list[1].args[0]
+    task_update = db.execute.await_args_list[2].args[0]
     sql = str(task_update.compile(dialect=postgresql.dialect(), compile_kwargs={'literal_binds': True}))
     assert updated
     assert "sg_task.task_status = 'preparing'" in sql

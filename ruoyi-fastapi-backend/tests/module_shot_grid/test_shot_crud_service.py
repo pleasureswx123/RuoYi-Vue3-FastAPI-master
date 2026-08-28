@@ -398,6 +398,8 @@ async def test_list_reads_versions_files_and_feedback_in_one_batch_query(monkeyp
         AsyncMock(),
         PROJECT_ID,
         ShotGridShotListQueryModel(),
+        _current_user(),
+        _access(),
     )
 
     assert page.total == 1
@@ -1105,3 +1107,57 @@ async def test_service_rechecks_director_access_instead_of_trusting_controller(m
     assert exc_info.value.error_key == 'SG_PROJECT_ACCESS_DENIED'
     lock_project.assert_not_awaited()
     db.rollback.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_shot_list_exposes_task_identity_and_manager_start_action(monkeypatch: pytest.MonkeyPatch) -> None:
+    row = _shot_projection_row()
+    row.update(task_status='not_started', status='not_started')
+    user = _current_user()
+    user.permissions.append('shotgrid:task:start')
+    monkeypatch.setattr(ShotGridShotCrudDao, 'get_shot_page', AsyncMock(return_value=([row], 1)))
+    monkeypatch.setattr(ShotGridShotCrudDao, 'list_assets_for_shots', AsyncMock(return_value=[]))
+    monkeypatch.setattr(ShotGridShotCrudDao, 'list_read_projections_for_shots', AsyncMock(return_value=[]))
+    page = await ShotGridShotCrudService.get_shot_page(
+        AsyncMock(),
+        PROJECT_ID,
+        ShotGridShotListQueryModel(),
+        user,
+        _access(),
+    )
+    item = page.rows[0]
+    assert item.task_id == row['task_id']
+    assert item.task_lock_version == row['task_lock_version']
+    assert item.lock_version == 1
+    assert 'task.start' in item.allowed_actions
+    assert 'task.start' in ShotGridShotCrudService._build_detail(row, [], None, user, _access()).allowed_actions
+
+    creator_access = _access()
+    creator_access.project_role = 'creator'
+    page = await ShotGridShotCrudService.get_shot_page(
+        AsyncMock(),
+        PROJECT_ID,
+        ShotGridShotListQueryModel(),
+        user,
+        creator_access,
+    )
+    assert 'task.start' not in page.rows[0].allowed_actions
+
+
+@pytest.mark.parametrize(
+    'changed',
+    [
+        {'task_id': None, 'task_status': None},
+        {'task_status': 'preparing'},
+        {'project_status': 'archived'},
+        {'lifecycle_status': 'archived'},
+        {'storage_status': 'pending'},
+    ],
+)
+def test_shot_start_action_requires_assigned_unstarted_mutable_shot(changed: dict[str, Any]) -> None:
+    row = _shot_projection_row()
+    row.update(task_status='not_started', status='not_started')
+    row.update(changed)
+    user = _current_user()
+    user.permissions.append('shotgrid:task:start')
+    assert 'task.start' not in ShotGridShotCrudService._allowed_actions(row, user, _access())

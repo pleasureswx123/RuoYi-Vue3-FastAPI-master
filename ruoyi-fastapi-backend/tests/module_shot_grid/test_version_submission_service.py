@@ -479,6 +479,8 @@ async def test_submit_preflight_reuses_context_422_and_does_not_check_unresolved
     ('context_patch', 'file_name', 'http_status', 'error_key'),
     [
         ({}, 'result.png', HTTP_UNPROCESSABLE_ENTITY, 'SG_TASK_FILE_TYPE_INVALID'),
+        ({'task_status': 'not_started'}, 'result.mov', HTTP_CONFLICT, 'SG_INVALID_STATE_TRANSITION'),
+        ({'task_status': 'preparing'}, 'result.mov', HTTP_CONFLICT, 'SG_INVALID_STATE_TRANSITION'),
         ({'shot_storage_dir_name': None}, 'result.mov', HTTP_CONFLICT, 'SG_VERSION_TARGET_PATH_CONFLICT'),
     ],
 )
@@ -647,6 +649,49 @@ async def test_unknown_source_adapter_error_maps_to_internal_submission_failure(
 
     assert exc_info.value.http_status == HTTP_SERVICE_UNAVAILABLE
     assert exc_info.value.error_key == 'SG_VERSION_SUBMISSION_FAILED'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('task_status', ['not_started', 'preparing'])
+async def test_create_rejects_task_before_production_without_reading_source(
+    monkeypatch: pytest.MonkeyPatch,
+    task_status: str,
+) -> None:
+    _patch_submit_preflight(monkeypatch, context={**_ready_shot_context(), 'task_status': task_status})
+    prefix = 'module_shot_grid.service.version_submission_service.'
+    access = ShotGridProjectAccessModel(
+        projectId=PROJECT_ID,
+        userId=USER_ID,
+        projectRole='creator',
+        hasAllScope=False,
+    )
+    monkeypatch.setattr(
+        prefix + 'ShotGridVersionSubmissionDao.lock_project',
+        AsyncMock(return_value=SimpleNamespace(project_status='active')),
+    )
+    monkeypatch.setattr(ShotGridVersionSubmissionService, '_refresh_locked_access', AsyncMock(return_value=access))
+    monkeypatch.setattr(
+        prefix + 'ShotGridVersionSubmissionDao.lock_task',
+        AsyncMock(return_value=SimpleNamespace(assignee_user_id=USER_ID, task_status=task_status)),
+    )
+    monkeypatch.setattr(
+        prefix + 'ShotGridVersionSubmissionDao.get_idempotent_submission_for_update', AsyncMock(return_value=None)
+    )
+    source = AsyncMock()
+    monkeypatch.setattr(prefix + 'FileInfoDao.get_file_info_by_id', source)
+    db = AsyncMock()
+    with pytest.raises(ShotGridDomainException) as exc_info:
+        await ShotGridVersionSubmissionService.create_submission(
+            db,
+            TASK_ID,
+            _create_command(),
+            'manager-start-regression',
+            _current_user(),
+        )
+    assert exc_info.value.error_key == 'SG_INVALID_STATE_TRANSITION'
+    source.assert_not_awaited()
+    db.commit.assert_not_awaited()
+    db.rollback.assert_awaited_once()
 
 
 @pytest.mark.asyncio

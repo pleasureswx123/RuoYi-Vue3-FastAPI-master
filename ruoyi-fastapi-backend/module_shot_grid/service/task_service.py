@@ -491,11 +491,13 @@ class ShotGridTaskService:
             access = await ShotGridProjectAccessService.resolve_access(db, current_user, project_id)
             cls._require_matching_access(access, project_id, actor_user_id)
             task = await cls._lock_task(db, project_id, task_id)
-            if access.project_role != 'creator' or task.assignee_user_id != actor_user_id:
+            is_shot = task.task_kind == 'shot_video'
+            can_start = access.has_all_scope or access.project_role == 'director'
+            if not can_start or not cls._has_permission(current_user, 'shotgrid:task:start'):
                 raise shot_grid_error(
                     403,
                     'SG_TASK_ACTION_DENIED',
-                    '只有当前任务负责制作人员可以开始任务',
+                    '任务须由项目管理人员确认开工',
                 )
             if task.task_status != 'not_started':
                 raise shot_grid_error(409, 'SG_INVALID_STATE_TRANSITION', '只有未开始任务可以执行开始动作')
@@ -516,7 +518,26 @@ class ShotGridTaskService:
                 item = await ShotGridTaskDao.lock_asset_item(db, project_id, task.asset_item_id)
                 if item is None:
                     raise shot_grid_error(404, 'SG_ASSET_ITEM_NOT_FOUND', '资产制作分项不存在或不可见')
+                if (
+                    not command.start_confirmed
+                    or command.asset_lock_version is None
+                    or command.asset_item_lock_version is None
+                ):
+                    raise shot_grid_error(
+                        422,
+                        'SG_ASSET_START_CONFIRMATION_REQUIRED',
+                        '请确认该资产制作分项可以开工，并提交当前资产及分项版本',
+                    )
+                cls._require_lock_version(asset.lock_version, command.asset_lock_version)
+                cls._require_lock_version(item.lock_version, command.asset_item_lock_version)
                 require_asset_production_item(item.production_item, action='开始任务')
+                member = await ShotGridTaskDao.get_assignable_member(db, project_id, task.assignee_user_id)
+                if member is None:
+                    raise shot_grid_error(
+                        409,
+                        'SG_TASK_ASSIGNEE_INVALID',
+                        '当前负责人已不是有效制作人员，请重新分配任务',
+                    )
 
             now = cls._now()
             directory_operation_id: int | None = None
@@ -527,6 +548,20 @@ class ShotGridTaskService:
                 if target is None:
                     raise shot_grid_error(404, 'SG_SHOT_NOT_FOUND', '镜头不存在或不可见')
                 shot, episode, scene = target
+                if not command.assets_confirmed or command.shot_lock_version is None:
+                    raise shot_grid_error(
+                        422,
+                        'SG_SHOT_START_CONFIRMATION_REQUIRED',
+                        '请确认已在线下核对资产齐备，并提交当前镜头版本',
+                    )
+                cls._require_lock_version(shot.lock_version, command.shot_lock_version)
+                member = await ShotGridTaskDao.get_assignable_member(db, project_id, task.assignee_user_id)
+                if member is None:
+                    raise shot_grid_error(
+                        409,
+                        'SG_TASK_ASSIGNEE_INVALID',
+                        '当前负责人已不是有效制作人员，请重新分配任务',
+                    )
                 latest_directory_status = await ShotGridTaskDao.get_latest_shot_directory_operation_status(
                     db,
                     project_id,
@@ -598,7 +633,29 @@ class ShotGridTaskService:
                 actor_name=actor_name,
                 dept_name=dept_name,
                 oper_url=f'/shot-grid/tasks/{task_id}/start',
-                payload={'taskId': task_id, 'lockVersion': command.lock_version},
+                payload={
+                    'taskId': task_id,
+                    'lockVersion': command.lock_version,
+                    **(
+                        {
+                            'projectId': project_id,
+                            'shotId': task.shot_id,
+                            'shotLockVersion': command.shot_lock_version,
+                            'assetsConfirmed': True,
+                            'confirmationMethod': 'manual',
+                        }
+                        if is_shot
+                        else {
+                            'projectId': project_id,
+                            'assetId': asset.asset_id,
+                            'assetItemId': task.asset_item_id,
+                            'assetLockVersion': command.asset_lock_version,
+                            'assetItemLockVersion': command.asset_item_lock_version,
+                            'startConfirmed': True,
+                            'confirmationMethod': 'manual',
+                        }
+                    ),
+                },
                 result={
                     'taskId': task_id,
                     'taskStatus': task.task_status,
@@ -956,7 +1013,7 @@ class ShotGridTaskService:
         target_active = (
             row['shot_lifecycle_status'] == 'active'
             if row['task_kind'] == 'shot_video'
-            else row['asset_item_lifecycle_status'] == 'active'
+            else row['asset_item_lifecycle_status'] == 'active' and row.get('asset_lifecycle_status') == 'active'
         )
         if not target_active:
             return []
@@ -977,7 +1034,8 @@ class ShotGridTaskService:
         if (
             row['task_status'] == 'not_started'
             and target_ready
-            and owner_creator
+            and director
+            and row.get('assignee_valid')
             and cls._has_permission(current_user, 'shotgrid:task:start')
         ):
             actions.append('task.start')

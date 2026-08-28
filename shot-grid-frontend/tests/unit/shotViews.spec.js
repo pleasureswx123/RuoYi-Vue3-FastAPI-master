@@ -5,6 +5,7 @@ import { createMemoryHistory, createRouter } from 'vue-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { getProjectDetail, getProjectPage } from '@/api/shot-grid/projects'
+import { startTask } from '@/api/shot-grid/tasks'
 import {
   batchAssignShotTasks,
   batchDeleteShots,
@@ -34,6 +35,7 @@ import ShotImportDialog from '@/views/shot/components/ShotImportDialog.vue'
 const sortableCreate = vi.hoisted(() => vi.fn(() => ({ destroy: vi.fn() })))
 
 vi.mock('sortablejs', () => ({ default: { create: sortableCreate } }))
+vi.mock('@/api/shot-grid/tasks', () => ({ startTask: vi.fn() }))
 vi.mock('@/api/shot-grid/projects', () => ({
   assertPositiveId: value => {
     const result = Number(value)
@@ -191,6 +193,253 @@ describe('镜头管理真实列表页', () => {
     createEpisode.mockResolvedValue({ data: { episodeId: 22, episodeNo: 2, episodeCode: 'EP002' } })
     createScene.mockResolvedValue({ data: { sceneId: 32, episodeId: 21, sceneNo: 2, sceneCode: '002' } })
     reorderShot.mockResolvedValue({ data: { shotId: 41, sequencePosition: 1, lockVersion: 1 } })
+  })
+
+  it('列表自动刷新目录准备结果，保留选中镜头并在就绪后停止查询', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    getShotPage.mockResolvedValueOnce({ rows: [{ ...shotRow, status: 'preparing' }], total: 1 })
+    const { wrapper } = await mountView(['shotgrid:shot:list', 'shotgrid:task:assign'])
+    try {
+      expect(findTag(wrapper, '目录准备中')).toBeDefined()
+      const checkbox = wrapper.findAllComponents({ name: 'ElCheckbox' }).find(item => item.attributes('aria-label') === '选择 S001')
+      checkbox.vm.$emit('change', true)
+      await flushPromises()
+      const calls = getShotPage.mock.calls.length
+      await vi.advanceTimersByTimeAsync(1500)
+      await flushPromises()
+      expect(getShotPage).toHaveBeenCalledTimes(calls + 1)
+      expect(findTag(wrapper, '制作中')).toBeDefined()
+      expect(findTag(wrapper, '目录准备中')).toBeUndefined()
+      expect(wrapper.findAllComponents({ name: 'ElCheckbox' }).find(item => item.attributes('aria-label') === '选择 S001').props('modelValue')).toBe(true)
+      await vi.advanceTimersByTimeAsync(10000)
+      expect(getShotPage).toHaveBeenCalledTimes(calls + 1)
+    } finally {
+      wrapper.unmount()
+      vi.useRealTimers()
+    }
+  })
+
+  it('列表自动刷新不会提交未确认的搜索词，查询后沿用当前筛选', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    getShotPage.mockResolvedValue({ rows: [{ ...shotRow, status: 'preparing' }], total: 1 })
+    const { wrapper } = await mountView()
+    try {
+      const form = wrapper.find('.shot-filters')
+      await form.find('input').setValue('动力舱')
+      const calls = getShotPage.mock.calls.length
+      await vi.advanceTimersByTimeAsync(5000)
+      expect(getShotPage).toHaveBeenCalledTimes(calls)
+      await form.findAllComponents(ElButton).find(button => button.text() === '查询').trigger('click')
+      await flushPromises()
+      getShotPage.mockResolvedValue({ rows: [shotRow], total: 1 })
+      await vi.advanceTimersByTimeAsync(1500)
+      await flushPromises()
+      expect(getShotPage).toHaveBeenCalledTimes(calls + 2)
+      expect(getShotPage).toHaveBeenLastCalledWith(8, expect.objectContaining({ keyword: '动力舱', pageNum: 1 }), expect.anything())
+      expect(form.find('input').element.value).toBe('动力舱')
+      expect(findTag(wrapper, '制作中')).toBeDefined()
+    } finally {
+      wrapper.unmount()
+      vi.useRealTimers()
+    }
+  })
+
+  it('列表自动刷新在开始加载编辑弹窗时即中止，不替换编辑快照', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    getShotPage.mockResolvedValue({ rows: [{ ...shotRow, status: 'not_started' }], total: 1 })
+    const { wrapper } = await mountView(['shotgrid:shot:list', 'shotgrid:shot:edit'])
+    let resolvePoll
+    let resolveDetail
+    try {
+      getShotPage.mockImplementationOnce(() => new Promise(resolve => { resolvePoll = resolve }))
+      await vi.advanceTimersByTimeAsync(5000)
+      const signal = getShotPage.mock.lastCall[2].signal
+      getShotDetail.mockImplementationOnce(() => new Promise(resolve => { resolveDetail = resolve }))
+      await wrapper.findAllComponents(ElButton).find(button => button.text() === '编辑').trigger('click')
+      expect(signal.aborted).toBe(true)
+      resolveDetail({ data: { ...shotDetail(8, 41, 'S001', '正在编辑的内容'), status: 'not_started', lockVersion: 3 } })
+      await flushPromises()
+      const calls = getShotPage.mock.calls.length
+      resolvePoll({ rows: [{ ...shotRow, lockVersion: 4 }], total: 1 })
+      await vi.advanceTimersByTimeAsync(10000)
+      await flushPromises()
+      expect(getShotPage).toHaveBeenCalledTimes(calls)
+      expect(wrapper.findComponent(ShotFormDialog).props('shot')).toMatchObject({ description: '正在编辑的内容', lockVersion: 3 })
+      expect(findTag(wrapper, '待开工')).toBeDefined()
+    } finally {
+      wrapper.unmount()
+      vi.useRealTimers()
+    }
+  })
+
+  it('列表自动刷新切项目再返回时丢弃旧响应，卸载后中止请求', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const project9 = { projectId: 9, projectCode: 'NEW', projectName: '新项目' }
+    getProjectPage.mockResolvedValue({ rows: [projectRow, project9], total: 2 })
+    getProjectDetail.mockImplementation(projectId => Promise.resolve({ data: {
+      ...(Number(projectId) === 8 ? projectRow : project9), projectStatus: 'active', storageStatus: 'ready', myProjectRole: 'director'
+    } }))
+    getShotPage.mockResolvedValue({ rows: [{ ...shotRow, status: 'preparing' }], total: 1 })
+    const { wrapper } = await mountView()
+    let resolveOld
+    let resolveUnmounted
+    try {
+      getShotPage.mockImplementationOnce(() => new Promise(resolve => { resolveOld = resolve }))
+      await vi.advanceTimersByTimeAsync(1500)
+      const oldSignal = getShotPage.mock.lastCall[2].signal
+      const projectSelect = wrapper.find('.project-context').findAllComponents(ElSelect)[0]
+      await setElSelectValue(projectSelect, '9')
+      await flushPromises()
+      await setElSelectValue(projectSelect, '8')
+      await flushPromises()
+      expect(oldSignal.aborted).toBe(true)
+      resolveOld({ rows: [{ ...shotRow, description: '迟到的旧项目内容' }], total: 1 })
+      await flushPromises()
+      expect(wrapper.text()).not.toContain('迟到的旧项目内容')
+      expect(findTag(wrapper, '目录准备中')).toBeDefined()
+      getShotPage.mockImplementationOnce(() => new Promise(resolve => { resolveUnmounted = resolve }))
+      await vi.advanceTimersByTimeAsync(1500)
+      const signal = getShotPage.mock.lastCall[2].signal
+      wrapper.unmount()
+      expect(signal.aborted).toBe(true)
+      const calls = getShotPage.mock.calls.length
+      resolveUnmounted({ rows: [shotRow], total: 1 })
+      await vi.advanceTimersByTimeAsync(10000)
+      expect(getShotPage).toHaveBeenCalledTimes(calls)
+    } finally {
+      if (wrapper.exists()) wrapper.unmount()
+      vi.useRealTimers()
+    }
+  })
+
+  it.each([
+    ['table', 'confirm'], ['table', 'cancel'],
+    ['card', 'confirm'], ['card', 'cancel'],
+    ['storyboard', 'confirm'], ['storyboard', 'cancel']
+  ])('%s 视图镜头开工先确认人工核对结果，选择 %s 后按预期处理', async (viewMode, action) => {
+    startTask.mockReset()
+    startTask.mockResolvedValue({ data: { taskId: 71, taskStatus: 'preparing', lockVersion: 5 } })
+    getShotPage.mockResolvedValue({ rows: [{
+      ...shotRow, taskId: 71, status: 'not_started', allowedActions: ['task.start'],
+      assignee: { userId: 7, userName: '杨景锋', nickName: 'YJF', producerCode: 'YJF' }
+    }], total: 1, hasNext: false })
+    const confirmSpy = vi.spyOn(ElMessageBox, 'confirm')
+    if (action === 'confirm') confirmSpy.mockResolvedValue('confirm')
+    else confirmSpy.mockRejectedValue('cancel')
+    const { wrapper } = await mountView(['shotgrid:shot:list', 'shotgrid:task:start'])
+    try {
+      wrapper.findComponent(ElRadioGroup).vm.$emit('update:modelValue', viewMode)
+      await flushPromises()
+      const detailCalls = getShotDetail.mock.calls.length
+      const button = wrapper.findAllComponents(ElButton).find(item => item.text() === '开始任务')
+      expect(button).toBeDefined()
+      expect(button.props('size')).toBe('small')
+      await button.trigger('click')
+      await flushPromises()
+      expect(getShotDetail).toHaveBeenCalledTimes(detailCalls)
+      expect(String(confirmSpy.mock.calls[0][0])).toContain('资产')
+      expect(String(confirmSpy.mock.calls[0][0])).toContain('杨景锋')
+      if (action === 'confirm') {
+        expect(startTask).toHaveBeenCalledTimes(1)
+        expect(startTask).toHaveBeenCalledWith(71, {
+          lockVersion: 4, shotLockVersion: 0, assetsConfirmed: true
+        })
+      } else {
+        expect(startTask).not.toHaveBeenCalled()
+      }
+    } finally {
+      wrapper.unmount()
+      confirmSpy.mockRestore()
+    }
+  })
+
+  it.each(['platform', 'backend', 'creator'])('缺少 %s 开工授权时不显示镜头开始按钮', async missing => {
+    getShotPage.mockResolvedValue({ rows: [{
+      ...shotRow, taskId: 71, status: 'not_started',
+      allowedActions: missing === 'backend' ? [] : ['task.start']
+    }], total: 1, hasNext: false })
+    if (missing === 'creator') getProjectDetail.mockResolvedValue({ data: {
+      ...projectRow, projectStatus: 'active', storageStatus: 'ready', myProjectRole: 'creator'
+    } })
+    const { wrapper } = await mountView(missing === 'platform'
+      ? ['shotgrid:shot:list'] : ['shotgrid:shot:list', 'shotgrid:task:start'])
+    try {
+      expect(wrapper.findAllComponents(ElButton).map(button => button.text())).not.toContain('开始任务')
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('开工确认防重复点击，切走并返回同一项目后旧确认不得提交', async () => {
+    startTask.mockReset()
+    const project9 = { projectId: 9, projectCode: 'NEW', projectName: '新项目' }
+    getProjectPage.mockResolvedValue({ rows: [projectRow, project9], total: 2, hasNext: false })
+    getProjectDetail.mockImplementation(projectId => Promise.resolve({ data: {
+      ...(Number(projectId) === 8 ? projectRow : project9),
+      projectStatus: 'active', storageStatus: 'ready', myProjectRole: 'director'
+    } }))
+    getShotPage.mockImplementation(projectId => Promise.resolve({ rows: [{
+      ...shotRow, projectId: Number(projectId), taskId: 71, status: 'not_started', allowedActions: ['task.start']
+    }], total: 1, hasNext: false }))
+    let resolveConfirm
+    const confirmSpy = vi.spyOn(ElMessageBox, 'confirm').mockImplementation(
+      () => new Promise(resolve => { resolveConfirm = resolve })
+    )
+    const { wrapper } = await mountView(['shotgrid:shot:list', 'shotgrid:task:start'])
+    try {
+      const button = wrapper.findAllComponents(ElButton).find(item => item.text() === '开始任务')
+      await button.trigger('click')
+      await button.trigger('click')
+      expect(confirmSpy).toHaveBeenCalledTimes(1)
+      const projectSelect = wrapper.find('.project-context').findAllComponents(ElSelect)[0]
+      await setElSelectValue(projectSelect, '9')
+      await flushPromises()
+      await setElSelectValue(projectSelect, '8')
+      await flushPromises()
+      resolveConfirm('confirm')
+      await flushPromises()
+      expect(startTask).not.toHaveBeenCalled()
+    } finally {
+      wrapper.unmount()
+      confirmSpy.mockRestore()
+    }
+  })
+
+  it('旧项目开工请求完成后不刷新或覆盖新项目镜头', async () => {
+    startTask.mockReset()
+    let resolveStart
+    startTask.mockImplementation(() => new Promise(resolve => { resolveStart = resolve }))
+    const project9 = { projectId: 9, projectCode: 'NEW', projectName: '新项目' }
+    getProjectPage.mockResolvedValue({ rows: [projectRow, project9], total: 2, hasNext: false })
+    getProjectDetail.mockImplementation(projectId => Promise.resolve({ data: {
+      ...(Number(projectId) === 8 ? projectRow : project9),
+      projectStatus: 'active', storageStatus: 'ready', myProjectRole: 'director'
+    } }))
+    getShotPage.mockImplementation(projectId => Promise.resolve({ rows: [{
+      ...shotRow, projectId: Number(projectId), taskId: 71, status: 'not_started',
+      description: Number(projectId) === 9 ? '新项目镜头' : '原项目镜头', allowedActions: ['task.start']
+    }], total: 1, hasNext: false }))
+    const confirmSpy = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm')
+    const { wrapper } = await mountView(['shotgrid:shot:list', 'shotgrid:task:start'])
+    try {
+      const button = wrapper.findAllComponents(ElButton).find(item => item.text() === '开始任务')
+      await button.trigger('click')
+      await flushPromises()
+      expect(button.props('disabled')).toBe(true)
+      await button.trigger('click')
+      expect(startTask).toHaveBeenCalledTimes(1)
+      await setElSelectValue(wrapper.find('.project-context').findAllComponents(ElSelect)[0], '9')
+      await flushPromises()
+      const calls = getShotPage.mock.calls.length
+      resolveStart({ data: { taskId: 71, taskStatus: 'preparing', lockVersion: 5 } })
+      await flushPromises()
+      expect(getShotPage).toHaveBeenCalledTimes(calls)
+      expect(wrapper.text()).toContain('新项目镜头')
+      expect(wrapper.text()).not.toContain('原项目镜头')
+    } finally {
+      wrapper.unmount()
+      confirmSpy.mockRestore()
+    }
   })
 
   it('在项目范围内展示同一真实结果的三种视图与写入入口', async () => {

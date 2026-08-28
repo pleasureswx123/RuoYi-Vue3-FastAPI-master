@@ -5,7 +5,7 @@ from sqlalchemy import Select, and_, exists, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from module_shot_grid.entity.do.asset_do import ShotGridAssetItem
-from module_shot_grid.entity.do.project_do import ShotGridShot
+from module_shot_grid.entity.do.project_do import ShotGridProject, ShotGridShot
 from module_shot_grid.entity.do.storage_do import (
     ShotGridProjectStorage,
     ShotGridStorageOperation,
@@ -179,6 +179,18 @@ class ShotGridStorageOperationDao:
         expected_attempt_count: int,
         now: datetime,
     ) -> bool:
+        # 与任务开工共用项目锁；必须先于操作锁和任务锁，避免遗漏并发开工或形成反向锁序。
+        # 此处仅在 NAS I/O 已结束后的回写短事务执行，等待后仍须重新校验 owner + attempt。
+        project_id = (
+            await db.execute(
+                select(ShotGridProject.project_id)
+                .join(ShotGridStorageOperation, ShotGridStorageOperation.project_id == ShotGridProject.project_id)
+                .where(ShotGridStorageOperation.operation_id == operation_id)
+                .with_for_update(of=ShotGridProject)
+            )
+        ).scalar_one_or_none()
+        if project_id is None:
+            return False
         operation = await cls._lock_owned_operation(
             db,
             operation_id=operation_id,

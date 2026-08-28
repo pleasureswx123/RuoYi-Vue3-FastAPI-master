@@ -23,8 +23,9 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { getMineTaskPage, getTaskDetail, startTask } from '@/api/shot-grid/tasks'
+import { getMineTaskPage, getTaskDetail, startTask, updateTask } from '@/api/shot-grid/tasks'
 import { getMineReviewListPage, getRecentMineVersions } from '@/api/shot-grid/reviews'
+import { createApiError } from '@/utils/apiError'
 import { useSessionStore } from '@/store/modules/session'
 import { setElSelectValue } from '../helpers/elementPlus'
 import TaskDetailView from '@/views/task/TaskDetailView.vue'
@@ -110,6 +111,15 @@ function taskFixture(taskId = 31, overrides = {}) {
   }
 }
 
+function assetTaskFixture(taskId = 31, overrides = {}) {
+  return taskFixture(taskId, {
+    taskName: '动力舱主视角制作', taskKind: 'asset_image', shotProduction: null,
+    target: { targetType: 'asset_item', targetId: 61, targetName: '动力舱主视角',
+      targetDescription: '动力舱图片制作', lifecycleStatus: 'active', assetId: 18, productionItem: '主视角' },
+    ...overrides
+  })
+}
+
 function installSession(permissions = []) {
   const pinia = createPinia()
   setActivePinia(pinia)
@@ -188,6 +198,123 @@ describe('真实任务工作台', () => {
     getMineTaskPage.mockResolvedValue({ rows: [taskFixture()], total: 1, hasNext: false })
     getMineReviewListPage.mockResolvedValue({ rows: [], total: 0 })
     getRecentMineVersions.mockResolvedValue({ rows: [], total: 0 })
+  })
+
+  it('列表自动刷新管理人员开工和目录准备结果，同步制作中摘要', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    getMineTaskPage.mockResolvedValueOnce({ rows: [taskFixture()], total: 1 })
+      .mockResolvedValueOnce({ rows: [taskFixture(31, { taskStatus: 'preparing' })], total: 1 })
+      .mockResolvedValue({ rows: [taskFixture(31, { taskStatus: 'in_progress' })], total: 1 })
+    const { wrapper } = await mountWorkbench()
+    try {
+      expect(wrapper.find('.task-row').text()).toContain('待开工')
+      const calls = getMineTaskPage.mock.calls.length
+      await vi.advanceTimersByTimeAsync(5000)
+      await flushPromises()
+      expect(wrapper.find('.task-row').text()).toContain('目录准备中')
+      await vi.advanceTimersByTimeAsync(1500)
+      await flushPromises()
+      expect(wrapper.find('.task-row').text()).toContain('制作中')
+      expect(wrapper.findAll('.task-stats strong')[2].text()).toBe('1')
+      expect(getMineTaskPage).toHaveBeenCalledTimes(calls + 2)
+      await vi.advanceTimersByTimeAsync(10000)
+      expect(getMineTaskPage).toHaveBeenCalledTimes(calls + 2)
+    } finally {
+      wrapper.unmount()
+      vi.useRealTimers()
+    }
+  })
+
+  it.each([[401, 1], [403, 1], [404, 1], [503, 3]])('列表自动刷新遇到业务码 %s 后有界停止，保留上次结果并支持人工刷新', async (status, retries) => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const { wrapper } = await mountWorkbench()
+    try {
+      getMineTaskPage.mockRejectedValue(createApiError({ status: 200, data: { code: status, msg: '无法刷新' } }))
+      const calls = getMineTaskPage.mock.calls.length
+      await vi.advanceTimersByTimeAsync(25000)
+      await flushPromises()
+      expect(getMineTaskPage).toHaveBeenCalledTimes(calls + retries)
+      expect(wrapper.find('.task-row').text()).toContain('待开工')
+      expect(wrapper.text()).toContain('状态自动刷新已暂停')
+      getMineTaskPage.mockResolvedValue({ rows: [taskFixture(31, { taskStatus: 'in_progress' })], total: 1 })
+      await wrapper.find('.workbench-section-heading').findComponent(ElButton).trigger('click')
+      await flushPromises()
+      expect(wrapper.text()).not.toContain('状态自动刷新已暂停')
+      expect(wrapper.find('.task-row').text()).toContain('制作中')
+    } finally {
+      wrapper.unmount()
+      vi.useRealTimers()
+    }
+  })
+
+  it('列表自动刷新目录长时间未就绪时停止查询，保留人工刷新入口', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    getMineTaskPage.mockResolvedValue({ rows: [taskFixture(31, { taskStatus: 'preparing' })], total: 1 })
+    const { wrapper } = await mountWorkbench()
+    try {
+      const calls = getMineTaskPage.mock.calls.length
+      await vi.advanceTimersByTimeAsync(1500 * 90)
+      await flushPromises()
+      expect(getMineTaskPage).toHaveBeenCalledTimes(calls + 80)
+      expect(wrapper.text()).toContain('目录准备时间较长')
+      expect(wrapper.find('.task-row').text()).toContain('目录准备中')
+    } finally {
+      wrapper.unmount()
+      vi.useRealTimers()
+    }
+  })
+
+  it('资产待开工任务在工作台自动等待管理人放行，不提供本人开始动作', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    getMineTaskPage.mockResolvedValue({ rows: [assetTaskFixture()], total: 1 })
+    const { wrapper } = await mountWorkbench()
+    try {
+      const calls = getMineTaskPage.mock.calls.length
+      expect(wrapper.find('.task-row').text()).toContain('待开工')
+      await vi.advanceTimersByTimeAsync(10000)
+      expect(getMineTaskPage).toHaveBeenCalledTimes(calls + 2)
+      getMineTaskPage.mockResolvedValueOnce({ rows: [assetTaskFixture(31, { taskStatus: 'preparing' })], total: 1 })
+        .mockResolvedValue({ rows: [assetTaskFixture(31, { taskStatus: 'in_progress' })], total: 1 })
+      await wrapper.find('.workbench-section-heading').findComponent(ElButton).trigger('click')
+      await flushPromises()
+      await vi.advanceTimersByTimeAsync(1500)
+      await flushPromises()
+      expect(wrapper.find('.task-row').text()).toContain('制作中')
+      expect(startTask).not.toHaveBeenCalled()
+    } finally {
+      wrapper.unmount()
+      vi.useRealTimers()
+    }
+  })
+
+  it('列表自动刷新不重叠，筛选草稿变化时中止旧请求并丢弃迟到结果', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const { wrapper } = await mountWorkbench()
+    let resolveOld
+    try {
+      getMineTaskPage.mockImplementationOnce(() => new Promise(resolve => { resolveOld = resolve }))
+      await vi.advanceTimersByTimeAsync(5000)
+      const signal = getMineTaskPage.mock.lastCall[1].signal
+      const calls = getMineTaskPage.mock.calls.length
+      await vi.advanceTimersByTimeAsync(20000)
+      expect(getMineTaskPage).toHaveBeenCalledTimes(calls)
+      const form = wrapper.find('.task-filters')
+      await form.find('input[placeholder="任务、项目、镜头或资产"]').setValue('新搜索')
+      expect(signal.aborted).toBe(true)
+      resolveOld({ rows: [taskFixture(88, { taskName: '迟到任务' })], total: 1 })
+      await vi.advanceTimersByTimeAsync(10000)
+      await flushPromises()
+      expect(getMineTaskPage).toHaveBeenCalledTimes(calls)
+      expect(wrapper.text()).not.toContain('迟到任务')
+      getMineTaskPage.mockResolvedValue({ rows: [taskFixture(89, { taskName: '新搜索结果', taskStatus: 'in_progress' })], total: 1 })
+      await form.findAllComponents(ElButton).find(button => button.text() === '查询').trigger('click')
+      await flushPromises()
+      expect(getMineTaskPage).toHaveBeenLastCalledWith(expect.objectContaining({ keyword: '新搜索' }), expect.anything())
+      expect(wrapper.text()).toContain('新搜索结果')
+    } finally {
+      wrapper.unmount()
+      vi.useRealTimers()
+    }
   })
 
   it('展示跨项目真实任务，并提交服务端分页筛选', async () => {
@@ -465,26 +592,158 @@ describe('任务详情、状态动作与异步上下文', () => {
     wrapper.unmount()
   })
 
-  it('开始与编辑动作同时受 allowedActions 和平台权限双门禁', async () => {
-    const { wrapper } = await mountDetail()
-    expect(wrapper.text()).toContain('EP001-001-S031')
-    expect(wrapper.text()).toContain('开始任务')
-    expect(wrapper.text()).toContain('编辑任务')
+  it.each([403, 503])('待开工状态查询遇到 %s 后按错误类型停止重试', async status => {
+    getTaskDetail.mockReset()
+    getTaskDetail.mockResolvedValueOnce({ data: taskFixture(31, { allowedActions: [] }) })
+      .mockRejectedValue({ httpStatus: status, message: '状态查询失败' })
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    let wrapper
+    try {
+      const mounted = await mountDetail()
+      wrapper = mounted.wrapper
+      await vi.advanceTimersByTimeAsync(15000)
+      await flushPromises()
+      expect(getTaskDetail).toHaveBeenCalledTimes(status === 403 ? 2 : 4)
+      await vi.advanceTimersByTimeAsync(30000)
+      expect(getTaskDetail).toHaveBeenCalledTimes(status === 403 ? 2 : 4)
+      expect(wrapper.get('[data-testid="version-workspace"]').attributes('data-allowed-actions')).toBe('')
+    } finally {
+      wrapper?.unmount()
+      vi.useRealTimers()
+    }
+  })
 
-    await wrapper.findAll('button').find(button => button.text().includes('开始任务')).trigger('click')
-    await flushPromises()
-    expect(startTask).toHaveBeenCalledWith(31, { lockVersion: 2 })
-    expect(wrapper.text()).toContain('制作中')
-    expect(wrapper.findAll('button').map(button => button.text())).not.toContain('编辑任务')
+  it.each([401, 403, 404])('待开工轮询遇到 HTTP 200 业务码 %s 时立即停止', async status => {
+    getTaskDetail.mockReset()
+    getTaskDetail.mockResolvedValueOnce({ data: taskFixture(31, { allowedActions: [] }) })
+      .mockRejectedValue(createApiError({ status: 200, data: { code: status, msg: '访问已撤销' } }))
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    let wrapper
+    try {
+      ;({ wrapper } = await mountDetail())
+      await vi.advanceTimersByTimeAsync(15000)
+      await flushPromises()
+      expect(getTaskDetail).toHaveBeenCalledTimes(2)
+      expect(wrapper.text()).toContain('访问已撤销')
+      expect(wrapper.text()).not.toContain('连续查询失败')
+    } finally {
+      wrapper?.unmount()
+      vi.useRealTimers()
+    }
+  })
+
+  it('待开工轮询更新任务后，编辑保存仍携带打开时的版本和字段', async () => {
+    const original = taskFixture()
+    getTaskDetail.mockReset()
+    getTaskDetail.mockResolvedValueOnce({ data: original })
+      .mockResolvedValue({ data: taskFixture(31, { lockVersion: original.lockVersion + 1, requirements: '其他管理人更新后的要求' }) })
+    updateTask.mockRejectedValueOnce(createApiError({ status: 409, data: { code: 409, msg: '任务已被修改' } }))
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    let wrapper
+    try {
+      ;({ wrapper } = await mountDetail())
+      await wrapper.findAllComponents(ElButton).find(button => button.text() === '编辑任务').trigger('click')
+      await flushPromises()
+      await vi.advanceTimersByTimeAsync(5000)
+      await flushPromises()
+      const dialog = wrapper.findComponent(TaskEditDialog)
+      await dialog.findAllComponents(ElButton).find(button => button.text() === '保存任务').trigger('click')
+      await flushPromises()
+      expect(updateTask).toHaveBeenCalledWith(31, expect.objectContaining({
+        requirements: original.requirements,
+        lockVersion: original.lockVersion
+      }))
+      expect(dialog.findComponent(ElAlert).props('title')).toBe('任务已发生变更')
+    } finally {
+      wrapper?.unmount()
+      vi.useRealTimers()
+    }
+  })
+
+  it('待开工每五秒刷新，管理人开工后切换为目录准备的一点五秒查询', async () => {
+    getTaskDetail.mockReset()
+    getTaskDetail.mockResolvedValueOnce({ data: taskFixture(31, { allowedActions: [] }) })
+      .mockResolvedValueOnce({ data: taskFixture(31, { taskStatus: 'preparing', allowedActions: [] }) })
+      .mockResolvedValueOnce({ data: taskFixture(31, { taskStatus: 'in_progress', allowedActions: ['version.add'] }) })
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    let wrapper
+    try {
+      ;({ wrapper } = await mountDetail())
+      await vi.advanceTimersByTimeAsync(5000)
+      await flushPromises()
+      expect(getTaskDetail).toHaveBeenCalledTimes(2)
+      expect(wrapper.get('[data-testid="version-workspace"]').attributes('data-allowed-actions')).toBe('')
+      await vi.advanceTimersByTimeAsync(1499)
+      expect(getTaskDetail).toHaveBeenCalledTimes(2)
+      await vi.advanceTimersByTimeAsync(1)
+      await flushPromises()
+      expect(getTaskDetail).toHaveBeenCalledTimes(3)
+      expect(wrapper.get('[data-testid="version-workspace"]').attributes('data-allowed-actions')).toBe('version.add')
+    } finally {
+      wrapper?.unmount()
+      vi.useRealTimers()
+    }
+  })
+
+  it('镜头任务详情不提供绕过管理端人工确认的直接开始入口', async () => {
+    getTaskDetail.mockResolvedValueOnce({ data: taskFixture(31, {
+      allowedActions: ['task.start']
+    }) })
+    const { wrapper } = await mountDetail()
+    try {
+      expect(wrapper.findAllComponents(ElButton).map(button => button.text())).not.toContain('开始任务')
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('等待开工的镜头任务在管理端放行后刷新为可提交版本', async () => {
+    getTaskDetail.mockReset()
+    getTaskDetail
+      .mockResolvedValueOnce({ data: taskFixture(31, { allowedActions: [] }) })
+      .mockResolvedValue({ data: taskFixture(31, {
+        taskStatus: 'in_progress', lockVersion: 4, allowedActions: ['version.add']
+      }) })
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const messageSpy = vi.spyOn(ElMessage, 'success').mockImplementation(() => undefined)
+    let wrapper
+    try {
+      ;({ wrapper } = await mountDetail())
+      await vi.advanceTimersByTimeAsync(5000)
+      await flushPromises()
+      const workspace = wrapper.get('[data-testid="version-workspace"]')
+      expect(workspace.attributes('data-task-status')).toBe('in_progress')
+      expect(workspace.attributes('data-allowed-actions')).toContain('version.add')
+      const requests = getTaskDetail.mock.calls.length
+      wrapper.unmount()
+      wrapper = null
+      await vi.advanceTimersByTimeAsync(10000)
+      expect(getTaskDetail).toHaveBeenCalledTimes(requests)
+    } finally {
+      wrapper?.unmount()
+      vi.useRealTimers()
+      messageSpy.mockRestore()
+    }
+  })
+
+  it('资产待开工详情禁止本人开始，编辑仍受 allowedActions 和平台权限双门禁', async () => {
+    getTaskDetail.mockResolvedValueOnce({ data: assetTaskFixture() })
+    const { wrapper } = await mountDetail()
+    expect(wrapper.text()).toContain('动力舱主视角')
+    expect(wrapper.findAllComponents(ElButton).map(button => button.text())).not.toContain('开始任务')
+    expect(wrapper.text()).toContain('等待管理人员确认开工')
+    expect(wrapper.text()).toContain('该制作分项')
+    expect(wrapper.text()).toContain('编辑任务')
+    expect(startTask).not.toHaveBeenCalled()
     wrapper.unmount()
 
-    getTaskDetail.mockResolvedValueOnce({ data: taskFixture(31, { allowedActions: ['task.start', 'task.edit'] }) })
+    getTaskDetail.mockResolvedValueOnce({ data: assetTaskFixture(31, { allowedActions: ['task.start', 'task.edit'] }) })
     const missingPlatformPermission = await mountDetail('/tasks/31', ['shotgrid:task:query'])
     expect(missingPlatformPermission.wrapper.findAll('button').map(button => button.text())).not.toContain('开始任务')
     expect(missingPlatformPermission.wrapper.findAll('button').map(button => button.text())).not.toContain('编辑任务')
     missingPlatformPermission.wrapper.unmount()
 
-    getTaskDetail.mockResolvedValueOnce({ data: taskFixture(31, { allowedActions: [] }) })
+    getTaskDetail.mockResolvedValueOnce({ data: assetTaskFixture(31, { allowedActions: [] }) })
     const missingBackendAction = await mountDetail()
     expect(missingBackendAction.wrapper.findAll('button').map(button => button.text())).not.toContain('开始任务')
     expect(missingBackendAction.wrapper.findAll('button').map(button => button.text())).not.toContain('编辑任务')
@@ -504,41 +763,41 @@ describe('任务详情、状态动作与异步上下文', () => {
     wrapper.unmount()
   })
 
-  it('任务开始后自动等待目录准备完成，并立即更新版本提交区域', async () => {
-    const inProgressTask = taskFixture(31, {
+  it('资产待开工详情等待管理员放行，目录就绪后才开放版本提交区域', async () => {
+    const inProgressTask = assetTaskFixture(31, {
       taskStatus: 'in_progress',
       lockVersion: 4,
       allowedActions: ['task.assign', 'version.add']
     })
     getTaskDetail
-      .mockResolvedValueOnce({ data: taskFixture() })
+      .mockResolvedValueOnce({ data: assetTaskFixture(31, { allowedActions: [] }) })
+      .mockResolvedValueOnce({ data: assetTaskFixture(31, {
+        taskStatus: 'preparing', lockVersion: 3, allowedActions: []
+      }) })
       .mockResolvedValueOnce({ data: inProgressTask })
-    startTask.mockResolvedValueOnce({ data: taskFixture(31, {
-      taskStatus: 'preparing',
-      lockVersion: 3,
-      allowedActions: ['task.assign']
-    }) })
     const messageSpy = vi.spyOn(ElMessage, 'success').mockImplementation(() => undefined)
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     const { wrapper } = await mountDetail()
-    vi.useFakeTimers()
 
     try {
-      await wrapper.findAll('button').find(button => button.text().includes('开始任务')).trigger('click')
+      expect(wrapper.get('[data-testid="version-workspace"]').attributes('data-allowed-actions')).toBe('')
+      await vi.advanceTimersByTimeAsync(5000)
       await flushPromises()
 
       expect(wrapper.text()).toContain('目录准备中')
       expect(wrapper.findAll('button').map(button => button.text())).not.toContain('编辑任务')
-      expect(messageSpy).toHaveBeenCalledWith('任务已开始，正在准备制作目录')
+      expect(wrapper.get('[data-testid="version-workspace"]').attributes('data-allowed-actions')).toBe('')
 
       await vi.advanceTimersByTimeAsync(1500)
       await flushPromises()
 
       const versionWorkspace = wrapper.get('[data-testid="version-workspace"]')
-      expect(getTaskDetail).toHaveBeenCalledTimes(2)
+      expect(getTaskDetail).toHaveBeenCalledTimes(3)
       expect(wrapper.text()).toContain('制作中')
       expect(versionWorkspace.attributes('data-task-status')).toBe('in_progress')
       expect(versionWorkspace.attributes('data-allowed-actions')).toContain('version.add')
       expect(messageSpy).toHaveBeenCalledWith('制作目录已准备完成，可以提交首版成果')
+      expect(startTask).not.toHaveBeenCalled()
     } finally {
       wrapper.unmount()
       vi.useRealTimers()
@@ -574,20 +833,24 @@ describe('任务详情、状态动作与异步上下文', () => {
     wrapper.unmount()
   })
 
-  it('404 与开始任务的 409 冲突均显示可区分状态', async () => {
+  it('404 与编辑任务的 409 冲突均显示可区分状态', async () => {
     getTaskDetail.mockRejectedValueOnce({ httpStatus: 404, message: '任务已归档或不可见' })
     const missing = await mountDetail()
     expect(missing.wrapper.text()).toContain('任务不存在')
     expect(missing.wrapper.text()).toContain('任务已归档或不可见')
     missing.wrapper.unmount()
 
-    getTaskDetail.mockResolvedValueOnce({ data: taskFixture() })
-    startTask.mockRejectedValueOnce({ httpStatus: 409, errorKey: 'SG_OPTIMISTIC_LOCK_CONFLICT', message: '任务已被修改' })
+    getTaskDetail.mockResolvedValueOnce({ data: assetTaskFixture() })
+    updateTask.mockRejectedValueOnce({ httpStatus: 409, errorKey: 'SG_OPTIMISTIC_LOCK_CONFLICT', message: '任务已被修改' })
     const conflict = await mountDetail()
-    await conflict.wrapper.findAll('button').find(button => button.text().includes('开始任务')).trigger('click')
+    await conflict.wrapper.findAllComponents(ElButton).find(button => button.text() === '编辑任务').trigger('click')
     await flushPromises()
-    expect(conflict.wrapper.text()).toContain('任务已发生变更')
-    expect(conflict.wrapper.text()).toContain('任务已被修改')
+    await conflict.wrapper.findComponent(TaskEditDialog).findAllComponents(ElButton).find(button => button.text() === '保存任务').trigger('click')
+    await flushPromises()
+    expect(updateTask).toHaveBeenCalledWith(31, expect.objectContaining({ lockVersion: 2 }))
+    const conflictAlert = conflict.wrapper.findComponent(TaskEditDialog).findComponent(ElAlert)
+    expect(conflictAlert.props('title')).toBe('任务已发生变更')
+    expect(conflictAlert.text()).toContain('任务已被修改')
     conflict.wrapper.unmount()
   })
 

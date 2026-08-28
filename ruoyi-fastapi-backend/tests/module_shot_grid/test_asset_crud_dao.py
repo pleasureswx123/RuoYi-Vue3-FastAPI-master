@@ -67,6 +67,25 @@ def test_asset_rollup_derives_status_from_task_and_final_version() -> None:
     assert 'asset_status' in compiled
 
 
+def test_asset_rollup_projects_preparing_counts_and_only_valid_startable_items() -> None:
+    rollup = ShotGridAssetCrudDao._asset_rollup_subquery()
+    assert {
+        'unassigned_count',
+        'not_started_count',
+        'preparing_count',
+        'in_progress_count',
+        'reviewing_count',
+        'revision_count',
+        'completed_count',
+        'startable_item_count',
+    } <= set(rollup.c.keys())
+    compiled = _sql(select(rollup))
+    assert "sg_task.task_status = 'preparing'" in compiled
+    assert "sg_project_member.member_status = 'active'" in compiled
+    assert "sg_project_member.project_role = 'creator'" in compiled
+    assert "sys_user.status = '0'" in compiled
+
+
 @pytest.mark.asyncio
 async def test_asset_page_applies_project_filters_assignee_and_whitelist_sort() -> None:
     db = _SequenceDb([_ScalarResult(0), _MappingResult([])])

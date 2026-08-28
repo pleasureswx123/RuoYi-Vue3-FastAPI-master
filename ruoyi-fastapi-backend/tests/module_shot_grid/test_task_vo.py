@@ -85,3 +85,31 @@ def test_task_start_requires_non_negative_lock_version() -> None:
 
     with pytest.raises(ValidationError):
         ShotGridTaskStartModel(lockVersion=-1)
+
+
+def test_shot_start_carries_explicit_manual_confirmation_and_independent_shot_version() -> None:
+    task_version, shot_version = 3, 7
+    command = ShotGridTaskStartModel(lockVersion=task_version, shotLockVersion=shot_version, assetsConfirmed=True)
+    assert command.lock_version == task_version
+    assert command.shot_lock_version == shot_version
+    assert command.assets_confirmed is True
+    assert ShotGridTaskStartModel(lockVersion=0).assets_confirmed is False
+
+    for invalid in ['true', 1, None]:
+        with pytest.raises(ValidationError):
+            ShotGridTaskStartModel(lockVersion=3, shotLockVersion=7, assetsConfirmed=invalid)
+    with pytest.raises(ValidationError):
+        ShotGridTaskStartModel(lockVersion=3, shotLockVersion=-1, assetsConfirmed=True)
+
+
+def test_asset_start_carries_three_versions_and_strict_manual_confirmation() -> None:
+    payload = {'lockVersion': 3, 'assetLockVersion': 4, 'assetItemLockVersion': 5, 'startConfirmed': True}
+    command = ShotGridTaskStartModel(**payload)
+    assert (command.lock_version, command.asset_lock_version, command.asset_item_lock_version) == (3, 4, 5)
+    assert command.start_confirmed is True
+    for invalid in ['true', 1, None]:
+        with pytest.raises(ValidationError):
+            ShotGridTaskStartModel(**{**payload, 'startConfirmed': invalid})
+    for field in ['assetLockVersion', 'assetItemLockVersion']:
+        with pytest.raises(ValidationError):
+            ShotGridTaskStartModel(**{**payload, field: -1})

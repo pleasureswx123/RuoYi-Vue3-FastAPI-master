@@ -52,8 +52,9 @@ async def get_shot_grid_shot_list(
     shot_query: Annotated[ShotGridShotListQueryModel, Query()],
     query_db: Annotated[AsyncSession, DBSessionDependency()],
     access: Annotated[ShotGridProjectAccessModel, ProjectAccessDependency()],
+    current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
 ) -> Response:
-    result = await ShotGridShotCrudService.get_shot_page(query_db, project_id, shot_query)
+    result = await ShotGridShotCrudService.get_shot_page(query_db, project_id, shot_query, current_user, access)
     return ResponseUtil.success(msg='查询成功', model_content=result)
 
 

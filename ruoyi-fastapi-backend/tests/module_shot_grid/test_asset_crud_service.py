@@ -27,6 +27,65 @@ DELETED_ITEM_LOCK_VERSION = 1
 CONFLICT_STATUS = 409
 
 
+def test_preparing_item_and_mixed_asset_status_keep_directory_preparation_visible() -> None:
+    task = SimpleNamespace(task_status='preparing')
+    assert ShotGridAssetCrudService._item_status(task, False) == 'preparing'
+    assert ShotGridAssetCrudService._aggregate_asset_status(['unassigned', 'not_started', 'preparing']) == 'preparing'
+    assert ShotGridAssetCrudService._aggregate_asset_status(['preparing', 'in_progress']) == 'in_progress'
+
+
+@pytest.mark.parametrize(
+    ('role', 'permitted', 'valid_assignee', 'can_start'),
+    [
+        ('director', True, True, True),
+        ('creator', True, True, False),
+        ('director', False, True, False),
+        ('director', True, False, False),
+    ],
+)
+def test_asset_item_start_action_requires_manager_permission_and_valid_assignee(
+    role: str, *, permitted: bool, valid_assignee: bool, can_start: bool
+) -> None:
+    user = _current_user()
+    user.user = UserInfoModel(userId=9, userName='director')
+    access = _access(role=role)
+    access.user_id = 9
+    if permitted:
+        user.permissions.append('shotgrid:task:start')
+    actions = ShotGridAssetCrudService._item_allowed_actions(
+        user,
+        access,
+        project_id=PROJECT_ID,
+        project_status='active',
+        storage_status='ready',
+        asset_lifecycle_status='active',
+        item_lifecycle_status='active',
+        production_item='主视角',
+        has_versions=False,
+        task_status='not_started',
+        has_uncommitted_submission=False,
+        assignee_valid=valid_assignee,
+    )
+    assert ('task.start' in actions) is can_start
+
+
+def test_asset_parent_start_action_only_opens_selection_when_a_startable_item_exists() -> None:
+    user = _current_user()
+    for has_startable_item in [True, False]:
+        actions = ShotGridAssetCrudService._asset_allowed_actions(
+            user,
+            _access(),
+            project_id=PROJECT_ID,
+            project_status='active',
+            storage_status='ready',
+            lifecycle_status='active',
+            has_archive_blockers=True,
+            can_assign_items=False,
+            can_start_items=has_startable_item,
+        )
+        assert ('task.start' in actions) is has_startable_item
+
+
 def _current_user() -> CurrentUserModel:
     return CurrentUserModel(
         permissions=[

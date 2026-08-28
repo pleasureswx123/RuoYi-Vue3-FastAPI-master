@@ -6,11 +6,41 @@ from module_shot_grid.entity.vo.asset_crud_vo import (
     ShotGridAssetCreateModel,
     ShotGridAssetItemDeleteModel,
     ShotGridAssetItemUpdateModel,
+    ShotGridAssetListItemModel,
     ShotGridAssetListQueryModel,
     ShotGridAssetUpdateModel,
 )
 
 SQL_BIGINT_MAX = 9_223_372_036_854_775_807
+
+
+def test_asset_status_counts_keep_all_seven_snake_case_keys_and_reject_negative_values() -> None:
+    payload = {
+        'assetId': 1,
+        'projectId': 1,
+        'assetType': 'Environment',
+        'assetName': '动力舱',
+        'sortOrder': 0,
+        'lifecycleStatus': 'active',
+        'assetStatus': 'in_progress',
+        'itemCount': 3,
+        'directoryStatus': 'ready',
+        'lockVersion': 0,
+        'updateTime': '2026-08-27T10:00:00',
+        'itemStatusCounts': {'in_progress': 1, 'not_started': 1, 'preparing': 1},
+    }
+    model = ShotGridAssetListItemModel.model_validate(payload)
+    assert model.model_dump(by_alias=True)['itemStatusCounts'] == {
+        'unassigned': 0,
+        'not_started': 1,
+        'preparing': 1,
+        'in_progress': 1,
+        'reviewing': 0,
+        'revision': 0,
+        'completed': 0,
+    }
+    with pytest.raises(ValidationError):
+        ShotGridAssetListItemModel.model_validate({**payload, 'itemStatusCounts': {'not_started': -1}})
 
 
 def _asset_create(**changes: object) -> ShotGridAssetCreateModel:

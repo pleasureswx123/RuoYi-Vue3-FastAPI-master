@@ -1,4 +1,4 @@
-import { ElAlert, ElButton, ElCard, ElDatePicker, ElDialog, ElDrawer, ElEmpty, ElForm, ElFormItem, ElIcon, ElInput, ElInputNumber, ElLoading, ElOption, ElPagination, ElRadioButton, ElRadioGroup, ElSelect, ElTable, ElTableColumn, ElTag } from 'element-plus'
+import { ElAlert, ElButton, ElCard, ElDatePicker, ElDialog, ElDrawer, ElEmpty, ElForm, ElFormItem, ElIcon, ElInput, ElInputNumber, ElLoading, ElMessageBox, ElOption, ElPagination, ElRadioButton, ElRadioGroup, ElSelect, ElTable, ElTableColumn, ElTag } from 'element-plus'
 import { createPinia, setActivePinia } from 'pinia'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
   archiveAsset,
+  archiveAssetItem,
   assignAssetItemTask,
   createAsset,
   createAssetItem,
@@ -14,9 +15,12 @@ import {
   getAssetPage,
   getAssetRequirementPage,
   listAssetAssignees,
-  resolveAssetRequirement
+  resolveAssetRequirement,
+  updateAsset,
+  updateAssetItem
 } from '@/api/shot-grid/assets'
 import { getProjectDetail, getProjectPage } from '@/api/shot-grid/projects'
+import { startTask } from '@/api/shot-grid/tasks'
 import { useSessionStore } from '@/store/modules/session'
 import { setElSelectValue } from '../helpers/elementPlus'
 import AssetDetailView from '@/views/asset/AssetDetailView.vue'
@@ -62,6 +66,7 @@ vi.mock('@/api/shot-grid/assets', () => ({
   updateAsset: vi.fn(),
   updateAssetItem: vi.fn()
 }))
+vi.mock('@/api/shot-grid/tasks', () => ({ startTask: vi.fn() }))
 
 const projectRow = { projectId: 8, projectCode: 'LCFR', projectName: '罗刹夫人' }
 const memberRow = { userId: 7, userName: '杨景锋', nickName: 'YJF', producerCode: 'YJF' }
@@ -405,6 +410,55 @@ describe('资产管理真实列表页', () => {
     expect(getAssetPage).toHaveBeenCalledTimes(callsBefore)
     wrapper.unmount()
   })
+
+  it.each(['table', 'card', 'type'])('%s 视图的父资产入口只打开详情供选择分项，不直接开始任务', async viewMode => {
+    getAssetPage.mockResolvedValue({ rows: [{
+      ...assetRow,
+      allowedActions: [...assetRow.allowedActions, 'task.start'],
+      itemStatusCounts: { not_started: 1, in_progress: 1 }
+    }], total: 1, hasNext: false })
+    const { wrapper } = await mountList(['shotgrid:asset:list', 'shotgrid:task:start'])
+    try {
+      wrapper.findComponent(ElRadioGroup).vm.$emit('update:modelValue', viewMode)
+      await flushPromises()
+      const entry = wrapper.findAllComponents(ElButton).find(button => button.text() === '选择分项开工')
+      expect(entry).toBeDefined()
+      await entry.trigger('click')
+      await flushPromises()
+      expect(wrapper.findComponent(AssetDetailView).exists()).toBe(true)
+      expect(startTask).not.toHaveBeenCalled()
+      expect(wrapper.text()).toContain('待开工 1')
+      expect(wrapper.text()).toContain('制作中 1')
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('列表按分项目录准备状态自动刷新并在结束后停止', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    getAssetPage.mockResolvedValueOnce({ rows: [{
+      ...assetRow, allowedActions: [...assetRow.allowedActions, 'task.assign'], itemStatusCounts: { preparing: 1 }
+    }], total: 1, hasNext: false }).mockResolvedValueOnce({ rows: [{
+      ...assetRow, allowedActions: [...assetRow.allowedActions, 'task.assign'], itemStatusCounts: { in_progress: 1 }
+    }], total: 1, hasNext: false })
+    const { wrapper } = await mountList(['shotgrid:asset:list', 'shotgrid:task:assign'])
+    try {
+      const checkbox = wrapper.findAllComponents({ name: 'ElCheckbox' }).find(item => item.attributes('aria-label') === '选择资产 动力舱室内')
+      checkbox.vm.$emit('change', true)
+      await flushPromises()
+      const calls = getAssetPage.mock.calls.length
+      await vi.advanceTimersByTimeAsync(1500)
+      await flushPromises()
+      expect(getAssetPage).toHaveBeenCalledTimes(calls + 1)
+      expect(wrapper.text()).toContain('制作中 1')
+      expect(wrapper.findAllComponents({ name: 'ElCheckbox' }).find(item => item.attributes('aria-label') === '选择资产 动力舱室内').props('modelValue')).toBe(true)
+      await vi.advanceTimersByTimeAsync(5000)
+      expect(getAssetPage).toHaveBeenCalledTimes(calls + 1)
+    } finally {
+      wrapper.unmount()
+      vi.useRealTimers()
+    }
+  })
 })
 
 describe('资产详情动作镜像与路由隔离', () => {
@@ -412,6 +466,271 @@ describe('资产详情动作镜像与路由隔离', () => {
     getProjectDetail.mockResolvedValue({ data: { ...projectRow, projectStatus: 'active', storageStatus: 'ready', myProjectRole: 'director', allowedActions: ['asset.create', 'asset.import'] } })
     listAssetAssignees.mockResolvedValue({ rows: [memberRow], total: 1, hasNext: false })
     getAssetDetail.mockResolvedValue({ data: assetDetail() })
+    startTask.mockReset()
+  })
+
+  it('管理员只在允许的制作分项确认开工，使用三份锁版本且不联动其他分项', async () => {
+    const confirmSpy = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm')
+    getAssetDetail.mockResolvedValue({ data: {
+      ...assetDetail(),
+      lockVersion: 2,
+      allowedActions: ['task.start'],
+      items: [
+        {
+          ...assetItem,
+          lockVersion: 3,
+          allowedActions: ['task.start'],
+          task: { taskId: 71, lockVersion: 4, taskStatus: 'not_started', assigneeUserId: 7 }
+        },
+        {
+          ...assetItem,
+          assetItemId: 42,
+          productionItem: '不应联动的反打视角',
+          allowedActions: [],
+          task: { taskId: 72, lockVersion: 5, taskStatus: 'not_started', assigneeUserId: 7 }
+        }
+      ]
+    } })
+    startTask.mockResolvedValue({ data: { taskId: 71, taskStatus: 'preparing' } })
+    const { wrapper } = await mountDetail('/projects/8/assets/31', ['shotgrid:task:start'])
+    try {
+      const startButton = wrapper.findAllComponents(ElButton).find(button => button.text() === '开始任务')
+      expect(startButton).toBeDefined()
+      expect(startButton.props('size')).toBe('small')
+      await startButton.trigger('click')
+      await flushPromises()
+      expect(String(confirmSpy.mock.calls[0][0])).toContain('动力舱室内')
+      expect(String(confirmSpy.mock.calls[0][0])).toContain('恐怖气氛主视角')
+      expect(String(confirmSpy.mock.calls[0][0])).toContain('杨景锋')
+      expect(startTask).toHaveBeenCalledTimes(1)
+      expect(startTask).toHaveBeenCalledWith(71, {
+        lockVersion: 4,
+        assetLockVersion: 2,
+        assetItemLockVersion: 3,
+        startConfirmed: true
+      })
+      expect(startTask).not.toHaveBeenCalledWith(72, expect.anything())
+    } finally {
+      wrapper.unmount()
+      confirmSpy.mockRestore()
+    }
+  })
+
+  it.each(['platform', 'parent', 'item'])('缺少 %s 开工授权时不显示制作分项开始按钮', async missing => {
+    getAssetDetail.mockResolvedValue({ data: {
+      ...assetDetail(),
+      allowedActions: missing === 'parent' ? [] : ['task.start'],
+      items: [{
+        ...assetItem,
+        allowedActions: missing === 'item' ? [] : ['task.start'],
+        task: { taskId: 71, lockVersion: 4, taskStatus: 'not_started', assigneeUserId: 7 }
+      }]
+    } })
+    const { wrapper } = await mountDetail('/projects/8/assets/31', missing === 'platform' ? [] : ['shotgrid:task:start'])
+    try {
+      expect(wrapper.findAllComponents(ElButton).map(button => button.text())).not.toContain('开始任务')
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('取消制作分项开工确认后不调用开始接口', async () => {
+    const confirmSpy = vi.spyOn(ElMessageBox, 'confirm').mockRejectedValue('cancel')
+    getAssetDetail.mockResolvedValue({ data: {
+      ...assetDetail(), lockVersion: 2, allowedActions: ['task.start'], items: [{
+        ...assetItem, lockVersion: 3, allowedActions: ['task.start'],
+        task: { taskId: 71, lockVersion: 4, taskStatus: 'not_started', assigneeUserId: 7 }
+      }]
+    } })
+    const { wrapper } = await mountDetail('/projects/8/assets/31', ['shotgrid:task:start'])
+    try {
+      await wrapper.findAllComponents(ElButton).find(button => button.text() === '开始任务').trigger('click')
+      await flushPromises()
+      expect(confirmSpy).toHaveBeenCalledTimes(1)
+      expect(startTask).not.toHaveBeenCalled()
+    } finally {
+      wrapper.unmount()
+      confirmSpy.mockRestore()
+    }
+  })
+
+  it('自动刷新待开工分项，更新后停止轮询且保留当前详情', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    getAssetDetail.mockResolvedValueOnce({ data: {
+      ...assetDetail(), itemStatusCounts: { not_started: 1 }, items: [{
+        ...assetItem, assetStatus: 'not_started', task: { taskId: 71, lockVersion: 4, taskStatus: 'not_started', assigneeUserId: 7 }
+      }]
+    } }).mockResolvedValueOnce({ data: {
+      ...assetDetail(), itemStatusCounts: { in_progress: 1 }, items: [{
+        ...assetItem, assetStatus: 'in_progress', task: { taskId: 71, lockVersion: 5, taskStatus: 'in_progress', assigneeUserId: 7 }
+      }]
+    } })
+    const { wrapper } = await mountDetail()
+    try {
+      const calls = getAssetDetail.mock.calls.length
+      await vi.advanceTimersByTimeAsync(5000)
+      await flushPromises()
+      expect(getAssetDetail).toHaveBeenCalledTimes(calls + 1)
+      expect(wrapper.text()).toContain('制作中')
+      await vi.advanceTimersByTimeAsync(10000)
+      expect(getAssetDetail).toHaveBeenCalledTimes(calls + 1)
+    } finally {
+      wrapper.unmount()
+      vi.useRealTimers()
+    }
+  })
+
+  it('普通刷新保留资产草稿与打开时旧锁，不能用新锁提交旧稿', async () => {
+    getAssetDetail.mockResolvedValue({ data: { ...assetDetail(), lockVersion: 2 } })
+    updateAsset.mockReset().mockRejectedValue({ httpStatus: 409, message: '资产已被他人修改' })
+    const { wrapper } = await mountDetail()
+    try {
+      await wrapper.findAllComponents(ElButton).find(button => button.text() === '编辑资产').trigger('click')
+      const dialog = wrapper.findComponent(AssetFormDialog)
+      const description = dialog.findAllComponents(ElFormItem).find(item => item.props('prop') === 'description')
+      await description.get('textarea').setValue('尚未提交的资产说明')
+      getAssetDetail.mockResolvedValue({ data: { ...assetDetail(), lockVersion: 6, description: '他人更新后的资产说明' } })
+      await wrapper.findAllComponents(ElButton).find(button => button.text() === '刷新').trigger('click')
+      await flushPromises()
+      const refreshedDialog = wrapper.findComponent(AssetFormDialog)
+      expect(refreshedDialog.exists()).toBe(true)
+      expect(wrapper.find('.asset-hero__main').text()).toContain('他人更新后的资产说明')
+      expect(refreshedDialog.findAllComponents(ElFormItem).find(item => item.props('prop') === 'description').get('textarea').element.value).toBe('尚未提交的资产说明')
+      await refreshedDialog.findAllComponents(ElButton).find(button => button.text() === '保存资产').trigger('click')
+      await flushPromises()
+      expect(updateAsset).toHaveBeenCalledWith(8, 31, {
+        description: '尚未提交的资产说明', sortOrder: 10, remark: '保持冷蓝色调', lockVersion: 2
+      })
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it.each([
+    { entry: '编辑资产', component: AssetFormDialog, submitLabel: '保存资产', api: updateAsset, targetId: 31, field: 'description', refreshedValue: '最新资产说明', lockField: 'lockVersion', oldLock: 2, newLock: 6 },
+    { entry: '编辑分项', component: AssetItemFormDialog, submitLabel: '保存分项', api: updateAssetItem, targetId: 41, field: 'description', refreshedValue: '最新分项说明', lockField: 'lockVersion', oldLock: 3, newLock: 7 },
+    { entry: '改派任务', component: AssetAssignDialog, submitLabel: '确认改派', api: assignAssetItemTask, targetId: 41, field: 'taskDescription', refreshedValue: '最新任务要求', lockField: 'taskLockVersion', oldLock: 4, newLock: 8 },
+    { entry: '删除分项', component: AssetItemDeleteDialog, submitLabel: '确认删除', api: deleteAssetItem, targetId: 41, field: 'reason', refreshedValue: '', lockField: 'lockVersion', oldLock: 3, newLock: 7 },
+    { entry: '归档资产', component: AssetArchiveDialog, submitLabel: '确认归档', api: archiveAsset, targetId: 31, field: 'reason', refreshedValue: '', lockField: 'lockVersion', oldLock: 2, newLock: 6 },
+    { entry: '归档分项', component: AssetArchiveDialog, submitLabel: '确认归档', api: archiveAssetItem, targetId: 41, field: 'reason', refreshedValue: '', lockField: 'lockVersion', oldLock: 3, newLock: 7 }
+  ])('$entry 发生 409 后刷新会关闭旧上下文，重新核对后使用新快照', async ({ entry, component, submitLabel, api, targetId, field, refreshedValue, lockField, oldLock, newLock }) => {
+    const detail = {
+      ...assetDetail(), lockVersion: 2, items: [{
+        ...assetItem, lockVersion: 3,
+        allowedActions: entry === '删除分项' ? ['assetItem.delete'] : assetItem.allowedActions,
+        task: { taskId: 71, lockVersion: 4, taskStatus: 'not_started', assigneeUserId: 7, requirements: '原任务要求', priority: 'normal' }
+      }]
+    }
+    getAssetDetail.mockResolvedValue({ data: detail })
+    api.mockReset().mockRejectedValue({ httpStatus: 409, message: '数据已被他人修改，请重新核对' })
+    const { wrapper } = await mountDetail()
+    try {
+      const actionButton = (container, label) => container.findAllComponents(ElButton).find(button => button.text() === label)
+      await actionButton(wrapper, entry).trigger('click')
+      const oldDialog = wrapper.findComponent(component)
+      const oldGeneration = oldDialog.props('operationGeneration')
+      const oldField = oldDialog.findAllComponents(ElFormItem).find(item => item.props('prop') === field)
+      await oldField.get('textarea').setValue('旧上下文中的草稿')
+      await actionButton(oldDialog, submitLabel).trigger('click')
+      await flushPromises()
+      expect(api).toHaveBeenCalledTimes(1)
+      expect(api).toHaveBeenLastCalledWith(8, targetId, expect.objectContaining({ [field]: '旧上下文中的草稿', [lockField]: oldLock }))
+
+      let resolveRefresh
+      getAssetDetail.mockImplementationOnce(() => new Promise(resolve => { resolveRefresh = resolve }))
+      await actionButton(oldDialog, '刷新后重试').trigger('click')
+      await flushPromises()
+      expect(wrapper.findComponent(component).exists()).toBe(false)
+      expect(wrapper.findAllComponents(ElButton).some(button => button.text() === submitLabel)).toBe(false)
+      expect(api).toHaveBeenCalledTimes(1)
+
+      resolveRefresh({ data: {
+        ...detail, lockVersion: 6, description: '最新资产说明', items: [{
+          ...detail.items[0], lockVersion: 7, description: '最新分项说明',
+          task: { ...detail.items[0].task, lockVersion: 8, requirements: '最新任务要求' }
+        }]
+      } })
+      await flushPromises()
+      expect(wrapper.findComponent(component).exists()).toBe(false)
+      expect(api).toHaveBeenCalledTimes(1)
+      await actionButton(wrapper, entry).trigger('click')
+      const newDialog = wrapper.findComponent(component)
+      expect(newDialog.props('operationGeneration')).not.toBe(oldGeneration)
+      const newField = newDialog.findAllComponents(ElFormItem).find(item => item.props('prop') === field)
+      expect(newField.get('textarea').element.value).toBe(refreshedValue)
+      if (field === 'reason') await newField.get('textarea').setValue('重新核对后的操作原因')
+      await actionButton(newDialog, submitLabel).trigger('click')
+      await flushPromises()
+      expect(api).toHaveBeenCalledTimes(2)
+      expect(api).toHaveBeenLastCalledWith(8, targetId, expect.objectContaining({
+        [field]: field === 'reason' ? '重新核对后的操作原因' : refreshedValue,
+        [lockField]: newLock
+      }))
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('开工成功后详情刷新未结束时发生 ABA，不发出旧 changed 事件', async () => {
+    const confirmSpy = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm')
+    const initial = {
+      ...assetDetail(), lockVersion: 2, allowedActions: ['task.start'], items: [{
+        ...assetItem, lockVersion: 3, allowedActions: ['task.start'],
+        task: { taskId: 71, lockVersion: 4, taskStatus: 'not_started', assigneeUserId: 7 }
+      }]
+    }
+    getAssetDetail.mockResolvedValue({ data: initial })
+    startTask.mockResolvedValue({ data: { taskId: 71, taskStatus: 'preparing' } })
+    const { wrapper, router } = await mountDetail('/projects/8/assets/31', ['shotgrid:task:start'])
+    try {
+      let resolveOldRefresh
+      getAssetDetail.mockImplementationOnce(() => new Promise(resolve => { resolveOldRefresh = resolve }))
+      await wrapper.findAllComponents(ElButton).find(button => button.text() === '开始任务').trigger('click')
+      await flushPromises()
+      expect(startTask).toHaveBeenCalledTimes(1)
+      expect(getAssetDetail).toHaveBeenCalledTimes(2)
+      getAssetDetail.mockImplementation((targetProjectId, targetAssetId) => Promise.resolve({ data: assetDetail(targetProjectId, targetAssetId, targetAssetId === 31 ? '返回后的当前资产' : '中转资产') }))
+      await router.push('/projects/8/assets/32')
+      await flushPromises()
+      await router.push('/projects/8/assets/31')
+      await flushPromises()
+      expect(wrapper.text()).toContain('返回后的当前资产')
+      resolveOldRefresh({ data: { ...initial, description: '不应显示的旧刷新结果' } })
+      await flushPromises()
+      expect(wrapper.text()).not.toContain('不应显示的旧刷新结果')
+      expect(wrapper.emitted('changed')).toBeUndefined()
+    } finally {
+      wrapper.unmount()
+      confirmSpy.mockRestore()
+    }
+  })
+
+  it('切换资产后迟到的开工确认不提交旧分项任务', async () => {
+    let resolveConfirm
+    const confirmSpy = vi.spyOn(ElMessageBox, 'confirm').mockImplementation(() => new Promise(resolve => { resolveConfirm = resolve }))
+    getAssetDetail.mockImplementation((targetProjectId, targetAssetId) => Promise.resolve({ data: {
+      ...assetDetail(targetProjectId, targetAssetId, targetAssetId === 31 ? '原资产' : '新资产'), lockVersion: 2,
+      allowedActions: ['task.start'], items: [{
+        ...assetItem, assetId: targetAssetId, lockVersion: 3, allowedActions: ['task.start'],
+        task: { taskId: targetAssetId === 31 ? 71 : 72, lockVersion: 4, taskStatus: 'not_started', assigneeUserId: 7 }
+      }]
+    } }))
+    const { wrapper, router } = await mountDetail('/projects/8/assets/31', ['shotgrid:task:start'])
+    try {
+      await wrapper.findAllComponents(ElButton).find(button => button.text() === '开始任务').trigger('click')
+      await wrapper.findAllComponents(ElButton).find(button => button.text() === '开始任务').trigger('click')
+      expect(confirmSpy).toHaveBeenCalledTimes(1)
+      await router.push('/projects/8/assets/32')
+      await flushPromises()
+      resolveConfirm('confirm')
+      await flushPromises()
+      expect(startTask).not.toHaveBeenCalled()
+      expect(wrapper.text()).toContain('新资产')
+      expect(wrapper.text()).not.toContain('原资产')
+    } finally {
+      wrapper.unmount()
+      confirmSpy.mockRestore()
+    }
   })
 
   it('资产与制作分项按钮同时受后端 allowedActions 和 session permission 约束', async () => {

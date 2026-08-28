@@ -3093,7 +3093,7 @@ values
     ('workbench', 2, '查看任务详情', 'shotgrid:task:query'),
     ('workbench', 3, '修改任务要求、优先级和截止日期', 'shotgrid:task:edit'),
     ('workbench', 4, '分配或改派制作任务', 'shotgrid:task:assign'),
-    ('workbench', 5, '开始本人任务', 'shotgrid:task:start'),
+    ('workbench', 5, '开始任务', 'shotgrid:task:start'),
     ('reviews', 1, '查看版本列表', 'shotgrid:version:list'),
     ('reviews', 2, '查看版本详情', 'shotgrid:version:query'),
     ('reviews', 3, '上传并提交任务版本', 'shotgrid:version:add'),
@@ -3188,7 +3188,7 @@ create table if not exists alembic_version (
     constraint alembic_version_pkc primary key (version_num)
 );
 delete from alembic_version;
-insert into alembic_version(version_num) values ('20260826_22');
+insert into alembic_version(version_num) values ('20260827_23');
 
 
 CREATE OR REPLACE FUNCTION "find_in_set"(int8, varchar)

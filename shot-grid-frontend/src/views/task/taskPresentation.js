@@ -1,7 +1,7 @@
 const FALLBACK_META = Object.freeze({ label: '未知', tone: 'neutral' })
 
 const TASK_STATUS = Object.freeze({
-  not_started: Object.freeze({ label: '未开始', tone: 'neutral' }),
+  not_started: Object.freeze({ label: '待开工', tone: 'neutral' }),
   preparing: Object.freeze({ label: '目录准备中', tone: 'warning' }),
   in_progress: Object.freeze({ label: '制作中', tone: 'info' }),
   pending_review: Object.freeze({ label: '待审核', tone: 'warning' }),
@@ -72,13 +72,14 @@ export function taskAssigneeLabel(assignee) {
 }
 
 export function taskErrorState(error, fallbackTitle = '任务加载失败') {
-  const status = Number(error?.httpStatus || error?.status || 0)
+  const status = Number(error?.status || error?.httpStatus || 0)
   const base = {
     status,
     errorKey: error?.errorKey || '',
     message: error?.message || '请稍后重试',
     retryable: status !== 403 && status !== 404
   }
+  if (status === 401) return { ...base, title: '登录状态已失效', retryable: false }
   if (status === 403) return { ...base, title: '没有任务访问权限', retryable: false }
   if (status === 404) return { ...base, title: '任务不存在', retryable: false }
   if (status === 409) return { ...base, title: '任务已发生变更', retryable: true }

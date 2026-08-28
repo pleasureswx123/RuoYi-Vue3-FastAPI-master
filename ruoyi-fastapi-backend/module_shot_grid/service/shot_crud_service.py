@@ -61,6 +61,8 @@ class ShotGridShotCrudService:
         db: AsyncSession,
         project_id: int,
         query: ShotGridShotListQueryModel,
+        current_user: CurrentUserModel,
+        access: ShotGridProjectAccessModel,
     ) -> PageModel[ShotGridShotListItemModel]:
         rows, total = await ShotGridShotCrudDao.get_shot_page(db, project_id, query)
         assets = await ShotGridShotCrudDao.list_assets_for_shots(
@@ -80,7 +82,7 @@ class ShotGridShotCrudService:
                 row,
                 asset_map.get(row['shot_id'], []),
                 projection_map.get(row['shot_id']),
-            )
+            ).model_copy(update={'allowed_actions': cls._allowed_actions(row, current_user, access)})
             for row in rows
         ]
         return PageModel[ShotGridShotListItemModel](
@@ -1435,6 +1437,8 @@ class ShotGridShotCrudService:
         ):
             return []
         candidates = []
+        if row.get('task_id') is not None and row.get('task_status') == 'not_started':
+            candidates.append(('task.start', 'shotgrid:task:start'))
         if row.get('task_status') != 'completed' and not row['has_uncommitted_submission']:
             candidates.append(('task.assign', 'shotgrid:task:assign'))
         if row.get('task_status') in {None, 'not_started'}:

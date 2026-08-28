@@ -1,7 +1,9 @@
 import runpy
 from pathlib import Path
+from types import SimpleNamespace
 
-from sqlalchemy import DateTime
+import pytest
+from sqlalchemy import DateTime, create_engine, text
 
 from config.database import Base
 from module_shot_grid.schema import (
@@ -517,3 +519,43 @@ def test_migration_seeds_the_frozen_dictionary_types() -> None:
 
     assert dict_types == EXPECTED_DICT_TYPES
     assert dict_data_types == EXPECTED_DICT_TYPES
+
+
+def test_manager_start_menu_migration_renames_only_standard_start_action(monkeypatch: pytest.MonkeyPatch) -> None:
+
+    migration = _migration_namespace('20260827_23')
+    engine = create_engine('sqlite://')
+    with engine.begin() as connection:
+        connection.execute(
+            text('CREATE TABLE sys_menu (menu_id INTEGER PRIMARY KEY, menu_name TEXT, perms TEXT, menu_type TEXT)')
+        )
+        connection.execute(
+            text(
+                'INSERT INTO sys_menu VALUES '
+                "(1, '开始本人任务', 'shotgrid:task:start', 'F'),"
+                "(2, '自定义开工', 'shotgrid:task:start', 'F'),"
+                "(3, '开始本人任务', 'other:start', 'F')"
+            )
+        )
+        monkeypatch.setattr(
+            migration['op'], 'get_context', lambda: SimpleNamespace(dialect=SimpleNamespace(name='postgresql'))
+        )
+        monkeypatch.setattr(migration['op'], 'execute', lambda sql: connection.execute(text(sql)))
+        migration['upgrade']()
+        assert connection.execute(text('SELECT menu_name FROM sys_menu ORDER BY menu_id')).scalars().all() == [
+            '开始任务',
+            '自定义开工',
+            '开始本人任务',
+        ]
+        migration['downgrade']()
+        assert (
+            connection.execute(text('SELECT menu_name FROM sys_menu WHERE menu_id = 1')).scalar_one() == '开始本人任务'
+        )
+        monkeypatch.setattr(
+            migration['op'], 'get_context', lambda: SimpleNamespace(dialect=SimpleNamespace(name='mysql'))
+        )
+        migration['upgrade']()
+        assert (
+            connection.execute(text('SELECT menu_name FROM sys_menu WHERE menu_id = 1')).scalar_one() == '开始本人任务'
+        )
+    engine.dispose()

@@ -306,7 +306,7 @@ onBeforeUnmount(() => {
 <template>
   <ProjectModal
     :title="isEdit ? `编辑 ${shot.shotCode}` : '新建镜头'"
-    :description="isEdit ? 'Sxxx 就是本场第几镜；顺序请回到列表拖拽调整。已有任务的负责人改派必须使用任务分配动作。' : '选择场内位置后，系统自动生成同值的 Sxxx；先创建未分配镜头，制作人开始任务时再创建 NAS 镜头目录。'"
+    :description="isEdit ? 'Sxxx 就是本场第几镜；顺序请回到列表拖拽调整。已有任务的负责人改派必须使用任务分配动作。' : '选择场内位置后，系统自动生成同值的 Sxxx；先创建未分配镜头，管理人员确认开工时再创建 NAS 镜头目录。'"
     :busy="busy"
     wide
     @close="closeDialog"

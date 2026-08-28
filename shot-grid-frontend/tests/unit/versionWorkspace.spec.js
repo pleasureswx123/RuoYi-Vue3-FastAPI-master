@@ -18,6 +18,7 @@ const submissionStub = {
 
 function mountWorkspace({
   taskStatus = 'not_started',
+  taskKind = 'shot_video',
   allowedActions = [],
   hasUncommittedSubmission = false,
   permissions = []
@@ -30,7 +31,7 @@ function mountWorkspace({
   return mount(VersionWorkspace, {
     props: {
       taskId: 31,
-      taskKind: 'shot_video',
+      taskKind,
       taskStatus,
       allowedActions,
       hasUncommittedSubmission
@@ -46,8 +47,15 @@ function mountWorkspace({
 }
 
 describe('版本工作区提交入口', () => {
-  it('任务未开始时即使响应误带提交动作也仅显示版本历史', () => {
+  it.each([
+    ['shot_video', 'not_started'],
+    ['shot_video', 'preparing'],
+    ['asset_image', 'not_started'],
+    ['asset_image', 'preparing']
+  ])('%s 的 %s 任务即使响应误带提交动作也仅显示版本历史', (taskKind, taskStatus) => {
     const wrapper = mountWorkspace({
+      taskKind,
+      taskStatus,
       allowedActions: ['version.add'],
       permissions: ['shotgrid:version:add']
     })

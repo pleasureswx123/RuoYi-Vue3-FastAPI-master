@@ -1,7 +1,7 @@
 from datetime import date, datetime
-from typing import Literal
+from typing import Literal, get_args
 
-from pydantic import ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from module_shot_grid.entity.vo.common_vo import (
     ShotGridApiModel,
@@ -11,6 +11,7 @@ from module_shot_grid.entity.vo.common_vo import (
 
 AssetType = Literal['Character', 'Environment', 'Prop']
 AssetWorkStatus = Literal['unassigned', 'not_started', 'preparing', 'in_progress', 'reviewing', 'revision', 'completed']
+ASSET_ITEM_STATUSES = get_args(AssetWorkStatus)
 DirectoryStatus = Literal['not_created', 'pending', 'ready', 'failed']
 LifecycleStatus = Literal['active', 'archived']
 TaskStatus = Literal['not_started', 'preparing', 'in_progress', 'pending_review', 'revision', 'completed']
@@ -266,6 +267,18 @@ class ShotGridAssetItemModel(ShotGridApiModel):
     update_time: datetime
 
 
+class ShotGridAssetItemStatusCountsModel(BaseModel):
+    """活动制作分项数量；键使用状态字面量，不转换为 camelCase。"""
+
+    unassigned: int = Field(default=0, ge=0)
+    not_started: int = Field(default=0, ge=0)
+    preparing: int = Field(default=0, ge=0)
+    in_progress: int = Field(default=0, ge=0)
+    reviewing: int = Field(default=0, ge=0)
+    revision: int = Field(default=0, ge=0)
+    completed: int = Field(default=0, ge=0)
+
+
 class ShotGridAssetListItemModel(ShotGridApiModel):
     """资产列表项。"""
 
@@ -278,6 +291,7 @@ class ShotGridAssetListItemModel(ShotGridApiModel):
     lifecycle_status: LifecycleStatus
     asset_status: AssetWorkStatus
     item_count: int = 0
+    item_status_counts: ShotGridAssetItemStatusCountsModel = Field(default_factory=ShotGridAssetItemStatusCountsModel)
     usage_shot_count: int = 0
     assignee_user_ids: list[int] = Field(default_factory=list)
     thumbnail: ShotGridAssetThumbnailModel | None = None

@@ -1,11 +1,13 @@
 <script setup>
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
-import { ArrowLeft, Delete, Edit, Lock, Plus, Refresh, UserFilled } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { ArrowLeft, Delete, Edit, Lock, Plus, Refresh, UserFilled, VideoPlay } from '@element-plus/icons-vue'
 
 import { getAssetDetail, listAssetAssignees } from '@/api/shot-grid/assets'
 import { assertPositiveId, getProjectDetail } from '@/api/shot-grid/projects'
+import { startTask } from '@/api/shot-grid/tasks'
+import { useTaskStatePolling } from '@/composables/useTaskStatePolling'
 import { useSessionStore } from '@/store/modules/session'
 import { tagTypeFromTone } from '@/utils/tag'
 import ProductionHistoryPanel from '@/components/production-history/ProductionHistoryPanel.vue'
@@ -16,7 +18,7 @@ import AssetFormDialog from '@/views/asset/components/AssetFormDialog.vue'
 import AssetItemFormDialog from '@/views/asset/components/AssetItemFormDialog.vue'
 import AssetItemDeleteDialog from '@/views/asset/components/AssetItemDeleteDialog.vue'
 import ProtectedAssetThumbnail from '@/views/asset/components/ProtectedAssetThumbnail.vue'
-import { assetDirectoryStatusMeta, assetErrorState, assetStatusMeta, assetTypeMeta, formatAssetDateTime, memberUserName } from '@/views/asset/assetPresentation'
+import { assetDirectoryStatusMeta, assetErrorState, assetItemStatusEntries, assetStatusMeta, assetTypeMeta, formatAssetDateTime, memberUserName } from '@/views/asset/assetPresentation'
 import { taskPriorityMeta, taskStatusMeta, taskVersionStatusMeta } from '@/views/task/taskPresentation'
 
 const props = defineProps({
@@ -39,6 +41,7 @@ const assignContext = ref(null)
 const archiveContext = ref(null)
 const deleteItemContext = ref(null)
 const historyRefreshKey = ref(0)
+const startingOperation = ref(null)
 
 function taskAssigneeName(task) {
   if (!task) return '未分配'
@@ -48,6 +51,8 @@ function taskAssigneeName(task) {
 let controller = null
 let disposed = false
 let operationGeneration = 0
+let contextGeneration = 0
+let loadGeneration = 0
 
 const projectId = computed(() => {
   try {
@@ -69,6 +74,8 @@ const assetAllowedActions = computed(() => new Set(asset.value?.allowedActions |
 const canEditAsset = computed(() => assetAllowedActions.value.has('asset.edit') && hasPermission('shotgrid:asset:edit'))
 const canArchiveAsset = computed(() => assetAllowedActions.value.has('asset.archive') && hasPermission('shotgrid:asset:archive'))
 const canAddItem = computed(() => assetAllowedActions.value.has('assetItem.add') && hasPermission('shotgrid:asset:add'))
+const canStartItems = computed(() => assetAllowedActions.value.has('task.start') && hasPermission('shotgrid:task:start'))
+const startDisabled = computed(() => loading.value || Boolean(startingOperation.value))
 
 const activeThumbnailItems = computed(() => [...(asset.value?.items || [])]
   .filter(item => item.lifecycleStatus === 'active')
@@ -79,6 +86,21 @@ function assetItemVersionLabel(item) {
   if (!item?.latestVersion) return '尚未提交版本'
   const versionNo = String(item.latestVersion.versionNo).padStart(3, '0')
   return `V${versionNo} · ${taskVersionStatusMeta(item.latestVersion.versionStatus).label}`
+}
+
+function visibleItemStatusEntries(counts) {
+  return assetItemStatusEntries(counts).filter(entry => entry.count > 0)
+}
+
+function itemCanStart(item) {
+  const task = item?.task
+  return Boolean(
+    canStartItems.value && new Set(item?.allowedActions || []).has('task.start') &&
+    Number.isSafeInteger(Number(task?.taskId)) && Number(task.taskId) > 0 &&
+    Number.isSafeInteger(Number(task?.lockVersion)) && Number(task.lockVersion) >= 0 &&
+    Number.isSafeInteger(Number(asset.value?.lockVersion)) && Number(asset.value.lockVersion) >= 0 &&
+    Number.isSafeInteger(Number(item?.lockVersion)) && Number(item.lockVersion) >= 0
+  )
 }
 async function fetchAllMembers(targetProjectId, signal) {
   const rows = []
@@ -101,39 +123,55 @@ function closeDialogs() {
   deleteItemContext.value = null
 }
 
-async function loadDetail() {
-  controller?.abort()
-  closeDialogs()
-  asset.value = null
-  project.value = null
-  members.value = []
-  errorState.value = null
+function refreshAfterConflict() {
+  ElMessage.info('原操作将关闭并刷新详情，请核对最新信息后重新操作。')
+  return loadDetail({ resetContext: true })
+}
+
+async function loadDetail({ background = false, requestController = null, resetContext = false } = {}) {
+  const generation = ++loadGeneration
+  if (!background) {
+    controller?.abort()
+    if (resetContext) {
+      contextGeneration += 1
+      closeDialogs()
+      asset.value = null
+      project.value = null
+      members.value = []
+    }
+    errorState.value = null
+  }
   const targetProjectId = projectId.value
   const targetAssetId = assetId.value
   if (!targetProjectId || !targetAssetId) {
     errorState.value = assetErrorState({ httpStatus: 404, message: '资产详情地址无效' })
     return
   }
-  const requestController = new AbortController()
-  controller = requestController
-  loading.value = true
+  const activeController = requestController || new AbortController()
+  controller = activeController
+  if (!background) loading.value = true
+  const isCurrent = () => controller === activeController && generation === loadGeneration &&
+    !activeController.signal.aborted && projectId.value === targetProjectId && assetId.value === targetAssetId
   try {
     const [assetResponse, projectResponse, memberRows] = await Promise.all([
-      getAssetDetail(targetProjectId, targetAssetId, { signal: requestController.signal }),
-      getProjectDetail(targetProjectId, { signal: requestController.signal }),
-      fetchAllMembers(targetProjectId, requestController.signal)
+      getAssetDetail(targetProjectId, targetAssetId, { signal: activeController.signal }),
+      getProjectDetail(targetProjectId, { signal: activeController.signal }),
+      fetchAllMembers(targetProjectId, activeController.signal)
     ])
-    if (controller !== requestController || requestController.signal.aborted || projectId.value !== targetProjectId || assetId.value !== targetAssetId) return
+    if (!isCurrent()) return
     asset.value = assetResponse.data
     project.value = projectResponse.data
     members.value = memberRows
     historyRefreshKey.value += 1
   } catch (error) {
-    if (error?.code !== 'ERR_CANCELED' && !requestController.signal.aborted) {
+    if (background) throw error
+    if (error?.code !== 'ERR_CANCELED' && !activeController.signal.aborted && !asset.value) {
       errorState.value = assetErrorState(error, '资产详情加载失败')
+    } else if (error?.code !== 'ERR_CANCELED' && !activeController.signal.aborted) {
+      ElMessage.error(error?.message || '资产详情刷新失败，当前显示上次结果。')
     }
   } finally {
-    if (controller === requestController) loading.value = false
+    if (!background && controller === activeController && generation === loadGeneration) loading.value = false
   }
 }
 
@@ -143,6 +181,8 @@ function newContext(item = null) {
     assetId: assetId.value,
     assetItemId: item?.assetItemId ? Number(item.assetItemId) : null,
     operationGeneration: ++operationGeneration,
+    // 普通状态刷新不替换编辑草稿对应的资产数据及锁版本。
+    asset: Object.freeze({ ...asset.value }),
     item
   })
 }
@@ -290,13 +330,83 @@ function itemCanAssign(item) {
   return new Set(item.allowedActions || []).has('task.assign') && hasPermission('shotgrid:task:assign')
 }
 
+function isCurrentStart(operation) {
+  return !disposed && startingOperation.value === operation &&
+    projectId.value === operation.projectId && assetId.value === operation.assetId &&
+    contextGeneration === operation.contextGeneration
+}
+
+async function confirmStartItem(item) {
+  if (!itemCanStart(item) || startDisabled.value) return
+  const task = item.task
+  const operation = Object.freeze({
+    projectId: projectId.value,
+    assetId: assetId.value,
+    assetItemId: Number(item.assetItemId),
+    taskId: Number(task.taskId),
+    lockVersion: Number(task.lockVersion),
+    assetLockVersion: Number(asset.value.lockVersion),
+    assetItemLockVersion: Number(item.lockVersion),
+    contextGeneration
+  })
+  startingOperation.value = operation
+  try {
+    await ElMessageBox.confirm(
+      `资产：${asset.value.assetName}；制作分项：${item.productionItem || '未命名制作分项'}；当前负责人：${taskAssigneeName(task)}。请确认线下制作条件已齐备。确认后将允许该负责人开始制作。`,
+      '确认分项开工',
+      { confirmButtonText: '确认开工', cancelButtonText: '暂不开工', type: 'warning' }
+    )
+    if (!isCurrentStart(operation)) return
+    const currentItem = asset.value?.items?.find(candidate => Number(candidate.assetItemId) === operation.assetItemId)
+    if (!itemCanStart(currentItem) || Number(currentItem.task?.taskId) !== operation.taskId ||
+      Number(currentItem.task?.lockVersion) !== operation.lockVersion || Number(asset.value?.lockVersion) !== operation.assetLockVersion ||
+      Number(currentItem.lockVersion) !== operation.assetItemLockVersion) {
+      ElMessage.warning('资产、制作分项或任务已发生变化，请刷新后重新确认开工。')
+      return
+    }
+    const response = await startTask(operation.taskId, {
+      lockVersion: operation.lockVersion,
+      assetLockVersion: operation.assetLockVersion,
+      assetItemLockVersion: operation.assetItemLockVersion,
+      startConfirmed: true
+    })
+    if (!isCurrentStart(operation)) {
+      ElMessage.success('原制作分项已确认开工，请返回原资产查看。')
+      return
+    }
+    ElMessage.success(response.data?.taskStatus === 'preparing'
+      ? '已确认开工，正在准备制作目录'
+      : '已确认开工，负责人可以开始制作')
+    await loadDetail()
+    if (!isCurrentStart(operation)) return
+    emit('changed', { projectId: operation.projectId, assetId: operation.assetId })
+  } catch (error) {
+    if (error === 'cancel' || error === 'close' || !isCurrentStart(operation)) return
+    ElMessage.error(error?.message || '确认开工失败，请刷新后重试')
+    if (Number(error?.httpStatus || error?.status) === 409) await loadDetail()
+  } finally {
+    if (startingOperation.value === operation) startingOperation.value = null
+  }
+}
+
+const { pollingError } = useTaskStatePolling({
+  getDelay: () => {
+    if (!asset.value || loading.value || errorState.value || startingOperation.value || editAssetContext.value ||
+      itemFormContext.value || assignContext.value || archiveContext.value || deleteItemContext.value) return null
+    if ((asset.value.items || []).some(item => item.task?.taskStatus === 'preparing' || item.assetStatus === 'preparing')) return 1500
+    return (asset.value.items || []).some(item => item.task?.taskStatus === 'not_started' || item.assetStatus === 'not_started') ? 5000 : null
+  },
+  refresh: requestController => loadDetail({ background: true, requestController })
+})
+
 watch(
   () => [props.targetProjectId, props.targetAssetId, route.params.projectId, route.params.assetId],
-  loadDetail,
+  () => loadDetail({ resetContext: true }),
   { immediate: true }
 )
 onBeforeUnmount(() => {
   disposed = true
+  loadGeneration += 1
   controller?.abort()
   closeDialogs()
 })
@@ -306,13 +416,14 @@ onBeforeUnmount(() => {
   <section class="sg-page asset-detail-page" :class="{ 'asset-detail-page--embedded': embedded }">
     <el-button v-if="!embedded" class="back-link" link :icon="ArrowLeft" @click="router.push({ path: '/assets', query: { projectId: String(projectId || '') } })">返回资产库</el-button>
 
-    <el-card v-if="loading" class="detail-loading" shadow="never" aria-busy="true">
+    <el-card v-if="loading && !asset" class="detail-loading" shadow="never" aria-busy="true">
       <span class="detail-loading__label">正在加载资产详情</span>
       <el-skeleton :rows="8" animated />
     </el-card>
     <ProjectStatePanel v-else-if="errorState" :title="errorState.title" :message="errorState.message" :retryable="errorState.retryable" @retry="loadDetail" />
 
     <template v-else-if="asset">
+      <el-alert v-if="pollingError" :title="pollingError" type="warning" show-icon :closable="false" />
       <el-card class="asset-hero" shadow="never">
         <div class="asset-hero__layout">
         <div class="asset-hero__gallery" aria-label="制作分项缩略图">
@@ -325,8 +436,8 @@ onBeforeUnmount(() => {
           </article>
           <el-empty v-if="!activeThumbnailItems.length" class="asset-hero__empty" :image-size="36" description="暂无活动制作分项" />
         </div>
-        <div class="asset-hero__main"><p class="sg-eyebrow">{{ project?.projectCode }} · ASSET {{ asset.assetId }}</p><div><el-tag size="small" effect="plain" round :type="tagTypeFromTone(assetTypeMeta(asset.assetType).tone)">{{ assetTypeMeta(asset.assetType).label }}</el-tag><h2>{{ asset.assetName }}</h2><el-tag size="small" effect="plain" round :type="tagTypeFromTone(assetStatusMeta(asset.assetStatus).tone)">{{ assetStatusMeta(asset.assetStatus).label }}</el-tag></div><p>{{ asset.description || '暂无资产说明' }}</p><div class="asset-hero__summary"><small>{{ asset.itemCount }} 个制作分项 · {{ asset.usageShotCount }} 个使用镜头</small><el-tag size="small" effect="plain" round :type="tagTypeFromTone(assetDirectoryStatusMeta(asset.directoryStatus).tone)">{{ assetDirectoryStatusMeta(asset.directoryStatus).label }}</el-tag></div></div>
-        <div class="asset-hero__actions"><el-button :icon="Refresh" :loading="loading" @click="loadDetail">刷新</el-button><el-button v-if="canAddItem" :icon="Plus" @click="openItemForm()">新增制作分项</el-button><el-button v-if="canEditAsset" :icon="Edit" @click="openEditAsset">编辑资产</el-button><el-button v-if="canArchiveAsset" type="danger" plain :icon="Lock" @click="openArchive()">归档资产</el-button></div>
+        <div class="asset-hero__main"><p class="sg-eyebrow">{{ project?.projectCode }} · ASSET {{ asset.assetId }}</p><div><el-tag size="small" effect="plain" round :type="tagTypeFromTone(assetTypeMeta(asset.assetType).tone)">{{ assetTypeMeta(asset.assetType).label }}</el-tag><h2>{{ asset.assetName }}</h2><el-tag size="small" effect="plain" round :type="tagTypeFromTone(assetStatusMeta(asset.assetStatus).tone)">{{ assetStatusMeta(asset.assetStatus).label }}</el-tag></div><p>{{ asset.description || '暂无资产说明' }}</p><div class="asset-hero__summary"><small>{{ asset.itemCount }} 个制作分项 · {{ asset.usageShotCount }} 个使用镜头</small><el-tag size="small" effect="plain" round :type="tagTypeFromTone(assetDirectoryStatusMeta(asset.directoryStatus).tone)">{{ assetDirectoryStatusMeta(asset.directoryStatus).label }}</el-tag></div><div v-if="visibleItemStatusEntries(asset.itemStatusCounts).length" class="asset-item-status-counts" aria-label="制作分项状态数量"><el-tag v-for="entry in visibleItemStatusEntries(asset.itemStatusCounts)" :key="entry.status" size="small" effect="plain" round :type="tagTypeFromTone(assetStatusMeta(entry.status).tone)">{{ entry.label }} {{ entry.count }}</el-tag></div></div>
+        <div class="asset-hero__actions"><el-button :icon="Refresh" :loading="loading" :disabled="Boolean(startingOperation)" @click="loadDetail">刷新</el-button><el-button v-if="canAddItem" :icon="Plus" :disabled="startDisabled" @click="openItemForm()">新增制作分项</el-button><el-button v-if="canEditAsset" :icon="Edit" :disabled="startDisabled" @click="openEditAsset">编辑资产</el-button><el-button v-if="canArchiveAsset" type="danger" plain :icon="Lock" :disabled="startDisabled" @click="openArchive()">归档资产</el-button></div>
         </div>
       </el-card>
 
@@ -353,16 +464,16 @@ onBeforeUnmount(() => {
           <el-card v-for="item in asset.items" :key="item.assetItemId" class="item-card" :class="{ 'is-archived': item.lifecycleStatus === 'archived' }" shadow="never">
             <ProtectedAssetThumbnail class="item-card__thumbnail" :thumbnail="item.thumbnail" :alt="`${item.productionItem || '未命名制作分项'} 缩略图`" />
             <div class="item-card__body"><header><div><span class="item-card__id">分项 #{{ item.assetItemId }}</span><h4>{{ item.productionItem || '未命名制作分项' }}</h4></div><el-tag size="small" effect="plain" round :type="tagTypeFromTone(assetStatusMeta(item.assetStatus).tone)">{{ assetStatusMeta(item.assetStatus).label }}</el-tag></header><p>{{ item.description || '暂无分项说明' }}</p><el-descriptions class="item-card__details" :column="4" border><el-descriptions-item label="负责人">{{ taskAssigneeName(item.task) }}</el-descriptions-item><el-descriptions-item label="任务"><span v-if="item.task" class="detail-tag-group"><el-tag size="small" effect="plain" round :type="tagTypeFromTone(taskStatusMeta(item.task.taskStatus).tone)">{{ taskStatusMeta(item.task.taskStatus).label }}</el-tag><el-tag size="small" effect="plain" round :type="tagTypeFromTone(taskPriorityMeta(item.task.priority).tone)">{{ taskPriorityMeta(item.task.priority).label }}优先级</el-tag></span><el-tag v-else type="info" size="small" effect="plain" round>未分配</el-tag></el-descriptions-item><el-descriptions-item label="最新版本"><span v-if="item.latestVersion" class="detail-tag-group"><span>V{{ String(item.latestVersion.versionNo).padStart(3, '0') }}</span><el-tag size="small" effect="plain" round :type="tagTypeFromTone(taskVersionStatusMeta(item.latestVersion.versionStatus).tone)">{{ taskVersionStatusMeta(item.latestVersion.versionStatus).label }}</el-tag></span><span v-else>—</span></el-descriptions-item><el-descriptions-item label="最终版本"><span v-if="item.finalVersion" class="detail-tag-group"><span>V{{ String(item.finalVersion.versionNo).padStart(3, '0') }}</span><el-tag size="small" effect="plain" round :type="tagTypeFromTone(taskVersionStatusMeta(item.finalVersion.versionStatus).tone)">{{ taskVersionStatusMeta(item.finalVersion.versionStatus).label }}</el-tag></span><span v-else>—</span></el-descriptions-item></el-descriptions><small>{{ item.remark || '无备注' }} · 更新于 {{ formatAssetDateTime(item.updateTime) }}</small></div>
-            <div class="item-card__actions"><el-button v-if="itemCanAssign(item)" text type="primary" :icon="UserFilled" @click="openAssign(item)">{{ item.task ? '改派任务' : '分配任务' }}</el-button><el-button v-if="itemCanEdit(item)" text :type="item.productionItem ? 'default' : 'warning'" :icon="Edit" @click="openItemForm(item)">{{ item.productionItem ? '编辑分项' : '补齐制作分项' }}</el-button><el-button v-if="itemCanDelete(item)" text type="danger" :icon="Delete" @click="openDeleteItem(item)">删除分项</el-button><el-button v-else-if="itemCanArchive(item)" text type="danger" :icon="Lock" @click="openArchive(item)">归档分项</el-button></div>
+            <div class="item-card__actions"><el-button v-if="itemCanStart(item)" size="small" type="primary" :icon="VideoPlay" :loading="startingOperation?.assetItemId === item.assetItemId" :disabled="startDisabled" @click="confirmStartItem(item)">开始任务</el-button><el-button v-if="itemCanAssign(item)" text type="primary" :icon="UserFilled" :disabled="startDisabled" @click="openAssign(item)">{{ item.task ? '改派任务' : '分配任务' }}</el-button><el-button v-if="itemCanEdit(item)" text :type="item.productionItem ? 'default' : 'warning'" :icon="Edit" :disabled="startDisabled" @click="openItemForm(item)">{{ item.productionItem ? '编辑分项' : '补齐制作分项' }}</el-button><el-button v-if="itemCanDelete(item)" text type="danger" :icon="Delete" :disabled="startDisabled" @click="openDeleteItem(item)">删除分项</el-button><el-button v-else-if="itemCanArchive(item)" text type="danger" :icon="Lock" :disabled="startDisabled" @click="openArchive(item)">归档分项</el-button></div>
           </el-card>
         </div>
       </el-card>
 
-      <AssetItemDeleteDialog v-if="deleteItemContext" :project-id="deleteItemContext.projectId" :operation-generation="deleteItemContext.operationGeneration" :asset="asset" :item="deleteItemContext.item" @close="deleteItemContext = null" @deleted="handleItemDeleted" @refresh="loadDetail" />
-      <AssetFormDialog v-if="editAssetContext" :project-id="editAssetContext.projectId" :operation-generation="editAssetContext.operationGeneration" :asset="asset" @close="editAssetContext = null" @saved="handleAssetSaved" @refresh="loadDetail" />
-      <AssetItemFormDialog v-if="itemFormContext" :project-id="itemFormContext.projectId" :operation-generation="itemFormContext.operationGeneration" :asset="asset" :item="itemFormContext.item" @close="itemFormContext = null" @saved="handleItemSaved" @refresh="loadDetail" />
-      <AssetAssignDialog v-if="assignContext" :project-id="assignContext.projectId" :operation-generation="assignContext.operationGeneration" :asset="asset" :item="assignContext.item" :members="members" @close="assignContext = null" @assigned="handleAssigned" @refresh="loadDetail" />
-      <AssetArchiveDialog v-if="archiveContext" :project-id="archiveContext.projectId" :operation-generation="archiveContext.operationGeneration" :asset="asset" :item="archiveContext.item" @close="archiveContext = null" @archived="handleArchived" @refresh="loadDetail" />
+      <AssetItemDeleteDialog v-if="deleteItemContext" :project-id="deleteItemContext.projectId" :operation-generation="deleteItemContext.operationGeneration" :asset="deleteItemContext.asset" :item="deleteItemContext.item" @close="deleteItemContext = null" @deleted="handleItemDeleted" @refresh="refreshAfterConflict" />
+      <AssetFormDialog v-if="editAssetContext" :project-id="editAssetContext.projectId" :operation-generation="editAssetContext.operationGeneration" :asset="editAssetContext.asset" @close="editAssetContext = null" @saved="handleAssetSaved" @refresh="refreshAfterConflict" />
+      <AssetItemFormDialog v-if="itemFormContext" :project-id="itemFormContext.projectId" :operation-generation="itemFormContext.operationGeneration" :asset="itemFormContext.asset" :item="itemFormContext.item" @close="itemFormContext = null" @saved="handleItemSaved" @refresh="refreshAfterConflict" />
+      <AssetAssignDialog v-if="assignContext" :project-id="assignContext.projectId" :operation-generation="assignContext.operationGeneration" :asset="assignContext.asset" :item="assignContext.item" :members="members" @close="assignContext = null" @assigned="handleAssigned" @refresh="refreshAfterConflict" />
+      <AssetArchiveDialog v-if="archiveContext" :project-id="archiveContext.projectId" :operation-generation="archiveContext.operationGeneration" :asset="archiveContext.asset" :item="archiveContext.item" @close="archiveContext = null" @archived="handleArchived" @refresh="refreshAfterConflict" />
     </template>
   </section>
 </template>
@@ -379,4 +490,5 @@ onBeforeUnmount(() => {
 .asset-hero__empty{width:132px;height:148px;border:1px dashed var(--sg-border);border-radius:12px}
 @container (max-width:1050px){.asset-hero__layout{grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"main actions" "gallery gallery";align-items:start}.asset-hero__actions{max-width:none;justify-content:flex-end}}
 @container (max-width:700px){.asset-hero__layout{grid-template-columns:1fr;grid-template-areas:"main" "gallery" "actions"}.asset-hero__gallery{width:100%;grid-auto-columns:140px}.asset-hero__actions{justify-content:flex-start}}
+.asset-item-status-counts{display:flex;gap:5px;flex-wrap:wrap;margin-top:8px}.item-card__actions{gap:4px}
 </style>

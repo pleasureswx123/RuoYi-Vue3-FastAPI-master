@@ -2,12 +2,14 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Delete, Edit, Grid, List, Plus, Rank, Refresh, RefreshLeft, Search, Upload, VideoCamera } from '@element-plus/icons-vue'
+import { Delete, Edit, Grid, List, Plus, Refresh, RefreshLeft, Search, Upload, VideoCamera, VideoPlay } from '@element-plus/icons-vue'
 import Sortable from 'sortablejs'
 
 import { getProjectDetail, getProjectPage } from '@/api/shot-grid/projects'
+import { startTask } from '@/api/shot-grid/tasks'
 import { batchAssignShotTasks, batchDeleteShots, getEpisodePage, getScenePage, getShotDetail, getShotPage, listShotAssignees, reorderShot } from '@/api/shot-grid/shots'
 import { assertPositiveId } from '@/api/shot-grid/projects'
+import { useTaskStatePolling } from '@/composables/useTaskStatePolling'
 import { useSessionStore } from '@/store/modules/session'
 import { tagTypeFromTone } from '@/utils/tag'
 import { projectRoleMeta, storageMeta } from '@/views/project/projectPresentation'
@@ -46,6 +48,7 @@ const editingShot = ref(null)
 const editContext = ref(null)
 const deleting = ref(false)
 const assigning = ref(false)
+const startingOperation = ref(null)
 const reordering = ref(false)
 const sceneOrderFullyLoaded = ref(false)
 const showHierarchyCreate = ref(false)
@@ -68,12 +71,14 @@ const query = reactive({
   keyword: '', episodeId: '', sceneId: '', shotStatus: '', assigneeUserId: '',
   pageNum: 1, pageSize: 100, orderByColumn: 'sortOrder', isAsc: 'ascending'
 })
+const appliedQuery = ref('')
 let projectController = null
 let shotController = null
 let sceneController = null
 let episodeRefreshController = null
 let disposed = false
 let operationGeneration = 0
+let projectGeneration = 0
 let rowSortable = null
 const MAX_SCENE_SORT_SHOTS = 2000
 
@@ -87,6 +92,8 @@ const canImport = computed(() => isDirector.value && hasPermission('shotgrid:sho
 const canEdit = computed(() => isDirector.value && hasPermission('shotgrid:shot:edit') && projectAllowsWrites.value)
 const canDelete = computed(() => isDirector.value && hasPermission('shotgrid:shot:archive') && projectAllowsWrites.value)
 const canAssign = computed(() => isDirector.value && hasPermission('shotgrid:task:assign') && projectAllowsWrites.value)
+const canStart = computed(() => isDirector.value && hasPermission('shotgrid:task:start') && projectAllowsWrites.value)
+const startDisabled = computed(() => shotsLoading.value || Boolean(startingOperation.value) || assigning.value || deleting.value || reordering.value)
 const canCreateEpisode = computed(() => isDirector.value && hasPermission('shotgrid:episode:add') && projectAllowsWrites.value)
 const canCreateScene = computed(() => isDirector.value && hasPermission('shotgrid:scene:add') && projectAllowsWrites.value)
 const isSceneOrderScope = computed(() => (
@@ -143,6 +150,17 @@ const detailDrawerTitle = computed(() => detailShot.value ? `镜头详情 · ${d
 const selectableShots = computed(() => shots.value.filter(shot => canSelectShot(shot)))
 const allSelectableSelected = computed(() => Boolean(selectableShots.value.length) && selectableShots.value.every(shot => selectedShotIds.value.has(Number(shot.shotId))))
 const canDeleteSelection = computed(() => Boolean(selectedShots.value.length) && selectedShots.value.every(shot => canDeleteShot(shot)))
+const { pollingError } = useTaskStatePolling({
+  getDelay: () => {
+    if (!projectAllowsWrites.value || shotsLoading.value || scenesLoading.value || shotsError.value ||
+        showDetail.value || showCreate.value || showImport.value || showEdit.value || editingShotId.value ||
+        showHierarchyCreate.value || showBatchAssign.value || startingOperation.value ||
+        deleting.value || assigning.value || reordering.value || appliedQuery.value !== JSON.stringify(query)) return null
+    if (shots.value.some(shot => shot.status === 'preparing')) return 1500
+    return shots.value.some(shot => shot.status === 'not_started') ? 5000 : null
+  },
+  refresh: controller => loadShots(controller, true)
+})
 const optionalPositiveIdRule = message => ({
   validator: (_rule, value, callback) => {
     if (!value) {
@@ -202,6 +220,67 @@ const batchAssignRules = {
   }]
 }
 
+function canStartShot(shot) {
+  return Boolean(
+    canStart.value && shot?.status === 'not_started' &&
+    shot.allowedActions?.includes('task.start') &&
+    Number.isSafeInteger(shot.taskId) && shot.taskId > 0 &&
+    Number.isSafeInteger(shot.taskLockVersion) && shot.taskLockVersion >= 0 &&
+    Number.isSafeInteger(shot.lockVersion) && shot.lockVersion >= 0
+  )
+}
+
+function isCurrentStart(operation) {
+  return !disposed && startingOperation.value === operation &&
+    currentProjectId.value === operation.projectId && projectGeneration === operation.projectGeneration
+}
+
+async function confirmStartShot(shot) {
+  if (!canStartShot(shot) || startDisabled.value) return
+  const operation = Object.freeze({
+    projectId: currentProjectId.value, projectGeneration,
+    shotId: shot.shotId, taskId: shot.taskId,
+    lockVersion: shot.taskLockVersion, shotLockVersion: shot.lockVersion
+  })
+  startingOperation.value = operation
+  try {
+    await ElMessageBox.confirm(
+      '镜头：' + [shot.episodeCode, shot.sceneCode, shot.shotCode].join(' / ') +
+      '；负责人：' + shotAssigneeName(shot.assignee, members.value) +
+      '。请确认该镜头制作所需资产已在线下核对齐备。确认后将允许负责人开始制作。',
+      '确认开工',
+      { confirmButtonText: '确认开工', cancelButtonText: '暂不开工', type: 'warning' }
+    )
+    if (!isCurrentStart(operation)) return
+    const currentShot = shots.value.find(item => item.shotId === operation.shotId)
+    if (!canStartShot(currentShot) || currentShot.taskId !== operation.taskId ||
+      currentShot.taskLockVersion !== operation.lockVersion || currentShot.lockVersion !== operation.shotLockVersion) {
+      ElMessage.warning('镜头或任务已发生变化，请刷新后重新确认开工。')
+      return
+    }
+    const response = await startTask(operation.taskId, {
+      lockVersion: operation.lockVersion,
+      shotLockVersion: operation.shotLockVersion,
+      assetsConfirmed: true
+    })
+    if (!isCurrentStart(operation)) {
+      ElMessage.success('原镜头任务已确认开工，请返回原项目查看。')
+      return
+    }
+    ElMessage.success(response.data?.taskStatus === 'preparing'
+      ? '已确认开工，正在准备制作目录'
+      : '已确认开工，负责人可以开始制作')
+    closeDetailDrawer()
+    await loadShots()
+  } catch (error) {
+    if (error === 'cancel' || error === 'close' || !isCurrentStart(operation)) return
+    ElMessage.error(error?.message || '确认开工失败，请刷新后重试')
+    if (Number(error?.httpStatus || error?.status) === 409) await loadShots()
+  } finally {
+    if (startingOperation.value === operation) startingOperation.value = null
+  }
+}
+
 function canDeleteShot(shot) {
   return canDelete.value && ['unassigned', 'not_started'].includes(shot?.status)
 }
@@ -258,6 +337,8 @@ async function loadProjects(preferredId = null) {
 }
 
 async function loadProjectContext() {
+  projectGeneration += 1
+  startingOperation.value = null
   const projectId = currentProjectId.value
   closeDetailDrawer()
   shotController?.abort()
@@ -292,6 +373,7 @@ async function loadProjectContext() {
         controller.signal
       )
     ])
+    if (disposed || controller.signal.aborted || shotController !== controller) return
     project.value = detailResponse.data
     episodes.value = episodeRows
     members.value = Array.isArray(memberResponse) ? memberResponse : []
@@ -300,9 +382,12 @@ async function loadProjectContext() {
       query.sceneId = ''
     }
     await loadScenes(false)
+    if (disposed || controller.signal.aborted || shotController !== controller) return
     await loadShots(controller)
   } catch (error) {
-    if (error?.code !== 'ERR_CANCELED') shotsError.value = shotErrorState(error, '项目镜头信息加载失败')
+    if (error?.code !== 'ERR_CANCELED' && !controller.signal.aborted && shotController === controller) {
+      shotsError.value = shotErrorState(error, '项目镜头信息加载失败')
+    }
   } finally {
     if (shotController === controller) shotsLoading.value = false
   }
@@ -331,15 +416,19 @@ async function loadScenes(resetScene = true) {
   }
 }
 
-async function loadShots(existingController = null) {
+async function loadShots(existingController = null, background = false) {
   const projectId = currentProjectId.value
   if (!projectId) return
   if (!existingController) shotController?.abort()
   const controller = existingController || new AbortController()
   shotController = controller
-  shotsLoading.value = true
-  shotsError.value = null
-  sceneOrderFullyLoaded.value = false
+  if (!background) {
+    shotsLoading.value = true
+    shotsError.value = null
+    sceneOrderFullyLoaded.value = false
+    appliedQuery.value = JSON.stringify(query)
+  }
+  const fullScene = isSceneOrderScope.value
   try {
     const params = {
       keyword: query.keyword.trim() || undefined,
@@ -353,35 +442,39 @@ async function loadShots(existingController = null) {
       isAsc: query.isAsc
     }
     const response = await getShotPage(projectId, params, { signal: controller.signal })
+    if (disposed || controller.signal.aborted || shotController !== controller) return
     let loadedRows = Array.isArray(response.rows) ? response.rows : []
     const loadedTotal = Number(response.total || 0)
-    if (isSceneOrderScope.value && loadedTotal <= MAX_SCENE_SORT_SHOTS && loadedRows.length < loadedTotal) {
+    if (fullScene && loadedTotal <= MAX_SCENE_SORT_SHOTS && loadedRows.length < loadedTotal) {
       loadedRows = await fetchAllPages(
         (pageParams, options) => getShotPage(projectId, pageParams, options),
         { ...params, pageNum: undefined, pageSize: undefined },
         controller.signal
       )
     }
-    if (controller.signal.aborted || shotController !== controller) return
+    if (disposed || controller.signal.aborted || shotController !== controller) return
     shots.value = loadedRows
-    selectedShotIds.value = new Set()
+    selectedShotIds.value = background
+      ? new Set(loadedRows.filter(shot => selectedShotIds.value.has(Number(shot.shotId)) && canSelectShot(shot)).map(shot => Number(shot.shotId)))
+      : new Set()
     total.value = loadedTotal
-    hasNext.value = isSceneOrderScope.value && loadedRows.length === loadedTotal
+    hasNext.value = fullScene && loadedRows.length === loadedTotal
       ? false
       : Boolean(response.hasNext)
     sceneOrderFullyLoaded.value = (
-      isSceneOrderScope.value &&
+      fullScene &&
       loadedTotal <= MAX_SCENE_SORT_SHOTS &&
       loadedRows.length === loadedTotal
     )
   } catch (error) {
-    if (error?.code !== 'ERR_CANCELED') {
+    if (error?.code !== 'ERR_CANCELED' && !controller.signal.aborted && shotController === controller && !disposed) {
+      if (background) throw error
       shots.value = []
       total.value = 0
       shotsError.value = shotErrorState(error, '镜头列表加载失败')
     }
   } finally {
-    if (shotController === controller) shotsLoading.value = false
+    if (!background && shotController === controller) shotsLoading.value = false
   }
 }
 
@@ -880,6 +973,7 @@ onBeforeUnmount(() => { disposed = true; destroyRowSortable(); projectController
 
         <div class="shot-list-toolbar"><div class="shot-list-toolbar__summary"><strong>{{ total }}</strong><span>个镜头<span v-if="shotsLoading"> · 正在刷新</span><span v-else>{{ dragSortHint }}</span></span><template v-if="viewMode === 'table' && selectedShots.length"><el-button v-if="canAssign" text type="primary" :loading="assigning" :disabled="deleting" @click="openBatchAssignDialog">{{ batchAssignLabel }}（{{ selectedShots.length }}）</el-button><el-button v-if="canDelete" text type="danger" :icon="Delete" :disabled="!canDeleteSelection || deleting || assigning" :loading="deleting" :title="!canDeleteSelection ? '选中项包含已开始任务，不能批量删除' : ''" @click="confirmDeleteShots(selectedShots)">批量删除（{{ selectedShots.length }}）</el-button></template></div><el-radio-group v-model="viewMode" class="shot-list-toolbar__views" size="small" aria-label="镜头视图"><el-radio-button value="table"><el-icon><List /></el-icon>表格</el-radio-button><el-radio-button value="card"><el-icon><Grid /></el-icon>卡片</el-radio-button><el-radio-button value="storyboard"><el-icon><VideoCamera /></el-icon>故事板</el-radio-button></el-radio-group></div>
 
+        <el-alert v-if="pollingError" :title="pollingError" type="warning" show-icon :closable="false" />
         <ProjectStatePanel v-if="shotsError" :title="shotsError.title" :message="shotsError.message" :retryable="shotsError.retryable" @retry="loadProjectContext" />
         <el-card v-else-if="shotsLoading && !shots.length" class="shot-loading" shadow="never" aria-busy="true"><el-skeleton animated :rows="8" /></el-card>
         <el-empty v-else-if="!shots.length" class="shot-empty" description="当前筛选没有镜头"><p>可以调整集、场次、状态或制作人筛选；项目管理人也可以新建或导入镜头。</p></el-empty>
@@ -942,17 +1036,17 @@ onBeforeUnmount(() => { disposed = true; destroyRowSortable(); projectController
                 </div>
               </template>
             </el-table-column>
-            <el-table-column label="操作" fixed="right" width="270">
+            <el-table-column label="操作" fixed="right" width="350">
               <template #default="scope">
-                <div v-if="scope?.row" class="shot-row-actions"><el-button text type="primary" @click="openShot(scope.row)">详情</el-button><el-button v-if="canEditShot(scope.row)" text type="warning" :icon="Edit" :loading="editingShotId === Number(scope.row.shotId)" :disabled="deleting" @click="openEditDialog(scope.row)">编辑</el-button><el-button v-if="canDelete" text type="danger" :icon="Delete" :disabled="!canDeleteShot(scope.row) || deleting" :title="canDeleteShot(scope.row) ? '删除镜头' : '任务已经开始，不能删除'" @click="confirmDeleteShots([scope.row])">删除</el-button></div>
+                <div v-if="scope?.row" class="shot-row-actions"><el-button v-if="canStartShot(scope.row)" size="small" type="primary" :icon="VideoPlay" :loading="startingOperation?.shotId === scope.row.shotId" :disabled="startDisabled" @click="confirmStartShot(scope.row)">开始任务</el-button><el-button text type="primary" @click="openShot(scope.row)">详情</el-button><el-button v-if="canEditShot(scope.row)" text type="warning" :icon="Edit" :loading="editingShotId === Number(scope.row.shotId)" :disabled="deleting" @click="openEditDialog(scope.row)">编辑</el-button><el-button v-if="canDelete" text type="danger" :icon="Delete" :disabled="!canDeleteShot(scope.row) || deleting" :title="canDeleteShot(scope.row) ? '删除镜头' : '任务已经开始，不能删除'" @click="confirmDeleteShots([scope.row])">删除</el-button></div>
               </template>
             </el-table-column>
           </el-table>
         </div>
 
-        <div v-else-if="viewMode === 'card'" class="shot-grid" :class="{ 'is-refreshing':shotsLoading }"><el-card v-for="shot in shots" :key="shot.shotId" class="shot-card" shadow="hover" role="link" tabindex="0" @click="openShot(shot)" @keydown.enter="openShot(shot)" @keydown.space.prevent="openShot(shot)"><div class="shot-card__media"><ProtectedThumbnail class="shot-thumb" :thumbnail="shot.thumbnail" :video="shot.proxyMedia" :alt="`${shot.shotCode} 缩略图`" /><span class="shot-card__duration">{{ formatShotDuration(shot.durationMs) }}</span></div><header><div><small>{{ shot.episodeCode }} / {{ shot.sceneCode }}</small><h3>{{ shot.shotCode }} · 第 {{ shot.shotNo }} 镜</h3></div><el-tag class="shot-status-tag" :class="shotStatusTagClass(shot.status)" :type="tagTypeFromTone(shotStatusMeta(shot.status).tone)" size="small" effect="light" round>{{ shotStatusMeta(shot.status).label }}</el-tag></header><p>{{ shot.description }}</p><footer><span>{{ shotAssigneeName(shot.assignee, members) }}</span><span>{{ shot.shotSize || '未设景别' }}</span></footer></el-card></div>
+        <div v-else-if="viewMode === 'card'" class="shot-grid" :class="{ 'is-refreshing':shotsLoading }"><el-card v-for="shot in shots" :key="shot.shotId" class="shot-card" shadow="hover" role="link" tabindex="0" @click="openShot(shot)" @keydown.enter="openShot(shot)" @keydown.space.prevent="openShot(shot)"><div class="shot-card__media"><ProtectedThumbnail class="shot-thumb" :thumbnail="shot.thumbnail" :video="shot.proxyMedia" :alt="`${shot.shotCode} 缩略图`" /><span class="shot-card__duration">{{ formatShotDuration(shot.durationMs) }}</span></div><header><div><small>{{ shot.episodeCode }} / {{ shot.sceneCode }}</small><h3>{{ shot.shotCode }} · 第 {{ shot.shotNo }} 镜</h3></div><el-tag class="shot-status-tag" :class="shotStatusTagClass(shot.status)" :type="tagTypeFromTone(shotStatusMeta(shot.status).tone)" size="small" effect="light" round>{{ shotStatusMeta(shot.status).label }}</el-tag></header><p>{{ shot.description }}</p><footer><span>{{ shotAssigneeName(shot.assignee, members) }}</span><span>{{ shot.shotSize || '未设景别' }}</span><el-button v-if="canStartShot(shot)" size="small" type="primary" :icon="VideoPlay" :loading="startingOperation?.shotId === shot.shotId" :disabled="startDisabled" @click.stop="confirmStartShot(shot)" @keydown.stop>开始任务</el-button></footer></el-card></div>
 
-        <div v-else class="storyboard" :class="{ 'is-refreshing':shotsLoading }"><el-card v-for="shot in shots" :key="shot.shotId" class="story-frame" shadow="hover" role="link" tabindex="0" @click="openShot(shot)" @keydown.enter="openShot(shot)" @keydown.space.prevent="openShot(shot)"><span class="story-frame__index" title="本场镜头序号">{{ String(shot.shotNo).padStart(2,'0') }}</span><ProtectedThumbnail class="shot-thumb" :thumbnail="shot.thumbnail" :video="shot.proxyMedia" :alt="`${shot.shotCode} 缩略图`" /><div><strong>{{ shot.episodeCode }} · {{ shot.sceneCode }} · {{ shot.shotCode }}</strong><p>{{ shot.description }}</p><small>本场第 {{ shot.shotNo }} 镜 · {{ formatShotDuration(shot.durationMs) }} · {{ shot.shotSize || '未设景别' }} · {{ shotAssigneeName(shot.assignee, members) }}</small></div></el-card></div>
+        <div v-else class="storyboard" :class="{ 'is-refreshing':shotsLoading }"><el-card v-for="shot in shots" :key="shot.shotId" class="story-frame" shadow="hover" role="link" tabindex="0" @click="openShot(shot)" @keydown.enter="openShot(shot)" @keydown.space.prevent="openShot(shot)"><span class="story-frame__index" title="本场镜头序号">{{ String(shot.shotNo).padStart(2,'0') }}</span><ProtectedThumbnail class="shot-thumb" :thumbnail="shot.thumbnail" :video="shot.proxyMedia" :alt="`${shot.shotCode} 缩略图`" /><div><strong>{{ shot.episodeCode }} · {{ shot.sceneCode }} · {{ shot.shotCode }}</strong><p>{{ shot.description }}</p><small>本场第 {{ shot.shotNo }} 镜 · {{ formatShotDuration(shot.durationMs) }} · {{ shot.shotSize || '未设景别' }} · {{ shotAssigneeName(shot.assignee, members) }}</small><el-button v-if="canStartShot(shot)" size="small" type="primary" :icon="VideoPlay" :loading="startingOperation?.shotId === shot.shotId" :disabled="startDisabled" @click.stop="confirmStartShot(shot)" @keydown.stop>开始任务</el-button></div></el-card></div>
 
         <el-pagination v-if="shots.length && !sceneOrderFullyLoaded" class="shot-pagination" background layout="prev, pager, next, total" :current-page="query.pageNum" :page-size="query.pageSize" :total="total" :disabled="shotsLoading" aria-label="镜头分页" @current-change="changePage" />
       </template>

@@ -5,6 +5,7 @@ import { Refresh, Right, Search } from '@element-plus/icons-vue'
 
 import { getMineTaskPage } from '@/api/shot-grid/tasks'
 import { getMineReviewListPage, getRecentMineVersions } from '@/api/shot-grid/reviews'
+import { useTaskStatePolling } from '@/composables/useTaskStatePolling'
 import { useSessionStore } from '@/store/modules/session'
 import { tagTypeFromTone } from '@/utils/tag'
 import ProjectStatePanel from '@/views/project/components/ProjectStatePanel.vue'
@@ -58,6 +59,7 @@ const taskFilterRules = {
     trigger: 'change'
   }]
 }
+const appliedQuery = ref('')
 let controller = null
 let loadGeneration = 0
 let activityController = null
@@ -79,6 +81,17 @@ const pageSummary = computed(() => ({
   revision: tasks.value.filter(task => task.taskStatus === 'revision').length,
   overdue: tasks.value.filter(task => task.taskStatus !== 'completed' && taskDueState(task.dueDate).overdue).length
 }))
+const { pollingError } = useTaskStatePolling({
+  getDelay: () => {
+    if (loading.value || errorState.value || appliedQuery.value !== JSON.stringify(query)) return null
+    const activeTasks = tasks.value.filter(task => (
+      !['completed', 'archived'].includes(task.project?.projectStatus) && task.target?.lifecycleStatus !== 'archived'
+    ))
+    if (activeTasks.some(task => task.taskStatus === 'preparing')) return 1500
+    return activeTasks.some(task => task.taskStatus === 'not_started') ? 5000 : null
+  },
+  refresh: requestController => loadTasks(requestController)
+})
 
 function getDueDateBounds() {
   const [dueDateFrom, dueDateTo] = Array.isArray(query.dueDateRange) ? query.dueDateRange : []
@@ -101,22 +114,28 @@ function buildParams() {
   }
 }
 
-async function loadTasks() {
+async function loadTasks(backgroundController = null) {
+  const background = Boolean(backgroundController)
   const generation = ++loadGeneration
   controller?.abort()
   controller = null
-  loading.value = false
-  let isValid = true
-  if (taskFilterForm.value) {
-    await taskFilterForm.value.validate(valid => {
-      isValid = valid
-    })
+  if (!background) {
+    loading.value = true
+    let isValid = true
+    if (taskFilterForm.value) {
+      await taskFilterForm.value.validate(valid => {
+        isValid = valid
+      })
+    }
+    if (!isValid || disposed || generation !== loadGeneration) {
+      if (generation === loadGeneration) loading.value = false
+      return
+    }
+    errorState.value = null
+    appliedQuery.value = JSON.stringify(query)
   }
-  if (!isValid || disposed || generation !== loadGeneration) return
-  const requestController = new AbortController()
+  const requestController = backgroundController || new AbortController()
   controller = requestController
-  loading.value = true
-  errorState.value = null
   const isCurrent = () => (
     !disposed &&
     controller === requestController &&
@@ -130,12 +149,13 @@ async function loadTasks() {
     total.value = Number(response.total || 0)
   } catch (error) {
     if (error?.code !== 'ERR_CANCELED' && isCurrent()) {
+      if (background) throw error
       tasks.value = []
       total.value = 0
       errorState.value = taskErrorState(error, '我的任务加载失败')
     }
   } finally {
-    if (controller === requestController && generation === loadGeneration) loading.value = false
+    if (!background && controller === requestController && generation === loadGeneration) loading.value = false
   }
 }
 
@@ -278,7 +298,7 @@ onBeforeUnmount(() => {
           <h3 id="my-task-title">我的制作任务</h3>
           <p>统一查看镜头视频与资产图片任务，及时掌握制作、审核和修订进度。</p>
         </div>
-        <el-button :icon="Refresh" :loading="loading" @click="loadTasks">刷新</el-button>
+        <el-button :icon="Refresh" :loading="loading" @click="loadTasks()">刷新</el-button>
       </header>
 
       <div class="task-stats" aria-label="当前分页任务摘要">
@@ -296,7 +316,7 @@ onBeforeUnmount(() => {
           <el-select v-model="query.taskKind" class="sg-select" placeholder="全部类型" aria-label="按任务类型筛选" @change="submitFilters"><el-option label="全部类型" value="" /><el-option label="镜头视频" value="shot_video" /><el-option label="资产图片" value="asset_image" /></el-select>
         </el-form-item>
         <el-form-item class="task-filter-item" label="任务状态" prop="taskStatus">
-          <el-select v-model="query.taskStatus" class="sg-select" placeholder="全部状态" aria-label="按任务状态筛选" @change="submitFilters"><el-option label="全部状态" value="" /><el-option label="未开始" value="not_started" /><el-option label="目录准备中" value="preparing" /><el-option label="制作中" value="in_progress" /><el-option label="待审核" value="pending_review" /><el-option label="待修订" value="revision" /><el-option label="已完成" value="completed" /></el-select>
+          <el-select v-model="query.taskStatus" class="sg-select" placeholder="全部状态" aria-label="按任务状态筛选" @change="submitFilters"><el-option label="全部状态" value="" /><el-option label="待开工" value="not_started" /><el-option label="目录准备中" value="preparing" /><el-option label="制作中" value="in_progress" /><el-option label="待审核" value="pending_review" /><el-option label="待修订" value="revision" /><el-option label="已完成" value="completed" /></el-select>
         </el-form-item>
         <el-form-item class="task-filter-item" label="优先级" prop="priority">
           <el-select v-model="query.priority" class="sg-select" placeholder="全部优先级" aria-label="按优先级筛选" @change="submitFilters"><el-option label="全部优先级" value="" /><el-option label="紧急" value="urgent" /><el-option label="高" value="high" /><el-option label="普通" value="normal" /><el-option label="低" value="low" /></el-select>
@@ -322,13 +342,14 @@ onBeforeUnmount(() => {
         <el-form-item class="task-filter-actions"><el-button type="primary" :loading="loading" @click="submitFilters">查询</el-button><el-button :disabled="loading" @click="resetFilters">重置</el-button></el-form-item>
       </el-form>
 
+      <el-alert v-if="pollingError" :title="pollingError" type="warning" show-icon :closable="false" />
       <ProjectStatePanel
         v-if="errorState"
         compact
         :title="errorState.title"
         :message="errorState.message"
         :retryable="errorState.retryable"
-        @retry="loadTasks"
+        @retry="loadTasks()"
       />
       <el-card v-else-if="loading && !tasks.length" class="task-loading" shadow="never" aria-busy="true"><el-skeleton animated :rows="5" /></el-card>
       <el-empty v-else-if="!tasks.length" class="task-empty" :description="total ? '当前页没有任务' : '当前筛选暂无任务'"><p>任务由项目管理人在镜头或资产制作分项中分配。</p></el-empty>
@@ -339,8 +360,8 @@ onBeforeUnmount(() => {
           </el-tag>
           <span class="task-row__main">
             <span class="task-row__heading"><strong>{{ item.taskName }}</strong><el-tag
-                :type="tagTypeFromTone(taskStatusMeta(item.taskStatus).tone)" size="small" effect="dark"
-                round>{{ taskStatusMeta(item.taskStatus).label }}</el-tag></span>
+                :type="tagTypeFromTone(taskStatusMeta(item.taskStatus, item.taskKind).tone)" size="small" effect="dark"
+                round>{{ taskStatusMeta(item.taskStatus, item.taskKind).label }}</el-tag></span>
             <small>{{ item.project.projectCode }} · {{ item.project.projectName }} / {{
                 item.target.targetName
               }}</small>

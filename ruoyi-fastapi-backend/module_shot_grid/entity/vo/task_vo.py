@@ -1,7 +1,7 @@
 from datetime import date, datetime
 from typing import Literal
 
-from pydantic import ConfigDict, Field, field_validator, model_validator
+from pydantic import ConfigDict, Field, StrictBool, field_validator, model_validator
 
 from module_shot_grid.entity.vo.common_vo import (
     ShotGridApiModel,
@@ -171,9 +171,15 @@ class ShotGridAssetItemTaskBatchAssignResultModel(ShotGridApiModel):
 
 
 class ShotGridTaskStartModel(ShotGridLockVersionModel):
-    """开始任务请求。"""
+    """管理人员针对镜头或资产制作分项确认开工。"""
 
     model_config = ConfigDict(extra='forbid')
+
+    shot_lock_version: int | None = Field(default=None, ge=0)
+    assets_confirmed: StrictBool = False
+    asset_lock_version: int | None = Field(default=None, ge=0)
+    asset_item_lock_version: int | None = Field(default=None, ge=0)
+    start_confirmed: StrictBool = False
 
 
 class ShotGridTaskProjectSummaryModel(ShotGridApiModel):

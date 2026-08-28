@@ -2,11 +2,11 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { ArrowLeft, Edit, Refresh, VideoPlay } from '@element-plus/icons-vue'
+import { ArrowLeft, Edit, Refresh } from '@element-plus/icons-vue'
 
 import { assertPositiveId } from '@/api/shot-grid/projects'
 import { getTaskIssues } from '@/api/shot-grid/reviews'
-import { getTaskDetail, startTask } from '@/api/shot-grid/tasks'
+import { getTaskDetail } from '@/api/shot-grid/tasks'
 import VersionWorkspace from '@/components/version/VersionWorkspace.vue'
 import { useSessionStore } from '@/store/modules/session'
 import { tagTypeFromTone } from '@/utils/tag'
@@ -24,6 +24,8 @@ import {
   taskVersionStatusMeta
 } from '@/views/task/taskPresentation'
 
+const WAITING_START_POLL_INTERVAL_MS = 5000
+const STATUS_POLL_MAX_FAILURES = 3
 const PREPARATION_POLL_INTERVAL_MS = 1500
 const PREPARATION_POLL_MAX_ATTEMPTS = 80
 
@@ -38,11 +40,10 @@ const actionError = ref(null)
 const showEdit = ref(false)
 const editContext = ref(null)
 const routeContext = ref(null)
-const startingOperation = ref(null)
 let controller = null
-let preparationController = null
-let preparationTimer = null
-let preparationGeneration = 0
+let statusController = null
+let statusTimer = null
+let statusGeneration = 0
 let loadGeneration = 0
 let operationGeneration = 0
 let disposed = false
@@ -62,8 +63,13 @@ const canEdit = computed(() => (
   allowedActions.value.has('task.edit') &&
   hasPermission('shotgrid:task:edit')
 ))
-const canStart = computed(() => allowedActions.value.has('task.start') && hasPermission('shotgrid:task:start'))
 const isShotTask = computed(() => task.value?.taskKind === 'shot_video')
+const isWaitingForStart = computed(() => task.value?.taskStatus === 'not_started')
+const shouldPollTaskState = computed(() => (
+  !['completed', 'archived'].includes(task.value?.project?.projectStatus) &&
+  task.value?.target?.lifecycleStatus === 'active' &&
+  (isWaitingForStart.value || task.value?.taskStatus === 'preparing')
+))
 const shotProduction = computed(() => isShotTask.value ? task.value?.shotProduction : null)
 const versionProductionDescription = computed(() => {
   if (isShotTask.value) {
@@ -80,7 +86,6 @@ const hasAdditionalShotRequirements = computed(() => {
 const assetTargetIncomplete = computed(() => (
   task.value?.taskKind === 'asset_image' && !String(task.value?.target?.productionItem || '').trim()
 ))
-const isStarting = computed(() => isCurrentRouteOperation(startingOperation.value))
 const targetRoute = computed(() => {
   if (!task.value?.project?.projectId || !task.value?.target) return null
   if (task.value.target.targetType === 'shot' && task.value.target.shotId) {
@@ -97,21 +102,21 @@ function nextOperationGeneration() {
   return operationGeneration
 }
 
-function stopPreparationPolling() {
-  preparationGeneration += 1
-  if (preparationTimer !== null) {
-    clearTimeout(preparationTimer)
-    preparationTimer = null
+function stopTaskStatusPolling() {
+  statusGeneration += 1
+  if (statusTimer !== null) {
+    clearTimeout(statusTimer)
+    statusTimer = null
   }
-  preparationController?.abort()
-  preparationController = null
+  statusController?.abort()
+  statusController = null
 }
 
-function isCurrentPreparationContext(context, generation) {
+function isCurrentStatusContext(context, generation) {
   return Boolean(
     !disposed &&
     context &&
-    preparationGeneration === generation &&
+    statusGeneration === generation &&
     routeContext.value === context &&
     taskId.value === context.taskId
   )
@@ -125,65 +130,70 @@ function preparationTimeoutState() {
   }
 }
 
-function schedulePreparationPoll(context, generation, attempt) {
-  if (
-    !isCurrentPreparationContext(context, generation) ||
-    task.value?.taskStatus !== 'preparing'
-  ) return
-  if (attempt >= PREPARATION_POLL_MAX_ATTEMPTS) {
+function scheduleTaskStatusPoll(context, generation, attempt, failures = 0) {
+  if (!isCurrentStatusContext(context, generation) || !shouldPollTaskState.value) return
+  if (failures >= STATUS_POLL_MAX_FAILURES) {
+    stopTaskStatusPolling()
+    actionError.value = {
+      title: '任务状态更新失败',
+      message: '连续查询失败，已暂停自动刷新。请检查网络后点击刷新查看最新状态。',
+      retryable: true
+    }
+    return
+  }
+  if (!isWaitingForStart.value && attempt >= PREPARATION_POLL_MAX_ATTEMPTS) {
+    stopTaskStatusPolling()
     actionError.value = preparationTimeoutState()
     return
   }
-  preparationTimer = setTimeout(() => {
-    preparationTimer = null
-    void pollPreparationStatus(context, generation, attempt + 1)
-  }, PREPARATION_POLL_INTERVAL_MS)
+  const waiting = isWaitingForStart.value
+  statusTimer = setTimeout(() => {
+    statusTimer = null
+    void pollTaskStatus(context, generation, waiting ? 0 : attempt + 1, failures)
+  }, waiting ? WAITING_START_POLL_INTERVAL_MS : PREPARATION_POLL_INTERVAL_MS)
 }
 
-async function pollPreparationStatus(context, generation, attempt) {
-  if (!isCurrentPreparationContext(context, generation)) return
+async function pollTaskStatus(context, generation, attempt, failures) {
+  if (!isCurrentStatusContext(context, generation)) return
   const requestController = new AbortController()
-  preparationController = requestController
+  statusController = requestController
   try {
     const response = await getTaskDetail(context.taskId, { signal: requestController.signal })
-    if (!isCurrentPreparationContext(context, generation) || requestController.signal.aborted) return
+    if (!isCurrentStatusContext(context, generation) || requestController.signal.aborted) return
+    const previousStatus = task.value?.taskStatus
     task.value = response.data
-    if (response.data?.taskStatus === 'preparing') {
-      schedulePreparationPoll(context, generation, attempt)
+    if (shouldPollTaskState.value) {
+      scheduleTaskStatusPoll(context, generation, previousStatus === 'preparing' ? attempt : 0)
       return
     }
-    stopPreparationPolling()
+    stopTaskStatusPolling()
     actionError.value = null
     if (response.data?.taskStatus === 'in_progress') {
-      ElMessage.success(`制作目录已准备完成，可以${Number(response.data?.versionCount || 0) > 0 ? '提交修改成果' : '提交首版成果'}`)
+      ElMessage.success('制作目录已准备完成，可以' +
+        (Number(response.data?.versionCount || 0) > 0 ? '提交修改成果' : '提交首版成果'))
     }
   } catch (error) {
-    if (error?.code === 'ERR_CANCELED' || !isCurrentPreparationContext(context, generation)) return
-    schedulePreparationPoll(context, generation, attempt)
+    if (error?.code === 'ERR_CANCELED' || !isCurrentStatusContext(context, generation)) return
+    if ([401, 403, 404].includes(Number(error?.status || error?.httpStatus))) {
+      stopTaskStatusPolling()
+      actionError.value = { ...taskErrorState(error, '无法更新任务状态'), retryable: false }
+      return
+    }
+    scheduleTaskStatusPoll(context, generation, attempt, failures + 1)
   } finally {
-    if (preparationController === requestController) preparationController = null
+    if (statusController === requestController) statusController = null
   }
 }
 
-function startPreparationPolling(context = routeContext.value) {
-  stopPreparationPolling()
-  if (!context || task.value?.taskStatus !== 'preparing') return
-  const generation = preparationGeneration
-  schedulePreparationPoll(context, generation, 0)
+function startTaskStatusPolling(context = routeContext.value) {
+  stopTaskStatusPolling()
+  if (!context || !shouldPollTaskState.value) return
+  scheduleTaskStatusPoll(context, statusGeneration, 0)
 }
 
 function closeEditDialog() {
   showEdit.value = false
   editContext.value = null
-}
-
-function isCurrentRouteOperation(operation) {
-  return Boolean(
-    operation &&
-    routeContext.value &&
-    operation.taskId === taskId.value &&
-    operation.routeGeneration === routeContext.value.operationGeneration
-  )
 }
 
 function isActiveEdit(operationContext) {
@@ -200,7 +210,7 @@ function isActiveEdit(operationContext) {
 async function loadDetail() {
   const generation = ++loadGeneration
   controller?.abort()
-  stopPreparationPolling()
+  stopTaskStatusPolling()
   closeEditDialog()
   task.value = null
   openIssues.value = []
@@ -244,7 +254,7 @@ async function loadDetail() {
     if (!isCurrent()) return
     task.value = response.data
     openIssues.value = issueResponse.data || []
-    startPreparationPolling(activeContext)
+    startTaskStatusPolling(activeContext)
   } catch (error) {
     if (error?.code !== 'ERR_CANCELED' && isCurrent()) {
       errorState.value = taskErrorState(error, '任务详情加载失败')
@@ -255,45 +265,15 @@ async function loadDetail() {
 }
 
 function openEditDialog() {
-  if (!canEdit.value || !task.value || !routeContext.value || loading.value || isStarting.value) return
+  if (!canEdit.value || !task.value || !routeContext.value || loading.value) return
   editContext.value = Object.freeze({
+    // 编辑字段和锁版本必须来自同一次快照，不能被后台轮询替换。
+    task: Object.freeze({ ...task.value }),
     taskId: Number(task.value.taskId),
     routeGeneration: routeContext.value.operationGeneration,
     operationGeneration: nextOperationGeneration()
   })
   showEdit.value = true
-}
-
-async function beginTask() {
-  if (!canStart.value || !task.value || !routeContext.value || loading.value || isStarting.value) return
-  const operation = Object.freeze({
-    taskId: Number(task.value.taskId),
-    routeGeneration: routeContext.value.operationGeneration,
-    operationGeneration: nextOperationGeneration(),
-    lockVersion: Number(task.value.lockVersion)
-  })
-  startingOperation.value = operation
-  actionError.value = null
-  try {
-    const response = await startTask(operation.taskId, { lockVersion: operation.lockVersion })
-    if (!isCurrentRouteOperation(operation)) {
-      ElMessage.success('任务已开始，请返回原任务查看最新结果。')
-      return
-    }
-    task.value = response.data
-    startPreparationPolling(routeContext.value)
-    ElMessage.success(
-      response.data?.taskStatus === 'preparing'
-        ? '任务已开始，正在准备制作目录'
-        : '任务已进入制作中'
-    )
-  } catch (error) {
-    if (isCurrentRouteOperation(operation)) {
-      actionError.value = taskErrorState(error, '开始任务失败')
-    }
-  } finally {
-    if (startingOperation.value === operation) startingOperation.value = null
-  }
 }
 
 async function handleSaved(_result, operationContext) {
@@ -332,7 +312,7 @@ onBeforeUnmount(() => {
   loadGeneration += 1
   routeContext.value = null
   controller?.abort()
-  stopPreparationPolling()
+  stopTaskStatusPolling()
   closeEditDialog()
 })
 </script>
@@ -359,15 +339,14 @@ onBeforeUnmount(() => {
           <p class="sg-eyebrow">{{ task.project.projectCode }} · {{ taskKindMeta(task.taskKind).label }}</p>
           <div class="task-hero__title">
             <h2>{{ task.taskName }}</h2>
-            <el-tag :type="tagTypeFromTone(taskStatusMeta(task.taskStatus).tone)" size="small" effect="light" round>{{ taskStatusMeta(task.taskStatus).label }}</el-tag>
+            <el-tag :type="tagTypeFromTone(taskStatusMeta(task.taskStatus, task.taskKind).tone)" size="small" effect="light" round>{{ taskStatusMeta(task.taskStatus, task.taskKind).label }}</el-tag>
           </div>
           <p>{{ task.target.targetName }} · {{ task.project.projectName }}</p>
           <small>更新于 {{ formatTaskDateTime(task.updateTime) }}</small>
         </div>
         <div class="task-hero__actions">
-          <el-button :icon="Refresh" :loading="loading" :disabled="isStarting" @click="loadDetail">刷新</el-button>
-          <el-button v-if="canStart" type="primary" :icon="VideoPlay" :loading="isStarting" :disabled="loading" @click="beginTask">开始任务</el-button>
-          <el-button v-if="canEdit" :icon="Edit" :disabled="loading || isStarting" @click="openEditDialog">编辑任务</el-button>
+          <el-button :icon="Refresh" :loading="loading" @click="loadDetail">刷新</el-button>
+          <el-button v-if="canEdit" :icon="Edit" :disabled="loading" @click="openEditDialog">编辑任务</el-button>
         </div>
       </header>
 
@@ -378,6 +357,17 @@ onBeforeUnmount(() => {
         :message="actionError.message"
         :retryable="actionError.retryable"
         @retry="loadDetail"
+      />
+
+      <el-alert
+        v-if="isWaitingForStart"
+        title="等待管理人员确认开工"
+        :description="isShotTask
+          ? '任务已分配。管理人员确认所需资产齐备并开始任务后，制作目录就绪即可提交版本。'
+          : '任务已分配。管理人员确认该制作分项的开工条件齐备并开始任务后，制作目录就绪即可提交版本；同一资产的其他分项独立确认。'"
+        type="info"
+        :closable="false"
+        show-icon
       />
 
       <ProjectStatePanel
@@ -462,7 +452,7 @@ onBeforeUnmount(() => {
 
       <TaskEditDialog
         v-if="showEdit && editContext"
-        :task="task"
+        :task="editContext.task"
         :operation-generation="editContext.operationGeneration"
         @close="closeEditDialog"
         @saved="handleSaved"

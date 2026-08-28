@@ -16,6 +16,7 @@ from module_shot_grid.entity.do.asset_do import ShotGridAsset, ShotGridAssetItem
 from module_shot_grid.entity.do.task_do import ShotGridTask
 from module_shot_grid.entity.vo.access_vo import ShotGridProjectAccessModel
 from module_shot_grid.entity.vo.asset_crud_vo import (
+    ASSET_ITEM_STATUSES,
     ShotGridAssetArchiveModel,
     ShotGridAssetBatchDeleteModel,
     ShotGridAssetBatchDeleteResultModel,
@@ -85,6 +86,7 @@ class ShotGridAssetCrudService:
             row['directory_status'] = cls._directory_status(directory_operations.get(asset_id))
             row['assignee_user_ids'] = assignees.get(asset_id, [])
             row['thumbnail'] = thumbnails.get(asset_id)
+            row['item_status_counts'] = {status: int(row[f'{status}_count']) for status in ASSET_ITEM_STATUSES}
             row['allowed_actions'] = cls._asset_allowed_actions(
                 current_user,
                 access,
@@ -94,6 +96,7 @@ class ShotGridAssetCrudService:
                 lifecycle_status=row['lifecycle_status'],
                 has_archive_blockers=bool(row['usage_shot_count']) or asset_id in delete_blockers,
                 can_assign_items=bool(row['item_count']) and asset_id not in assignment_blockers,
+                can_start_items=bool(row['startable_item_count']),
             )
             models.append(ShotGridAssetListItemModel.model_validate(row))
         return PageModel[ShotGridAssetListItemModel](
@@ -737,6 +740,7 @@ class ShotGridAssetCrudService:
             lifecycleStatus=asset.lifecycle_status,
             assetStatus=cls._aggregate_asset_status(active_statuses),
             itemCount=len(active_statuses),
+            itemStatusCounts={status: active_statuses.count(status) for status in ASSET_ITEM_STATUSES},
             usageShotCount=usage_count,
             assigneeUserIds=assignees,
             thumbnail=cls._representative_thumbnail(items),
@@ -750,6 +754,7 @@ class ShotGridAssetCrudService:
                 has_archive_blockers=has_archive_blockers,
                 can_assign_items=bool(active_statuses)
                 and all('task.assign' in item.allowed_actions for item in items if item.lifecycle_status == 'active'),
+                can_start_items=any('task.start' in item.allowed_actions for item in items),
             ),
             directoryStatus=cls._directory_status(operation.get(asset.asset_id)),
             storageDirName=asset.storage_dir_name,
@@ -835,6 +840,7 @@ class ShotGridAssetCrudService:
                         has_versions=bool(versions),
                         task_status=row['task_status'],
                         has_uncommitted_submission=bool(row.get('has_uncommitted_submission')),
+                        assignee_valid=bool(row.get('assignee_valid')),
                     ),
                     lockVersion=row['lock_version'],
                     createTime=row['create_time'],
@@ -952,6 +958,7 @@ class ShotGridAssetCrudService:
         lifecycle_status: str,
         has_archive_blockers: bool,
         can_assign_items: bool,
+        can_start_items: bool = False,
     ) -> list[str]:
         if (
             not cls._can_manage_assets(
@@ -974,6 +981,8 @@ class ShotGridAssetCrudService:
             actions.append('assetItem.add')
         if can_assign_items and cls._has_permission(current_user, 'shotgrid:task:assign'):
             actions.append('task.assign')
+        if can_start_items and cls._has_permission(current_user, 'shotgrid:task:start'):
+            actions.append('task.start')
         return actions
 
     @classmethod
@@ -991,6 +1000,7 @@ class ShotGridAssetCrudService:
         has_versions: bool,
         task_status: str | None,
         has_uncommitted_submission: bool,
+        assignee_valid: bool = False,
     ) -> list[str]:
         if (
             not cls._can_manage_assets(
@@ -1031,6 +1041,13 @@ class ShotGridAssetCrudService:
             and cls._has_permission(current_user, 'shotgrid:task:assign')
         ):
             actions.append('task.assign')
+        if (
+            task_status == 'not_started'
+            and assignee_valid
+            and is_asset_production_item_ready(production_item)
+            and cls._has_permission(current_user, 'shotgrid:task:start')
+        ):
+            actions.append('task.start')
         return actions
 
     @staticmethod
@@ -1237,6 +1254,7 @@ class ShotGridAssetCrudService:
             return 'unassigned'
         mapping = {
             'not_started': 'not_started',
+            'preparing': 'preparing',
             'in_progress': 'in_progress',
             'pending_review': 'reviewing',
             'revision': 'revision',
@@ -1251,7 +1269,7 @@ class ShotGridAssetCrudService:
             return 'unassigned'
         if all(status == 'completed' for status in item_statuses):
             return 'completed'
-        for status in ('revision', 'reviewing', 'in_progress', 'unassigned', 'not_started'):
+        for status in ('revision', 'reviewing', 'in_progress', 'preparing', 'unassigned', 'not_started'):
             if status in item_statuses:
                 return status
         return 'not_started'

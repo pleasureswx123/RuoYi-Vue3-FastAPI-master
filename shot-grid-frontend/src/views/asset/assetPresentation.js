@@ -6,7 +6,7 @@ const TYPE_META = {
 
 const STATUS_META = {
   unassigned: { label: '待分配', tone: 'warning' },
-  not_started: { label: '未开始', tone: 'muted' },
+  not_started: { label: '待开工', tone: 'muted' },
   preparing: { label: '目录准备中', tone: 'info' },
   in_progress: { label: '制作中', tone: 'primary' },
   reviewing: { label: '待审核', tone: 'purple' },
@@ -27,6 +27,15 @@ export function assetTypeMeta(assetType) {
 
 export function assetStatusMeta(status) {
   return STATUS_META[status] || { label: '未知资产状态', tone: 'muted' }
+}
+
+export function assetItemStatusEntries(counts = {}) {
+  return ['unassigned', 'not_started', 'preparing', 'in_progress', 'reviewing', 'revision', 'completed']
+    .map(status => ({
+      status,
+      label: assetStatusMeta(status).label,
+      count: Math.max(0, Number(counts?.[status]) || 0)
+    }))
 }
 
 export function assetDirectoryStatusMeta(status) {

@@ -1,6 +1,6 @@
 const STATUS_META = {
   unassigned: { label: '待分配', tone: 'warning' },
-  not_started: { label: '未开始', tone: 'muted' },
+  not_started: { label: '待开工', tone: 'muted' },
   preparing: { label: '目录准备中', tone: 'info' },
   in_progress: { label: '制作中', tone: 'primary' },
   reviewing: { label: '待审核', tone: 'purple' },

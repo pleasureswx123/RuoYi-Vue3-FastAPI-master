@@ -10,7 +10,7 @@
 - 项目范围列表、详情、真实概览聚合、创建项目事务、存储初始化状态与项目成员管理；
 - 项目编辑/归档，以及集、场次、镜头、资产和资产制作分项的查询、创建、修改与业务归档；
 - 项目内镜头/资产任务委派候选安全选项、镜头与资产导入模板的鉴权二进制下载，以及完成/归档项目下集、场次、镜头、资产、资产制作分项和两类 Excel 导入写门禁；
-- 项目任务分页、跨项目“我的任务”、任务详情/编辑、镜头或资产制作分项首次分配/受控改派，以及负责人开始任务；
+- 项目任务分页、跨项目“我的任务”、任务详情/编辑、镜头或资产制作分项首次分配/受控改派，以及管理人分别确认镜头及资产制作分项开工；
 - 镜头和资产 `.xlsx` 的安全预检、Redis 短期 Token、选中行全事务提交和 PostgreSQL 耐久幂等结果；
 - 平台私有文件上传后的多候选版本暂存、逐文件临时业务引用、默认关闭的 NAS 版本发布 Worker、正式版本轮次/候选文件引用/`auto_single` 审核单事务，以及候选文件专用授权下载；
 - 任务版本、自动单版本审核单、跨版本修改问题、制作人逐条处理说明、审核人逐条确认、审核动作历史和 `approve/reject/defer` 状态闭环；
@@ -19,9 +19,9 @@
 - PostgreSQL Alembic 迁移链、初始化 SQL、菜单、权限按钮和字典种子；
 - 元数据、导航、项目权限、项目事务、两类真实样表解析、任务/版本/审核、目录状态/DAO/路径适配器/Worker/路由和内部 Scheduler 任务的针对性测试入口。
 
-当前批次仍不包含资产需求人工处理、`manual_batch` 人工批量审核单、真实 FFmpeg 媒体缩略图/代理/转码验收和完整系统 E2E；镜头与资产 v2 模板下载已经交付。独立业务前端已接入镜头和资产的真实列表多视图、详情、CRUD、任务分配及 Excel 预检/提交，并已接入跨项目“我的任务”工作台、任务详情/开始/编辑、多候选版本提交、刷新恢复、历史/详情、受保护下载和 `auto_single` 候选选择/问题/退回/通过闭环。项目管理和任务/版本子集已有隔离 PostgreSQL、Redis DB 15、真实平台账号与浏览器旅程；旧镜头/资产导入旅程基于 v1 预分配规则，不能作为当前 v2“导入后未分配且不建任务”的验收证据，两类 v2 模板/导入、首次委派唯一性和六阶段生产履历仍需重新验证。多候选旅程使用测试专用 UNC 到本机临时目录映射验证真实私有上传、Worker 复制、数据库提交和审核编排，不是真实 UNC/SMB/NAS 服务账号、共享 ACL 或 FFmpeg 验收。平台私有上传当前单文件上限仍为 100 MiB，`mov` 已加入上传白名单；版本服务按真实字节校验 JPEG/PNG 与 MP4/MOV 容器签名/品牌，但尚未探测 codec、视频轨、可解码性或执行转码。已交付接口通过平台权限、项目角色、资源归属、项目/任务/版本行锁、乐观锁、业务归档、文件引用和同事务审计约束，不能使用通用代码生成 CRUD 绕过状态机。任何子集旅程都不是完整系统 E2E 或生产就绪证明。
+当前批次仍不包含资产需求人工处理、`manual_batch` 人工批量审核单、真实 FFmpeg 媒体缩略图/代理/转码验收和完整系统 E2E；镜头与资产 v2 模板下载已经交付。独立业务前端已接入镜头和资产的真实列表多视图、详情、CRUD、任务分配及 Excel 预检/提交，并已接入跨项目“我的任务”工作台、任务详情/编辑/等待开工、多候选版本提交、刷新恢复、历史/详情、受保护下载和 `auto_single` 候选选择/问题/退回/通过闭环。项目管理和任务/版本子集已有隔离 PostgreSQL、Redis DB 15、真实平台账号与浏览器旅程；旧镜头/资产导入旅程基于 v1 预分配规则，不能作为当前 v2“导入后未分配且不建任务”的验收证据，两类 v2 模板/导入、首次委派唯一性和六阶段生产履历仍需重新验证。多候选旅程使用测试专用 UNC 到本机临时目录映射验证真实私有上传、Worker 复制、数据库提交和审核编排，不是真实 UNC/SMB/NAS 服务账号、共享 ACL 或 FFmpeg 验收。平台私有上传当前单文件上限仍为 100 MiB，`mov` 已加入上传白名单；版本服务按真实字节校验 JPEG/PNG 与 MP4/MOV 容器签名/品牌，但尚未探测 codec、视频轨、可解码性或执行转码。已交付接口通过平台权限、项目角色、资源归属、项目/任务/版本行锁、乐观锁、业务归档、文件引用和同事务审计约束，不能使用通用代码生成 CRUD 绕过状态机。任何子集旅程都不是完整系统 E2E 或生产就绪证明。
 
-资产类型、名称和完整目录身份在创建时一并冻结，但手工创建和 Excel 导入都不创建资产对象目录 Outbox；制作人开始任一资产制作分项任务时才锁定父资产、创建或复用共享目录操作，任务经 `preparing` 等待成功后进入 `in_progress`。普通 PUT 只修改描述、排序和备注；该 PUT 是三项非身份主数据的完整快照，省略描述或备注表示清空，省略排序表示归零。任何重命名、改类型或目录迁移都必须另建受控动作。制作分项在尚无版本时可补充或纠正主数据，已有正式版本后全部冻结；缺失制作分项只能作为未分配草稿保存或导入，首次分配、改派、批量分配、开始任务和资产图片版本提交均失败关闭。镜头号、集号和场次号也不提供普通改号。手工创建或 Excel 导入只创建镜头/资产制作分项，不接受制作人且不得创建任务；首次显式委派才创建唯一的 `not_started` 任务。正式版本事务按 `project → task/submission → version → auto_single review list → note` 锁序执行，避免项目元数据、改派、提交和审核并发穿透。
+资产类型、名称和完整目录身份在创建时一并冻结，但手工创建和 Excel 导入都不创建资产对象目录 Outbox；管理人确认某个资产制作分项开工时才锁定父资产、创建或复用共享目录操作，任务经 `preparing` 等待成功后进入 `in_progress`。普通 PUT 只修改描述、排序和备注；该 PUT 是三项非身份主数据的完整快照，省略描述或备注表示清空，省略排序表示归零。任何重命名、改类型或目录迁移都必须另建受控动作。制作分项在尚无版本时可补充或纠正主数据，已有正式版本后全部冻结；缺失制作分项只能作为未分配草稿保存或导入，首次分配、改派、批量分配、开始任务和资产图片版本提交均失败关闭。镜头号、集号和场次号也不提供普通改号。手工创建或 Excel 导入只创建镜头/资产制作分项，不接受制作人且不得创建任务；首次显式委派才创建唯一的 `not_started` 任务。正式版本事务按 `project → task/submission → version → auto_single review list → note` 锁序执行，避免项目元数据、改派、提交和审核并发穿透。
 
 NAS 目录 Worker 和版本发布 Worker 的代码路径已经建立，所有环境样例仍以 `SHOT_GRID_STORAGE_WORKER_ENABLED=false`、`SHOT_GRID_VERSION_WORKER_ENABLED=false` 安全关闭。Windows 运行节点可直接使用 UNC；公司 Linux 生产节点通过 `SHOT_GRID_NAS_SERVER_MOUNT_MAP` 只允许 `192.168.10.64`，并把该服务器下任意共享动态解析到 autofs/CIFS 命名空间；`SHOT_GRID_NAS_UNC_MOUNT_MAP` 仍保留为精确根兼容能力。每次探测、目录操作和版本发布前都要确认实际共享挂载根位于 `cifs/smb3`，防止 autofs 或 NAS 失效后误写本地磁盘。本地测试只有显式 `allow_local_root=True` 才能使用临时目录。启用前仍必须以正式 NAS 服务账号完成共享 ACL、真实读写删除、目录创建、版本发布和失败恢复验收；源码、Mock、迁移或 Scheduler 注册不能替代该门禁。
 
@@ -59,7 +59,9 @@ GET /shot-grid/imports/assets/template
 - 当前服务资源为 `resources/templates/shot-v2.xlsx` 与 `resources/templates/asset-v2.xlsx`，附件文件名分别为 `镜头导入模板-shot-v2.xlsx`、`资产导入模板-asset-v2.xlsx`。冻结 SHA-256 分别为 `B6F24078CA56295E9E6CCE50BB3455AF198DFFFE5C08F8D85605A68C09439ECE`、`B551AC1D1D5EDC20A025B0ED90157412E1365006108816F08CB2C59AE4301696`；镜头主数据区固定 A:O 15 列，资产固定 A:F 6 列，均不含制作人。旧 `shot-v1.xlsx`、`asset-v1.xlsx` 仅保留为历史资源，不再由服务下载。
 - 集、场次、镜头、资产和资产制作分项的创建、修改、归档在锁内读取项目状态；镜头和资产导入 preview 普通读取状态并拒绝，commit 再以 `FOR UPDATE` 锁定项目重检。`completed` 或 `archived` 均返回 HTTP 409 / `SG_INVALID_STATE_TRANSITION`。项目 `completed` 时详情只保留合法的 `project.archive`，`archived` 时无写动作，镜头、资产和制作分项 `allowedActions` 同步为空。
 - 镜头制作字段只允许在未分配或唯一任务仍为 `not_started` 时编辑；任务进入 `preparing/in_progress/pending_review/revision/completed` 后详情不再返回 `shot.edit`，列表也隐藏编辑入口，直接调用普通更新接口返回 HTTP 409 / `SG_SHOT_EDIT_PRODUCTION_STARTED`。负责人改派仍是独立受控动作，不能借改派覆盖镜头制作字段。
-- 资产及制作分项 `allowedActions` 由后端结合平台权限、项目管理人/全项目范围、项目状态、`storageStatus=ready`、资源生命周期、版本、任务状态和未提交版本发布记录计算：资产可返回 `asset.edit`、`assetItem.add`、`asset.archive`，并在全部活动分项均可分配时聚合返回 `task.assign`；制作分项可返回 `assetItem.edit`、`assetItem.archive`、`assetItem.delete`、`task.assign`，前端不能自行合成。资产删除允许级联处理尚未开始的任务和活动制作分项，但仍被镜头使用、已有版本或任一任务已开始时必须拒绝；分项仅在未分配或任务仍为 `not_started` 且尚无版本时允许普通编辑，任务开始后直接调用更新接口返回 HTTP 409 / `SG_ASSET_ITEM_PRODUCTION_STARTED`。存在活动任务时不允许单独归档，任务已完成或存在非 `committed` 提交时不允许分配/改派。
+- 资产及制作分项 `allowedActions` 由后端结合平台权限、项目管理人/全项目范围、项目状态、`storageStatus=ready`、资源生命周期、版本、任务状态和未提交版本发布记录计算：资产可返回 `asset.edit`、`assetItem.add`、`asset.archive`，并在全部活动分项均可分配时聚合返回 `task.assign`；制作分项可返回 `assetItem.edit`、`assetItem.archive`、`assetItem.delete`、`task.assign`、`task.start`，前端不能自行合成。资产删除允许级联处理尚未开始的任务和活动制作分项，但仍被镜头使用、已有版本或任一任务已开始时必须拒绝；分项仅在未分配或任务仍为 `not_started` 且尚无版本时允许普通编辑，任务开始后直接调用更新接口返回 HTTP 409 / `SG_ASSET_ITEM_PRODUCTION_STARTED`。存在活动任务时不允许单独归档，任务已完成或存在非 `committed` 提交时不允许分配/改派。
+- 资产列表与详情返回 `itemStatusCounts`，固定包含 `unassigned/not_started/preparing/in_progress/reviewing/revision/completed` 七个非负整数键，仅统计活动且未删除分项。父级状态按 `revision → reviewing → in_progress → preparing → unassigned → not_started` 聚合；至少有一个活动分项且全部完成才为 `completed`，无活动分项为 `unassigned`。父级 `task.start` 仅表示可进入分项选择，至少存在一个实际可开工分项才返回；真正 start 必须对选中分项任务提交，不能整资产开工。
+- 目录成功回写必须先锁项目，再锁目录操作及任务/存储行，与开工事务使用同一项目协调锁；等待后仍复核 owner + attempt fencing。该锁仅在 NAS I/O 结束后的短事务持有，保证共享目录完成与新分项开工交错时不会遗漏已开工分项。
 - 制作分项独立删除使用项目范围 `/asset-items/{assetItemId}/delete`：必须未开始制作、无版本及非 `committed` 提交，携带删除原因和分项锁版本；逻辑删除目标及未开始任务并在同事务记录审计，不删除父资产、其他分项或 NAS 文件。已有历史的分项继续使用合法归档。
 - 制作分项缩略图只绑定该分项当前最新版本的首个 `thumbnail` 文件；最新版本无缩略图时返回空，不回退旧版本。父资产代表图按活动分项 `(sort_order, asset_item_id)` 升序选择第一张可用缩略图。下载 URL 仍为受保护的 `/shot-grid/versions/{versionId}/files/{fileId}/download`，不暴露绝对存储路径。
 - 该终态门禁目前覆盖项目自身、集、场次、镜头、资产、资产制作分项及两类 Excel 导入；成员、任务、版本、审核、文件和目录操作等其余写接口尚未统一完成相同治理，不能从本批结论外推。
@@ -83,10 +85,10 @@ POST /shot-grid/tasks/{taskId}/start
 - 手工创建和 Excel 导入只创建未分配业务对象，不创建空负责人任务；首次显式委派必须提供非空 `assigneeUserId` 并创建唯一 `not_started` 任务，后续改派更新同一任务，不得创建第二条正式任务。
 - 镜头批量分配最多接收 200 个 `shotId/taskLockVersion`，按镜头 ID 固定顺序加锁，并在一个事务中复用上述首次分配/改派规则；任一项失败时整批回滚。
 - 资产列表批量分配最多接收 200 个 `assetItemId/taskLockVersion`，选择的父资产会展开为全部活动制作分项；批量删除最多接收 200 个 `assetId/lockVersion`。两者均按稳定 ID 顺序加锁并在单事务执行，任一目标状态或锁版本冲突时整批回滚。
-- `start` 请求必须携带 `lockVersion`，且只允许任务当前委派的活动 `creator` 本人执行。后端在行锁内确认当前用户就是 `assignee_user_id`、项目成员仍为 `active + creator` 且平台账号有效；`director`、管理员、超级管理员和 `shotgrid:project:all` 均不得代开始。资产任务开始前还会锁定制作分项并校验名称完整性，防止历史异常任务进入制作流程。
-- 独立业务前端 `/workbench` 以 `GET /shot-grid/tasks/mine` 为真实数据源，`/tasks/:taskId` 读取真实详情并调用开始/编辑接口；写按钮必须同时满足平台权限和详情 `allowedActions`。任务编辑仅向项目管理人开放且只允许 `not_started`，进入 `preparing/in_progress/pending_review/revision/completed` 后不再返回 `task.edit`，更新接口在行锁内同样以 HTTP 409 / `SG_INVALID_STATE_TRANSITION` 拒绝；开始任务只向当前活动负责人本人开放，前端显隐不能替代后端授权和状态门禁。
+- `start` 统一要求具备 `shotgrid:task:start` 的项目 `director` 或 `has_all_scope` 管理人员。镜头以 `{ lockVersion, shotLockVersion, assetsConfirmed: true }` 确认线下资产齐备；资产按分项以 `{ lockVersion, assetLockVersion, assetItemLockVersion, startConfirmed: true }` 确认开工条件。锁内复核管理范围、全部版本、生命周期、待开工状态、分项名称和有效负责人；人工确认、状态及目录操作同事务审计。只递增任务版本，不改父资产/分项元数据版本；制作人不得自行开工。
+- 独立业务前端 `/workbench` 以 `GET /shot-grid/tasks/mine` 为真实数据源，`/tasks/:taskId` 读取真实详情并调用编辑接口，等待管理端开工；写按钮必须同时满足平台权限和详情 `allowedActions`。任务编辑仅向项目管理人开放且只允许 `not_started`，进入 `preparing/in_progress/pending_review/revision/completed` 后不再返回 `task.edit`，更新接口在行锁内同样以 HTTP 409 / `SG_INVALID_STATE_TRANSITION` 拒绝；镜头开始入口在镜头管理列表，任务详情只等待管理人放行；资产开始入口在资产列表与详情，由管理人员选择待开工分项逐个确认，前端显隐不能替代后端授权和状态门禁。
 - 平台不执行图片或视频制作；任务负责人在线下制作后，按“本地校验 → 只读预检 → 平台私有上传 → 创建版本提交”进入版本发布链。
-- 制作履历按“创建/导入 → 委派 → 制作 → 提交版本 → 审核 → 完成”六阶段投影。开始任务进入 `in_progress`；不可变版本正式提交后进入 `pending_review`；通过后版本为 `final` 且任务为 `completed`；退回后任务为 `revision`，制作人提交新版本继续审核循环。历史数据若只有任务创建时间而没有独立委派审计，只能标记为 `inferred`，不得把 `task.create_time` 伪装成已确认的委派事件。
+- 制作履历按“创建/导入 → 委派 → 制作 → 提交版本 → 审核 → 完成”六阶段投影。开工时目录未就绪则进入 `preparing`，目录就绪后进入 `in_progress`；已有成功目录可直接进入 `in_progress`；不可变版本正式提交后进入 `pending_review`；通过后版本为 `final` 且任务为 `completed`；退回后任务为 `revision`，制作人提交新版本继续审核循环。历史数据若只有任务创建时间而没有独立委派审计，只能标记为 `inferred`，不得把 `task.create_time` 伪装成已确认的委派事件。
 
 版本与审核主要接口：
 
@@ -269,7 +271,7 @@ controller → service → dao → entity/do
 - `20260810_04` 是无版本历史库的采用/修复 revision，会把时间精度、审计人默认值、序场次/资产制作分项/主文件约束和集场次编号唯一性收敛为仓库从 01 起就声明的当前契约。时间精度收敛到秒会舍弃历史秒以下精度，升级前必须保留可恢复备份。
 - `20260810_05` 为 NAS Worker 补充存储操作执行状态一致性约束和两个非唯一的项目维度查询索引。升级会先检查历史 `sg_storage_operation`；若状态、租约、重试时间或完成时间互相矛盾，会以 `SG_STORAGE_OPERATION_EXECUTION_STATE_CONFLICT` 整体失败，必须先治理冲突数据再重试，迁移不会自动改写业务状态。两个新索引不引入数据唯一性冲突；降级会恢复 04 版 `target_relative_path` 列注释，并精确移除 05 新增的一个约束和两个索引，不回写或删除存储操作数据。
 - `20260811_06` 在任何 DDL 前检查：同一 `source_file_id` 不得被多条提交占用；每个任务在 `pending/publishing/published/committing/failed` 中最多一条未解决提交；提交状态、租约与错误字段组合必须一致。冲突分别以 `SG_VERSION_FILE_ALREADY_BOUND`、`SG_VERSION_SUBMISSION_ACTIVE` 或 `SG_VERSION_SUBMISSION_EXECUTION_STATE_CONFLICT` 整体失败，迁移不猜测修复业务数据。通过后安装“我的任务”索引、源文件唯一索引、包含 `failed` 的未解决提交部分唯一索引、提交执行/错误状态约束，以及审核动作幂等键、SHA-256 请求哈希、首次成功响应快照和唯一约束。downgrade 只移除 06 对象并恢复 05 的活动提交索引语义，不回写业务数据。
-- `20260812_07` 增加媒体派生任务表；`20260812_08` 至 `20260825_19` 依次补齐 NAS 管理、镜头号治理、跨版本问题、受管角色、延迟目录、审核草稿和项目永久删除；`20260826_20` 增加版本轮次内多候选文件、候选级媒体派生和审核候选选择历史，并把既有版本回填为候选 01；`20260826_21` 增加最终版本 NAS 交付；`20260826_22` 自动选择并回填单候选版本。历史 NAS 文件不改名。
+- `20260812_07` 增加媒体派生任务表；`20260812_08` 至 `20260825_19` 依次补齐 NAS 管理、镜头号治理、跨版本问题、受管角色、延迟目录、审核草稿和项目永久删除；`20260826_20` 增加版本轮次内多候选文件、候选级媒体派生和审核候选选择历史，并把既有版本回填为候选 01；`20260826_21` 增加最终版本 NAS 交付；`20260826_22` 自动选择并回填单候选版本；当前 head `20260827_23` 仅将标准开工菜单更名为“开始任务”，不改任务状态和角色授权。上线需由平台管理员显式为 `shotgrid_admin` 配置 `shotgrid:task:start` 并刷新权限缓存/会话；不自动扩大角色授权，制作人员即使仍有此权限也不能自行开工。历史 NAS 文件不改名。
 - 04 在任何 `ALTER` 或时间精度收敛前先预检历史数据；若存在序场次命名不一致、资产制作分项名称/键不成对、非审核媒体被标为主文件，或未删除的集号/场次号（含归档行）重复，会以稳定的 `SG_SHOT_GRID_REPAIR_*` PostgreSQL 异常整体回滚。必须先治理冲突数据再重试，迁移不会猜测或静默改写业务数据。
 - 04 的 downgrade 只回退 Alembic 版本号，不把数据库重新污染为从未被正式 revision 声明的旧弱结构，也不能恢复已舍弃的秒以下精度；灾难恢复应使用升级前备份。
 - 04 只修复有业务语义的差异；`selection_hash`、`result_summary`、成员生命周期字段的物理列顺序，以及 PostgreSQL 对等价 `CHECK`/部分索引的 cast 文本差异，不通过重建表处理。

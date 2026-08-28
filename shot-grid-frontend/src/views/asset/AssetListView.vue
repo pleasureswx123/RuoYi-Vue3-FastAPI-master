@@ -2,10 +2,11 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Box, Collection, Delete, Edit, Grid, List, Plus, Refresh, RefreshLeft, Search, Upload } from '@element-plus/icons-vue'
+import { Box, Collection, Delete, Edit, Grid, List, Plus, Refresh, RefreshLeft, Search, Upload, VideoPlay } from '@element-plus/icons-vue'
 
 import { archiveAsset, batchAssignAssetItemTasks, batchDeleteAssets, getAssetDetail, getAssetPage, listAssetAssignees } from '@/api/shot-grid/assets'
 import { assertPositiveId, getProjectDetail, getProjectPage } from '@/api/shot-grid/projects'
+import { useTaskStatePolling } from '@/composables/useTaskStatePolling'
 import { useSessionStore } from '@/store/modules/session'
 import { tagTypeFromTone } from '@/utils/tag'
 import ProjectStatePanel from '@/views/project/components/ProjectStatePanel.vue'
@@ -14,7 +15,7 @@ import AssetImportDialog from '@/views/asset/components/AssetImportDialog.vue'
 import AssetRequirementDialog from '@/views/asset/components/AssetRequirementDialog.vue'
 import AssetDetailView from '@/views/asset/AssetDetailView.vue'
 import ProtectedAssetThumbnail from '@/views/asset/components/ProtectedAssetThumbnail.vue'
-import { assetAssigneeSummary, assetDirectoryStatusMeta, assetErrorState, assetStatusMeta, assetStatusTagClass, assetTypeMeta, memberLabel, memberUserName, resolveAssetThumbnail } from '@/views/asset/assetPresentation'
+import { assetAssigneeSummary, assetDirectoryStatusMeta, assetErrorState, assetItemStatusEntries, assetStatusMeta, assetStatusTagClass, assetTypeMeta, memberLabel, memberUserName, resolveAssetThumbnail } from '@/views/asset/assetPresentation'
 import { projectRoleMeta, storageMeta } from '@/views/project/projectPresentation'
 
 const route = useRoute()
@@ -50,6 +51,7 @@ const detailAssetId = ref(null)
 const createContext = ref(null)
 const importContext = ref(null)
 const assetFilterForm = ref(null)
+const appliedAssetQuery = ref('')
 const query = reactive({
   keyword: '',
   assetType: '',
@@ -120,6 +122,14 @@ const selectableAssets = computed(() => assets.value.filter(asset => canSelectAs
 const allSelectableSelected = computed(() => Boolean(selectableAssets.value.length) && selectableAssets.value.every(asset => selectedAssetIds.value.has(Number(asset.assetId))))
 const canDeleteSelection = computed(() => Boolean(selectedAssets.value.length) && selectedAssets.value.every(asset => canDeleteAsset(asset)))
 
+function itemStatusEntries(asset) {
+  return assetItemStatusEntries(asset?.itemStatusCounts).filter(entry => entry.count > 0)
+}
+
+function canOpenItemStart(asset) {
+  return hasPermission('shotgrid:task:start') && (asset?.allowedActions || []).includes('task.start')
+}
+
 function canEditAsset(asset) {
   return canEdit.value && (asset?.allowedActions || []).includes('asset.edit')
 }
@@ -134,6 +144,23 @@ function canAssignAsset(asset) {
 
 function canSelectAsset(asset) {
   return canAssignAsset(asset) || canDeleteAsset(asset)
+}
+
+function assetQueryParams() {
+  return {
+    keyword: query.keyword.trim() || undefined,
+    assetType: query.assetType || undefined,
+    assetStatus: query.assetStatus || undefined,
+    assigneeUserId: query.assigneeUserId || undefined,
+    pageNum: query.pageNum,
+    pageSize: query.pageSize,
+    orderByColumn: query.orderByColumn,
+    isAsc: query.isAsc
+  }
+}
+
+function currentAssetQueryKey() {
+  return JSON.stringify(assetQueryParams())
 }
 
 async function fetchAllPages(loader, baseParams, signal) {
@@ -212,30 +239,29 @@ async function loadProjectContext() {
   }
 }
 
-async function loadAssets(existingController = null) {
+async function loadAssets(existingController = null, background = false) {
   const projectId = currentProjectId.value
   if (!projectId) return
   if (!existingController) assetController?.abort()
   const controller = existingController || new AbortController()
   assetController = controller
-  assetsLoading.value = true
-  assetsError.value = null
+  const params = background ? JSON.parse(appliedAssetQuery.value || '{}') : assetQueryParams()
+  if (!background) {
+    assetsLoading.value = true
+    assetsError.value = null
+    appliedAssetQuery.value = JSON.stringify(params)
+  }
   try {
-    const response = await getAssetPage(projectId, {
-      keyword: query.keyword.trim() || undefined,
-      assetType: query.assetType || undefined,
-      assetStatus: query.assetStatus || undefined,
-      assigneeUserId: query.assigneeUserId || undefined,
-      pageNum: query.pageNum,
-      pageSize: query.pageSize,
-      orderByColumn: query.orderByColumn,
-      isAsc: query.isAsc
-    }, { signal: controller.signal })
+    const response = await getAssetPage(projectId, params, { signal: controller.signal })
     if (assetController !== controller || controller.signal.aborted || currentProjectId.value !== projectId) return
-    assets.value = Array.isArray(response.rows) ? response.rows : []
-    selectedAssetIds.value = new Set()
+    const loadedAssets = Array.isArray(response.rows) ? response.rows : []
+    assets.value = loadedAssets
+    selectedAssetIds.value = background
+      ? new Set(loadedAssets.filter(asset => selectedAssetIds.value.has(Number(asset.assetId)) && canSelectAsset(asset)).map(asset => Number(asset.assetId)))
+      : new Set()
     total.value = Number(response.total || 0)
   } catch (error) {
+    if (background) throw error
     if (error?.code !== 'ERR_CANCELED') {
       assets.value = []
       selectedAssetIds.value = new Set()
@@ -243,7 +269,7 @@ async function loadAssets(existingController = null) {
       assetsError.value = assetErrorState(error, '资产列表加载失败')
     }
   } finally {
-    if (assetController === controller) assetsLoading.value = false
+    if (!background && assetController === controller) assetsLoading.value = false
   }
 }
 
@@ -274,6 +300,11 @@ function openAsset(asset) {
   showDetail.value = true
 }
 
+function openAssetItemStart(asset) {
+  if (!canOpenItemStart(asset)) return
+  openAsset(asset)
+}
+
 function closeDetailDrawer() {
   showDetail.value = false
 }
@@ -295,6 +326,17 @@ async function handleDetailDeleted(operationContext) {
   closeDetailDrawer()
   await loadAssets()
 }
+
+const { pollingError } = useTaskStatePolling({
+  getDelay: () => {
+    if (!currentProjectId.value || assetsLoading.value || assetsError.value || showDetail.value || showCreate.value ||
+      showImport.value || showRequirements.value || showEdit.value || editingAssetId.value || showBatchAssign.value ||
+      assigning.value || deleting.value || appliedAssetQuery.value !== currentAssetQueryKey()) return null
+    if (assets.value.some(asset => Number(asset?.itemStatusCounts?.preparing) > 0)) return 1500
+    return assets.value.some(asset => Number(asset?.itemStatusCounts?.not_started) > 0) ? 5000 : null
+  },
+  refresh: controller => loadAssets(controller, true)
+})
 
 function toggleAssetSelection(asset) {
   if (!canSelectAsset(asset)) return
@@ -620,6 +662,7 @@ onBeforeUnmount(() => {
       <el-empty v-else-if="!projectContext.selectedProjectId" class="asset-empty" description="当前范围暂无可选项目"><template #image><el-icon><Collection /></el-icon></template><p>请先创建项目或加入项目成员范围。</p></el-empty>
 
       <template v-else-if="projectContext.selectedProjectId">
+        <el-alert v-if="pollingError" :title="pollingError" type="warning" show-icon :closable="false" />
         <el-form ref="assetFilterForm" :model="query" :rules="assetFilterRules" class="asset-filters" size="large" aria-label="资产筛选">
           <el-form-item class="asset-filter-item asset-filter-item--keyword" prop="keyword">
             <el-input v-model="query.keyword" class="asset-search sg-input" :prefix-icon="Search" maxlength="200" clearable placeholder="资产名称或描述" aria-label="按资产名称或描述搜索" />
@@ -685,7 +728,9 @@ onBeforeUnmount(() => {
                 <div v-if="scope?.row" class="asset-description">{{ scope.row.description || '—' }}</div>
               </template>
             </el-table-column>
-            <el-table-column label="制作分项" width="90" align="center" prop="itemCount"/>
+            <el-table-column label="制作分项" width="180" align="center">
+              <template #default="scope"><div v-if="scope?.row" class="asset-item-status-counts"><span>{{ scope.row.itemCount }} 项</span><el-tag v-for="entry in itemStatusEntries(scope.row)" :key="entry.status" size="small" effect="plain" round :type="tagTypeFromTone(assetStatusMeta(entry.status).tone)">{{ entry.label }} {{ entry.count }}</el-tag></div></template>
+            </el-table-column>
 <!--            <el-table-column label="镜头使用" width="90" align="center" prop="usageShotCount"/>-->
             <el-table-column label="制作人" fixed="right" width="130">
               <template #default="scope"><span
@@ -708,6 +753,7 @@ onBeforeUnmount(() => {
             <el-table-column label="操作" fixed="right" width="250">
               <template #default="scope">
                 <div v-if="scope?.row" class="asset-row-actions">
+                  <el-button v-if="canOpenItemStart(scope.row)" text type="primary" :icon="VideoPlay" @click="openAssetItemStart(scope.row)">选择分项开工</el-button>
                   <el-button text type="primary" @click="openAsset(scope.row)">详情</el-button>
                   <el-button v-if="canEditAsset(scope.row)" text type="warning" :icon="Edit"
                              :loading="editingAssetId === Number(scope.row.assetId)" @click="openEditDialog(scope.row)">
@@ -722,9 +768,9 @@ onBeforeUnmount(() => {
           </el-table>
         </div>
 
-        <div v-else-if="viewMode === 'card'" class="asset-grid" v-loading="assetsLoading"><el-card v-for="asset in assets" :key="asset.assetId" class="asset-card" shadow="hover" tabindex="0" @click="openAsset(asset)" @keydown.enter="openAsset(asset)"><ProtectedAssetThumbnail class="asset-thumb" :thumbnail="resolveAssetThumbnail(asset)" :alt="`${asset.assetName} 缩略图`" /><header><el-tag size="small" effect="plain" round :type="tagTypeFromTone(assetTypeMeta(asset.assetType).tone)">{{ assetTypeMeta(asset.assetType).label }}</el-tag><el-tag class="asset-status-tag" :class="assetStatusTagClass(asset.assetStatus)" size="small" effect="light" round :type="tagTypeFromTone(assetStatusMeta(asset.assetStatus).tone)">{{ assetStatusMeta(asset.assetStatus).label }}</el-tag></header><h3>{{ asset.assetName }}</h3><p>{{ asset.description || '暂无资产说明' }}</p><footer><span>{{ asset.itemCount }} 个制作分项</span><span>{{ asset.usageShotCount }} 个使用镜头</span></footer></el-card></div>
+        <div v-else-if="viewMode === 'card'" class="asset-grid" v-loading="assetsLoading"><el-card v-for="asset in assets" :key="asset.assetId" class="asset-card" shadow="hover" tabindex="0" @click="openAsset(asset)" @keydown.enter="openAsset(asset)"><ProtectedAssetThumbnail class="asset-thumb" :thumbnail="resolveAssetThumbnail(asset)" :alt="`${asset.assetName} 缩略图`" /><header><el-tag size="small" effect="plain" round :type="tagTypeFromTone(assetTypeMeta(asset.assetType).tone)">{{ assetTypeMeta(asset.assetType).label }}</el-tag><el-tag class="asset-status-tag" :class="assetStatusTagClass(asset.assetStatus)" size="small" effect="light" round :type="tagTypeFromTone(assetStatusMeta(asset.assetStatus).tone)">{{ assetStatusMeta(asset.assetStatus).label }}</el-tag></header><h3>{{ asset.assetName }}</h3><p>{{ asset.description || '暂无资产说明' }}</p><div v-if="itemStatusEntries(asset).length" class="asset-item-status-counts asset-item-status-counts--card"><el-tag v-for="entry in itemStatusEntries(asset)" :key="entry.status" size="small" effect="plain" round :type="tagTypeFromTone(assetStatusMeta(entry.status).tone)">{{ entry.label }} {{ entry.count }}</el-tag></div><footer><span>{{ asset.itemCount }} 个制作分项</span><span>{{ asset.usageShotCount }} 个使用镜头</span><el-button v-if="canOpenItemStart(asset)" size="small" type="primary" :icon="VideoPlay" @click.stop="openAssetItemStart(asset)">选择分项开工</el-button></footer></el-card></div>
 
-        <div v-else class="type-board" v-loading="assetsLoading"><el-card v-for="group in groupedAssets" :key="group.type" class="type-board__column" shadow="never"><header><div><el-tag size="small" effect="plain" round :type="tagTypeFromTone(assetTypeMeta(group.type).tone)">{{ assetTypeMeta(group.type).label }}</el-tag><strong>{{ group.assets.length }}</strong></div><small>当前分页结果</small></header><div v-if="group.assets.length" class="type-board__items"><el-button v-for="asset in group.assets" :key="asset.assetId" text class="type-board__asset" @click="openAsset(asset)"><ProtectedAssetThumbnail class="asset-thumb asset-thumb--board" :thumbnail="resolveAssetThumbnail(asset)" :alt="`${asset.assetName} 缩略图`" /><span><strong>{{ asset.assetName }}</strong><small>{{ asset.itemCount }} 分项</small><el-tag class="asset-status-tag" :class="assetStatusTagClass(asset.assetStatus)" size="small" effect="light" round :type="tagTypeFromTone(assetStatusMeta(asset.assetStatus).tone)">{{ assetStatusMeta(asset.assetStatus).label }}</el-tag></span></el-button></div><el-empty v-else :image-size="48" :description="`本页暂无${assetTypeMeta(group.type).label}资产`" /></el-card></div>
+        <div v-else class="type-board" v-loading="assetsLoading"><el-card v-for="group in groupedAssets" :key="group.type" class="type-board__column" shadow="never"><header><div><el-tag size="small" effect="plain" round :type="tagTypeFromTone(assetTypeMeta(group.type).tone)">{{ assetTypeMeta(group.type).label }}</el-tag><strong>{{ group.assets.length }}</strong></div><small>当前分页结果</small></header><div v-if="group.assets.length" class="type-board__items"><div v-for="asset in group.assets" :key="asset.assetId" class="type-board__asset-row"><el-button text class="type-board__asset" @click="openAsset(asset)"><ProtectedAssetThumbnail class="asset-thumb asset-thumb--board" :thumbnail="resolveAssetThumbnail(asset)" :alt="`${asset.assetName} 缩略图`" /><span><strong>{{ asset.assetName }}</strong><small>{{ asset.itemCount }} 分项</small><el-tag class="asset-status-tag" :class="assetStatusTagClass(asset.assetStatus)" size="small" effect="light" round :type="tagTypeFromTone(assetStatusMeta(asset.assetStatus).tone)">{{ assetStatusMeta(asset.assetStatus).label }}</el-tag><small v-if="itemStatusEntries(asset).length">{{ itemStatusEntries(asset).map(entry => `${entry.label} ${entry.count}`).join(' · ') }}</small></span></el-button><el-button v-if="canOpenItemStart(asset)" size="small" type="primary" :icon="VideoPlay" @click="openAssetItemStart(asset)">选择分项开工</el-button></div></div><el-empty v-else :image-size="48" :description="`本页暂无${assetTypeMeta(group.type).label}资产`" /></el-card></div>
 
         <el-pagination v-if="total" class="asset-pagination" background layout="prev, pager, next, total" :current-page="query.pageNum" :page-size="query.pageSize" :total="total" :disabled="assetsLoading" aria-label="资产分页" @current-change="changePage" />
       </template>
@@ -787,4 +833,5 @@ onBeforeUnmount(() => {
 .asset-filter-actions:deep(.el-form-item__content){flex-wrap:nowrap;justify-content:flex-end}
 @media(max-width:1100px){.asset-filters{grid-template-columns:1fr 1fr 1fr}.asset-filter-actions:deep(.el-form-item__content){justify-content:flex-start}}
 @media(max-width:700px){.asset-filters{grid-template-columns:1fr}}
+.asset-item-status-counts{display:flex;gap:4px;align-items:center;justify-content:center;flex-wrap:wrap;font-size:10px}.asset-item-status-counts--card{padding:0 14px;justify-content:flex-start}.type-board__asset-row{display:flex;gap:8px;align-items:center}.type-board__asset-row>.type-board__asset{flex:1}
 </style>

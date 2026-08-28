@@ -144,6 +144,10 @@ Controller → Service → DAO → DO
 - 日志中不得记录密码、Token、API Key、私钥、完整身份证号或其他敏感信息。
 - 定时任务可调用路径受 `JobConstant.JOB_WHITE_LIST` 限制；不要扩大到任意模块或动态执行不可信代码。
 
+- Shot Grid 开工统一由管理人员确认，请求字段按任务类型区分：镜头任务仅允许具备 `shotgrid:task:start` 的项目 `director` 或 `has_all_scope` 管理人员确认开工；制作人只能等待，不能自行开始。管理人线下确认依赖资产齐备后提交 `{ lockVersion, shotLockVersion, assetsConfirmed: true }`，服务端在锁内复核管理范围、任务与镜头版本、状态及当前负责人仍为有效 `creator`，并在同一事务审计人工确认。资产任务同样由具备上述权限和范围的管理人员按制作分项确认，以 `{ lockVersion, assetLockVersion, assetItemLockVersion, startConfirmed: true }` 提交；锁内复核任务、父资产和分项三份版本、分项内容及有效负责人，同事务审计。只递增任务版本，不修改父资产和分项元数据版本；其他分项不随本分项或共享目录开工；版本 preflight/create 和失败提交重试仍只允许当前受派的活动制作人员本人，管理人不得代提交或代重试。新目录尚未就绪时，开工进入 `preparing`，沿用现有 NAS 目录 Outbox；目录成功后才进入 `in_progress`。已有成功目录可直接进入 `in_progress`；未开工和目录准备中均不得提交版本。不自动检查资产依赖，不重置已开工任务。
+- 资产列表与详情返回 `itemStatusCounts`，固定包含 `unassigned/not_started/preparing/in_progress/reviewing/revision/completed` 七个非负整数键，仅统计活动且未删除分项。父级状态按 `revision → reviewing → in_progress → preparing → unassigned → not_started` 聚合；至少有一个活动分项且全部完成才为 `completed`，无活动分项为 `unassigned`。父级 `task.start` 仅表示可进入分项选择，至少存在一个实际可开工分项才返回；真正 start 必须对选中分项任务提交，不能整资产开工。
+- 目录成功回写必须先锁项目，再锁目录操作及任务/存储行，与开工事务使用同一项目协调锁；等待后仍复核 owner + attempt fencing。该锁仅在 NAS I/O 结束后的短事务持有，保证共享目录完成与新分项开工交错时不会遗漏已开工分项。
+
 ## 6. 数据库规则
 
 当前项目实际使用 PostgreSQL；代码仓库仍保留 MySQL 兼容能力。
@@ -365,8 +369,8 @@ git status --short
 
 1. 当前主分支和 GitHub Actions 已统一为 `main`；内网生产 CD 只能由带 `ruoyi-prod` 标签的专用 self-hosted Runner 手动触发，并受 `intranet-production` Environment 审批约束。服务器外网依赖不稳定时，Windows 开发机使用 `deploy/remote-deploy.ps1` 从已提交的 `main` 构建并离线传输版本镜像，服务器仍必须执行同一套备份、迁移和健康门禁。
 2. 后端 `.env.*` 被 Git 跟踪，其中包含示例密码和私钥材料。
-3. Alembic 当前已有 Shot Grid `20260810_01 → 20260826_22` 增量迁移链；`05` 至 `19` 保持目录执行、任务/版本/审核、媒体派生、NAS 管理、镜头号治理、跨版本问题、受管角色、延迟目录、审核草稿和项目永久删除语义；`20` 增加一轮多候选、候选级媒体和审核选择；`21` 增加审核通过后的最终版本 NAS 交付 Outbox；`22` 将仅有一个候选的版本自动设为本轮最佳并回填历史单候选。固定角色包仍由平台管理端显式配置。媒体 Worker 默认关闭，视频派生必须配置 FFmpeg。全平台仍缺少能够从真正空库独立建立全部 RuoYi 平台表的完整 baseline。新库使用同步后的 PostgreSQL 初始化 SQL并写入 head，已有平台库执行增量迁移。无版本标记的历史库必须先备份并在克隆库核验结构，不能未经确认直接 `stamp`。
-4. Shot Grid 当前 PostgreSQL head 为 `20260826_22`：一个 `sg_version` 表示 V001/V002 轮次，一轮包含 `1..N` 个不可变候选；单候选由系统直接设为本轮最佳且不伪造审核人选择历史，多候选仍由审核人显式选择。审核通过时数据库事务同时创建唯一 `sg_final_delivery(pending)`；同一 Leader 版本 Worker 在事务外将最佳候选发布到源文件同级 `FINAL/`，优先硬链接、失败时校验复制，并写 `FINAL.json`。候选原文件不改名、不覆盖；文件与清单都完成后才能标记 `published`。领取、NAS I/O、回写继续使用短事务、租约、`SKIP LOCKED` 和 owner + attempt fencing。
+3. Alembic 当前已有 Shot Grid `20260810_01 → 20260827_23` 增量迁移链；`05` 至 `19` 保持目录执行、任务/版本/审核、媒体派生、NAS 管理、镜头号治理、跨版本问题、受管角色、延迟目录、审核草稿和项目永久删除语义；`20` 增加一轮多候选、候选级媒体和审核选择；`21` 增加审核通过后的最终版本 NAS 交付 Outbox；`22` 将仅有一个候选的版本自动设为本轮最佳并回填历史单候选；`23` 将标准权限菜单“开始本人任务”更名为“开始任务”，不修改任务状态或自动扩大角色授权。固定角色包仍由平台管理端显式配置。媒体 Worker 默认关闭，视频派生必须配置 FFmpeg。全平台仍缺少能够从真正空库独立建立全部 RuoYi 平台表的完整 baseline。新库使用同步后的 PostgreSQL 初始化 SQL并写入 head，已有平台库执行增量迁移。无版本标记的历史库必须先备份并在克隆库核验结构，不能未经确认直接 `stamp`。
+4. Shot Grid 当前 PostgreSQL head 为 `20260827_23`：一个 `sg_version` 表示 V001/V002 轮次，一轮包含 `1..N` 个不可变候选；单候选由系统直接设为本轮最佳且不伪造审核人选择历史，多候选仍由审核人显式选择。审核通过时数据库事务同时创建唯一 `sg_final_delivery(pending)`；同一 Leader 版本 Worker 在事务外将最佳候选发布到源文件同级 `FINAL/`，优先硬链接、失败时校验复制，并写 `FINAL.json`。候选原文件不改名、不覆盖；文件与清单都完成后才能标记 `published`。领取、NAS I/O、回写继续使用短事务、租约、`SKIP LOCKED` 和 owner + attempt fencing。
 5. Shot Grid 前端已提交依赖锁文件并使用 `npm ci`；平台管理端仍没有提交 `package-lock.json`，其 CI 与生产镜像使用 `npm install`，存在依赖漂移风险。
 6. 新生产 `docker-compose.prod.yml` 已提供独立持久化卷；历史 `docker-compose.my.yml` / `docker-compose.pg.yml` 仍没有完整持久化与安全边界，只能作为兼容参考，不能直接上线。
 7. 后端 CORS 默认仍允许任意 Origin 以兼容开发环境；生产必须通过 `APP_CORS_ALLOWED_ORIGINS` 显式收紧，新生产环境模板固定为 `192.168.10.122:12580/12581` 两个来源。

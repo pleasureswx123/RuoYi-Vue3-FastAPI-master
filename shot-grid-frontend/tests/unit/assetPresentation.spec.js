@@ -4,6 +4,7 @@ import {
   assetAssigneeSummary,
   assetDirectoryStatusMeta,
   assetErrorState,
+  assetItemStatusEntries,
   assetStatusMeta,
   assetStatusTagClass,
   assetTypeMeta,
@@ -20,6 +21,7 @@ describe('资产展示模型', () => {
     expect(assetTypeMeta('Environment').label).toBe('场景')
     expect(assetTypeMeta('Prop').label).toBe('道具')
     expect(assetStatusMeta('unassigned')).toMatchObject({ label: '待分配', tone: 'warning' })
+    expect(assetStatusMeta('not_started')).toMatchObject({ label: '待开工', tone: 'muted' })
     expect(assetStatusMeta('in_progress')).toMatchObject({ label: '制作中', tone: 'primary' })
     expect(assetStatusMeta('reviewing').label).toBe('待审核')
     expect(assetStatusTagClass('in_progress')).toBe('asset-status-tag--in_progress')
@@ -27,6 +29,18 @@ describe('资产展示模型', () => {
     expect(assetDirectoryStatusMeta('not_created')).toMatchObject({ label: '开始制作时创建', tone: 'muted' })
     expect(assetDirectoryStatusMeta('ready')).toMatchObject({ label: '目录已就绪', tone: 'info' })
     expect(assetDirectoryStatusMeta('failed')).toMatchObject({ label: '目录处理异常', tone: 'danger' })
+  })
+
+  it('固定展示七类制作分项状态数量，并忽略异常计数', () => {
+    expect(assetItemStatusEntries({ not_started: 2, preparing: 1, in_progress: -4, unknown: 9 })).toEqual([
+      { status: 'unassigned', label: '待分配', count: 0 },
+      { status: 'not_started', label: '待开工', count: 2 },
+      { status: 'preparing', label: '目录准备中', count: 1 },
+      { status: 'in_progress', label: '制作中', count: 0 },
+      { status: 'reviewing', label: '待审核', count: 0 },
+      { status: 'revision', label: '修改中', count: 0 },
+      { status: 'completed', label: '已完成', count: 0 }
+    ])
   })
 
   it('按真实 HTTP 状态分流而不把权限失败伪装成空列表', () => {

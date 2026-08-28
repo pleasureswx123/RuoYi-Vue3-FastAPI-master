@@ -13,6 +13,8 @@ import {
 describe('任务展示契约', () => {
   it('集中映射稳定英文状态码，未知值不影响渲染', () => {
     expect(taskStatusMeta('revision')).toMatchObject({ label: '待修订', tone: 'danger' })
+    expect(taskStatusMeta('not_started', 'asset_image').label).toBe('待开工')
+    expect(taskStatusMeta('not_started', 'shot_video').label).toBe('待开工')
     expect(taskKindMeta('shot_video')).toMatchObject({ label: '镜头视频', shortLabel: '镜头' })
     expect(taskPriorityMeta('urgent')).toMatchObject({ label: '紧急', tone: 'danger' })
     expect(taskVersionStatusMeta('final')).toMatchObject({ label: '最终版本', tone: 'success' })
