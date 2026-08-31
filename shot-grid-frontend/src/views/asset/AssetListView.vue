@@ -1,8 +1,8 @@
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Box, Collection, Delete, Edit, Grid, List, Plus, Refresh, RefreshLeft, Search, Switch, Upload, User, VideoPlay, View } from '@element-plus/icons-vue'
+import { Box, Calendar, Clock, Collection, Delete, Edit, Grid, List, Plus, Refresh, RefreshLeft, Search, Switch, Upload, User, VideoPlay, View } from '@element-plus/icons-vue'
 
 import { archiveAsset, batchAssignAssetItemTasks, batchDeleteAssets, getAssetDetail, getAssetPage, listAssetAssignees } from '@/api/shot-grid/assets'
 import { assertPositiveId, getProjectDetail, getProjectPage } from '@/api/shot-grid/projects'
@@ -21,6 +21,8 @@ import AssetDetailView from '@/views/asset/AssetDetailView.vue'
 import ProtectedAssetThumbnail from '@/views/asset/components/ProtectedAssetThumbnail.vue'
 import { assetErrorState, assetItemStatusEntries, assetStatusMeta, assetStatusTagClass, assetTypeMeta, memberLabel, memberUserName, resolveAssetThumbnail } from '@/views/asset/assetPresentation'
 import { projectRoleMeta, storageMeta } from '@/views/project/projectPresentation'
+
+const ScheduleBoard = defineAsyncComponent(() => import('@/views/schedule/ScheduleBoard.vue'))
 
 const route = useRoute()
 const router = useRouter()
@@ -106,6 +108,12 @@ const projectAllowsWrites = computed(() => project.value && !['completed', 'arch
 const canEdit = computed(() => isDirector.value && hasPermission('shotgrid:asset:edit') && projectAllowsWrites.value)
 const canDelete = computed(() => isDirector.value && hasPermission('shotgrid:asset:archive') && projectAllowsWrites.value)
 const canAssign = computed(() => isDirector.value && hasPermission('shotgrid:task:assign') && projectAllowsWrites.value)
+const canSchedule = computed(() => Boolean(
+  project.value
+  && isDirector.value
+  && hasPermission('shotgrid:task:schedule')
+  && !['completed', 'archived'].includes(project.value.projectStatus)
+))
 const canResolveRequirements = computed(() => hasPermission('shotgrid:assetRequirement:resolve'))
 const canIgnoreRequirements = computed(() => hasPermission('shotgrid:assetRequirement:ignore'))
 const canRematchRequirements = computed(() => hasPermission('shotgrid:assetRequirement:rematch'))
@@ -135,6 +143,10 @@ function itemStatusEntries(asset) {
 
 function canOpenItemStart(asset) {
   return hasPermission('shotgrid:task:start') && (asset?.allowedActions || []).includes('task.start')
+}
+
+function handleScheduleQueryChange({ mode }) {
+  if (['swimlane', 'gantt'].includes(mode)) viewMode.value = mode
 }
 
 function canEditAsset(asset) {
@@ -668,7 +680,7 @@ onBeforeUnmount(() => {
     <header class="sg-page-heading asset-heading">
       <div><p class="sg-eyebrow">ASSETS</p>
         <h2 class="sg-page-title">资产库管理</h2>
-        <p class="sg-page-description">在项目范围内统一管理角色、场景、道具及其制作分项，查看制作状态、负责人和缩略图。</p>
+        <p class="sg-page-description">统一管理角色、场景和道具制作分项，也可切换人员泳道或任务甘特监管资产制作排期。</p>
       </div>
       <div class="asset-heading__actions">
         <el-button v-if="canImport" :icon="Upload" @click="openImportDialog">导入 Excel</el-button>
@@ -709,9 +721,13 @@ onBeforeUnmount(() => {
           </el-form-item>
         </el-form>
 
-        <section class="asset-toolbar"><div class="asset-toolbar__summary"><strong>{{ total }}</strong><span>个资产</span><template v-if="selectedAssets.length"><el-button v-if="canAssign" text type="primary" :loading="assigning" @click="openBatchAssignDialog">{{ batchAssignLabel }}（{{ selectedAssets.length }}）</el-button><el-button v-if="canDelete" text type="danger" :icon="Delete" :loading="deleting" :disabled="!canDeleteSelection" @click="deleteSelectedAssets">批量删除（{{ selectedAssets.length }}）</el-button></template></div><el-radio-group v-model="viewMode" class="view-switch" size="small" aria-label="资产视图"><el-radio-button value="table"><el-icon><List /></el-icon>表格</el-radio-button><el-radio-button value="card"><el-icon><Grid /></el-icon>卡片</el-radio-button><el-radio-button value="type"><el-icon><Box /></el-icon>类型看板</el-radio-button></el-radio-group></section>
+        <section class="asset-toolbar"><div class="asset-toolbar__summary"><strong>{{ total }}</strong><span>个资产</span><template v-if="selectedAssets.length"><el-button v-if="canAssign" text type="primary" :loading="assigning" @click="openBatchAssignDialog">{{ batchAssignLabel }}（{{ selectedAssets.length }}）</el-button><el-button v-if="canDelete" text type="danger" :icon="Delete" :loading="deleting" :disabled="!canDeleteSelection" @click="deleteSelectedAssets">批量删除（{{ selectedAssets.length }}）</el-button></template></div><el-radio-group v-model="viewMode" class="view-switch" size="small" aria-label="资产视图"><el-radio-button value="table"><el-icon><List /></el-icon>表格</el-radio-button><el-radio-button value="card"><el-icon><Grid /></el-icon>卡片</el-radio-button><el-radio-button value="type"><el-icon><Box /></el-icon>类型看板</el-radio-button><el-radio-button value="swimlane"><el-icon><Clock /></el-icon>人员泳道</el-radio-button><el-radio-button value="gantt"><el-icon><Calendar /></el-icon>任务甘特</el-radio-button></el-radio-group></section>
 
-        <ProjectStatePanel v-if="assetsError" :title="assetsError.title" :message="assetsError.message" :retryable="assetsError.retryable" @retry="loadProjectContext" />
+        <Suspense v-if="['swimlane', 'gantt'].includes(viewMode) && currentProjectId">
+          <ScheduleBoard :project-id="currentProjectId" target-kind="asset_item" :initial-mode="viewMode" :editable-allowed="canSchedule" @query-change="handleScheduleQueryChange" />
+          <template #fallback><el-card class="asset-context-loading" shadow="never"><el-skeleton :rows="8" animated /></el-card></template>
+        </Suspense>
+        <ProjectStatePanel v-else-if="assetsError" :title="assetsError.title" :message="assetsError.message" :retryable="assetsError.retryable" @retry="loadProjectContext" />
         <el-empty v-else-if="!assetsLoading && !assets.length" class="asset-empty" description="当前筛选没有资产"><template #image><el-icon><Box /></el-icon></template><p>调整筛选条件，或在存储就绪的活动项目中新建/导入资产。</p></el-empty>
 
         <AssetTreeTable v-else-if="viewMode === 'table'" ref="assetTable" :assets="assets" :project-id="currentProjectId"
@@ -801,7 +817,7 @@ onBeforeUnmount(() => {
 .project-context { display: flex; gap: 14px; align-items: end; padding: 15px 17px; background: var(--sg-surface); border: 1px solid var(--sg-border); border-radius: var(--sg-radius-md); flex-wrap: wrap; }
 .project-context__meta { display: flex; flex: 1; gap: 8px; align-items: center; justify-content: flex-end; flex-wrap: wrap; }
 .asset-filters { display: grid; grid-template-columns: minmax(220px, 1fr) repeat(3, minmax(130px, 180px)) auto; gap: 9px; }
-.asset-toolbar { display: flex; align-items: center; justify-content: space-between; }
+.asset-toolbar { display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
 .asset-toolbar > div:first-child { display: flex; gap: 6px; align-items: baseline; }
 .asset-toolbar strong { font-size: 23px; }
 .asset-toolbar span { color: var(--sg-text-muted); font-size: 11px; }

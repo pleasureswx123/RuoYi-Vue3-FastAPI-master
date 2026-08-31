@@ -54,6 +54,9 @@ export function getRouteDefinition(routeKey) {
 }
 
 export function getRouteKeyByPath(path) {
+  if (typeof path === 'string' && /^\/projects\/\d+\/schedule\/?$/.test(path)) {
+    return 'projects'
+  }
   return SHOT_GRID_ROUTE_KEYS.find(routeKey => ROUTE_REGISTRY[routeKey].path === path) || null
 }
 

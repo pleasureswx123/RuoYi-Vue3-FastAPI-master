@@ -35,6 +35,13 @@ import ShotImportDialog from '@/views/shot/components/ShotImportDialog.vue'
 const sortableCreate = vi.hoisted(() => vi.fn(() => ({ destroy: vi.fn() })))
 
 vi.mock('sortablejs', () => ({ default: { create: sortableCreate } }))
+vi.mock('@/views/schedule/ScheduleBoard.vue', () => ({
+  default: {
+    name: 'ScheduleBoard',
+    props: ['projectId', 'targetKind', 'initialMode', 'editableAllowed'],
+    template: '<section data-testid="schedule-board-entry" :data-target-kind="targetKind" :data-mode="initialMode" />'
+  }
+}))
 vi.mock('@/api/shot-grid/tasks', () => ({ startTask: vi.fn() }))
 vi.mock('@/api/shot-grid/projects', () => ({
   assertPositiveId: value => {
@@ -108,6 +115,11 @@ const shotRow = {
 const assignableShotRow = { ...shotRow, status: 'not_started', allowedActions: ['task.assign'] }
 
 const formComponents = { ElAlert, ElButton, ElDatePicker, ElDescriptions, ElDescriptionsItem, ElForm, ElFormItem, ElIcon, ElInput, ElInputNumber, ElOption, ElSelect, ElUpload }
+const scheduleBoardStub = {
+  name: 'ScheduleBoard',
+  props: ['projectId', 'targetKind', 'initialMode', 'editableAllowed'],
+  template: '<section data-testid="schedule-board-entry" :data-target-kind="targetKind" :data-mode="initialMode" />'
+}
 
 async function mountView(permissions = ['shotgrid:shot:list', 'shotgrid:shot:add', 'shotgrid:shot:import', 'shotgrid:member:list'], configureRouter = null) {
   const pinia = createPinia()
@@ -126,7 +138,7 @@ async function mountView(permissions = ['shotgrid:shot:list', 'shotgrid:shot:add
   await router.push('/shots?projectId=8')
   await router.isReady()
   const wrapper = mount(ShotListView, {
-    global: { plugins: [pinia, router], components: { ...formComponents, ElCard, ElDialog, ElDrawer, ElPagination, ElRadioButton, ElRadioGroup, ElTable, ElTableColumn, ElTag } }
+    global: { plugins: [pinia, router], stubs: { ScheduleBoard: scheduleBoardStub }, components: { ...formComponents, ElCard, ElDialog, ElDrawer, ElPagination, ElRadioButton, ElRadioGroup, ElTable, ElTableColumn, ElTag } }
   })
   await flushPromises()
   await flushPromises()
@@ -693,7 +705,7 @@ describe('镜头管理真实列表页', () => {
     }
   })
 
-  it('在项目范围内展示同一真实结果的三种视图与写入入口', async () => {
+  it('在项目范围内保留三种镜头视图并增加人员泳道与任务甘特', async () => {
     const { wrapper } = await mountView()
     const projectForm = wrapper.findAllComponents(ElForm).find(form => form.classes().includes('project-context'))
     const filterForm = wrapper.findAllComponents(ElForm).find(form => form.classes().includes('shot-filters'))
@@ -736,6 +748,14 @@ describe('镜头管理真实列表页', () => {
     expect(findTag(wrapper, '制作中').classes()).toContain('shot-status-tag--in_progress')
     expect(wrapper.find('.shot-table-wrap').text()).not.toContain('目录已就绪')
     expect(wrapper.find('.shot-chip').exists()).toBe(false)
+    const viewLabels = wrapper.find('.shot-list-toolbar__views').findAllComponents(ElRadioButton).map(button => buttonLabel(button))
+    expect(viewLabels).toEqual(['表格', '卡片', '故事板', '人员泳道', '任务甘特'])
+    wrapper.find('.shot-list-toolbar__views').findComponent(ElRadioGroup).vm.$emit('update:modelValue', 'swimlane')
+    await flushPromises()
+    expect(wrapper.get('[data-testid="schedule-board-entry"]').attributes()).toMatchObject({
+      'data-target-kind': 'shot',
+      'data-mode': 'swimlane'
+    })
 
     const viewSwitch = wrapper.findComponent(ElRadioGroup)
     viewSwitch.vm.$emit('update:modelValue', 'card')

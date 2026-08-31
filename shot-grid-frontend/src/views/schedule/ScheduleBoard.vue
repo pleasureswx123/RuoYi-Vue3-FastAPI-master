@@ -179,6 +179,35 @@ watch(() => props.projectId, projectId => {
   load()
 })
 
+watch(() => props.initialMode, mode => {
+  store.setMode(mode)
+})
+
+watch(() => props.initialScale, scale => {
+  store.setScale(scale)
+})
+
+watch(() => props.initialGroupBy, groupBy => {
+  store.setGrouping(groupBy)
+  load()
+})
+
+watch(() => props.targetKind, targetKind => {
+  store.setTargetKind(targetKind)
+  load()
+})
+
+watch(
+  () => [props.initialWindowStart, props.initialWindowEnd],
+  ([nextStart, nextEnd], [previousStart, previousEnd]) => {
+    if (!nextStart || !nextEnd || (nextStart === previousStart && nextEnd === previousEnd)) return
+    windowStart.value = nextStart
+    windowEnd.value = nextEnd
+    store.invalidateQuery()
+    load()
+  }
+)
+
 watch(() => props.editableAllowed, allowed => {
   if (!allowed) {
     store.setEditMode(false)

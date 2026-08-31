@@ -108,6 +108,27 @@ describe('共享任务排期面板', () => {
     expect(wrapper.emitted('query-change').at(-1)[0]).toMatchObject({ mode: 'gantt', scale: 'week' })
   })
 
+  it('响应镜头与资产列表外层视图切换，并按目标类型重新查询', async () => {
+    const wrapper = mount(ScheduleBoard, {
+      props: {
+        projectId: 11,
+        targetKind: 'shot',
+        initialMode: 'swimlane',
+        initialScale: 'week',
+        initialWindowStart: '2026-09-01T00:00:00',
+        initialWindowEnd: '2026-09-08T00:00:00'
+      }
+    })
+    await flushPromises()
+
+    await wrapper.setProps({ targetKind: 'asset_item', initialMode: 'gantt', initialScale: 'month' })
+    await flushPromises()
+
+    expect(wrapper.findComponent(TaskGantt).exists()).toBe(true)
+    expect(wrapper.findComponent(TaskGantt).props('scale')).toBe('month')
+    expect(getProjectSchedule.mock.calls.at(-1)[1]).toMatchObject({ targetKind: 'asset_item' })
+  })
+
   it('无编辑授权时拒绝进入编辑模式', async () => {
     const wrapper = mount(ScheduleBoard, {
       props: {

@@ -24,6 +24,7 @@ describe('Shot Grid 本地路由白名单', () => {
     expect(navigation.map(item => item.routeKey)).toEqual(SHOT_GRID_ROUTE_KEYS)
     expect(getFirstAuthorizedPath(navigation)).toBe('/workbench')
     expect(getRouteKeyByPath('/reviews')).toBe('reviews')
+    expect(getRouteKeyByPath('/projects/11/schedule')).toBe('projects')
   })
 
   it('拒绝未知键、重复键和路径注入', () => {

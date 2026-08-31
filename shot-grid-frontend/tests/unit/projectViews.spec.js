@@ -288,12 +288,13 @@ describe('项目管理页面', () => {
     setActivePinia(pinia)
     const session = useSessionStore()
     session.user = { userId: 1, userName: 'admin', nickName: '管理员' }
-    session.permissions = ['shotgrid:project:query']
+    session.permissions = ['shotgrid:project:query', 'shotgrid:task:list']
     const router = createRouter({
       history: createMemoryHistory(),
       routes: [
         { path: '/projects', component: { template: '<div>项目列表</div>' } },
-        { path: '/projects/:projectId/overview', component: ProjectDetailView }
+        { path: '/projects/:projectId/overview', component: ProjectDetailView },
+        { path: '/projects/:projectId/schedule', component: { template: '<div>项目排期页</div>' } }
       ]
     })
     await router.push('/projects/8/overview')
@@ -319,6 +320,9 @@ describe('项目管理页面', () => {
     expect(tags.find(tag => tag.text() === '镜头制作')?.props('type')).toBe('info')
     expect(tags.find(tag => tag.text() === '项目管理人')?.props('type')).toBe('primary')
     expect(tags.find(tag => tag.text() === '存储就绪')?.props('type')).toBe('success')
+    await buttonByText(wrapper, '项目排期').trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.path).toBe('/projects/8/schedule')
     wrapper.unmount()
   })
 

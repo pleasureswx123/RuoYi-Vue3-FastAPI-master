@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { ArrowLeft, Delete, Edit, Lock, Refresh } from '@element-plus/icons-vue'
+import { ArrowLeft, Calendar, Delete, Edit, Lock, Refresh } from '@element-plus/icons-vue'
 
 import { assertPositiveId, getProjectDetail, getProjectOverview } from '@/api/shot-grid/projects'
 import { useSessionStore } from '@/store/modules/session'
@@ -46,6 +46,7 @@ const isDirectorScope = computed(
 )
 const canDiagnoseStorage = computed(() => isDirectorScope.value && hasPermission('shotgrid:storage:path'))
 const canRetryOperation = computed(() => isDirectorScope.value && hasPermission('shotgrid:storage:retry'))
+const canViewSchedule = computed(() => hasPermission('shotgrid:task:list'))
 const metrics = computed(() => [
   { label: '总集数', value: overview.value?.totalEpisodes ?? project.value?.totalEpisodes ?? 0 },
   { label: '总场次', value: overview.value?.totalScenes ?? project.value?.totalScenes ?? 0 },
@@ -141,6 +142,7 @@ onBeforeUnmount(() => controller?.abort())
         </div>
         <div class="project-hero__actions">
           <el-button :icon="Refresh" :loading="loading" @click="loadProject">刷新</el-button>
+          <el-button v-if="canViewSchedule" :icon="Calendar" @click="router.push(`/projects/${projectId}/schedule`)">项目排期</el-button>
           <el-button v-if="allowedActions.has('project.edit')" :icon="Edit" @click="showEdit = true">编辑项目</el-button>
           <el-button v-if="allowedActions.has('project.archive')" type="danger" plain :icon="Lock" @click="showArchive = true">归档</el-button>
           <el-button v-if="allowedActions.has('project.delete')" type="danger" :icon="Delete" @click="showPurge = true">永久删除</el-button>

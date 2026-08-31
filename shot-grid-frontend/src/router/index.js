@@ -55,6 +55,12 @@ const routes = [
         meta: { title: '项目详情', routeKey: 'projects' }
       },
       {
+        path: 'projects/:projectId/schedule',
+        name: 'project-schedule',
+        component: () => import('@/views/schedule/ProjectScheduleView.vue'),
+        meta: { title: '项目排期', routeKey: 'projects' }
+      },
+      {
         path: 'shots',
         name: 'shots',
         component: () => import('@/views/shot/ShotListView.vue'),

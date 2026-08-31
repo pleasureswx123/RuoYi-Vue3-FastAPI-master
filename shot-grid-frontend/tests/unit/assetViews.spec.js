@@ -37,6 +37,13 @@ import AssetItemDeleteDialog from '@/views/asset/components/AssetItemDeleteDialo
 import ProtectedAssetThumbnail from '@/views/asset/components/ProtectedAssetThumbnail.vue'
 import AssetRequirementDialog from '@/views/asset/components/AssetRequirementDialog.vue'
 
+vi.mock('@/views/schedule/ScheduleBoard.vue', () => ({
+  default: {
+    name: 'ScheduleBoard',
+    props: ['projectId', 'targetKind', 'initialMode', 'editableAllowed'],
+    template: '<section data-testid="schedule-board-entry" :data-target-kind="targetKind" :data-mode="initialMode" />'
+  }
+}))
 vi.mock('@/api/shot-grid/projects', () => ({
   assertPositiveId: value => {
     const result = Number(value)
@@ -112,6 +119,11 @@ const assetItem = {
   createTime: '2026-08-11T10:00:00',
   updateTime: '2026-08-11T10:00:00'
 }
+const scheduleBoardStub = {
+  name: 'ScheduleBoard',
+  props: ['projectId', 'targetKind', 'initialMode', 'editableAllowed'],
+  template: '<section data-testid="schedule-board-entry" :data-target-kind="targetKind" :data-mode="initialMode" />'
+}
 
 function assetDetail(targetProjectId = 8, targetAssetId = 31, name = '动力舱室内') {
   return {
@@ -149,7 +161,7 @@ async function mountList(permissions = ['shotgrid:asset:list', 'shotgrid:asset:a
   })
   await router.push('/assets?projectId=8')
   await router.isReady()
-  const wrapper = mount(AssetListView, { global: { plugins: [pinia, router], stubs: { ProductionHistoryPanel: true }, components: { ElButton, ElCard, ElDatePicker, ElDescriptions, ElDescriptionsItem, ElDialog, ElDrawer, ElEmpty, ElForm, ElFormItem, ElIcon, ElInput, ElInputNumber, ElPagination, ElRadioButton, ElRadioGroup, ElTable, ElTableColumn, ElTag } } })
+  const wrapper = mount(AssetListView, { global: { plugins: [pinia, router], stubs: { ProductionHistoryPanel: true, ScheduleBoard: scheduleBoardStub }, components: { ElButton, ElCard, ElDatePicker, ElDescriptions, ElDescriptionsItem, ElDialog, ElDrawer, ElEmpty, ElForm, ElFormItem, ElIcon, ElInput, ElInputNumber, ElPagination, ElRadioButton, ElRadioGroup, ElTable, ElTableColumn, ElTag } } })
   await flushPromises()
   await flushPromises()
   return { wrapper, router }
@@ -838,7 +850,7 @@ describe('资产管理真实列表页', () => {
     }
   })
 
-  it('展示真实资产结果、四类筛选、分页与三种视图', async () => {
+  it('展示真实资产结果、四类筛选、分页，保留三种视图并增加两种排期视图', async () => {
     const { wrapper } = await mountList()
     const filterForm = wrapper.findAllComponents(ElForm).find(form => form.classes().includes('asset-filters'))
     expect(filterForm.props('model')).toMatchObject({ keyword: '', assetType: '', assetStatus: '', assigneeUserId: '' })
@@ -861,6 +873,14 @@ describe('资产管理真实列表页', () => {
     const rightFixedColumns = tableColumns.filter(column => column.props('fixed') === 'right')
     expect(rightFixedColumns.map(column => column.props('label'))).toEqual(['时间状态', '制作人', '状态', '操作'])
     expect(tableColumns.slice(-3).map(column => column.props('label'))).toEqual(['制作人', '状态', '操作'])
+    const viewLabels = wrapper.find('.view-switch').findAllComponents(ElRadioButton).map(button => buttonLabel(button))
+    expect(viewLabels).toEqual(['表格', '卡片', '类型看板', '人员泳道', '任务甘特'])
+    wrapper.find('.view-switch').findComponent(ElRadioGroup).vm.$emit('update:modelValue', 'gantt')
+    await flushPromises()
+    expect(wrapper.get('[data-testid="schedule-board-entry"]').attributes()).toMatchObject({
+      'data-target-kind': 'asset_item',
+      'data-mode': 'gantt'
+    })
 
     const filterSelects = wrapper.find('.asset-filters').findAllComponents({ name: 'ElSelect' })
     await setElSelectValue(filterSelects[0], 'Environment')
