@@ -34,6 +34,8 @@ class ShotGridTask(ShotGridMutableAuditMixin, Base):
     due_date = Column(Date, nullable=True, comment='截止日期')
     expected_start_time = Column(SHOT_GRID_DATETIME, nullable=True, comment='预期开始时间，仅供制作人参考')
     expected_end_time = Column(SHOT_GRID_DATETIME, nullable=True, comment='预期结束时间，仅供制作人参考')
+    baseline_start_time = Column(SHOT_GRID_DATETIME, nullable=True, comment='首版排期开始时间，首次写入后冻结')
+    baseline_end_time = Column(SHOT_GRID_DATETIME, nullable=True, comment='首版排期结束时间，首次写入后冻结')
     requirements = Column(Text, nullable=True, comment='制作要求')
 
     __table_args__ = (
@@ -75,6 +77,11 @@ class ShotGridTask(ShotGridMutableAuditMixin, Base):
             '(expected_start_time IS NULL AND expected_end_time IS NULL) OR '
             '(expected_start_time IS NOT NULL AND expected_end_time IS NOT NULL AND expected_end_time > expected_start_time)',
             name='ck_sg_task_expected_time_range',
+        ),
+        CheckConstraint(
+            '(baseline_start_time IS NULL AND baseline_end_time IS NULL) OR '
+            '(baseline_start_time IS NOT NULL AND baseline_end_time IS NOT NULL AND baseline_end_time > baseline_start_time)',
+            name='ck_sg_task_baseline_time_range',
         ),
         CheckConstraint("del_flag in ('0', '2')", name='ck_sg_task_del_flag'),
         Index(

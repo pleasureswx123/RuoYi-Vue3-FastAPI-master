@@ -34,6 +34,7 @@ from module_shot_grid.entity.do.review_do import (
 )
 from module_shot_grid.entity.do.storage_do import ShotGridProjectStorage, ShotGridStorageOperation
 from module_shot_grid.entity.do.task_do import ShotGridTask
+from module_shot_grid.entity.do.task_schedule_change_do import ShotGridTaskScheduleChange
 from module_shot_grid.entity.do.version_do import (
     ShotGridMediaDerivation,
     ShotGridVersion,
@@ -302,6 +303,7 @@ class ShotGridProjectPurgeDao:
             delete(ShotGridVersionSubmissionFile).where(ShotGridVersionSubmissionFile.submission_id.in_(submission_ids))
         )
         await db.execute(delete(ShotGridVersionSubmission).where(ShotGridVersionSubmission.project_id == project_id))
+        await db.execute(delete(ShotGridTaskScheduleChange).where(ShotGridTaskScheduleChange.project_id == project_id))
         for model in (
             ShotGridTask,
             ShotGridShotAssetRequirement,

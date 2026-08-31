@@ -6,7 +6,7 @@ from module_admin.entity.do.file_do import SysFileInfo  # noqa: F401
 from module_admin.entity.do.user_do import SysUser  # noqa: F401
 from module_shot_grid.schema import SHOT_GRID_TABLE_NAMES
 
-EXPECTED_TABLE_COUNT = 31
+EXPECTED_TABLE_COUNT = 32
 
 
 def _primary_key_columns(table_name: str) -> tuple[str, ...]:
@@ -143,6 +143,69 @@ def test_json_columns_compile_to_jsonb_on_postgresql() -> None:
     assert str(Base.metadata.tables['sg_review_issue_draft'].c.annotations.type.compile(dialect=dialect)) == 'JSONB'
     assert str(Base.metadata.tables['sg_import_batch'].c.result_summary.type.compile(dialect=dialect)) == 'JSONB'
     assert str(Base.metadata.tables['sg_project_purge'].c.file_manifest.type.compile(dialect=dialect)) == 'JSONB'
+    assert (
+        str(Base.metadata.tables['sg_task_schedule_change'].c.overlap_task_ids.type.compile(dialect=dialect)) == 'JSONB'
+    )
+    assert (
+        str(Base.metadata.tables['sg_task_schedule_change'].c.result_snapshot.type.compile(dialect=dialect)) == 'JSONB'
+    )
+
+
+def test_task_schedule_metadata_freezes_baseline_and_guards_append_only_history() -> None:
+    task = Base.metadata.tables['sg_task']
+    task_checks = {
+        constraint.name: str(constraint.sqltext)
+        for constraint in task.constraints
+        if isinstance(constraint, CheckConstraint)
+    }
+    schedule_change = Base.metadata.tables['sg_task_schedule_change']
+    schedule_checks = {
+        constraint.name: str(constraint.sqltext)
+        for constraint in schedule_change.constraints
+        if isinstance(constraint, CheckConstraint)
+    }
+    schedule_indexes = {index.name: index for index in schedule_change.indexes}
+
+    assert {'baseline_start_time', 'baseline_end_time'} <= set(task.c.keys())
+    assert 'baseline_end_time > baseline_start_time' in task_checks['ck_sg_task_baseline_time_range']
+    assert {
+        'schedule_change_id',
+        'project_id',
+        'task_id',
+        'operator_user_id',
+        'from_start_time',
+        'from_end_time',
+        'to_start_time',
+        'to_end_time',
+        'change_type',
+        'operation_source',
+        'change_reason',
+        'overlap_acknowledged',
+        'overlap_task_ids',
+        'task_lock_version_before',
+        'task_lock_version_after',
+        'idempotency_key',
+        'request_hash',
+        'result_snapshot',
+        'create_by',
+        'create_time',
+    } == set(schedule_change.c.keys())
+    assert (
+        schedule_checks['ck_sg_task_schedule_change_type']
+        == "change_type in ('initial', 'move', 'resize_start', 'resize_end', 'dialog')"
+    )
+    assert (
+        schedule_checks['ck_sg_task_schedule_operation_source']
+        == "operation_source in ('start', 'swimlane', 'gantt', 'dialog')"
+    )
+    assert 'to_end_time > to_start_time' in schedule_checks['ck_sg_task_schedule_to_range']
+    assert 'from_end_time > from_start_time' in schedule_checks['ck_sg_task_schedule_from_range']
+    assert 'task_lock_version_after > task_lock_version_before' in schedule_checks['ck_sg_task_schedule_lock_versions']
+    assert schedule_checks['ck_sg_task_schedule_request_hash'] == "request_hash ~ '^[0-9a-f]{64}$'"
+    assert schedule_indexes.keys() == {
+        'idx_sg_task_schedule_task_time',
+        'idx_sg_task_schedule_project_time',
+    }
 
 
 def test_project_purge_queue_is_independent_and_guards_lease_states() -> None:

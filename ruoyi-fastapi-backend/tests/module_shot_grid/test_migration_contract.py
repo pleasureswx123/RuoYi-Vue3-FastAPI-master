@@ -19,6 +19,7 @@ from module_shot_grid.schema import (
     SHOT_GRID_REPAIR_SCHEMA_REVISION,
     SHOT_GRID_REVIEW_ISSUE_DRAFT_SCHEMA_REVISION,
     SHOT_GRID_SCENE_SEQUENCE_GUARD_SCHEMA_REVISION,
+    SHOT_GRID_SCHEDULING_SCHEMA_REVISION,
     SHOT_GRID_SCHEMA_REVISION,
     SHOT_GRID_SHOT_DELETE_SCHEMA_REVISION,
     SHOT_GRID_SINGLE_CANDIDATE_DEFAULT_SCHEMA_REVISION,
@@ -122,6 +123,8 @@ def test_schema_repair_migration_extends_member_lifecycle_and_covers_metadata() 
         ('sg_version', 'selected_time'),
         ('sg_task', 'expected_start_time'),
         ('sg_task', 'expected_end_time'),
+        ('sg_task', 'baseline_start_time'),
+        ('sg_task', 'baseline_end_time'),
     }
     assert repaired_timestamp_columns - {
         item for item in repaired_timestamp_columns if item[0] in surviving_initial_tables
@@ -297,6 +300,11 @@ def test_postgresql_baseline_is_stamped_at_the_current_head() -> None:
     assert 'ck_sg_submission_execution_state' in baseline
     assert 'uk_sg_version_submission_source_file' in baseline
     assert 'idx_sg_task_assignee_status_due' in baseline
+    assert 'baseline_start_time TIMESTAMP(0) WITHOUT TIME ZONE' in baseline
+    assert 'baseline_end_time TIMESTAMP(0) WITHOUT TIME ZONE' in baseline
+    assert 'CREATE TABLE sg_task_schedule_change (' in baseline
+    assert 'ck_sg_task_schedule_request_hash' in baseline
+    assert "'shotgrid:task:schedule'" in baseline
     assert 'uk_sg_review_action_idempotency' in baseline
     assert 'CREATE TABLE sg_review_issue_draft' in baseline
     assert 'uk_sg_review_list_id_project' in baseline
@@ -503,15 +511,48 @@ def test_migration_ddl_contains_every_named_metadata_constraint_and_index() -> N
 def test_initial_migration_seeds_frozen_and_legacy_permissions_without_duplicates() -> None:
     migration = _migration_namespace(SHOT_GRID_INITIAL_SCHEMA_REVISION)
     purge_migration = _migration_namespace(SHOT_GRID_PROJECT_PURGE_SCHEMA_REVISION)
+    schedule_migration = _migration_namespace(SHOT_GRID_SCHEDULING_SCHEMA_REVISION)
     permission_sequence = [migration['ROOT_MENU_SEED'][-1]]
     permission_sequence.extend(seed[-1] for seed in migration['CHILD_MENU_SEEDS'])
     permission_sequence.extend(seed[-1] for seed in migration['PERMISSION_BUTTON_SEEDS'])
     permission_sequence.append(purge_migration['PERMISSION'])
+    permission_sequence.append(schedule_migration['PERMISSION'])
     legacy_permissions = {'shotgrid:note:reply', 'shotgrid:note:resolve'}
 
     assert len(permission_sequence) == len(SHOT_GRID_PERMISSION_CODES | legacy_permissions)
     assert len(permission_sequence) == len(set(permission_sequence))
     assert set(permission_sequence) == SHOT_GRID_PERMISSION_CODES | legacy_permissions
+
+
+def test_scheduling_migration_extends_task_expected_time_and_freezes_only_provable_baseline() -> None:
+    migration = _migration_namespace(SHOT_GRID_SCHEDULING_SCHEMA_REVISION)
+    source = Path(migration['__file__']).read_text(encoding='utf-8')
+
+    assert migration['revision'] == SHOT_GRID_SCHEDULING_SCHEMA_REVISION
+    assert migration['down_revision'] == '20260828_24'
+    assert migration['PERMISSION'] == 'shotgrid:task:schedule'
+    assert "'baseline_start_time'" in source
+    assert "'baseline_end_time'" in source
+    assert 'UPDATE sg_task' in source
+    assert 'SET baseline_start_time = expected_start_time' in source
+    assert 'baseline_end_time = expected_end_time' in source
+    assert 'expected_start_time IS NOT NULL' in source
+    assert 'expected_end_time IS NOT NULL' in source
+    assert "'sg_task_schedule_change'" in source
+    assert 'INSERT INTO sg_task_schedule_change' not in source
+    assert 'cannot downgrade while task schedule baseline or history exists' in source
+    assert 'UPDATE sg_task SET lock_version' not in source
+    assert 'UPDATE sg_task SET task_status' not in source
+    assert 'INSERT INTO sys_role_menu' not in source
+
+
+def test_scheduling_migration_is_an_explicit_non_postgresql_noop() -> None:
+    migration = _migration_namespace(SHOT_GRID_SCHEDULING_SCHEMA_REVISION)
+
+    for action_name in ('upgrade', 'downgrade'):
+        action = migration[action_name]
+        action.__globals__['_is_postgresql'] = lambda: False
+        action()
 
 
 def test_migration_seeds_the_frozen_dictionary_types() -> None:

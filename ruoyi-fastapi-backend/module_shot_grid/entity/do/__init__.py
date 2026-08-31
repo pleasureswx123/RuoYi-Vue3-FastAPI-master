@@ -35,6 +35,7 @@ from module_shot_grid.entity.do.storage_do import (
     ShotGridStorageRoot,
 )
 from module_shot_grid.entity.do.task_do import ShotGridTask
+from module_shot_grid.entity.do.task_schedule_change_do import ShotGridTaskScheduleChange
 from module_shot_grid.entity.do.version_do import (
     ShotGridMediaDerivation,
     ShotGridVersion,
@@ -68,6 +69,7 @@ __all__ = [
     'ShotGridStorageOperation',
     'ShotGridStorageRoot',
     'ShotGridTask',
+    'ShotGridTaskScheduleChange',
     'ShotGridVersion',
     'ShotGridVersionCandidate',
     'ShotGridVersionCandidateSelection',

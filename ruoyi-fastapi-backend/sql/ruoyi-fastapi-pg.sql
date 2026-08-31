@@ -2307,6 +2307,8 @@ CREATE TABLE sg_task (
 	due_date DATE,
 	expected_start_time TIMESTAMP(0) WITHOUT TIME ZONE,
 	expected_end_time TIMESTAMP(0) WITHOUT TIME ZONE,
+	baseline_start_time TIMESTAMP(0) WITHOUT TIME ZONE,
+	baseline_end_time TIMESTAMP(0) WITHOUT TIME ZONE,
 	requirements TEXT,
 	create_by VARCHAR(64) DEFAULT '' NOT NULL,
 	create_time TIMESTAMP(0) WITHOUT TIME ZONE NOT NULL,
@@ -2325,6 +2327,7 @@ CREATE TABLE sg_task (
 	CONSTRAINT ck_sg_task_status CHECK (task_status in ('not_started', 'preparing', 'in_progress', 'pending_review', 'revision', 'completed')),
 	CONSTRAINT ck_sg_task_priority CHECK (priority in ('low', 'normal', 'high', 'urgent')),
 	CONSTRAINT ck_sg_task_expected_time_range CHECK ((expected_start_time IS NULL AND expected_end_time IS NULL) OR (expected_start_time IS NOT NULL AND expected_end_time IS NOT NULL AND expected_end_time > expected_start_time)),
+	CONSTRAINT ck_sg_task_baseline_time_range CHECK ((baseline_start_time IS NULL AND baseline_end_time IS NULL) OR (baseline_start_time IS NOT NULL AND baseline_end_time IS NOT NULL AND baseline_end_time > baseline_start_time)),
 	CONSTRAINT ck_sg_task_lock_version CHECK (lock_version >= 0),
 	CONSTRAINT ck_sg_task_del_flag CHECK (del_flag in ('0', '2'))
 );
@@ -2345,6 +2348,8 @@ COMMENT ON COLUMN sg_task.priority IS '任务优先级';
 COMMENT ON COLUMN sg_task.due_date IS '截止日期';
 COMMENT ON COLUMN sg_task.expected_start_time IS '预期开始时间，仅供制作人参考';
 COMMENT ON COLUMN sg_task.expected_end_time IS '预期结束时间，仅供制作人参考';
+COMMENT ON COLUMN sg_task.baseline_start_time IS '首版排期开始时间，首次写入后冻结';
+COMMENT ON COLUMN sg_task.baseline_end_time IS '首版排期结束时间，首次写入后冻结';
 COMMENT ON COLUMN sg_task.requirements IS '制作要求';
 COMMENT ON COLUMN sg_task.create_by IS '创建者';
 COMMENT ON COLUMN sg_task.create_time IS '创建时间';
@@ -2353,6 +2358,65 @@ COMMENT ON COLUMN sg_task.update_time IS '更新时间';
 COMMENT ON COLUMN sg_task.remark IS '备注';
 COMMENT ON COLUMN sg_task.lock_version IS '乐观锁版本';
 COMMENT ON COLUMN sg_task.del_flag IS '删除标志（0正常 2删除）';
+
+-- sg_task_schedule_change
+CREATE TABLE sg_task_schedule_change (
+	schedule_change_id BIGSERIAL NOT NULL,
+	project_id BIGINT NOT NULL,
+	task_id BIGINT NOT NULL,
+	operator_user_id BIGINT NOT NULL,
+	from_start_time TIMESTAMP(0) WITHOUT TIME ZONE,
+	from_end_time TIMESTAMP(0) WITHOUT TIME ZONE,
+	to_start_time TIMESTAMP(0) WITHOUT TIME ZONE NOT NULL,
+	to_end_time TIMESTAMP(0) WITHOUT TIME ZONE NOT NULL,
+	change_type VARCHAR(20) NOT NULL,
+	operation_source VARCHAR(20) NOT NULL,
+	change_reason VARCHAR(500) NOT NULL,
+	overlap_acknowledged BOOLEAN DEFAULT false NOT NULL,
+	overlap_task_ids JSONB NOT NULL,
+	task_lock_version_before INTEGER NOT NULL,
+	task_lock_version_after INTEGER NOT NULL,
+	idempotency_key VARCHAR(128) NOT NULL,
+	request_hash VARCHAR(64) NOT NULL,
+	result_snapshot JSONB NOT NULL,
+	create_by VARCHAR(64) DEFAULT '' NOT NULL,
+	create_time TIMESTAMP(0) WITHOUT TIME ZONE NOT NULL,
+	PRIMARY KEY (schedule_change_id),
+	CONSTRAINT fk_sg_task_schedule_change_task_project FOREIGN KEY(task_id, project_id) REFERENCES sg_task (task_id, project_id) ON DELETE RESTRICT,
+	CONSTRAINT fk_sg_task_schedule_change_operator FOREIGN KEY(operator_user_id) REFERENCES sys_user (user_id) ON DELETE RESTRICT,
+	CONSTRAINT uk_sg_task_schedule_idempotency UNIQUE (task_id, operator_user_id, idempotency_key),
+	CONSTRAINT ck_sg_task_schedule_from_range CHECK ((from_start_time IS NULL AND from_end_time IS NULL) OR (from_start_time IS NOT NULL AND from_end_time IS NOT NULL AND from_end_time > from_start_time)),
+	CONSTRAINT ck_sg_task_schedule_to_range CHECK (to_end_time > to_start_time),
+	CONSTRAINT ck_sg_task_schedule_change_type CHECK (change_type in ('initial', 'move', 'resize_start', 'resize_end', 'dialog')),
+	CONSTRAINT ck_sg_task_schedule_operation_source CHECK (operation_source in ('start', 'swimlane', 'gantt', 'dialog')),
+	CONSTRAINT ck_sg_task_schedule_reason CHECK (btrim(change_reason) <> ''),
+	CONSTRAINT ck_sg_task_schedule_lock_versions CHECK (task_lock_version_before >= 0 and task_lock_version_after > task_lock_version_before),
+	CONSTRAINT ck_sg_task_schedule_idempotency CHECK (btrim(idempotency_key) <> ''),
+	CONSTRAINT ck_sg_task_schedule_request_hash CHECK (request_hash ~ '^[0-9a-f]{64}$')
+);
+CREATE INDEX idx_sg_task_schedule_task_time ON sg_task_schedule_change (project_id, task_id, create_time DESC, schedule_change_id DESC);
+CREATE INDEX idx_sg_task_schedule_project_time ON sg_task_schedule_change (project_id, create_time DESC, schedule_change_id DESC);
+COMMENT ON TABLE sg_task_schedule_change IS 'Shot Grid任务排期不可变结构化历史表';
+COMMENT ON COLUMN sg_task_schedule_change.schedule_change_id IS '排期变更ID';
+COMMENT ON COLUMN sg_task_schedule_change.project_id IS '项目ID';
+COMMENT ON COLUMN sg_task_schedule_change.task_id IS '任务ID';
+COMMENT ON COLUMN sg_task_schedule_change.operator_user_id IS '操作用户ID';
+COMMENT ON COLUMN sg_task_schedule_change.from_start_time IS '变更前开始时间';
+COMMENT ON COLUMN sg_task_schedule_change.from_end_time IS '变更前结束时间';
+COMMENT ON COLUMN sg_task_schedule_change.to_start_time IS '变更后开始时间';
+COMMENT ON COLUMN sg_task_schedule_change.to_end_time IS '变更后结束时间';
+COMMENT ON COLUMN sg_task_schedule_change.change_type IS '后端规范化的变更类型';
+COMMENT ON COLUMN sg_task_schedule_change.operation_source IS '操作来源';
+COMMENT ON COLUMN sg_task_schedule_change.change_reason IS '改期原因';
+COMMENT ON COLUMN sg_task_schedule_change.overlap_acknowledged IS '是否确认人员排期重叠';
+COMMENT ON COLUMN sg_task_schedule_change.overlap_task_ids IS '当次确认的重叠任务ID有序快照';
+COMMENT ON COLUMN sg_task_schedule_change.task_lock_version_before IS '修改前任务乐观锁版本';
+COMMENT ON COLUMN sg_task_schedule_change.task_lock_version_after IS '修改后任务乐观锁版本';
+COMMENT ON COLUMN sg_task_schedule_change.idempotency_key IS '客户端排期命令幂等键';
+COMMENT ON COLUMN sg_task_schedule_change.request_hash IS '规范化排期命令SHA-256';
+COMMENT ON COLUMN sg_task_schedule_change.result_snapshot IS '首次成功响应安全快照';
+COMMENT ON COLUMN sg_task_schedule_change.create_by IS '创建者';
+COMMENT ON COLUMN sg_task_schedule_change.create_time IS '创建时间';
 
 -- sg_version_submission
 CREATE TABLE sg_version_submission (
@@ -3099,6 +3163,7 @@ values
     ('workbench', 3, '修改任务要求、优先级和截止日期', 'shotgrid:task:edit'),
     ('workbench', 4, '分配或改派制作任务', 'shotgrid:task:assign'),
     ('workbench', 5, '开始任务', 'shotgrid:task:start'),
+    ('workbench', 6, '调整任务排期', 'shotgrid:task:schedule'),
     ('reviews', 1, '查看版本列表', 'shotgrid:version:list'),
     ('reviews', 2, '查看版本详情', 'shotgrid:version:query'),
     ('reviews', 3, '上传并提交任务版本', 'shotgrid:version:add'),
@@ -3193,7 +3258,7 @@ create table if not exists alembic_version (
     constraint alembic_version_pkc primary key (version_num)
 );
 delete from alembic_version;
-insert into alembic_version(version_num) values ('20260828_24');
+insert into alembic_version(version_num) values ('20260831_25');
 
 
 CREATE OR REPLACE FUNCTION "find_in_set"(int8, varchar)

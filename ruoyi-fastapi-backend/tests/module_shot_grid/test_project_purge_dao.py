@@ -73,3 +73,23 @@ async def test_prepare_exclusive_files_removes_every_candidate_temporary_referen
     assert "'file-a'" in reference_deletes[1]
     assert "'file-b'" in reference_deletes[1]
     assert [item['fileId'] for item in result] == ['file-a', 'file-b']
+
+
+@pytest.mark.asyncio
+async def test_delete_project_graph_removes_schedule_history_before_tasks() -> None:
+    db = AsyncMock()
+    db.execute.return_value = SimpleNamespace(rowcount=1)
+
+    await ShotGridProjectPurgeDao.delete_project_graph(db, project_id=9)
+
+    statements = [_sql(call.args[0]) for call in db.execute.await_args_list]
+    schedule_delete_index = next(
+        index
+        for index, statement in enumerate(statements)
+        if statement.startswith('DELETE FROM sg_task_schedule_change')
+    )
+    task_delete_index = next(
+        index for index, statement in enumerate(statements) if statement.startswith('DELETE FROM sg_task ')
+    )
+
+    assert schedule_delete_index < task_delete_index
