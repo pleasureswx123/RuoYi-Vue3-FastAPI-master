@@ -22,6 +22,7 @@ const form = reactive({
   confirmed: true
 })
 const isShot = Boolean(context.shot)
+const hasExistingSchedule = Boolean(context.task?.expectedStartTime && context.task?.expectedEndTime)
 const confirmation = isShot ? '我已在线下核对该镜头所需资产齐备，可以开工' : '我已确认该制作分项的线下制作条件齐备，可以开工'
 const defaultTime = [new Date(Date.now() + 5 * 60 * 1000), new Date(2000, 0, 1, 18)]
 const rules = {
@@ -30,7 +31,7 @@ const rules = {
     if (!Array.isArray(value) || value.length !== 2 || value.some(time => !time || Number.isNaN(new Date(time).getTime()))) {
       return callback(new Error('请选择完整的预期开始与结束时间'))
     }
-    if (new Date(value[0]).getTime() < Math.floor(Date.now() / 1000) * 1000) return callback(new Error('开始时间不能早于当前时间，请重新选择'))
+    if (!hasExistingSchedule && new Date(value[0]).getTime() < Math.floor(Date.now() / 1000) * 1000) return callback(new Error('开始时间不能早于当前时间，请重新选择'))
     if (new Date(value[1]).getTime() <= new Date(value[0]).getTime()) return callback(new Error('结束时间必须晚于开始时间'))
     callback()
   }, trigger: 'change' }],
@@ -64,8 +65,12 @@ async function submit() {
       return
     }
     const response = await startTask(context.taskId, {
-      ...context.command, priority: form.priority,
-      expectedStartTime: form.expectedRange[0], expectedEndTime: form.expectedRange[1]
+      ...context.command,
+      priority: form.priority,
+      ...(hasExistingSchedule ? {} : {
+        expectedStartTime: form.expectedRange[0],
+        expectedEndTime: form.expectedRange[1]
+      })
     })
     if (!disposed) emit('started', response)
   } catch (failure) {
@@ -87,7 +92,8 @@ async function submit() {
       </section>
       <el-form-item label="任务优先级" prop="priority"><el-select v-model="form.priority" :disabled="saving"><el-option label="低" value="low" /><el-option label="普通" value="normal" /><el-option label="高" value="high" /><el-option label="紧急" value="urgent" /></el-select></el-form-item>
       <el-form-item label="预期制作时间" prop="expectedRange">
-        <el-date-picker v-model="form.expectedRange" type="datetimerange" range-separator="至" start-placeholder="预期开始时间" end-placeholder="预期结束时间" value-format="YYYY-MM-DDTHH:mm:ss" format="YYYY-MM-DD HH:mm:ss" :default-time="defaultTime" :disabled-date="disabledDate" :disabled-hours="disabledHours" :disabled-minutes="disabledMinutes" :disabled-seconds="disabledSeconds" :disabled="saving" @calendar-change="dates => calendarDates = dates" />
+        <el-date-picker v-model="form.expectedRange" type="datetimerange" range-separator="至" start-placeholder="预期开始时间" end-placeholder="预期结束时间" value-format="YYYY-MM-DDTHH:mm:ss" format="YYYY-MM-DD HH:mm:ss" :default-time="defaultTime" :disabled-date="disabledDate" :disabled-hours="disabledHours" :disabled-minutes="disabledMinutes" :disabled-seconds="disabledSeconds" :disabled="saving || hasExistingSchedule" @calendar-change="dates => calendarDates = dates" />
+        <small v-if="hasExistingSchedule">任务已有正式排期，本次开工只读沿用该范围；如需调整，请先到项目排期页修改。</small>
         <small v-if="legacyDue">原截止日期：{{ legacyDue }}，请在本次开工时确认完整时间范围。</small>
       </el-form-item>
       <el-form-item prop="confirmed"><ElCheckbox v-model="form.confirmed" :disabled="saving">{{ confirmation }}</ElCheckbox></el-form-item>

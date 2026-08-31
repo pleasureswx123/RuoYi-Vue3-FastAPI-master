@@ -1,7 +1,7 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, onBeforeUnmount, ref } from 'vue'
 
-import { toGanttTasks, toSwimlaneRows } from '@/views/schedule/adapters/svarGanttAdapter'
+import { rangeChangeRequest, toGanttTasks, toSwimlaneRows } from '@/views/schedule/adapters/svarGanttAdapter'
 
 const props = defineProps({
   rows: { type: Array, default: () => [] },
@@ -17,6 +17,9 @@ const windowEndMs = computed(() => new Date(props.windowEnd).getTime())
 const windowDuration = computed(() => Math.max(1, windowEndMs.value - windowStartMs.value))
 const lanes = computed(() => toSwimlaneRows(toGanttTasks(props.rows, { editable: props.editable })))
 const laneHeight = lane => Math.max(54, lane.trackCount * 38 + 16)
+const preview = ref(null)
+let dragCleanup = null
+let suppressClickTaskId = null
 
 function positionStyle(start, end, track = 0) {
   const clippedStart = Math.max(start.getTime(), windowStartMs.value)
@@ -24,6 +27,18 @@ function positionStyle(start, end, track = 0) {
   const left = ((clippedStart - windowStartMs.value) / windowDuration.value) * 100
   const width = Math.max(0.8, ((clippedEnd - clippedStart) / windowDuration.value) * 100)
   return { left: `${left}%`, width: `${width}%`, top: `${8 + track * 38}px` }
+}
+
+function visibleRange(task) {
+  if (preview.value?.taskId === task.taskId) {
+    return { start: preview.value.start, end: preview.value.end }
+  }
+  return { start: task.start, end: task.end }
+}
+
+function taskPositionStyle(task) {
+  const range = visibleRange(task)
+  return positionStyle(range.start, range.end, task.track)
 }
 
 function baselineStyle(task) {
@@ -44,6 +59,65 @@ const ticks = computed(() => {
     }
   })
 })
+
+function startDrag(event, task, edge = 'move') {
+  if (!props.editable || task.readonly || event.button !== 0) return
+  event.preventDefault()
+  event.stopPropagation()
+  dragCleanup?.()
+  const timeline = event.currentTarget.closest('.personnel-lane__timeline')
+  const width = Math.max(1, timeline?.getBoundingClientRect().width || 1)
+  const originX = event.clientX
+  const originStart = task.start.getTime()
+  const originEnd = task.end.getTime()
+  const minimumDuration = 60 * 1000
+  let moved = false
+  const move = moveEvent => {
+    const delta = Math.round(((moveEvent.clientX - originX) / width) * windowDuration.value / 1000) * 1000
+    moved ||= delta !== 0
+    let nextStart = originStart
+    let nextEnd = originEnd
+    if (edge === 'move') {
+      nextStart += delta
+      nextEnd += delta
+    } else if (edge === 'start') {
+      nextStart = Math.min(originStart + delta, originEnd - minimumDuration)
+    } else {
+      nextEnd = Math.max(originEnd + delta, originStart + minimumDuration)
+    }
+    preview.value = { taskId: task.taskId, start: new Date(nextStart), end: new Date(nextEnd) }
+  }
+  const up = () => {
+    const next = preview.value
+    dragCleanup?.()
+    if (!moved || !next || next.taskId !== task.taskId) return
+    suppressClickTaskId = task.taskId
+    globalThis.setTimeout(() => { suppressClickTaskId = null }, 0)
+    const request = rangeChangeRequest({
+      task,
+      nextStart: next.start,
+      nextEnd: next.end,
+      nextAssigneeUserId: task.assigneeUserId,
+      operationSource: 'swimlane'
+    })
+    if (request.accepted) emit('range-change-request', request.payload)
+  }
+  dragCleanup = () => {
+    globalThis.removeEventListener('pointermove', move)
+    globalThis.removeEventListener('pointerup', up)
+    preview.value = null
+    dragCleanup = null
+  }
+  globalThis.addEventListener('pointermove', move)
+  globalThis.addEventListener('pointerup', up, { once: true })
+}
+
+function openTask(task) {
+  if (suppressClickTaskId === task.taskId) return
+  emit('task-click', { taskId: task.taskId })
+}
+
+onBeforeUnmount(() => dragCleanup?.())
 </script>
 
 <template>
@@ -70,12 +144,17 @@ const ticks = computed(() => {
           <el-button
             class="personnel-task"
             :class="[task.className, `status-${task.taskStatus}`]"
-            :style="positionStyle(task.start, task.end, task.track)"
+            :style="taskPositionStyle(task)"
             :data-task-id="task.taskId"
             :aria-label="`${task.text}，${task.assigneeName}`"
             text
-            @click="emit('task-click', { taskId: task.taskId })"
-          >{{ task.text }}</el-button>
+            @pointerdown="event => startDrag(event, task, 'move')"
+            @click="openTask(task)"
+          >
+            <span v-if="editable && !task.readonly" class="personnel-task__handle is-start" aria-hidden="true" @pointerdown.stop="event => startDrag(event, task, 'start')" />
+            <span class="personnel-task__label">{{ task.text }}</span>
+            <span v-if="editable && !task.readonly" class="personnel-task__handle is-end" aria-hidden="true" @pointerdown.stop="event => startDrag(event, task, 'end')" />
+          </el-button>
         </template>
       </div>
     </div>
@@ -95,6 +174,9 @@ const ticks = computed(() => {
 .personnel-lane>header small { margin-top: 3px; color: var(--sg-text-muted); font-size: 10px; }
 .personnel-lane__gridline { position: absolute; top: 0; bottom: 0; border-left: 1px dashed color-mix(in srgb,var(--sg-border) 75%,transparent); }
 .personnel-task { position: absolute; z-index: 2; display: block; height: 28px; padding: 0 9px!important; overflow: hidden; color: var(--sg-text)!important; text-align: left; text-overflow: ellipsis; white-space: nowrap; background: color-mix(in srgb,var(--el-color-primary) 22%,var(--sg-surface-raised))!important; border: 1px solid color-mix(in srgb,var(--el-color-primary) 55%,transparent)!important; border-radius: 6px; }
+.personnel-task__label { display: block; overflow: hidden; text-overflow: ellipsis; }
+.personnel-task__handle { position: absolute; z-index: 3; top: 3px; bottom: 3px; width: 6px; cursor: ew-resize; background: color-mix(in srgb,var(--sg-text) 35%,transparent); border-radius: 3px; }
+.personnel-task__handle.is-start { left: 2px; }.personnel-task__handle.is-end { right: 2px; }
 .personnel-task.status-completed { background: color-mix(in srgb,var(--el-color-success) 18%,var(--sg-surface-raised))!important; border-color: var(--el-color-success)!important; }
 .personnel-task.is-conflicted { border-color: var(--el-color-danger)!important; box-shadow: 0 0 0 1px color-mix(in srgb,var(--el-color-danger) 38%,transparent); }
 .personnel-task__baseline { position: absolute; z-index: 1; height: 4px; background: color-mix(in srgb,var(--el-color-info) 60%,transparent); border: 1px dashed var(--el-color-info); border-radius: 999px; }

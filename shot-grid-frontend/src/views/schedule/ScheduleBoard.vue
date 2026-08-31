@@ -4,11 +4,13 @@ import { Warning } from '@element-plus/icons-vue'
 
 import { useScheduleStore } from '@/store/modules/schedule'
 import { scheduleErrorState } from '@/views/schedule/schedulePresentation'
+import { useScheduleMutation } from '@/views/schedule/useScheduleMutation'
 import ScheduleToolbar from '@/views/schedule/components/ScheduleToolbar.vue'
 import PersonnelSwimlane from '@/views/schedule/components/PersonnelSwimlane.vue'
 import TaskGantt from '@/views/schedule/components/TaskGantt.vue'
 import ScheduleTaskDrawer from '@/views/schedule/components/ScheduleTaskDrawer.vue'
 import UnscheduledTaskDrawer from '@/views/schedule/components/UnscheduledTaskDrawer.vue'
+import ScheduleEditDialog from '@/views/schedule/components/ScheduleEditDialog.vue'
 
 const props = defineProps({
   projectId: { type: [Number, String], required: true },
@@ -23,6 +25,7 @@ const props = defineProps({
 
 const emit = defineEmits(['query-change'])
 const store = useScheduleStore()
+const mutation = useScheduleMutation(store, { onSaved: refresh, onRefresh: refresh })
 const detailVisible = ref(false)
 const unscheduledVisible = ref(false)
 const accessNotice = ref('')
@@ -117,6 +120,7 @@ function toggleEdit(enabled) {
     return
   }
   store.setEditMode(enabled)
+  if (!enabled) mutation.close()
 }
 
 function openTask({ taskId }) {
@@ -126,7 +130,28 @@ function openTask({ taskId }) {
 
 function requestRangeChange(payload) {
   const task = store.tasks.find(item => item.taskId === payload.taskId)
-  if (task) openTask({ taskId: task.taskId })
+  if (!store.editMode || !props.editableAllowed) {
+    accessNotice.value = '请先由授权管理人员显式进入排期编辑模式。'
+    return
+  }
+  if (task) mutation.open(task, payload)
+}
+
+function openEdit(task) {
+  if (!store.editMode || !props.editableAllowed) {
+    accessNotice.value = '请先由授权管理人员显式进入排期编辑模式。'
+    return
+  }
+  detailVisible.value = false
+  unscheduledVisible.value = false
+  mutation.open(task, { operationSource: 'dialog' })
+}
+
+async function saveMutation(form) {
+  const saved = await mutation.save(form)
+  if (!saved && ['SG_TASK_SCHEDULE_READ_ONLY'].includes(mutation.error.value?.errorKey)) {
+    accessNotice.value = '排期权限或任务状态已变化，已退出编辑模式；请刷新后确认。'
+  }
 }
 
 function handleRejected(payload) {
@@ -155,10 +180,16 @@ watch(() => props.projectId, projectId => {
 })
 
 watch(() => props.editableAllowed, allowed => {
-  if (!allowed) store.setEditMode(false)
+  if (!allowed) {
+    store.setEditMode(false)
+    mutation.close()
+  }
 })
 
-onBeforeUnmount(() => store.dispose())
+onBeforeUnmount(() => {
+  mutation.dispose()
+  store.dispose()
+})
 </script>
 
 <template>
@@ -238,12 +269,24 @@ onBeforeUnmount(() => store.dispose())
       v-model:visible="detailVisible"
       :task="selectedTask"
       :can-edit="Boolean(selectedTask?.allowedActions?.includes('schedule') && store.editMode && editableAllowed)"
+      @edit="openEdit"
     />
     <UnscheduledTaskDrawer
       v-model:visible="unscheduledVisible"
       :project-id="projectId"
       :query="effectiveQuery"
-      @edit-task="task => { store.selectedTaskId = task.taskId; detailVisible = true }"
+      @edit-task="openEdit"
+    />
+    <ScheduleEditDialog
+      :visible="mutation.visible.value"
+      :task="mutation.activeTask.value"
+      :draft="mutation.draft.value"
+      :saving="mutation.saving.value"
+      :conflict-task-ids="mutation.conflictTaskIds.value"
+      :error="mutation.error.value"
+      @update:visible="value => { if (!value) mutation.close() }"
+      @cancel="mutation.close"
+      @submit="saveMutation"
     />
   </section>
 </template>

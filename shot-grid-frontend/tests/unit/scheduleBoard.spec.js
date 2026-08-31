@@ -6,6 +6,7 @@ import { getProjectSchedule, getTaskScheduleChanges } from '@/api/shot-grid/sche
 import ScheduleBoard from '@/views/schedule/ScheduleBoard.vue'
 import PersonnelSwimlane from '@/views/schedule/components/PersonnelSwimlane.vue'
 import ScheduleTaskDrawer from '@/views/schedule/components/ScheduleTaskDrawer.vue'
+import ScheduleEditDialog from '@/views/schedule/components/ScheduleEditDialog.vue'
 import ScheduleToolbar from '@/views/schedule/components/ScheduleToolbar.vue'
 import TaskGantt from '@/views/schedule/components/TaskGantt.vue'
 
@@ -21,7 +22,8 @@ vi.mock('@/views/schedule/components/ScheduleGanttAdapter.vue', () => ({
 vi.mock('@/api/shot-grid/schedules', () => ({
   getProjectSchedule: vi.fn(),
   getTaskScheduleChanges: vi.fn(),
-  getUnscheduledScheduleTasks: vi.fn()
+  getUnscheduledScheduleTasks: vi.fn(),
+  updateTaskSchedule: vi.fn()
 }))
 
 const rows = [
@@ -122,5 +124,34 @@ describe('共享任务排期面板', () => {
 
     expect(wrapper.getComponent(PersonnelSwimlane).props('editable')).toBe(false)
     expect(wrapper.text()).toContain('没有调整排期权限')
+  })
+
+  it('显式进入编辑后拖动只打开草稿弹窗，不立即改写任务时间', async () => {
+    const wrapper = mount(ScheduleBoard, {
+      props: {
+        projectId: 11,
+        initialWindowStart: '2026-09-01T00:00:00',
+        initialWindowEnd: '2026-09-08T00:00:00',
+        editableAllowed: true
+      }
+    })
+    await flushPromises()
+    wrapper.getComponent(ScheduleToolbar).vm.$emit('edit-toggle', true)
+    await flushPromises()
+    wrapper.getComponent(PersonnelSwimlane).vm.$emit('range-change-request', {
+      taskId: 31,
+      lockVersion: 8,
+      expectedStartTime: '2026-09-02T09:00:00',
+      expectedEndTime: '2026-09-06T18:00:00',
+      operationSource: 'swimlane'
+    })
+    await flushPromises()
+
+    expect(wrapper.getComponent(ScheduleEditDialog).props('visible')).toBe(true)
+    expect(wrapper.getComponent(ScheduleEditDialog).props('draft')).toMatchObject({
+      expectedStartTime: '2026-09-02T09:00:00',
+      expectedEndTime: '2026-09-06T18:00:00'
+    })
+    expect(wrapper.getComponent(PersonnelSwimlane).props('rows')[0].currentStart).toBe('2026-09-01T09:00:00')
   })
 })

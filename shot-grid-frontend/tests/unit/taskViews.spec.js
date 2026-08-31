@@ -987,6 +987,33 @@ describe('开工时间表单', () => {
     } finally { wrapper.unmount() }
   })
 
+  it('已有排期在开工时只读沿用，即使开始时间已过去也不重复提交时间字段', async () => {
+    startTask.mockReset().mockResolvedValue({ data: { taskStatus: 'preparing' } })
+    const existingTimes = {
+      expectedStartTime: '2026-08-28T09:00:00',
+      expectedEndTime: '2026-08-30T18:00:00'
+    }
+    const wrapper = mountStart(() => true, {
+      task: { priority: 'high', ...existingTimes }
+    })
+    try {
+      await flushPromises()
+      expect(wrapper.findComponent(ElDatePicker).props('disabled')).toBe(true)
+      expect(document.body.textContent).toContain('任务已有正式排期')
+      await wrapper.findAllComponents(ElButton).find(button => buttonLabel(button) === '确认开工').trigger('click')
+      await flushPromises()
+      expect(startTask).toHaveBeenCalledWith(71, {
+        lockVersion: 4,
+        assetLockVersion: 2,
+        assetItemLockVersion: 3,
+        startConfirmed: true,
+        priority: 'high'
+      })
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
   it('旧上下文不提交；服务端时间校验失败后保留输入允许修正', async () => {
     startTask.mockReset()
     const stale = mountStart(() => false)
