@@ -315,7 +315,7 @@ onBeforeUnmount(() => {
       :error="mutation.error.value"
       @update:visible="value => { if (!value) mutation.close() }"
       @cancel="mutation.close"
-      @submit="saveMutation"
+      @save-request="saveMutation"
     />
   </section>
 </template>

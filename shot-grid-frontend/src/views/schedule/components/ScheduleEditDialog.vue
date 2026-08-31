@@ -12,7 +12,7 @@ const props = defineProps({
   error: { type: Object, default: null }
 })
 
-const emit = defineEmits(['update:visible', 'submit', 'cancel'])
+const emit = defineEmits(['update:visible', 'save-request', 'cancel'])
 const formRef = ref(null)
 const form = reactive({ expectedRange: [], changeReason: '', overlapAcknowledged: false })
 const dialogVisible = computed({
@@ -70,7 +70,7 @@ async function submit() {
   if (props.saving) return
   const valid = await formRef.value?.validate().catch(() => false)
   if (!valid) return
-  emit('submit', {
+  emit('save-request', {
     expectedStartTime: form.expectedRange[0],
     expectedEndTime: form.expectedRange[1],
     operationSource: props.draft?.operationSource || 'dialog',

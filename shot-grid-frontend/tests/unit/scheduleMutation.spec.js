@@ -55,12 +55,12 @@ describe('排期编辑表单', () => {
     expect(form.props('rules')).toMatchObject({ expectedRange: expect.any(Array), changeReason: expect.any(Array) })
 
     await wrapper.findAllComponents(ElButton).find(button => button.text() === '保存排期').trigger('click')
-    expect(wrapper.emitted('submit')).toBeUndefined()
+    expect(wrapper.emitted('save-request')).toBeUndefined()
 
     await wrapper.findAllComponents(ElInput).find(input => input.props('type') === 'textarea').setValue('调整动画制作窗口')
     await wrapper.findAllComponents(ElButton).find(button => button.text() === '保存排期').trigger('click')
     await flushPromises()
-    expect(wrapper.emitted('submit')[0][0]).toEqual({
+    expect(wrapper.emitted('save-request')[0][0]).toEqual({
       expectedStartTime: '2026-09-02T09:00:00',
       expectedEndTime: '2026-09-06T18:00:00',
       operationSource: 'gantt',
