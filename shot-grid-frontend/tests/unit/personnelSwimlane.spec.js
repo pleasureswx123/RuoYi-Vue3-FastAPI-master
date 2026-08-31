@@ -146,6 +146,59 @@ describe('人员泳道任务条', () => {
     expect(wrapper.get('.personnel-task__baseline').attributes('style')).toContain('display: none')
   })
 
+  it('把首版基线放在当前任务色块下方', () => {
+    const wrapper = mount(PersonnelSwimlane, {
+      props: {
+        rows: [task],
+        windowStart: '2026-08-23T00:00:00',
+        windowEnd: '2026-10-10T00:00:00',
+        scale: 'day'
+      }
+    })
+
+    expect(wrapper.get('[data-task-id="31"]').element.style.top).toBe('8px')
+    expect(wrapper.get('.personnel-task__baseline').element.style.top).toBe('39px')
+  })
+
+  it('切换首版基线可见性时保持相邻任务的横向位置', async () => {
+    const adjacentButtonStyle = document.createElement('style')
+    adjacentButtonStyle.textContent = '.el-button + .el-button { margin-left: 12px; }'
+    document.head.append(adjacentButtonStyle)
+
+    try {
+      const wrapper = mount(PersonnelSwimlane, {
+        props: {
+          rows: [
+            task,
+            {
+              ...task,
+              taskId: 32,
+              target: { ...task.target, targetId: 102, code: 'EP001-002-0003', name: 'EP001-002-0003' },
+              currentStart: '2026-09-02T09:00:00',
+              currentEnd: '2026-09-03T09:00:00',
+              baselineStart: '2026-09-02T09:00:00',
+              baselineEnd: '2026-09-03T09:00:00'
+            }
+          ],
+          windowStart: '2026-08-23T00:00:00',
+          windowEnd: '2026-10-10T00:00:00',
+          scale: 'day',
+          showBaseline: true
+        }
+      })
+
+      await wrapper.setProps({ showBaseline: false })
+
+      const taskButtons = wrapper.findAll('.personnel-task')
+      const baselines = wrapper.findAll('.personnel-task__baseline')
+      expect(Number.parseFloat(getComputedStyle(taskButtons[1].element).marginLeft || '0')).toBe(0)
+      expect(baselines).toHaveLength(2)
+      expect(baselines.every(item => item.element.style.visibility === 'hidden')).toBe(true)
+    } finally {
+      adjacentButtonStyle.remove()
+    }
+  })
+
   it('保持真实时长宽度，并通过悬浮提示提供完整任务信息', () => {
     const wrapper = mount(PersonnelSwimlane, {
       props: {

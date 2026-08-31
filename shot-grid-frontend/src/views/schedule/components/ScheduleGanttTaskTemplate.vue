@@ -12,7 +12,18 @@ const props = defineProps({
 const baselineStyle = computed(() => baselineOverlayStyle(props.data))
 const hasConflict = computed(() => props.data.conflictTaskIds?.length > 0)
 const isGroup = computed(() => props.data.isScheduleGroup === true)
-const hasBaseline = computed(() => !isGroup.value && Object.keys(baselineStyle.value).length > 0)
+const hasBaseline = computed(() => (
+  props.data.showBaseline !== false
+  && !isGroup.value
+  && Object.keys(baselineStyle.value).length > 0
+))
+const currentBarClasses = computed(() => ({
+  'is-current-schedule': !isGroup.value,
+  'is-conflicted': hasConflict.value,
+  'is-readonly': props.data.readonly,
+  'is-group': isGroup.value,
+  [`status-${props.data.taskStatus}`]: !isGroup.value && Boolean(props.data.taskStatus)
+}))
 </script>
 
 <template>
@@ -28,7 +39,13 @@ const hasBaseline = computed(() => !isGroup.value && Object.keys(baselineStyle.v
       data-testid="schedule-baseline-shadow"
       aria-hidden="true"
     />
-    <span class="schedule-task-content__label">{{ data.text }}</span>
+    <span
+      class="schedule-task-content__current"
+      :class="currentBarClasses"
+      data-testid="schedule-current-bar"
+    >
+      <span class="schedule-task-content__label">{{ data.text }}</span>
+    </span>
   </div>
 </template>
 
@@ -41,20 +58,41 @@ const hasBaseline = computed(() => !isGroup.value && Object.keys(baselineStyle.v
   min-width: 0;
   align-items: center;
   overflow: visible;
+}
+
+.schedule-task-content__current {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  overflow: hidden;
+  color: var(--sg-text);
   border: 1px solid transparent;
   border-radius: 5px;
 }
 
-.schedule-task-content.is-conflicted {
+.schedule-task-content__current.is-current-schedule {
+  background: color-mix(in srgb, var(--el-color-primary) 22%, var(--sg-surface-raised));
+  border-color: color-mix(in srgb, var(--el-color-primary) 55%, transparent);
+}
+
+.schedule-task-content__current.status-completed {
+  background: color-mix(in srgb, var(--el-color-success) 18%, var(--sg-surface-raised));
+  border-color: var(--el-color-success);
+}
+
+.schedule-task-content__current.is-conflicted {
   border-color: var(--el-color-danger);
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--el-color-danger) 38%, transparent);
 }
 
-.schedule-task-content.is-readonly {
+.schedule-task-content__current.is-readonly {
   cursor: default;
 }
 
-.schedule-task-content.is-group {
+.schedule-task-content__current.is-group {
   font-weight: 600;
 }
 
@@ -70,7 +108,6 @@ const hasBaseline = computed(() => !isGroup.value && Object.keys(baselineStyle.v
 
 .schedule-task-content__label {
   position: relative;
-  z-index: 1;
   min-width: 0;
   padding: 0 7px;
   overflow: hidden;

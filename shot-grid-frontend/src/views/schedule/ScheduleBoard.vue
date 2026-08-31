@@ -17,7 +17,7 @@ const props = defineProps({
   projectId: { type: [Number, String], required: true },
   targetKind: { type: String, default: 'all' },
   initialMode: { type: String, default: 'swimlane' },
-  initialScale: { type: String, default: 'week' },
+  initialScale: { type: String, default: 'day' },
   initialGroupBy: { type: String, default: 'assignee' },
   initialWindowStart: { type: String, default: '' },
   initialWindowEnd: { type: String, default: '' },

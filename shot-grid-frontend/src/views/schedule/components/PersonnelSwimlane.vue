@@ -8,7 +8,7 @@ const props = defineProps({
   rows: { type: Array, default: () => [] },
   windowStart: { type: String, required: true },
   windowEnd: { type: String, required: true },
-  scale: { type: String, default: 'week' },
+  scale: { type: String, default: 'day' },
   groupBy: { type: String, default: 'assignee' },
   showBaseline: { type: Boolean, default: true },
   editable: Boolean
@@ -18,7 +18,7 @@ const emit = defineEmits(['task-click', 'range-change-request'])
 const windowStartMs = computed(() => new Date(props.windowStart).getTime())
 const windowEndMs = computed(() => new Date(props.windowEnd).getTime())
 const windowDuration = computed(() => Math.max(1, windowEndMs.value - windowStartMs.value))
-const scaleConfig = computed(() => ganttScaleFor(props.scale) || ganttScaleFor('week'))
+const scaleConfig = computed(() => ganttScaleFor(props.scale) || ganttScaleFor('day'))
 const lanes = computed(() => {
   const tasks = toGanttTasks(props.rows, { editable: props.editable })
   if (!Number.isFinite(windowStartMs.value) || !Number.isFinite(windowEndMs.value)) return []
@@ -64,7 +64,11 @@ function taskPositionStyle(task) {
 
 function baselineStyle(task) {
   const style = positionStyle(task.baseline.start, task.baseline.end, task.track)
-  return { ...style, top: `${31 + task.track * 38}px` }
+  return {
+    ...style,
+    top: `${39 + task.track * 38}px`,
+    visibility: props.showBaseline ? 'visible' : 'hidden'
+  }
 }
 
 function startOfScaleUnit(value, scale) {
@@ -212,7 +216,7 @@ onBeforeUnmount(() => dragCleanup?.())
       <div class="personnel-lane__timeline">
         <span v-for="tick in ticks" :key="tick.key" class="personnel-lane__gridline" :style="{ left: tick.left }" aria-hidden="true" />
         <template v-for="task in lane.tasks" :key="task.id">
-          <span v-if="showBaseline" class="personnel-task__baseline" :style="baselineStyle(task)" aria-hidden="true" />
+          <span class="personnel-task__baseline" :style="baselineStyle(task)" aria-hidden="true" />
           <el-tooltip
             :content="taskTooltipContent(task)"
             placement="top"
@@ -251,7 +255,7 @@ onBeforeUnmount(() => dragCleanup?.())
 .personnel-lane>header { z-index: 3; flex-direction: column; align-items: flex-start; justify-content: center; background: var(--sg-surface); }
 .personnel-lane>header small { margin-top: 3px; color: var(--sg-text-muted); font-size: 10px; }
 .personnel-lane__gridline { position: absolute; top: 0; bottom: 0; border-left: 1px dashed color-mix(in srgb,var(--sg-border) 75%,transparent); }
-.personnel-task { position: absolute; z-index: 2; display: block; height: 28px; padding: 0 9px!important; overflow: hidden; color: var(--sg-text)!important; text-align: left; text-overflow: ellipsis; white-space: nowrap; background: color-mix(in srgb,var(--el-color-primary) 22%,var(--sg-surface-raised))!important; border: 1px solid color-mix(in srgb,var(--el-color-primary) 55%,transparent)!important; border-radius: 6px; }
+.personnel-task { position: absolute; z-index: 2; display: block; height: 28px; padding: 0 9px!important; margin-left: 0!important; overflow: hidden; color: var(--sg-text)!important; text-align: left; text-overflow: ellipsis; white-space: nowrap; background: color-mix(in srgb,var(--el-color-primary) 22%,var(--sg-surface-raised))!important; border: 1px solid color-mix(in srgb,var(--el-color-primary) 55%,transparent)!important; border-radius: 6px; }
 .personnel-task__label { display: block; overflow: hidden; text-overflow: ellipsis; }
 .personnel-task__handle { position: absolute; z-index: 3; top: 3px; bottom: 3px; width: 6px; cursor: ew-resize; background: color-mix(in srgb,var(--sg-text) 35%,transparent); border-radius: 3px; }
 .personnel-task__handle.is-start { left: 2px; }.personnel-task__handle.is-end { right: 2px; }

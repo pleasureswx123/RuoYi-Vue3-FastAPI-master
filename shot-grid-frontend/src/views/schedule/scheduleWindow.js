@@ -50,8 +50,8 @@ export function formatScheduleDate(date) {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
 }
 
-export function scheduleWindowForScale(scale = 'week', anchor = new Date()) {
-  const effectiveScale = SCALES.has(scale) ? scale : 'week'
+export function scheduleWindowForScale(scale = 'day', anchor = new Date()) {
+  const effectiveScale = SCALES.has(scale) ? scale : 'day'
   const anchorDate = validDate(anchor, '排期锚点')
   const anchorDay = new Date(anchorDate.getFullYear(), anchorDate.getMonth(), anchorDate.getDate())
   let start

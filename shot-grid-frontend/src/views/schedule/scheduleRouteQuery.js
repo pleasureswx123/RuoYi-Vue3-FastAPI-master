@@ -9,7 +9,7 @@ export function formatScheduleRouteTime(date) {
   return formatScheduleTime(date)
 }
 
-export function defaultScheduleRouteWindow(now = new Date(), scale = 'week') {
+export function defaultScheduleRouteWindow(now = new Date(), scale = 'day') {
   return scheduleWindowForScale(scale, now)
 }
 
@@ -25,7 +25,7 @@ function validBusinessTime(value) {
 export function normalizeScheduleRouteQuery(query = {}, now = new Date()) {
   const rawMode = firstQueryValue(query.mode)
   const rawScale = firstQueryValue(query.scale)
-  const scale = SCALES.has(rawScale) ? rawScale : 'week'
+  const scale = SCALES.has(rawScale) ? rawScale : 'day'
   const defaults = defaultScheduleRouteWindow(now, scale)
   const rawGroupBy = firstQueryValue(query.groupBy)
   const rawStart = firstQueryValue(query.windowStart)

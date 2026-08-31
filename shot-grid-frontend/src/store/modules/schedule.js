@@ -69,7 +69,7 @@ export const useScheduleStore = defineStore('schedule', {
   state: () => ({
     projectId: null,
     mode: 'swimlane',
-    scale: 'week',
+    scale: 'day',
     groupBy: 'assignee',
     targetKind: 'all',
     filters: freshFilters(),

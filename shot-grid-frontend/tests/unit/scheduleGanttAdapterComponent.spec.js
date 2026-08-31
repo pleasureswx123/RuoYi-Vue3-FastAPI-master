@@ -130,4 +130,26 @@ describe('ScheduleGanttAdapter', () => {
     expect(ganttHarness.receivedProps.readonly).toBe(true)
     expect(ganttHarness.receivedProps.lengthUnit).toBe('week')
   })
+
+  it('把首版基线开关状态传给自定义任务模板数据', async () => {
+    const wrapper = mount(ScheduleGanttAdapter, {
+      props: {
+        rows: [scheduleRow],
+        scale: 'day',
+        editable: false,
+        showBaseline: true,
+        windowStart: '2026-09-01T00:00:00',
+        windowEnd: '2026-10-01T00:00:00',
+        groupBy: 'assignee'
+      }
+    })
+    await nextTick()
+
+    expect(ganttHarness.receivedProps.tasks.find(item => item.id === 'task:31').showBaseline).toBe(true)
+
+    await wrapper.setProps({ showBaseline: false })
+    await nextTick()
+
+    expect(ganttHarness.receivedProps.tasks.find(item => item.id === 'task:31').showBaseline).toBe(false)
+  })
 })

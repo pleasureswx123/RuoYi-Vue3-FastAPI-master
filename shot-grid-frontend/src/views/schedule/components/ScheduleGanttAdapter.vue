@@ -34,7 +34,10 @@ const GANTT_CANVAS_GRID_COLOR = {
 const ganttTasks = computed(() => toGanttTasks(props.rows, {
   editable: props.editable,
   groupBy: props.groupBy
-}))
+}).map(task => ({
+  ...task,
+  showBaseline: props.showBaseline
+})))
 const columnConfig = ganttColumns()
 const ganttRuntimeStyle = computed(() => {
   const gridColor = GANTT_CANVAS_GRID_COLOR[themeStore.mode] || GANTT_CANVAS_GRID_COLOR.light

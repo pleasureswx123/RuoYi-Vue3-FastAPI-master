@@ -113,7 +113,7 @@ describe('共享任务排期面板', () => {
     wrapper.getComponent(ScheduleToolbar).vm.$emit('update:mode', 'gantt')
     await flushPromises()
     expect(wrapper.findComponent(TaskGantt).exists()).toBe(true)
-    expect(wrapper.emitted('query-change').at(-1)[0]).toMatchObject({ mode: 'gantt', scale: 'week' })
+    expect(wrapper.emitted('query-change').at(-1)[0]).toMatchObject({ mode: 'gantt', scale: 'day' })
   })
 
   it('甘特模式关闭共享容器的横向滚动', async () => {

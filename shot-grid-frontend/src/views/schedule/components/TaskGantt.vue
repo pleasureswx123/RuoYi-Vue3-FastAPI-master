@@ -3,7 +3,7 @@ import ScheduleGanttAdapter from '@/views/schedule/components/ScheduleGanttAdapt
 
 defineProps({
   rows: { type: Array, default: () => [] },
-  scale: { type: String, default: 'week' },
+  scale: { type: String, default: 'day' },
   groupBy: { type: String, default: 'assignee' },
   windowStart: { type: String, required: true },
   windowEnd: { type: String, required: true },

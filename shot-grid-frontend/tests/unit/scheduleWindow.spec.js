@@ -60,4 +60,23 @@ describe('排期自然日期窗口', () => {
       windowEnd: '2025-03-20T18:00:00'
     })
   })
+
+  it('缺少或提供非法缩放参数时统一回退到日视图窗口', () => {
+    const now = new Date(2026, 7, 31, 16, 20, 30)
+
+    expect(normalizeScheduleRouteQuery({}, now)).toMatchObject({
+      scale: 'day',
+      windowStart: '2026-08-24T00:00:00',
+      windowEnd: '2026-09-24T00:00:00'
+    })
+    expect(normalizeScheduleRouteQuery({ scale: 'year' }, now)).toMatchObject({
+      scale: 'day',
+      windowStart: '2026-08-24T00:00:00',
+      windowEnd: '2026-09-24T00:00:00'
+    })
+    expect(scheduleWindowForScale(undefined, now)).toEqual({
+      windowStart: '2026-08-24T00:00:00',
+      windowEnd: '2026-09-24T00:00:00'
+    })
+  })
 })

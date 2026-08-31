@@ -6,7 +6,7 @@ import { dateRangeToScheduleWindow, scheduleWindowToDateRange } from '@/views/sc
 
 const props = defineProps({
   mode: { type: String, default: 'swimlane' },
-  scale: { type: String, default: 'week' },
+  scale: { type: String, default: 'day' },
   groupBy: { type: String, default: 'assignee' },
   windowStart: { type: String, required: true },
   windowEnd: { type: String, required: true },
