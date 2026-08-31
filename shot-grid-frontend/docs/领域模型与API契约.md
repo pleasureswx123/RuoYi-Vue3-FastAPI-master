@@ -205,7 +205,7 @@ sg_project / sg_shot / sg_asset / sg_version / sg_note
 
 只新增 DO、只修改初始化 SQL 或只写设计文档，都不算数据库交付完成。JSONB、部分唯一索引等 PostgreSQL 专用实现必须明确限制在 PostgreSQL 路径，不得无意影响仓库保留的 MySQL 兼容模块。
 
-当前 Shot Grid Alembic head 为 `20260828_24`。24 新增任务预期制作时间，不回填历史任务；06 增加任务/版本/审核完整性约束；07 增加媒体派生；08 至 19 依次补齐 NAS 管理、镜头号治理、跨版本问题、媒体引用、受管角色、排序、延迟目录、审核草稿和项目永久删除；20 增加版本轮次内多候选文件、候选级媒体派生与审核选择审计，并把既有每个版本回填为候选 01，历史 NAS 路径和业务文件名不改名；21 增加审核通过后的最终版本 NAS 交付 Outbox，由 Leader Worker 异步发布 `FINAL/` 文件和 `FINAL.json`；22 将单候选版本自动设为本轮最佳并回填历史数据；23 仅更名标准任务开工菜单，不自动扩大角色权限。媒体 Worker 默认关闭：图片使用 Pillow 生成 JPEG 缩略图和网页代理，视频使用显式配置的 FFmpeg 生成 JPEG 缩略图和 H.264/AAC faststart MP4；工具缺失或解码失败必须持久化安全错误并让前端降级原媒体，不得将原文件登记为代理。生成物继续进入 `sys_file_info`、`sys_file_reference` 和候选级 `sg_version_file`，成功提交前清理半成品。该增量链仍不是完整 RuoYi 空库 Alembic baseline。
+当前 Shot Grid Alembic head 为 `20260831_25`。24 新增任务预期制作时间；25 增加不可变首版排期基线、只追加结构化改期历史、独立排期权限和项目/负责人/时间窗口索引，迁移时只为已有完整计划冻结基线，不伪造历史操作记录。06 至 23 的任务/版本/审核、媒体、NAS、镜头号、多候选和最终交付语义保持不变。媒体 Worker 默认关闭：图片使用 Pillow 生成 JPEG 缩略图和网页代理，视频使用显式配置的 FFmpeg 生成 JPEG 缩略图和 H.264/AAC faststart MP4；工具缺失或解码失败必须持久化安全错误并让前端降级原媒体，不得将原文件登记为代理。生成物继续进入 `sys_file_info`、`sys_file_reference` 和候选级 `sg_version_file`，成功提交前清理半成品。该增量链仍不是完整 RuoYi 空库 Alembic baseline。
 
 媒体派生配置使用 `SHOT_GRID_MEDIA_WORKER_` 前缀；至少需要显式设置 `ENABLED=true` 才注册 Application Leader 内部任务，视频环境还需通过 `FFMPEG_PATH` 提供可执行文件。默认缩略图最长边 480、图片代理最长边 1920、视频代理最大宽度 1280；转换期间按 `HEARTBEAT_SECONDS` 续租，数据库回写继续使用 version + owner + attempt fencing。审核列表返回 `thumbnail` 和 `mediaDerivationStatus`，版本详情返回完整派生文件角色及同名状态；前端只能优先使用真实 `proxy_media`，代理加载失败时回退主 `review_media`。
 
