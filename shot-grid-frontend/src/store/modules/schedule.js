@@ -83,6 +83,7 @@ export const useScheduleStore = defineStore('schedule', {
     error: null,
     selectedTaskId: null,
     editingTaskId: null,
+    editMode: false,
     conflictSnapshot: [],
     generation: 0,
     requestController: null,
@@ -118,6 +119,13 @@ export const useScheduleStore = defineStore('schedule', {
       this.editingTaskId = null
       this.conflictSnapshot = []
     },
+    setEditMode(enabled) {
+      this.editMode = Boolean(enabled)
+      if (!this.editMode) {
+        this.editingTaskId = null
+        this.conflictSnapshot = []
+      }
+    },
     setScale(scale) {
       this.scale = scale
     },
@@ -137,6 +145,7 @@ export const useScheduleStore = defineStore('schedule', {
       this.error = null
       this.selectedTaskId = null
       this.editingTaskId = null
+      this.editMode = false
       this.conflictSnapshot = []
       this.loadedRequestKey = ''
     },

@@ -54,7 +54,7 @@ const scheduleRow = {
   baselineStart: '2026-08-31T09:00:00',
   baselineEnd: '2026-09-04T18:00:00',
   conflicts: [],
-  allowedActions: ['task.schedule']
+  allowedActions: ['schedule']
 }
 
 describe('ScheduleGanttAdapter', () => {

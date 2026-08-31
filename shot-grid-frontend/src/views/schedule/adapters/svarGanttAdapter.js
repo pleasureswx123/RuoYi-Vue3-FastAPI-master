@@ -46,11 +46,11 @@ export function ganttScaleFor(scale) {
 export function toGanttTasks(rows, { editable = false } = {}) {
   return rows.map(row => {
     const conflicts = Array.isArray(row.conflicts) ? row.conflicts : []
-    const canSchedule = Array.isArray(row.allowedActions) && row.allowedActions.includes('task.schedule')
+    const canSchedule = Array.isArray(row.allowedActions) && row.allowedActions.includes('schedule')
     return {
       id: `task:${row.taskId}`,
       taskId: row.taskId,
-      text: row.taskName,
+      text: row.taskName || row.target?.code || row.target?.name || `任务 ${row.taskId}`,
       start: new Date(row.currentStart),
       end: new Date(row.currentEnd),
       assigneeUserId: row.assignee.userId,

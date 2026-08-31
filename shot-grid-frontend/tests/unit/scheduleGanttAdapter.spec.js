@@ -58,7 +58,7 @@ describe('排期领域行到甘特任务适配', () => {
         baselineStart: '2026-08-31T09:00:00',
         baselineEnd: '2026-09-04T18:00:00',
         conflicts: [{ taskId: 32, targetName: 'EP01-S020', startTime: '2026-09-03T09:00:00', endTime: '2026-09-06T18:00:00' }],
-        allowedActions: ['task.schedule']
+        allowedActions: ['schedule']
       }
     ], { editable: true })
 
