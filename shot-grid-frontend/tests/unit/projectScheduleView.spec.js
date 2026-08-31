@@ -59,7 +59,7 @@ async function mountView(path, permissions = ['shotgrid:task:list', 'shotgrid:ta
 describe('项目排期深层页面', () => {
   beforeEach(() => vi.clearAllMocks())
 
-  it('非法或缺失查询参数统一归一化为本月人员泳道周视图', async () => {
+  it('非法或缺失查询参数统一归一化为未来偏重的人员泳道周视图', async () => {
     const { wrapper, router } = await mountView('/projects/11/schedule?mode=invalid&scale=year&groupBy=unknown&windowStart=bad')
 
     expect(router.currentRoute.value.query).toEqual(normalizeScheduleRouteQuery({}))
@@ -88,7 +88,7 @@ describe('项目排期深层页面', () => {
     wrapper.getComponent({ name: 'ScheduleBoard' }).vm.$emit('query-change', {
       mode: 'gantt',
       scale: 'month',
-      groupBy: 'priority',
+      groupBy: 'scene',
       windowStart: '2026-09-01T00:00:00',
       windowEnd: '2026-10-01T00:00:00'
     })
@@ -97,7 +97,7 @@ describe('项目排期深层页面', () => {
     expect(router.currentRoute.value.query).toEqual({
       mode: 'gantt',
       scale: 'month',
-      groupBy: 'priority',
+      groupBy: 'scene',
       windowStart: '2026-09-01T00:00:00',
       windowEnd: '2026-10-01T00:00:00'
     })

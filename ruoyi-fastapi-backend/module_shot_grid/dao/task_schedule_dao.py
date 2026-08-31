@@ -221,20 +221,20 @@ class ShotGridTaskScheduleDao:
             statement = statement.where(ShotGridTask.task_kind == 'shot_video')
         elif query.target_kind == 'asset_item':
             statement = statement.where(ShotGridTask.task_kind == 'asset_image')
-        if query.assignee_user_id is not None:
-            statement = statement.where(ShotGridTask.assignee_user_id == query.assignee_user_id)
-        if query.task_kind is not None:
-            statement = statement.where(ShotGridTask.task_kind == query.task_kind)
-        if query.task_status is not None:
-            statement = statement.where(ShotGridTask.task_status == query.task_status)
-        if query.priority is not None:
-            statement = statement.where(ShotGridTask.priority == query.priority)
-        if query.episode_id is not None:
-            statement = statement.where(ShotGridShot.episode_id == query.episode_id)
-        if query.scene_id is not None:
-            statement = statement.where(ShotGridShot.scene_id == query.scene_id)
-        if query.asset_type is not None:
-            statement = statement.where(ShotGridAsset.asset_type == query.asset_type)
+        if query.assignee_user_ids:
+            statement = statement.where(ShotGridTask.assignee_user_id.in_(query.assignee_user_ids))
+        if query.task_kinds:
+            statement = statement.where(ShotGridTask.task_kind.in_(query.task_kinds))
+        if query.task_statuses:
+            statement = statement.where(ShotGridTask.task_status.in_(query.task_statuses))
+        if query.priorities:
+            statement = statement.where(ShotGridTask.priority.in_(query.priorities))
+        if query.episode_ids:
+            statement = statement.where(ShotGridShot.episode_id.in_(query.episode_ids))
+        if query.scene_ids:
+            statement = statement.where(ShotGridShot.scene_id.in_(query.scene_ids))
+        if query.asset_types:
+            statement = statement.where(ShotGridAsset.asset_type.in_(query.asset_types))
         if query.keyword:
             keyword = f'%{query.keyword}%'
             statement = statement.where(

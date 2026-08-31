@@ -37,6 +37,8 @@ describe('SVAR OSS 真实运行门禁', () => {
       attachTo: document.body,
       props: {
         scale: 'day',
+        windowStart: '2026-09-01T00:00:00',
+        windowEnd: '2026-10-01T00:00:00',
         editable: false,
         rows: [{
           taskId: 31,

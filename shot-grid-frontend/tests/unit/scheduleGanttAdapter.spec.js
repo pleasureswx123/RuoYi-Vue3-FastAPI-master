@@ -51,6 +51,8 @@ describe('排期领域行到甘特任务适配', () => {
         taskStatus: 'in_progress',
         priority: 'high',
         lockVersion: 8,
+        groupKey: 'scene:5',
+        groupName: '动力舱',
         target: { targetKind: 'shot', targetId: 101, name: 'EP01-S010' },
         assignee: { userId: 7, userName: '杨景锋' },
         currentStart: '2026-09-01T09:00:00',
@@ -75,6 +77,8 @@ describe('排期领域行到甘特任务适配', () => {
       taskStatus: 'in_progress',
       priority: 'high',
       lockVersion: 8,
+      groupKey: 'scene:5',
+      groupName: '动力舱',
       baseline: {
         start: new Date('2026-08-31T09:00:00'),
         end: new Date('2026-09-04T18:00:00')
@@ -83,6 +87,40 @@ describe('排期领域行到甘特任务适配', () => {
       className: 'is-conflicted',
       readonly: false
     })
+  })
+
+  it('用开源甘特支持的汇总层级渲染真实分组', () => {
+    const tasks = toGanttTasks([
+      {
+        taskId: 31,
+        taskName: 'EP001-001-0001',
+        taskKind: 'shot_video',
+        taskStatus: 'in_progress',
+        priority: 'normal',
+        lockVersion: 2,
+        groupKey: 'scene:5',
+        groupName: '动力舱',
+        target: { name: 'EP001-001-0001' },
+        assignee: { userId: 7, userName: '杨景锋' },
+        currentStart: '2026-09-01T09:00:00',
+        currentEnd: '2026-09-03T18:00:00',
+        baselineStart: '2026-08-31T09:00:00',
+        baselineEnd: '2026-09-02T18:00:00',
+        conflicts: [],
+        allowedActions: ['schedule']
+      }
+    ], { editable: true, groupBy: 'scene' })
+
+    expect(tasks).toHaveLength(2)
+    expect(tasks[0]).toMatchObject({
+      id: 'group:scene:5',
+      text: '动力舱',
+      type: 'summary',
+      parent: 0,
+      open: true,
+      readonly: true
+    })
+    expect(tasks[1]).toMatchObject({ id: 'task:31', parent: 'group:scene:5' })
   })
 })
 
@@ -148,6 +186,16 @@ describe('人员泳道重叠堆叠', () => {
       { id: 'assignee:7', trackCount: 2, taskTracks: [[1, 0], [2, 1], [3, 0]] },
       { id: 'assignee:9', trackCount: 1, taskTracks: [[4, 0]] }
     ])
+  })
+
+  it('按接口返回的稳定分组键生成非人员泳道', () => {
+    const rows = toSwimlaneRows([
+      { id: 'task:1', taskId: 1, groupKey: 'scene:5', groupName: '动力舱', assigneeUserId: 7, assigneeName: '甲', start: new Date('2026-09-01'), end: new Date('2026-09-02') },
+      { id: 'task:2', taskId: 2, groupKey: 'scene:5', groupName: '动力舱', assigneeUserId: 9, assigneeName: '乙', start: new Date('2026-09-03'), end: new Date('2026-09-04') }
+    ], { groupBy: 'scene' })
+
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ id: 'scene:5', groupName: '动力舱', trackCount: 1 })
   })
 })
 

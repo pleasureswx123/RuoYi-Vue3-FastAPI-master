@@ -165,9 +165,11 @@ def test_task_schedule_metadata_freezes_baseline_and_guards_append_only_history(
         if isinstance(constraint, CheckConstraint)
     }
     schedule_indexes = {index.name: index for index in schedule_change.indexes}
+    task_indexes = {index.name for index in task.indexes}
 
     assert {'baseline_start_time', 'baseline_end_time'} <= set(task.c.keys())
     assert 'baseline_end_time > baseline_start_time' in task_checks['ck_sg_task_baseline_time_range']
+    assert {'idx_sg_task_schedule_window', 'idx_sg_task_assignee_schedule_window'} <= task_indexes
     assert {
         'schedule_change_id',
         'project_id',

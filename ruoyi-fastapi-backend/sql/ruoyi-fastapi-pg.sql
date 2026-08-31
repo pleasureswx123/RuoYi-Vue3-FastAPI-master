@@ -2333,6 +2333,8 @@ CREATE TABLE sg_task (
 );
 CREATE INDEX idx_sg_task_project_assignee_status_due ON sg_task (project_id, assignee_user_id, task_status, due_date);
 CREATE INDEX idx_sg_task_assignee_status_due ON sg_task (assignee_user_id, task_status, due_date, task_id) WHERE del_flag = '0';
+CREATE INDEX idx_sg_task_schedule_window ON sg_task (project_id, expected_start_time, expected_end_time) WHERE del_flag = '0' AND expected_start_time IS NOT NULL AND expected_end_time IS NOT NULL;
+CREATE INDEX idx_sg_task_assignee_schedule_window ON sg_task (project_id, assignee_user_id, expected_start_time, expected_end_time) WHERE del_flag = '0' AND expected_start_time IS NOT NULL AND expected_end_time IS NOT NULL;
 CREATE UNIQUE INDEX uk_sg_task_asset_item ON sg_task (asset_item_id) WHERE asset_item_id IS NOT NULL AND del_flag = '0';
 CREATE UNIQUE INDEX uk_sg_task_shot ON sg_task (shot_id) WHERE shot_id IS NOT NULL AND del_flag = '0';
 COMMENT ON TABLE sg_task IS 'Shot Grid制作任务表';

@@ -111,5 +111,24 @@ class ShotGridTask(ShotGridMutableAuditMixin, Base):
             'task_id',
             postgresql_where=text("del_flag = '0'"),
         ),
+        Index(
+            'idx_sg_task_schedule_window',
+            'project_id',
+            'expected_start_time',
+            'expected_end_time',
+            postgresql_where=text(
+                "del_flag = '0' AND expected_start_time IS NOT NULL AND expected_end_time IS NOT NULL"
+            ),
+        ),
+        Index(
+            'idx_sg_task_assignee_schedule_window',
+            'project_id',
+            'assignee_user_id',
+            'expected_start_time',
+            'expected_end_time',
+            postgresql_where=text(
+                "del_flag = '0' AND expected_start_time IS NOT NULL AND expected_end_time IS NOT NULL"
+            ),
+        ),
         {'comment': 'Shot Grid制作任务表'},
     )

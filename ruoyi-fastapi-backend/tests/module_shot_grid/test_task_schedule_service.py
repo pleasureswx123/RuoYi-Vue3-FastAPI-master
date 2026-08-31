@@ -140,7 +140,6 @@ def _wire_success(monkeypatch: pytest.MonkeyPatch, task: SimpleNamespace, *, ove
         baseline_end=datetime(2026, 9, 4, 18),
     )
     conflict_task.task_id = CONFLICT_TASK_ID
-    conflict_row = _row(conflict_task, task_id=CONFLICT_TASK_ID)
     mocks = {
         'resolve_access': AsyncMock(return_value=_access()),
         'lock_project': AsyncMock(return_value=project),
@@ -151,7 +150,9 @@ def _wire_success(monkeypatch: pytest.MonkeyPatch, task: SimpleNamespace, *, ove
         'target': AsyncMock(return_value=(SimpleNamespace(), SimpleNamespace(), SimpleNamespace())),
         'overlaps': AsyncMock(return_value=overlaps or []),
         'rows': AsyncMock(
-            side_effect=lambda _db, _project_id, ids: [_row(task)] if ids == [TASK_ID] else [conflict_row]
+            side_effect=lambda _db, _project_id, ids: (
+                [_row(task)] if ids == [TASK_ID] else [_row(conflict_task, task_id=task_id) for task_id in ids]
+            )
         ),
         'add_change': AsyncMock(side_effect=lambda _db, change: change),
         'audit': AsyncMock(),
@@ -264,7 +265,14 @@ async def test_overlap_requires_current_exact_snapshot_before_save(monkeypatch: 
         )
 
     assert exc_info.value.error_key == 'SG_TASK_SCHEDULE_OVERLAP'
-    assert exc_info.value.details == {'conflictTaskIds': [CONFLICT_TASK_ID]}
+    assert exc_info.value.details['conflictTaskIds'] == [CONFLICT_TASK_ID]
+    assert exc_info.value.details['conflicts'][0] == {
+        'taskId': CONFLICT_TASK_ID,
+        'targetName': 'EP001-001-0010',
+        'assignee': {'userId': ASSIGNEE_ID, 'userName': 'creator', 'nickName': '制作人'},
+        'startTime': '2026-09-02T09:00:00',
+        'endTime': '2026-09-04T18:00:00',
+    }
     assert task.expected_start_time is None
     mocks['add_change'].assert_not_awaited()
     db.rollback.assert_awaited_once()
@@ -297,7 +305,8 @@ async def test_overlap_snapshot_change_and_lock_conflict_fail_closed(monkeypatch
             _current_user(),
         )
     assert overlap_error.value.error_key == 'SG_TASK_SCHEDULE_OVERLAP'
-    assert overlap_error.value.details == {'conflictTaskIds': [99, 100]}
+    assert overlap_error.value.details['conflictTaskIds'] == [99, 100]
+    assert [item['taskId'] for item in overlap_error.value.details['conflicts']] == [99, 100]
 
     task.lock_version = LOCK_VERSION + 1
     with pytest.raises(ShotGridDomainException) as lock_error:
@@ -340,7 +349,8 @@ async def test_creator_or_missing_schedule_permission_cannot_mutate(monkeypatch:
 async def test_same_idempotency_key_replays_snapshot_and_rejects_other_command(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    task = _task()
+    # 模拟首次写入已经成功、响应丢失后客户端仍携带旧 lockVersion 重试。
+    task = _task(lock_version=LOCK_VERSION + 1)
     mocks = _wire_success(monkeypatch, task)
     snapshot_task = _task(
         lock_version=LOCK_VERSION + 1,

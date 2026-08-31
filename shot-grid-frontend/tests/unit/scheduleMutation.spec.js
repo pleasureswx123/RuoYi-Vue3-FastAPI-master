@@ -90,13 +90,17 @@ describe('排期写入与重叠二次确认', () => {
       httpStatus: 409,
       errorKey: 'SG_TASK_SCHEDULE_OVERLAP',
       message: '存在重叠',
-      details: { conflictTaskIds: [32, 35] }
+      details: {
+        conflictTaskIds: [32, 35],
+        conflicts: [{ taskId: 32, targetName: 'EP001-001-0020', assignee: { userName: '李梅' }, startTime: '2026-09-03T09:00:00', endTime: '2026-09-06T18:00:00' }]
+      }
     })
 
     await mutation.save({ changeReason: '调整窗口', overlapAcknowledged: false })
 
     expect(store.tasks[0].currentStart).toBe(task.currentStart)
     expect(mutation.conflictTaskIds.value).toEqual([32, 35])
+    expect(mutation.conflicts.value[0]).toMatchObject({ targetName: 'EP001-001-0020', assignee: { userName: '李梅' } })
     const idempotencyKey = updateTaskSchedule.mock.calls[0][2]
 
     const saved = { ...task, lockVersion: 9, currentStart: '2026-09-02T09:00:00', currentEnd: '2026-09-06T18:00:00' }

@@ -28,12 +28,13 @@ describe('任务排期 API 契约', () => {
     getUnscheduledScheduleTasks(11, params, { signal })
 
     expect(request.mock.calls).toEqual([
-      [{ url: '/shot-grid/projects/11/schedule', method: 'get', params, signal, silentError: true }],
+      [{ url: '/shot-grid/projects/11/schedule', method: 'get', params, paramsSerializer: { indexes: null }, signal, silentError: true }],
       [
         {
           url: '/shot-grid/projects/11/schedule/unscheduled',
           method: 'get',
           params,
+          paramsSerializer: { indexes: null },
           signal,
           silentError: true
         }

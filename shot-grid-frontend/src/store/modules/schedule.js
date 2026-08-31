@@ -5,12 +5,15 @@ import { assertPositiveId } from '@/api/shot-grid/projects'
 
 const DEFAULT_FILTERS = Object.freeze({
   assigneeUserIds: [],
+  taskKinds: [],
   taskStatuses: [],
   priorities: [],
   keyword: '',
   episodeIds: [],
   sceneIds: [],
-  assetTypes: []
+  assetTypes: [],
+  onlyConflicts: false,
+  onlyDelayed: false
 })
 
 function freshFilters() {
@@ -187,12 +190,40 @@ export const useScheduleStore = defineStore('schedule', {
       this.pendingRequestKey = requestKey
       this.loading = true
       this.error = null
-      const requestPromise = getProjectSchedule(projectId, params, { signal: controller.signal })
-        .then(response => {
+      const requestPromise = (async () => {
+        const allRows = []
+        const groupsByKey = new Map()
+        let result = {}
+        let pageNum = 1
+        do {
+          const response = await getProjectSchedule(
+            projectId,
+            { ...params, pageNum },
+            { signal: controller.signal }
+          )
+          result = response?.data ?? response ?? {}
           if (generation !== this.generation || projectId !== this.projectId) return this.tasks
-          const result = response?.data ?? response ?? {}
-          this.tasks = Array.isArray(result.rows) ? result.rows : []
-          this.groups = Array.isArray(result.groups) ? result.groups : []
+          if (Array.isArray(result.rows)) allRows.push(...result.rows)
+          for (const group of Array.isArray(result.groups) ? result.groups : []) {
+            const existing = groupsByKey.get(group.groupKey)
+            groupsByKey.set(group.groupKey, existing
+              ? { ...existing, taskCount: Number(existing.taskCount || 0) + Number(group.taskCount || 0) }
+              : { ...group })
+          }
+          pageNum += 1
+        } while (result.hasNext === true)
+        return {
+          result,
+          allRows,
+          groups: [...groupsByKey.values()].sort((left, right) => left.sortOrder - right.sortOrder)
+        }
+      })()
+        .then(payload => {
+          if (Array.isArray(payload)) return payload
+          if (generation !== this.generation || projectId !== this.projectId) return this.tasks
+          const { result, allRows, groups } = payload
+          this.tasks = allRows
+          this.groups = groups
           this.total = Number(result.total || 0)
           this.unscheduledCount = Number(result.unscheduledCount || 0)
           this.serverTime = result.serverTime || null
@@ -220,6 +251,7 @@ export const useScheduleStore = defineStore('schedule', {
     dispose() {
       this.cancelRequest()
       this.resetResults()
+      this.filters = freshFilters()
       this.projectId = null
     }
   }

@@ -11,15 +11,18 @@ const props = defineProps({
 
 const baselineStyle = computed(() => baselineOverlayStyle(props.data))
 const hasConflict = computed(() => props.data.conflictTaskIds?.length > 0)
+const isGroup = computed(() => props.data.isScheduleGroup === true)
+const hasBaseline = computed(() => !isGroup.value && Object.keys(baselineStyle.value).length > 0)
 </script>
 
 <template>
   <div
     class="schedule-task-content"
-    :class="{ 'is-conflicted': hasConflict, 'is-readonly': data.readonly }"
+    :class="{ 'is-conflicted': hasConflict, 'is-readonly': data.readonly, 'is-group': isGroup }"
     data-testid="schedule-task-content"
   >
     <span
+      v-if="hasBaseline"
       class="schedule-task-content__baseline"
       :style="baselineStyle"
       data-testid="schedule-baseline-shadow"
@@ -49,6 +52,10 @@ const hasConflict = computed(() => props.data.conflictTaskIds?.length > 0)
 
 .schedule-task-content.is-readonly {
   cursor: default;
+}
+
+.schedule-task-content.is-group {
+  font-weight: 600;
 }
 
 .schedule-task-content__baseline {

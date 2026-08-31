@@ -160,6 +160,15 @@ const pageCount = computed(() => Math.max(1, Math.ceil(total.value / query.pageS
 const currentProjectId = computed(() => {
   try { return assertPositiveId(projectContext.projectId, '项目') } catch { return null }
 })
+const scheduleInitialFilters = computed(() => ({
+  keyword: query.keyword.trim(),
+  assigneeUserIds: query.assigneeUserId ? [Number(query.assigneeUserId)] : [],
+  episodeIds: query.episodeId ? [Number(query.episodeId)] : [],
+  sceneIds: query.sceneId ? [Number(query.sceneId)] : [],
+  taskStatuses: query.shotStatus && query.shotStatus !== 'unassigned'
+    ? [query.shotStatus === 'reviewing' ? 'pending_review' : query.shotStatus]
+    : []
+}))
 const creatorMembers = computed(() => members.value.filter(member => member.projectRole === 'creator'))
 const selectedShots = computed(() => shots.value.filter(shot => selectedShotIds.value.has(Number(shot.shotId))))
 const hasAssignedSelection = computed(() => selectedShots.value.some(shot => Boolean(shot.assignee)))
@@ -1079,7 +1088,7 @@ onBeforeUnmount(() => { disposed = true; closeSingleAssign(); destroyRowSortable
 
         <el-alert v-if="pollingError" :title="pollingError" type="warning" show-icon :closable="false" />
         <Suspense v-if="['swimlane', 'gantt'].includes(viewMode) && currentProjectId">
-          <ScheduleBoard :project-id="currentProjectId" target-kind="shot" :initial-mode="viewMode" :editable-allowed="canSchedule" @query-change="handleScheduleQueryChange" />
+          <ScheduleBoard :project-id="currentProjectId" target-kind="shot" :initial-mode="viewMode" :initial-filters="scheduleInitialFilters" :editable-allowed="canSchedule" @query-change="handleScheduleQueryChange" />
           <template #fallback><el-card class="shot-loading" shadow="never"><el-skeleton animated :rows="8" /></el-card></template>
         </Suspense>
         <ProjectStatePanel v-else-if="shotsError" :title="shotsError.title" :message="shotsError.message" :retryable="shotsError.retryable" @retry="loadProjectContext" />

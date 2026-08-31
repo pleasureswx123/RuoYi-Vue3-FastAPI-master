@@ -4,6 +4,7 @@ import { Warning } from '@element-plus/icons-vue'
 
 import { useScheduleStore } from '@/store/modules/schedule'
 import { scheduleErrorState } from '@/views/schedule/schedulePresentation'
+import { scheduleWindowForScale, shiftScheduleWindow } from '@/views/schedule/scheduleWindow'
 import { useScheduleMutation } from '@/views/schedule/useScheduleMutation'
 import ScheduleToolbar from '@/views/schedule/components/ScheduleToolbar.vue'
 import PersonnelSwimlane from '@/views/schedule/components/PersonnelSwimlane.vue'
@@ -20,6 +21,7 @@ const props = defineProps({
   initialGroupBy: { type: String, default: 'assignee' },
   initialWindowStart: { type: String, default: '' },
   initialWindowEnd: { type: String, default: '' },
+  initialFilters: { type: Object, default: () => ({}) },
   editableAllowed: Boolean
 })
 
@@ -29,10 +31,31 @@ const mutation = useScheduleMutation(store, { onSaved: refresh, onRefresh: refre
 const detailVisible = ref(false)
 const unscheduledVisible = ref(false)
 const accessNotice = ref('')
-const windowStart = ref(props.initialWindowStart || monthWindow().windowStart)
-const windowEnd = ref(props.initialWindowEnd || monthWindow().windowEnd)
+const showBaseline = ref(true)
+const defaultWindow = scheduleWindowForScale(props.initialScale)
+const windowStart = ref(props.initialWindowStart || defaultWindow.windowStart)
+const windowEnd = ref(props.initialWindowEnd || defaultWindow.windowEnd)
 const selectedTask = computed(() => store.tasks.find(task => task.taskId === store.selectedTaskId) || null)
 const errorState = computed(() => store.error ? scheduleErrorState(store.error) : null)
+const filterOptions = computed(() => {
+  const assignees = new Map()
+  const episodes = new Map()
+  const scenes = new Map()
+  const assetTypes = new Set()
+  for (const task of store.tasks) {
+    if (task.assignee?.userId) assignees.set(task.assignee.userId, task.assignee.userName)
+    if (task.target?.episodeId) episodes.set(task.target.episodeId, `第 ${task.target.episodeNo ?? task.target.episodeId} 集`)
+    if (task.target?.sceneId) scenes.set(task.target.sceneId, `场次 ${task.target.sceneNo ?? task.target.sceneId}`)
+    if (task.target?.assetType) assetTypes.add(task.target.assetType)
+  }
+  const entries = map => [...map].map(([value, label]) => ({ value, label }))
+  return {
+    assignees: entries(assignees),
+    episodes: entries(episodes),
+    scenes: entries(scenes),
+    assetTypes: [...assetTypes].map(value => ({ value, label: value }))
+  }
+})
 const effectiveQuery = computed(() => ({
   windowStart: store.loadedWindow?.windowStart || windowStart.value,
   windowEnd: store.loadedWindow?.windowEnd || windowEnd.value,
@@ -40,20 +63,6 @@ const effectiveQuery = computed(() => ({
   groupBy: store.groupBy,
   ...store.filters
 }))
-
-function pad(value) {
-  return String(value).padStart(2, '0')
-}
-
-function formatBusinessTime(date) {
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
-}
-
-function monthWindow(now = new Date()) {
-  const start = new Date(now.getFullYear(), now.getMonth(), 1)
-  const end = new Date(now.getFullYear(), now.getMonth() + 1, 1)
-  return { windowStart: formatBusinessTime(start), windowEnd: formatBusinessTime(end) }
-}
 
 async function load() {
   await store.loadSchedule(windowStart.value, windowEnd.value).catch(() => undefined)
@@ -75,8 +84,15 @@ function setMode(mode) {
 }
 
 function setScale(scale) {
+  if (scale === store.scale) return
+  const now = new Date()
+  const currentStart = new Date(windowStart.value)
+  const currentEnd = new Date(windowEnd.value)
+  const anchor = now >= currentStart && now < currentEnd
+    ? now
+    : new Date(currentStart.getTime() + (currentEnd.getTime() - currentStart.getTime()) / 2)
   store.setScale(scale)
-  publishQuery()
+  setWindow(scheduleWindowForScale(scale, anchor))
 }
 
 function setGroupBy(groupBy) {
@@ -95,21 +111,31 @@ function setWindow(value) {
 
 function shiftWindow(direction) {
   if (direction === 0) {
-    setWindow(monthWindow())
+    setWindow(scheduleWindowForScale(store.scale))
     return
   }
-  const start = new Date(windowStart.value)
-  const end = new Date(windowEnd.value)
-  const duration = end.getTime() - start.getTime()
-  setWindow({
-    windowStart: formatBusinessTime(new Date(start.getTime() + duration * direction)),
-    windowEnd: formatBusinessTime(new Date(end.getTime() + duration * direction))
-  })
+  setWindow(shiftScheduleWindow(windowStart.value, windowEnd.value, direction, store.scale))
 }
 
 function setFilters(filters) {
   store.setFilters(filters)
   load()
+}
+
+function applyInitialFilters(value) {
+  const source = value && typeof value === 'object' ? value : {}
+  store.setFilters({
+    assigneeUserIds: Array.isArray(source.assigneeUserIds) ? source.assigneeUserIds : [],
+    taskKinds: Array.isArray(source.taskKinds) ? source.taskKinds : [],
+    taskStatuses: Array.isArray(source.taskStatuses) ? source.taskStatuses : [],
+    priorities: Array.isArray(source.priorities) ? source.priorities : [],
+    keyword: typeof source.keyword === 'string' ? source.keyword : '',
+    episodeIds: Array.isArray(source.episodeIds) ? source.episodeIds : [],
+    sceneIds: Array.isArray(source.sceneIds) ? source.sceneIds : [],
+    assetTypes: Array.isArray(source.assetTypes) ? source.assetTypes : [],
+    onlyConflicts: Boolean(source.onlyConflicts),
+    onlyDelayed: Boolean(source.onlyDelayed)
+  })
 }
 
 function toggleEdit(enabled) {
@@ -171,6 +197,7 @@ onMounted(() => {
   store.setScale(props.initialScale)
   store.setGrouping(props.initialGroupBy)
   store.setTargetKind(props.targetKind)
+  applyInitialFilters(props.initialFilters)
   load()
 })
 
@@ -196,6 +223,11 @@ watch(() => props.targetKind, targetKind => {
   store.setTargetKind(targetKind)
   load()
 })
+
+watch(() => props.initialFilters, filters => {
+  applyInitialFilters(filters)
+  load()
+}, { deep: true })
 
 watch(
   () => [props.initialWindowStart, props.initialWindowEnd],
@@ -234,12 +266,15 @@ onBeforeUnmount(() => {
       :edit-mode="store.editMode"
       :editable-allowed="editableAllowed"
       :unscheduled-count="store.unscheduledCount"
+      :filter-options="filterOptions"
+      :show-baseline="showBaseline"
       @update:mode="setMode"
       @update:scale="setScale"
       @update:group-by="setGroupBy"
       @window-change="setWindow"
       @window-shift="shiftWindow"
       @filters-change="setFilters"
+      @baseline-change="value => { showBaseline = value }"
       @refresh="refresh"
       @edit-toggle="toggleEdit"
       @open-unscheduled="unscheduledVisible = true"
@@ -271,14 +306,21 @@ onBeforeUnmount(() => {
     <el-empty v-else-if="!store.tasks.length" :image-size="72" description="当前时间窗口没有已排期任务">
       <p>可调整日期、筛选条件，或打开未排期任务池安排时间。</p>
     </el-empty>
-    <div v-else class="schedule-board__viewport" :class="{ 'is-loading': store.loading }">
+    <div
+      v-else
+      class="schedule-board__viewport"
+      :class="{ 'is-loading': store.loading }"
+      :style="{ overflowX: store.mode === 'gantt' ? 'hidden' : undefined }"
+    >
       <PersonnelSwimlane
         v-if="store.mode === 'swimlane'"
         :rows="store.tasks"
         :window-start="windowStart"
         :window-end="windowEnd"
         :scale="store.scale"
+        :group-by="store.groupBy"
         :editable="store.editMode && editableAllowed"
+        :show-baseline="showBaseline"
         @task-click="openTask"
         @range-change-request="requestRangeChange"
       />
@@ -286,13 +328,16 @@ onBeforeUnmount(() => {
         v-else
         :rows="store.tasks"
         :scale="store.scale"
+        :group-by="store.groupBy"
+        :window-start="windowStart"
+        :window-end="windowEnd"
         :editable="store.editMode && editableAllowed"
+        :show-baseline="showBaseline"
         @task-click="openTask"
         @range-change-request="requestRangeChange"
         @change-rejected="handleRejected"
       />
     </div>
-    <p v-if="store.total > store.pageSize" class="schedule-board__limit">当前仅加载前 {{ store.pageSize }} 项；请缩小时间窗口或增加筛选后继续查看。</p>
 
     <ScheduleTaskDrawer
       v-model:visible="detailVisible"
@@ -312,6 +357,7 @@ onBeforeUnmount(() => {
       :draft="mutation.draft.value"
       :saving="mutation.saving.value"
       :conflict-task-ids="mutation.conflictTaskIds.value"
+      :conflicts="mutation.conflicts.value"
       :error="mutation.error.value"
       @update:visible="value => { if (!value) mutation.close() }"
       @cancel="mutation.close"

@@ -19,6 +19,9 @@ vi.mock('@svar-ui/vue-gantt', () => ({
       lengthUnit: { type: String, default: '' },
       taskTemplate: { type: Object, default: null },
       readonly: Boolean,
+      start: { type: Date, default: null },
+      end: { type: Date, default: null },
+      groupBy: { type: [String, Object], default: null },
       init: { type: Function, default: null }
     },
     setup(props) {
@@ -47,6 +50,8 @@ const scheduleRow = {
   taskStatus: 'in_progress',
   priority: 'high',
   lockVersion: 8,
+  groupKey: 'scene:5',
+  groupName: '动力舱',
   target: { targetKind: 'shot', targetId: 101, name: 'EP01-S010' },
   assignee: { userId: 7, userName: '杨景锋' },
   currentStart: '2026-09-01T09:00:00',
@@ -66,7 +71,7 @@ describe('ScheduleGanttAdapter', () => {
 
   it('拦截渲染器本地更新并只向上游发排期草稿', async () => {
     const wrapper = mount(ScheduleGanttAdapter, {
-      props: { rows: [scheduleRow], scale: 'day', editable: true }
+      props: { rows: [scheduleRow], scale: 'day', editable: true, windowStart: '2026-09-01T00:00:00', windowEnd: '2026-10-01T00:00:00', groupBy: 'scene' }
     })
     await nextTick()
 
@@ -92,17 +97,31 @@ describe('ScheduleGanttAdapter', () => {
     expect(ganttHarness.receivedProps.readonly).toBe(false)
     expect(ganttHarness.receivedProps.lengthUnit).toBe('day')
     expect(ganttHarness.receivedProps.taskTemplate?.name).toBe('ScheduleGanttTaskTemplate')
+    expect(ganttHarness.receivedProps.start).toEqual(new Date('2026-09-01T00:00:00'))
+    expect(ganttHarness.receivedProps.end).toEqual(new Date('2026-10-01T00:00:00'))
+    expect(ganttHarness.receivedProps.groupBy).toBeNull()
+    expect(ganttHarness.receivedProps.tasks[0]).toMatchObject({
+      id: 'group:scene:5',
+      text: '动力舱',
+      type: 'summary'
+    })
+    expect(ganttHarness.receivedProps.tasks[1]).toMatchObject({
+      id: 'task:31',
+      parent: 'group:scene:5'
+    })
   })
 
   it('把渲染器选择动作转换为领域任务点击事件', async () => {
     const wrapper = mount(ScheduleGanttAdapter, {
-      props: { rows: [scheduleRow], scale: 'week', editable: false }
+      props: { rows: [scheduleRow], scale: 'week', editable: false, windowStart: '2026-09-01T00:00:00', windowEnd: '2026-10-01T00:00:00' }
     })
     await nextTick()
 
     const selectTask = ganttHarness.listeners.get('select-task')
     expect(selectTask).toEqual(expect.any(Function))
     selectTask({ id: 'task:31' })
+    expect(wrapper.emitted('task-click')).toEqual([[{ taskId: 31 }]])
+    selectTask({ id: 'group:assignee:7' })
     expect(wrapper.emitted('task-click')).toEqual([[{ taskId: 31 }]])
     expect(ganttHarness.receivedProps.readonly).toBe(true)
     expect(ganttHarness.receivedProps.lengthUnit).toBe('week')

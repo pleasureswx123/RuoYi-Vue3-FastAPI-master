@@ -164,6 +164,18 @@ WHERE expected_start_time IS NOT NULL
 """
     )
 
+    # 排期窗口和同人冲突查询都先按项目收敛，再按自然时间半开区间过滤。
+    op.execute(
+        'CREATE INDEX IF NOT EXISTS idx_sg_task_schedule_window '
+        'ON sg_task (project_id, expected_start_time, expected_end_time) '
+        "WHERE del_flag = '0' AND expected_start_time IS NOT NULL AND expected_end_time IS NOT NULL"
+    )
+    op.execute(
+        'CREATE INDEX IF NOT EXISTS idx_sg_task_assignee_schedule_window '
+        'ON sg_task (project_id, assignee_user_id, expected_start_time, expected_end_time) '
+        "WHERE del_flag = '0' AND expected_start_time IS NOT NULL AND expected_end_time IS NOT NULL"
+    )
+
     if _use_compatible_existing_schedule_history_table():
         op.execute("COMMENT ON TABLE sg_task_schedule_change IS 'Shot Grid任务排期不可变结构化历史表'")
         _seed_schedule_permission()
@@ -287,6 +299,8 @@ $shot_grid_task_schedule_downgrade_guard$
     op.drop_index('idx_sg_task_schedule_project_time', table_name='sg_task_schedule_change')
     op.drop_index('idx_sg_task_schedule_task_time', table_name='sg_task_schedule_change')
     op.drop_table('sg_task_schedule_change')
+    op.execute('DROP INDEX IF EXISTS idx_sg_task_assignee_schedule_window')
+    op.execute('DROP INDEX IF EXISTS idx_sg_task_schedule_window')
     op.drop_constraint('ck_sg_task_baseline_time_range', 'sg_task', type_='check')
     op.drop_column('sg_task', 'baseline_end_time')
     op.drop_column('sg_task', 'baseline_start_time')

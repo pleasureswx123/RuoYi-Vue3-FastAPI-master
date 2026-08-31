@@ -27,12 +27,21 @@ def test_schedule_query_accepts_natural_time_window_and_maximum_page_size() -> N
         windowEnd='2026-10-01T00:00:00',
         targetKind='all',
         groupBy='assignee',
+        assigneeUserIds=[7, 9],
+        taskKinds=['shot_video'],
+        taskStatuses=['not_started', 'in_progress'],
+        priorities=['normal', 'high'],
+        episodeIds=[3],
+        sceneIds=[5],
+        assetTypes=['Character'],
         pageSize=MAX_PAGE_SIZE,
     )
 
     assert query.window_start == datetime(2026, 8, 31)
     assert query.window_end == datetime(2026, 10, 1)
     assert query.page_size == MAX_PAGE_SIZE
+    assert query.assignee_user_ids == [7, 9]
+    assert query.task_statuses == ['not_started', 'in_progress']
 
 
 @pytest.mark.parametrize(
@@ -106,6 +115,7 @@ def test_schedule_read_models_emit_camel_case_second_precision_contract() -> Non
     conflict = ShotGridScheduleConflictModel(
         taskId=99,
         targetName='EP01_SC02_SH020',
+        assignee=assignee,
         startTime='2026-09-02T09:00:00',
         endTime='2026-09-03T18:00:00',
     )
@@ -116,6 +126,8 @@ def test_schedule_read_models_emit_camel_case_second_precision_contract() -> Non
         taskStatus='in_progress',
         priority='high',
         lockVersion=4,
+        groupKey='scene:5',
+        groupName='SC02',
         target=target,
         assignee=assignee,
         currentStart='2026-09-01T09:00:00',
@@ -140,6 +152,8 @@ def test_schedule_read_models_emit_camel_case_second_precision_contract() -> Non
     payload = page.model_dump(by_alias=True, mode='json')
     assert payload['rows'][0]['currentStart'] == '2026-09-01T09:00:00'
     assert payload['rows'][0]['baselineStart'] == '2026-08-31T09:00:00'
+    assert payload['rows'][0]['groupKey'] == 'scene:5'
+    assert payload['rows'][0]['conflicts'][0]['assignee']['userName'] == 'zhangsan'
     assert payload['serverTime'] == '2026-08-31T12:00:00'
     assert 'current_start' not in payload['rows'][0]
 

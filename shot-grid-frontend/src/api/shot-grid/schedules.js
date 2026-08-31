@@ -14,6 +14,7 @@ export function getProjectSchedule(projectId, params, options = {}) {
     url: projectScheduleUrl(projectId),
     method: 'get',
     params,
+    paramsSerializer: { indexes: null },
     signal: options.signal,
     silentError: true
   })
@@ -24,6 +25,7 @@ export function getUnscheduledScheduleTasks(projectId, params, options = {}) {
     url: projectScheduleUrl(projectId, '/unscheduled'),
     method: 'get',
     params,
+    paramsSerializer: { indexes: null },
     signal: options.signal,
     silentError: true
   })

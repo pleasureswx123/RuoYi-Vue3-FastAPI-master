@@ -198,18 +198,6 @@ class ShotGridTaskScheduleService:
             task = await ShotGridTaskScheduleDao.lock_task(db, project_id, task_id)
             if task is None:
                 raise shot_grid_error(404, 'SG_TASK_NOT_FOUND', '任务不存在或不可见')
-            cls._require_task_mutable(task)
-            if task.lock_version != command.lock_version:
-                raise shot_grid_error(
-                    409,
-                    'SG_OPTIMISTIC_LOCK_CONFLICT',
-                    '任务已被其他用户修改，请刷新后重试',
-                    details={
-                        'expectedLockVersion': command.lock_version,
-                        'actualLockVersion': task.lock_version,
-                    },
-                )
-
             previous = await ShotGridTaskScheduleDao.get_idempotency_result(
                 db,
                 task_id,
@@ -226,6 +214,18 @@ class ShotGridTaskScheduleService:
                 await db.rollback()
                 return replay
 
+            cls._require_task_mutable(task)
+            if task.lock_version != command.lock_version:
+                raise shot_grid_error(
+                    409,
+                    'SG_OPTIMISTIC_LOCK_CONFLICT',
+                    '任务已被其他用户修改，请刷新后重试',
+                    details={
+                        'expectedLockVersion': command.lock_version,
+                        'actualLockVersion': task.lock_version,
+                    },
+                )
+
             await cls._require_active_target(db, task)
             if await ShotGridTaskDao.get_assignable_member(db, project_id, task.assignee_user_id) is None:
                 raise shot_grid_error(409, 'SG_TASK_SCHEDULE_READ_ONLY', '当前负责人已不是有效项目制作人员')
@@ -238,12 +238,12 @@ class ShotGridTaskScheduleService:
                 start_time=command.expected_start_time,
                 end_time=command.expected_end_time,
             )
-            if overlap_task_ids != command.expected_conflict_task_ids and (
+            conflict_changed = overlap_task_ids != command.expected_conflict_task_ids and (
                 command.overlap_acknowledged or command.expected_conflict_task_ids
-            ):
-                raise cls._overlap_error(overlap_task_ids)
-            if overlap_task_ids and not command.overlap_acknowledged:
-                raise cls._overlap_error(overlap_task_ids)
+            )
+            if conflict_changed or (overlap_task_ids and not command.overlap_acknowledged):
+                conflict_rows = await ShotGridTaskScheduleDao.get_task_rows_by_ids(db, project_id, overlap_task_ids)
+                raise cls._overlap_error(overlap_task_ids, cls._build_conflicts(conflict_rows))
 
             from_start = task.expected_start_time
             from_end = task.expected_end_time
@@ -405,12 +405,18 @@ class ShotGridTaskScheduleService:
             raise shot_grid_error(409, 'SG_TASK_SCHEDULE_READ_ONLY', '资产或制作分项已归档、删除或不可见')
 
     @staticmethod
-    def _overlap_error(overlap_task_ids: list[int]) -> ShotGridDomainException:
+    def _overlap_error(
+        overlap_task_ids: list[int],
+        conflicts: list[ShotGridScheduleConflictModel],
+    ) -> ShotGridDomainException:
         return shot_grid_error(
             409,
             'SG_TASK_SCHEDULE_OVERLAP',
             '当前排期与同一负责人其他任务重叠，请确认最新冲突清单',
-            details={'conflictTaskIds': overlap_task_ids},
+            details={
+                'conflictTaskIds': overlap_task_ids,
+                'conflicts': [item.model_dump(by_alias=True, mode='json') for item in conflicts],
+            },
         )
 
     @staticmethod
@@ -452,6 +458,8 @@ class ShotGridTaskScheduleService:
             taskStatus=row['task_status'],
             priority=row['priority'],
             lockVersion=row['lock_version'],
+            groupKey=str(row['group_key']),
+            groupName=str(row['group_name']),
             target=target,
             assignee=ShotGridScheduleAssigneeModel(
                 userId=row['assignee_user_id'],
@@ -534,6 +542,11 @@ class ShotGridTaskScheduleService:
                 ShotGridScheduleConflictModel(
                     taskId=row['task_id'],
                     targetName=cls._build_target(row).name,
+                    assignee=ShotGridScheduleAssigneeModel(
+                        userId=row['assignee_user_id'],
+                        userName=row['assignee_user_name'],
+                        nickName=row.get('assignee_nick_name'),
+                    ),
                     startTime=start_time,
                     endTime=end_time,
                 )

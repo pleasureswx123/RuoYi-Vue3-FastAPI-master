@@ -43,31 +43,80 @@ export function ganttScaleFor(scale) {
   return SCALE_CONFIG[scale]
 }
 
-export function toGanttTasks(rows, { editable = false } = {}) {
-  return rows.map(row => {
-    const conflicts = Array.isArray(row.conflicts) ? row.conflicts : []
-    const canSchedule = Array.isArray(row.allowedActions) && row.allowedActions.includes('schedule')
+function toGanttTask(row, editable) {
+  const conflicts = Array.isArray(row.conflicts) ? row.conflicts : []
+  const canSchedule = Array.isArray(row.allowedActions) && row.allowedActions.includes('schedule')
+  return {
+    id: `task:${row.taskId}`,
+    taskId: row.taskId,
+    text: row.taskName || row.target?.code || row.target?.name || `任务 ${row.taskId}`,
+    start: new Date(row.currentStart),
+    end: new Date(row.currentEnd),
+    assigneeUserId: row.assignee.userId,
+    assigneeName: row.assignee.userName,
+    targetName: row.target.name,
+    taskKind: row.taskKind,
+    taskStatus: row.taskStatus,
+    priority: row.priority,
+    lockVersion: row.lockVersion,
+    groupKey: row.groupKey,
+    groupName: row.groupName,
+    baseline: {
+      start: new Date(row.baselineStart),
+      end: new Date(row.baselineEnd)
+    },
+    conflictTaskIds: conflicts.map(conflict => conflict.taskId),
+    className: conflicts.length > 0 ? 'is-conflicted' : '',
+    readonly: !editable || !canSchedule
+  }
+}
+
+function ganttGroupFor(task, groupBy) {
+  if (groupBy === 'assignee') {
     return {
-      id: `task:${row.taskId}`,
-      taskId: row.taskId,
-      text: row.taskName || row.target?.code || row.target?.name || `任务 ${row.taskId}`,
-      start: new Date(row.currentStart),
-      end: new Date(row.currentEnd),
-      assigneeUserId: row.assignee.userId,
-      assigneeName: row.assignee.userName,
-      targetName: row.target.name,
-      taskKind: row.taskKind,
-      taskStatus: row.taskStatus,
-      priority: row.priority,
-      lockVersion: row.lockVersion,
-      baseline: {
-        start: new Date(row.baselineStart),
-        end: new Date(row.baselineEnd)
-      },
-      conflictTaskIds: conflicts.map(conflict => conflict.taskId),
-      className: conflicts.length > 0 ? 'is-conflicted' : '',
-      readonly: !editable || !canSchedule
+      key: `assignee:${task.assigneeUserId}`,
+      name: task.assigneeName || '未分配负责人'
     }
+  }
+  return {
+    key: task.groupKey || `${groupBy}:ungrouped`,
+    name: task.groupName || '未分组'
+  }
+}
+
+export function toGanttTasks(rows, { editable = false, groupBy = null } = {}) {
+  const tasks = rows.map(row => toGanttTask(row, editable))
+  if (!groupBy) {
+    return tasks
+  }
+
+  const groups = new Map()
+  for (const task of tasks) {
+    const group = ganttGroupFor(task, groupBy)
+    if (!groups.has(group.key)) {
+      groups.set(group.key, { ...group, tasks: [] })
+    }
+    groups.get(group.key).tasks.push(task)
+  }
+
+  return Array.from(groups.values()).flatMap(group => {
+    const groupId = `group:${group.key}`
+    const start = new Date(Math.min(...group.tasks.map(task => task.start.getTime())))
+    const end = new Date(Math.max(...group.tasks.map(task => task.end.getTime())))
+    const summary = {
+      id: groupId,
+      text: group.name,
+      type: 'summary',
+      parent: 0,
+      open: true,
+      start,
+      end,
+      readonly: true,
+      isScheduleGroup: true,
+      groupKey: group.key,
+      groupName: group.name
+    }
+    return [summary, ...group.tasks.map(task => ({ ...task, parent: groupId }))]
   })
 }
 
@@ -99,18 +148,21 @@ export function rangeChangeRequest({ task, nextStart, nextEnd, nextAssigneeUserI
   }
 }
 
-export function toSwimlaneRows(tasks) {
+export function toSwimlaneRows(tasks, { groupBy = 'assignee' } = {}) {
   const lanes = new Map()
   for (const task of tasks) {
-    if (!lanes.has(task.assigneeUserId)) {
-      lanes.set(task.assigneeUserId, {
-        id: `assignee:${task.assigneeUserId}`,
+    const laneId = groupBy === 'assignee' ? `assignee:${task.assigneeUserId}` : task.groupKey
+    const laneName = groupBy === 'assignee' ? task.assigneeName : task.groupName
+    if (!lanes.has(laneId)) {
+      lanes.set(laneId, {
+        id: laneId,
         assigneeUserId: task.assigneeUserId,
         assigneeName: task.assigneeName,
+        groupName: laneName,
         tasks: []
       })
     }
-    lanes.get(task.assigneeUserId).tasks.push(task)
+    lanes.get(laneId).tasks.push(task)
   }
 
   return Array.from(lanes.values()).map(lane => {
@@ -131,7 +183,13 @@ export function toSwimlaneRows(tasks) {
 }
 
 export function baselineOverlayStyle(task) {
+  if (!task?.baseline?.start || !task?.baseline?.end || !task?.start || !task?.end) {
+    return {}
+  }
   const currentDuration = task.end - task.start
+  if (currentDuration <= 0) {
+    return {}
+  }
   const left = ((task.baseline.start - task.start) / currentDuration) * 100
   const width = ((task.baseline.end - task.baseline.start) / currentDuration) * 100
   return {

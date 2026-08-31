@@ -22,6 +22,17 @@ function conflictIds(error) {
   return [...new Set(ids.map(Number).filter(id => Number.isSafeInteger(id) && id > 0))].sort((a, b) => a - b)
 }
 
+function conflictDetails(error) {
+  if (!Array.isArray(error?.details?.conflicts)) return []
+  return error.details.conflicts.filter(item => (
+    Number.isSafeInteger(Number(item?.taskId))
+    && item?.targetName
+    && item?.assignee?.userName
+    && item?.startTime
+    && item?.endTime
+  ))
+}
+
 export function useScheduleMutation(store, options = {}) {
   const visible = ref(false)
   const saving = ref(false)
@@ -29,6 +40,7 @@ export function useScheduleMutation(store, options = {}) {
   const draft = ref(null)
   const error = ref(null)
   const conflictTaskIds = ref([])
+  const conflicts = ref([])
   const overlapAcknowledged = ref(false)
   let idempotencyKey = ''
   let disposed = false
@@ -43,6 +55,7 @@ export function useScheduleMutation(store, options = {}) {
       changeReason: rangeDraft.changeReason || ''
     }
     conflictTaskIds.value = []
+    conflicts.value = []
     overlapAcknowledged.value = false
     error.value = null
     idempotencyKey = newIdempotencyKey(task.taskId)
@@ -56,6 +69,7 @@ export function useScheduleMutation(store, options = {}) {
     activeTask.value = null
     draft.value = null
     conflictTaskIds.value = []
+    conflicts.value = []
     overlapAcknowledged.value = false
     error.value = null
     idempotencyKey = ''
@@ -85,6 +99,7 @@ export function useScheduleMutation(store, options = {}) {
       activeTask.value = null
       draft.value = null
       conflictTaskIds.value = []
+      conflicts.value = []
       overlapAcknowledged.value = false
       await options.onSaved?.(saved)
       return saved
@@ -93,6 +108,7 @@ export function useScheduleMutation(store, options = {}) {
       error.value = safeError(caught)
       if (caught?.errorKey === 'SG_TASK_SCHEDULE_OVERLAP') {
         conflictTaskIds.value = conflictIds(caught)
+        conflicts.value = conflictDetails(caught)
         overlapAcknowledged.value = false
         return null
       }
@@ -124,6 +140,7 @@ export function useScheduleMutation(store, options = {}) {
     draft,
     error,
     conflictTaskIds,
+    conflicts,
     overlapAcknowledged,
     open,
     close,

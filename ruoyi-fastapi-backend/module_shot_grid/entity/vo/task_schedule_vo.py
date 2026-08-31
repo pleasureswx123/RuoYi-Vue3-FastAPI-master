@@ -60,13 +60,13 @@ class ShotGridScheduleQueryModel(ShotGridApiModel):
     window_end: BusinessDateTime
     target_kind: ScheduleTargetKind = 'all'
     group_by: ScheduleGroupBy = 'assignee'
-    assignee_user_id: int | None = Field(default=None, gt=0, le=SQL_BIGINT_MAX)
-    task_kind: TaskKind | None = None
-    task_status: TaskStatus | None = None
-    priority: TaskPriority | None = None
-    episode_id: int | None = Field(default=None, gt=0, le=SQL_BIGINT_MAX)
-    scene_id: int | None = Field(default=None, gt=0, le=SQL_BIGINT_MAX)
-    asset_type: AssetType | None = None
+    assignee_user_ids: list[int] = Field(default_factory=list, max_length=100)
+    task_kinds: list[TaskKind] = Field(default_factory=list, max_length=10)
+    task_statuses: list[TaskStatus] = Field(default_factory=list, max_length=20)
+    priorities: list[TaskPriority] = Field(default_factory=list, max_length=10)
+    episode_ids: list[int] = Field(default_factory=list, max_length=100)
+    scene_ids: list[int] = Field(default_factory=list, max_length=100)
+    asset_types: list[AssetType] = Field(default_factory=list, max_length=10)
     keyword: str | None = Field(default=None, max_length=200)
     only_conflicts: bool = False
     only_delayed: bool = False
@@ -82,6 +82,15 @@ class ShotGridScheduleQueryModel(ShotGridApiModel):
             raise ValueError('keyword 必须是字符串')
         normalized = value.strip()
         return normalized or None
+
+    @field_validator('assignee_user_ids', 'episode_ids', 'scene_ids')
+    @classmethod
+    def validate_positive_ids(cls, value: list[int]) -> list[int]:
+        if any(item <= 0 or item > SQL_BIGINT_MAX for item in value):
+            raise ValueError('筛选条件包含非法ID')
+        if len(value) != len(set(value)):
+            raise ValueError('筛选条件不能包含重复ID')
+        return value
 
     @model_validator(mode='after')
     def validate_window(self) -> 'ShotGridScheduleQueryModel':
@@ -119,6 +128,7 @@ class ShotGridScheduleConflictModel(ShotGridApiModel):
 
     task_id: int = Field(gt=0, le=SQL_BIGINT_MAX)
     target_name: str
+    assignee: ShotGridScheduleAssigneeModel
     start_time: BusinessDateTime
     end_time: BusinessDateTime
 
@@ -138,6 +148,8 @@ class ShotGridScheduleTaskModel(ShotGridApiModel):
     task_status: TaskStatus
     priority: TaskPriority
     lock_version: int = Field(ge=0)
+    group_key: str
+    group_name: str
     target: ShotGridScheduleTargetModel
     assignee: ShotGridScheduleAssigneeModel
     current_start: BusinessDateTime

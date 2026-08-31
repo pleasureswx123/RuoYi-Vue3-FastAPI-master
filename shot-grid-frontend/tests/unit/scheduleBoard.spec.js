@@ -1,5 +1,6 @@
 import { createPinia, setActivePinia } from 'pinia'
 import { flushPromises, mount } from '@vue/test-utils'
+import { ElButton, ElCheckbox, ElDatePicker, ElSelect } from 'element-plus'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { getProjectSchedule, getTaskScheduleChanges } from '@/api/shot-grid/schedules'
@@ -61,6 +62,13 @@ const rows = [
   }
 ]
 
+async function changeDatePicker(datePicker, value) {
+  datePicker.vm.$emit('update:modelValue', value)
+  await datePicker.vm.$nextTick()
+  datePicker.findComponent({ name: 'Picker' }).vm.$emit('change', value)
+  await datePicker.vm.$nextTick()
+}
+
 describe('共享任务排期面板', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
@@ -106,6 +114,126 @@ describe('共享任务排期面板', () => {
     await flushPromises()
     expect(wrapper.findComponent(TaskGantt).exists()).toBe(true)
     expect(wrapper.emitted('query-change').at(-1)[0]).toMatchObject({ mode: 'gantt', scale: 'week' })
+  })
+
+  it('甘特模式关闭共享容器的横向滚动', async () => {
+    const wrapper = mount(ScheduleBoard, {
+      attachTo: document.body,
+      props: {
+        projectId: 11,
+        initialMode: 'gantt',
+        initialWindowStart: '2026-09-01T00:00:00',
+        initialWindowEnd: '2026-09-08T00:00:00'
+      }
+    })
+    await flushPromises()
+
+    expect(wrapper.get('.schedule-board__viewport').element.style.overflowX).toBe('hidden')
+    wrapper.unmount()
+  })
+
+  it('工具栏按自然日期展示，并把包含结束日的选择转换为查询边界', async () => {
+    const wrapper = mount(ScheduleBoard, {
+      props: {
+        projectId: 11,
+        initialScale: 'day',
+        initialWindowStart: '2026-08-24T00:00:00',
+        initialWindowEnd: '2026-09-24T00:00:00'
+      }
+    })
+    await flushPromises()
+
+    const datePicker = wrapper.getComponent(ElDatePicker)
+    expect(datePicker.props()).toMatchObject({
+      type: 'daterange',
+      modelValue: ['2026-08-24', '2026-09-23'],
+      valueFormat: 'YYYY-MM-DD',
+      format: 'YYYY-MM-DD'
+    })
+
+    await changeDatePicker(datePicker, ['2026-09-01', '2026-09-30'])
+    await flushPromises()
+    expect(wrapper.emitted('query-change').at(-1)[0]).toMatchObject({
+      windowStart: '2026-09-01T00:00:00',
+      windowEnd: '2026-10-01T00:00:00'
+    })
+  })
+
+  it('“回到今天”按当前缩放恢复未来偏重的默认窗口', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(2026, 7, 31, 16, 20, 30))
+    try {
+      const wrapper = mount(ScheduleBoard, {
+        props: {
+          projectId: 11,
+          initialScale: 'day',
+          initialWindowStart: '2026-06-01T00:00:00',
+          initialWindowEnd: '2026-07-01T00:00:00'
+        }
+      })
+      await flushPromises()
+
+      expect(wrapper.text()).toContain('回到今天')
+      wrapper.getComponent(ScheduleToolbar).vm.$emit('window-shift', 0)
+      await flushPromises()
+
+      expect(wrapper.emitted('query-change').at(-1)[0]).toMatchObject({
+        scale: 'day',
+        windowStart: '2026-08-24T00:00:00',
+        windowEnd: '2026-09-24T00:00:00'
+      })
+      wrapper.unmount()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('切换时间缩放时以当前可见的今天为锚点应用对应窗口', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(2026, 7, 31, 16, 20, 30))
+    try {
+      const wrapper = mount(ScheduleBoard, {
+        props: {
+          projectId: 11,
+          initialScale: 'day',
+          initialWindowStart: '2026-08-24T00:00:00',
+          initialWindowEnd: '2026-09-24T00:00:00'
+        }
+      })
+      await flushPromises()
+
+      wrapper.getComponent(ScheduleToolbar).vm.$emit('update:scale', 'month')
+      await flushPromises()
+
+      expect(wrapper.emitted('query-change').at(-1)[0]).toMatchObject({
+        scale: 'month',
+        windowStart: '2026-05-01T00:00:00',
+        windowEnd: '2027-06-01T00:00:00'
+      })
+      wrapper.unmount()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('月视图的前后导航按完整自然月平移，不因闰年偏离月初', async () => {
+    const wrapper = mount(ScheduleBoard, {
+      props: {
+        projectId: 11,
+        initialScale: 'month',
+        initialWindowStart: '2026-01-01T00:00:00',
+        initialWindowEnd: '2027-02-01T00:00:00'
+      }
+    })
+    await flushPromises()
+
+    wrapper.getComponent(ScheduleToolbar).vm.$emit('window-shift', 1)
+    await flushPromises()
+
+    expect(wrapper.emitted('query-change').at(-1)[0]).toMatchObject({
+      windowStart: '2027-02-01T00:00:00',
+      windowEnd: '2028-03-01T00:00:00'
+    })
   })
 
   it('响应镜头与资产列表外层视图切换，并按目标类型重新查询', async () => {
@@ -174,5 +302,34 @@ describe('共享任务排期面板', () => {
       expectedEndTime: '2026-09-06T18:00:00'
     })
     expect(wrapper.getComponent(PersonnelSwimlane).props('rows')[0].currentStart).toBe('2026-09-01T09:00:00')
+  })
+
+  it('多选筛选按复数查询参数提交，并可独立隐藏首版基线', async () => {
+    const wrapper = mount(ScheduleBoard, {
+      props: {
+        projectId: 11,
+        initialWindowStart: '2026-09-01T00:00:00',
+        initialWindowEnd: '2026-09-08T00:00:00'
+      }
+    })
+    await flushPromises()
+
+    const toolbar = wrapper.getComponent(ScheduleToolbar)
+    const selectByPlaceholder = placeholder => toolbar.findAllComponents(ElSelect).find(item => item.props('placeholder') === placeholder)
+    selectByPlaceholder('全部负责人').vm.$emit('update:modelValue', [7])
+    selectByPlaceholder('全部状态').vm.$emit('update:modelValue', ['in_progress'])
+    const conflictToggle = toolbar.findAllComponents(ElCheckbox).find(item => item.text() === '仅冲突')
+    conflictToggle.vm.$emit('update:modelValue', true)
+    await toolbar.findAllComponents(ElButton).find(item => item.text() === '应用筛选').trigger('click')
+    await flushPromises()
+
+    expect(getProjectSchedule.mock.calls.at(-1)[1]).toMatchObject({
+      assigneeUserIds: [7], taskStatuses: ['in_progress'], onlyConflicts: true
+    })
+
+    const baselineToggle = toolbar.findAllComponents(ElCheckbox).find(item => item.text() === '显示首版基线')
+    baselineToggle.vm.$emit('change', false)
+    await flushPromises()
+    expect(wrapper.getComponent(PersonnelSwimlane).props('showBaseline')).toBe(false)
   })
 })

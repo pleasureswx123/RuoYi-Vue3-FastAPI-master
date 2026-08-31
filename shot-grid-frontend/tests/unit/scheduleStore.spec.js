@@ -66,6 +66,22 @@ describe('项目排期状态', () => {
     expect(store.unscheduledCount).toBe(2)
   })
 
+  it('自动读取窗口内全部分页，避免 500 项后的任务不可见', async () => {
+    getProjectSchedule
+      .mockResolvedValueOnce({ data: { rows: [{ taskId: 1 }], groups: [{ groupKey: 'user:7', groupName: '甲', sortOrder: 0, taskCount: 500 }], total: 501, hasNext: true, unscheduledCount: 2 } })
+      .mockResolvedValueOnce({ data: { rows: [{ taskId: 501 }], groups: [{ groupKey: 'user:7', groupName: '甲', sortOrder: 0, taskCount: 1 }], total: 501, hasNext: false, unscheduledCount: 2 } })
+    const store = useScheduleStore()
+    store.setProject(11)
+
+    await store.loadSchedule('2026-09-01T00:00:00', '2026-10-01T00:00:00')
+
+    expect(getProjectSchedule).toHaveBeenCalledTimes(2)
+    expect(getProjectSchedule.mock.calls.map(call => call[1].pageNum)).toEqual([1, 2])
+    expect(store.tasks.map(task => task.taskId)).toEqual([1, 501])
+    expect(store.groups).toEqual([{ groupKey: 'user:7', groupName: '甲', sortOrder: 0, taskCount: 501 }])
+    expect(store.total).toBe(501)
+  })
+
   it('切换筛选会取消旧请求，并丢弃同项目 ABA 迟到响应', async () => {
     const first = deferred()
     const second = deferred()

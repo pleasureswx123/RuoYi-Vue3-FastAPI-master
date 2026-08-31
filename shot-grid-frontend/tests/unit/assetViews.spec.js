@@ -40,7 +40,7 @@ import AssetRequirementDialog from '@/views/asset/components/AssetRequirementDia
 vi.mock('@/views/schedule/ScheduleBoard.vue', () => ({
   default: {
     name: 'ScheduleBoard',
-    props: ['projectId', 'targetKind', 'initialMode', 'editableAllowed'],
+    props: ['projectId', 'targetKind', 'initialMode', 'initialFilters', 'editableAllowed'],
     template: '<section data-testid="schedule-board-entry" :data-target-kind="targetKind" :data-mode="initialMode" />'
   }
 }))
@@ -121,7 +121,7 @@ const assetItem = {
 }
 const scheduleBoardStub = {
   name: 'ScheduleBoard',
-  props: ['projectId', 'targetKind', 'initialMode', 'editableAllowed'],
+  props: ['projectId', 'targetKind', 'initialMode', 'initialFilters', 'editableAllowed'],
   template: '<section data-testid="schedule-board-entry" :data-target-kind="targetKind" :data-mode="initialMode" />'
 }
 
@@ -895,6 +895,9 @@ describe('资产管理真实列表页', () => {
       assetStatus: 'in_progress',
       assigneeUserId: '7'
     }), expect.anything())
+    expect(wrapper.findComponent({ name: 'ScheduleBoard' }).props('initialFilters')).toMatchObject({
+      assigneeUserIds: [7], assetTypes: ['Environment'], taskStatuses: ['in_progress']
+    })
 
     const viewSwitch = wrapper.findComponent(ElRadioGroup)
     viewSwitch.vm.$emit('update:modelValue', 'card')

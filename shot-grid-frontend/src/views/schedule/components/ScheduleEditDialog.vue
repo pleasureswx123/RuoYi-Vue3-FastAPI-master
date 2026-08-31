@@ -2,6 +2,7 @@
 import { computed, reactive, ref, watch } from 'vue'
 
 import { scheduleErrorState, scheduleTaskLabel } from '@/views/schedule/schedulePresentation'
+import { formatTaskDateTime } from '@/views/task/taskPresentation'
 
 const props = defineProps({
   visible: Boolean,
@@ -9,6 +10,7 @@ const props = defineProps({
   draft: { type: Object, default: null },
   saving: Boolean,
   conflictTaskIds: { type: Array, default: () => [] },
+  conflicts: { type: Array, default: () => [] },
   error: { type: Object, default: null }
 })
 
@@ -122,8 +124,17 @@ function cancel() {
         :closable="false"
         show-icon
         title="保存前请二次确认人员时间重叠"
-        :description="`冲突任务 ID：${conflictTaskIds.join('、')}。系统不会自动改派或压缩任务。`"
-      />
+      >
+        <ul class="schedule-conflict-list">
+          <li v-for="conflict in conflicts" :key="conflict.taskId">
+            <strong>{{ conflict.targetName }}</strong>
+            <span>负责人：{{ conflict.assignee.userName }}</span>
+            <span>{{ formatTaskDateTime(conflict.startTime) }} 至 {{ formatTaskDateTime(conflict.endTime) }}</span>
+          </li>
+          <li v-if="!conflicts.length">冲突任务：{{ conflictTaskIds.join('、') }}</li>
+        </ul>
+        <p>系统不会自动改派或压缩任务。</p>
+      </el-alert>
       <el-form-item v-if="conflictTaskIds.length" prop="overlapAcknowledged">
         <el-checkbox v-model="form.overlapAcknowledged" :disabled="saving">我已查看本次完整冲突清单，仍要保存该排期</el-checkbox>
       </el-form-item>
@@ -140,4 +151,6 @@ function cancel() {
 .schedule-edit-form { display: grid; gap: 16px; }
 .schedule-edit-form:deep(.el-form-item) { margin-bottom: 0; }
 .schedule-edit-form:deep(.el-date-editor) { width: 100%; box-sizing: border-box; }
+.schedule-conflict-list { display: grid; gap: 6px; margin: 8px 0; padding-left: 18px; }
+.schedule-conflict-list li { display: grid; gap: 2px; }
 </style>

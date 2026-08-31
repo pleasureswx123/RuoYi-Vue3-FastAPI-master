@@ -38,7 +38,7 @@ vi.mock('sortablejs', () => ({ default: { create: sortableCreate } }))
 vi.mock('@/views/schedule/ScheduleBoard.vue', () => ({
   default: {
     name: 'ScheduleBoard',
-    props: ['projectId', 'targetKind', 'initialMode', 'editableAllowed'],
+    props: ['projectId', 'targetKind', 'initialMode', 'initialFilters', 'editableAllowed'],
     template: '<section data-testid="schedule-board-entry" :data-target-kind="targetKind" :data-mode="initialMode" />'
   }
 }))
@@ -117,8 +117,13 @@ const assignableShotRow = { ...shotRow, status: 'not_started', allowedActions: [
 const formComponents = { ElAlert, ElButton, ElDatePicker, ElDescriptions, ElDescriptionsItem, ElForm, ElFormItem, ElIcon, ElInput, ElInputNumber, ElOption, ElSelect, ElUpload }
 const scheduleBoardStub = {
   name: 'ScheduleBoard',
-  props: ['projectId', 'targetKind', 'initialMode', 'editableAllowed'],
+  props: ['projectId', 'targetKind', 'initialMode', 'initialFilters', 'editableAllowed'],
   template: '<section data-testid="schedule-board-entry" :data-target-kind="targetKind" :data-mode="initialMode" />'
+}
+const projectModalStub = {
+  name: 'ProjectModal',
+  emits: ['close'],
+  template: '<section><slot /></section>'
 }
 
 async function mountView(permissions = ['shotgrid:shot:list', 'shotgrid:shot:add', 'shotgrid:shot:import', 'shotgrid:member:list'], configureRouter = null) {
@@ -755,6 +760,9 @@ describe('镜头管理真实列表页', () => {
     expect(wrapper.get('[data-testid="schedule-board-entry"]').attributes()).toMatchObject({
       'data-target-kind': 'shot',
       'data-mode': 'swimlane'
+    })
+    expect(wrapper.findComponent({ name: 'ScheduleBoard' }).props('initialFilters')).toMatchObject({
+      keyword: '', assigneeUserIds: [], episodeIds: [], sceneIds: [], taskStatuses: []
     })
 
     const viewSwitch = wrapper.findComponent(ElRadioGroup)
@@ -1447,7 +1455,7 @@ describe('镜头 Element Plus 表单契约', () => {
         operationGeneration: 1,
         episodes: [{ episodeId: 21, episodeCode: 'EP001', episodeName: '第一集' }]
       },
-      global: { components: formComponents }
+      global: { components: formComponents, stubs: { ProjectModal: projectModalStub } }
     })
     const form = wrapper.findComponent(ElForm)
     const formItems = form.findAllComponents(ElFormItem)
@@ -1517,7 +1525,7 @@ describe('镜头 Element Plus 表单契约', () => {
         initialEpisodeId: '21',
         initialSceneId: '31'
       },
-      global: { components: formComponents }
+      global: { components: formComponents, stubs: { ProjectModal: projectModalStub } }
     })
     await flushPromises()
     await flushPromises()
@@ -1547,7 +1555,7 @@ describe('镜头 Element Plus 表单契约', () => {
         initialEpisodeId: '21',
         initialSceneId: '31'
       },
-      global: { components: formComponents }
+      global: { components: formComponents, stubs: { ProjectModal: projectModalStub } }
     })
     await flushPromises()
     await flushPromises()
@@ -1571,7 +1579,7 @@ describe('镜头 Element Plus 表单契约', () => {
         shot: { ...shotRow, task: null },
         members: [{ userId: 7, nickName: '杨景锋', projectRole: 'creator' }]
       },
-      global: { components: formComponents }
+      global: { components: formComponents, stubs: { ProjectModal: projectModalStub } }
     })
     const form = wrapper.findComponent(ElForm)
     const formItems = form.findAllComponents(ElFormItem)
@@ -1631,7 +1639,7 @@ describe('镜头 Element Plus 表单契约', () => {
         },
         members: [{ userId: 7, nickName: '杨景锋', projectRole: 'creator' }]
       },
-      global: { components: formComponents }
+      global: { components: formComponents, stubs: { ProjectModal: projectModalStub } }
     })
 
     expect(wrapper.findAllComponents(ElFormItem).map(item => item.props('prop'))).toEqual(['assigneeUserId'])
@@ -1721,7 +1729,7 @@ describe('镜头详情跨项目请求隔离', () => {
     await flushPromises()
     expect(wrapper.find('.detail-loading').attributes('aria-busy')).toBe('true')
     expect(wrapper.text()).not.toContain('旧项目镜头')
-    expect(document.body.querySelector('.shot-form')).toBeNull()
+    expect(wrapper.findComponent(ShotFormDialog).exists()).toBe(false)
     expect(wrapper.text()).not.toContain('编辑镜头')
 
     await router.push('/projects/10/shots/61')

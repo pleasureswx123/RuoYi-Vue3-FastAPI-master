@@ -125,6 +125,14 @@ const currentProjectId = computed(() => {
     return null
   }
 })
+const scheduleInitialFilters = computed(() => ({
+  keyword: query.keyword.trim(),
+  assigneeUserIds: query.assigneeUserId ? [Number(query.assigneeUserId)] : [],
+  assetTypes: query.assetType ? [query.assetType] : [],
+  taskStatuses: query.assetStatus && query.assetStatus !== 'unassigned'
+    ? [query.assetStatus === 'reviewing' ? 'pending_review' : query.assetStatus]
+    : []
+}))
 const groupedAssets = computed(() => ['Character', 'Environment', 'Prop'].map(type => ({
   type,
   assets: assets.value.filter(asset => asset.assetType === type)
@@ -724,7 +732,7 @@ onBeforeUnmount(() => {
         <section class="asset-toolbar"><div class="asset-toolbar__summary"><strong>{{ total }}</strong><span>个资产</span><template v-if="selectedAssets.length"><el-button v-if="canAssign" text type="primary" :loading="assigning" @click="openBatchAssignDialog">{{ batchAssignLabel }}（{{ selectedAssets.length }}）</el-button><el-button v-if="canDelete" text type="danger" :icon="Delete" :loading="deleting" :disabled="!canDeleteSelection" @click="deleteSelectedAssets">批量删除（{{ selectedAssets.length }}）</el-button></template></div><el-radio-group v-model="viewMode" class="view-switch" size="small" aria-label="资产视图"><el-radio-button value="table"><el-icon><List /></el-icon>表格</el-radio-button><el-radio-button value="card"><el-icon><Grid /></el-icon>卡片</el-radio-button><el-radio-button value="type"><el-icon><Box /></el-icon>类型看板</el-radio-button><el-radio-button value="swimlane"><el-icon><Clock /></el-icon>人员泳道</el-radio-button><el-radio-button value="gantt"><el-icon><Calendar /></el-icon>任务甘特</el-radio-button></el-radio-group></section>
 
         <Suspense v-if="['swimlane', 'gantt'].includes(viewMode) && currentProjectId">
-          <ScheduleBoard :project-id="currentProjectId" target-kind="asset_item" :initial-mode="viewMode" :editable-allowed="canSchedule" @query-change="handleScheduleQueryChange" />
+          <ScheduleBoard :project-id="currentProjectId" target-kind="asset_item" :initial-mode="viewMode" :initial-filters="scheduleInitialFilters" :editable-allowed="canSchedule" @query-change="handleScheduleQueryChange" />
           <template #fallback><el-card class="asset-context-loading" shadow="never"><el-skeleton :rows="8" animated /></el-card></template>
         </Suspense>
         <ProjectStatePanel v-else-if="assetsError" :title="assetsError.title" :message="assetsError.message" :retryable="assetsError.retryable" @retry="loadProjectContext" />

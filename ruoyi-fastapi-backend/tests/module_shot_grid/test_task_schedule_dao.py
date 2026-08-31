@@ -38,11 +38,11 @@ def test_schedule_statement_uses_current_or_baseline_window_and_stable_group_ord
         _query(
             targetKind='shot',
             groupBy='scene',
-            assigneeUserId=ASSIGNEE_ID,
-            taskStatus='in_progress',
-            priority='high',
-            episodeId=3,
-            sceneId=5,
+            assigneeUserIds=[ASSIGNEE_ID],
+            taskStatuses=['in_progress'],
+            priorities=['high'],
+            episodeIds=[3],
+            sceneIds=[5],
             keyword='SH010',
         ),
     )
@@ -54,11 +54,11 @@ def test_schedule_statement_uses_current_or_baseline_window_and_stable_group_ord
     assert 'sg_task.baseline_start_time <' in sql
     assert 'sg_task.baseline_end_time >' in sql
     assert "sg_task.task_kind = 'shot_video'" in sql
-    assert 'sg_task.assignee_user_id = 7' in sql
-    assert "sg_task.task_status = 'in_progress'" in sql
-    assert "sg_task.priority = 'high'" in sql
-    assert 'sg_shot.episode_id = 3' in sql
-    assert 'sg_shot.scene_id = 5' in sql
+    assert 'sg_task.assignee_user_id in (7)' in sql
+    assert "sg_task.task_status in ('in_progress')" in sql
+    assert "sg_task.priority in ('high')" in sql
+    assert 'sg_shot.episode_id in (3)' in sql
+    assert 'sg_shot.scene_id in (5)' in sql
     assert 'order by' in sql
     assert 'sg_scene.sort_order' in sql
     assert 'sg_task.expected_start_time' in sql
@@ -69,12 +69,12 @@ def test_schedule_statement_can_filter_conflicts_and_baseline_delay_without_narr
     sql = _sql(
         ShotGridTaskScheduleDao.build_schedule_statement(
             PROJECT_ID,
-            _query(onlyConflicts=True, onlyDelayed=True, targetKind='asset_item', assetType='Character'),
+            _query(onlyConflicts=True, onlyDelayed=True, targetKind='asset_item', assetTypes=['Character']),
         )
     )
 
     assert "sg_task.task_kind = 'asset_image'" in sql
-    assert "sg_asset.asset_type = 'character'" in sql
+    assert "sg_asset.asset_type in ('character')" in sql
     assert 'sg_task.expected_end_time > sg_task.baseline_end_time' in sql
     assert 'exists (select schedule_overlap_task.task_id' in sql
     assert 'schedule_overlap_task.expected_start_time < sg_task.expected_end_time' in sql
