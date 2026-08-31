@@ -4,10 +4,10 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 版本 | v2.4 |
-| 状态 | 2026-08-20 冻结“创建/导入生产对象 → 独立委派生成唯一任务 → 制作 → 提交不可变版本 → 审核 → 完成/返修循环”契约；镜头/资产 v2 模板与手工创建均不接收制作人，导入和创建不得生成任务；生产履历改为六阶段投影，继续区分确认事实与推断事实。第一版只聚合既有正式表，不新增领域事件表，不伪造缺失的旧委派、改派或开始历史 |
+| 版本 | v2.5 |
+| 状态 | 2026-08-31 在既有生产闭环上冻结项目排期扩展：镜头、资产和项目综合入口共用当前计划、首次基线和结构化改期历史；人员泳道与任务甘特按自然时间支持日/周/月，撞期二次确认，不增加工时容量、任务依赖、关键路径或自动调度 |
 | 建立日期 | 2026-08-07 |
-| 最近修订 | 2026-08-20 |
+| 最近修订 | 2026-08-31 |
 | 数据库 | PostgreSQL |
 | 业务前端 | 独立 `shot-grid-frontend`，工程配置参考 `ruoyi-fastapi-frontend` |
 | 管理后台 | `ruoyi-fastapi-frontend` |
@@ -592,6 +592,8 @@ CHECK (
 | `due_date` | date | 否 | 兼容截止日期；填写预期范围时同步为结束日期，不限制提交 |
 | `expected_start_time` | timestamp(0) without time zone | 否 | 管理员预期开始时间，仅供展示 |
 | `expected_end_time` | timestamp(0) without time zone | 否 | 管理员预期结束时间，仅供展示 |
+| `baseline_start_time` | timestamp(0) without time zone | 否 | 首次完整排期开始；冻结后不可修改 |
+| `baseline_end_time` | timestamp(0) without time zone | 否 | 首次完整排期结束；冻结后不可修改 |
 | `requirements` | text | 否 | 制作要求 |
 | 通用审计字段 |  | 是 | 见 5.2 |
 
@@ -600,6 +602,7 @@ CHECK (
 | 代码 | 中文 |
 | --- | --- |
 | `not_started` | 待开工 |
+| `preparing` | 目录准备中 |
 | `in_progress` | 制作中 |
 | `pending_review` | 待审核 |
 | `revision` | 修改中 |
@@ -635,6 +638,9 @@ CHECK (
 - `assignee_user_id` 只保存一名主制作人；只有显式委派接口接受负责人，且一次委派只能选择一名活动项目成员，不得静默选择或创建多人负责人文本。
 - 后续改派只更新现有任务负责人并记录操作日志，不创建第二个正式任务。
 - 平台不执行图片或视频制作；任务仅承载制作要求、负责人、截止日期、上传版本和审核状态。
+- `expected_start_time/expected_end_time` 是当前排期；首次完整排期同事务写入 `baseline_start_time/baseline_end_time`，以后只允许修改当前排期。当前与基线都不驱动任务状态机。
+- 当前排期和基线均必须成对为空或成对有效，结束严格晚于开始；首版不提供把已有当前排期清空的动作。
+- 当前排期结束时间变化时，`due_date` 同事务同步为结束日期，仅继续服务旧筛选/排序。
 
 建议索引：
 
@@ -647,6 +653,43 @@ CREATE UNIQUE INDEX uk_sg_task_asset_item
 ON sg_task(asset_item_id)
 WHERE asset_item_id IS NOT NULL AND del_flag = '0';
 ```
+
+### 6.8.1 `sg_task_schedule_change`
+
+任务排期结构化变更历史，只追加，不提供普通更新或删除 API。
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `schedule_change_id` | bigint | 是 | 主键 |
+| `project_id` | bigint | 是 | 项目 ID |
+| `task_id` | bigint | 是 | 任务 ID，与项目组成复合外键 |
+| `operator_user_id` | bigint | 是 | 操作人用户 ID，用于稳定授权与幂等范围 |
+| `from_start_time` | timestamp(0) without time zone | 否 | 修改前开始；初次排期时与结束同时为空 |
+| `from_end_time` | timestamp(0) without time zone | 否 | 修改前结束 |
+| `to_start_time` | timestamp(0) without time zone | 是 | 修改后开始 |
+| `to_end_time` | timestamp(0) without time zone | 是 | 修改后结束 |
+| `change_type` | varchar(20) | 是 | `initial/move/resize_start/resize_end/dialog`，由服务端规范化 |
+| `operation_source` | varchar(20) | 是 | `start/swimlane/gantt/dialog` |
+| `change_reason` | varchar(500) | 是 | 首次排期或改期原因 |
+| `overlap_acknowledged` | boolean | 是 | 是否确认人员时间重叠 |
+| `overlap_task_ids` | jsonb | 是 | 当次确认的冲突任务 ID 有序快照，默认空数组 |
+| `task_lock_version_before` | integer | 是 | 修改前任务锁版本 |
+| `task_lock_version_after` | integer | 是 | 修改后任务锁版本 |
+| `idempotency_key` | varchar(128) | 是 | 命令幂等键 |
+| `request_hash` | varchar(64) | 是 | 规范化命令 SHA-256 |
+| `result_snapshot` | jsonb | 是 | 首次成功结果的安全快照，供原样重放 |
+| `create_by` | varchar(64) | 是 | 操作账号 |
+| `create_time` | timestamp(0) without time zone | 是 | 操作时间 |
+
+约束与索引：
+
+- 修改前时间成对为空或成对有效，修改后时间必须完整且结束严格晚于开始。
+- `UNIQUE(task_id, operator_user_id, idempotency_key)`；相同键绑定不同命令返回幂等冲突。
+- 任务和项目使用 `(task_id, project_id)` 复合外键，禁止跨项目历史。
+- 查询索引为 `(project_id, task_id, create_time DESC, schedule_change_id DESC)` 和 `(project_id, create_time DESC)`。
+- 项目永久删除在任务前显式删除该项目排期历史；普通业务生命周期不得删除或覆盖历史。
+
+`SysOperLog` 继续保存平台统一操作审计；本表用于业务页面可查询的结构化时间历史，二者必须与任务改期同事务写入。迁移将已有完整当前排期复制为基线，但不创建本表记录，因为无法证明原操作人、原因和时间。
 
 ### 6.9 `sg_version`
 
@@ -1725,6 +1768,7 @@ sg_project_member.project_role = creator
 | `shotgrid:task:edit` | 修改任务要求、优先级和截止日期 |
 | `shotgrid:task:assign` | 分配或改派制作任务 |
 | `shotgrid:task:start` | 开始任务（管理人确认镜头或资产制作分项） |
+| `shotgrid:task:schedule` | 创建或调整任务当前排期并记录改期历史 |
 | `shotgrid:version:list` | 查看版本列表 |
 | `shotgrid:version:query` | 查看版本详情 |
 | `shotgrid:version:add` | 上传并提交任务版本 |
@@ -1771,6 +1815,8 @@ shotgrid:<resource>:<domain-action>
 | 导入镜头和资产表 | 允许 | 允许 | 禁止 |
 | 解决或忽略资产待匹配需求 | 允许 | 允许 | 禁止 |
 | 分配任务 | 允许 | 允许 | 禁止 |
+| 查看项目排期 | 通过项目访问与任务列表权限后允许 | 允许 | 允许只读查看授权项目 |
+| 创建或调整任务排期 | 具备 `shotgrid:task:schedule` 和跨项目管理范围时允许 | 具备 `shotgrid:task:schedule` 时允许 | 禁止 |
 | 查看所属项目任务、版本和修改问题 | 允许 | 允许 | 允许只读查看；本人任务可见完整来源标注与处理历史 |
 | 确认镜头开工 | 具备对应接口权限及项目管理/跨项目管理范围时允许 | 具备接口权限并人工确认资产齐备后允许 | 禁止，等待管理人员确认 |
 | 确认资产分项开工 | 具备对应接口权限及项目管理/跨项目管理范围时允许 | 具备接口权限并人工确认该分项开工条件后允许 | 禁止，等待管理人员确认 |
@@ -1796,7 +1842,7 @@ Shot Grid 后端必须分层完成授权：
 4. 写操作再使用 `ProjectRoleDependency` 校验 `director`、`creator` 等项目内角色；
 5. Service 和 DAO 继续校验目标资源的 `project_id`，不能只相信路径参数。
 
-`shotgrid:project:all` 只扩大数据范围，不自动授予动作权限。镜头及资产分项开工均要求 `shotgrid:task:start` 和项目管理范围，并执行人工确认。版本 preflight/create 和失败提交重试仍必须满足“当前用户就是任务当前委派的活动 `creator` 本人”的业务门禁，平台超级管理员也不能代交或代重试。
+`shotgrid:project:all` 只扩大数据范围，不自动授予动作权限。镜头及资产分项开工均要求 `shotgrid:task:start` 和项目管理范围，并执行人工确认。排期写入要求独立 `shotgrid:task:schedule`，且操作者必须为当前项目 `director` 或具有 `has_all_scope` 管理范围；制作人员始终只读。版本 preflight/create 和失败提交重试仍必须满足“当前用户就是任务当前委派的活动 `creator` 本人”的业务门禁，平台超级管理员也不能代交或代重试。
 
 任务动作与文件还要增加资源关系校验：
 
@@ -3209,7 +3255,7 @@ Permission: shotgrid:task:start
 
 开工统一由管理人员确认，请求按任务类型区分；分配不自动开工：
 
-两类命令共同支持 `priority`（省略保留）、`expectedStartTime` 与 `expectedEndTime`（成对，示例 `"2026-09-01T09:00:00"`、`"2026-09-02T18:00:00"`）。新开工窗口要求完整时间范围；旧客户端省略时保留原值。时间沿用业务本地时区和秒精度，不接收偏移时区或小数秒；结束必须严格晚于开始。服务端在取得项目/任务锁后检查开始时间不得早于当前时间，过期返回 HTTP 422 / `SG_TASK_EXPECTED_TIME_INVALID`，不得写入部分状态。开工优先级、双时间、状态、Outbox 与审计为同一事务；`dueDate` 是结束日期的兼容查询投影。任务列表/详情、镜头任务摘要、分项任务摘要均返回双时间。
+两类命令共同支持 `priority`（省略保留）、`expectedStartTime` 与 `expectedEndTime`（成对，示例 `"2026-09-01T09:00:00"`、`"2026-09-02T18:00:00"`）。任务尚无当前排期时，新开工窗口要求完整时间范围；时间沿用业务本地时区和秒精度，不接收偏移时区或小数秒，结束必须严格晚于开始，服务端在取得项目/任务锁后拒绝新建的过去开始时间（HTTP 422 / `SG_TASK_EXPECTED_TIME_INVALID`）。任务已有当前排期时，开工窗口只读展示并省略时间，服务端保留原值且不得因计划开始已经过去而拒绝；已有计划的改变只能走第 15.7.1 节排期 API。无计划任务由开工首次写入时复用排期领域逻辑冻结基线并写结构化历史。开工优先级、首次时间/基线、状态、Outbox 与审计为同一事务；`dueDate` 是结束日期的兼容查询投影。任务列表/详情、镜头任务摘要、分项任务摘要均返回当前双时间。
 
 **时间是期望，不是状态机门禁。** 确认开工依然立即进入原有 `preparing/in_progress` 流程，未来开始日期不延迟放行；到期不自动完成或关闭，早于预期开始和逾期均可按原权限、状态和文件条件提交/重试。分配窗口移除优先级和日期，只选择制作人并核对制作内容。现有任务不补造开始时间，也不据此重置状态。
 
@@ -3229,7 +3275,7 @@ Permission: shotgrid:task:start
 - 目录失败仍保持 `preparing`，通过原目录重试链恢复；请求事务中不执行 NAS I/O。现有已开工任务不回退、不要求重新确认。
 - 两类人工确认与状态/Outbox 同事务记录审计：操作人、时间、项目、镜头或资产及分项、任务、负责人、双/三版本和 `confirmationMethod=manual`。确认时间表示管理人放行时间，不证明制作人员已在线下实际开工。
 - 任务详情等待时自动查询状态；两类任务制作人均无需再次点击开始。未开工与目录准备中均不能 preflight/create 版本，进入制作中后仍只有当前受派制作人员可以提交，管理人不获得代提交权限。
-- 镜头和资产列表三种视图、工作台及任务/资产详情复用有界状态查询：待开工每 5 秒，目录准备中每 1.5 秒且每轮最多 80 次；资产列表依据 `itemStatusCounts`，不能因父级为制作中而漏掉其他待开工/准备中分项。仅查询已确认的筛选、分页和排序；保留当前内容与有效勾选，列表及资产详情在筛选草稿、相关弹窗或写入期间暂停；任务详情保留编辑快照且不替换锁号，切项目/路由和卸载中止请求并隔离迟到响应。连续 3 次失败或归一化 401/403/404 停止并提示人工刷新；当前结果无待开工/准备中项时停止。轮询只读取服务端状态，不触发开工。
+- 镜头和资产列表原有三种视图、工作台及任务/资产详情复用有界状态查询：待开工每 5 秒，目录准备中每 1.5 秒且每轮最多 80 次；资产列表依据 `itemStatusCounts`，不能因父级为制作中而漏掉其他待开工/准备中分项。仅查询已确认的筛选、分页和排序；保留当前内容与有效勾选，列表及资产详情在筛选草稿、相关弹窗或写入期间暂停；任务详情保留编辑快照且不替换锁号，切项目/路由和卸载中止请求并隔离迟到响应。连续 3 次失败或归一化 401/403/404 停止并提示人工刷新；当前结果无待开工/准备中项时停止。轮询只读取服务端状态，不触发开工。排期双视图不复用该状态轮询，首版不增加 WebSocket；改期成功后只定向刷新任务与受影响泳道。
 
 权限交付：PostgreSQL 增量 `20260827_23` 仅将标准权限菜单“开始本人任务”更名为“开始任务”，不修改既有角色授权、任务状态或历史审计。部署后由平台管理员显式为 `shotgrid_admin` 配置 `shotgrid:task:start`，刷新权限缓存/会话并核对实际按钮；不自动扩大角色授权，`shotgrid_creator` 即使仍有此权限也不能自行开工。
 
@@ -3658,6 +3704,92 @@ Permissions:
 
 镜头任务的 `GET /shot-grid/tasks/{taskId}` 额外返回详情专用 `shotProduction`：`durationMs/description/shotSize/cameraPosition/cameraMovement/focalLength/dialogue/soundEffect/colorReference/remark`。这些字段来自任务当前关联的 `sg_shot` 只读投影，供制作人在任务详情完整查看制作资料；任务列表及其中的 `target` 继续保持摘要结构，不返回该完整对象。分配和改派弹窗使用镜头详情中的同组字段只读展示；任务 `requirements` 与 `shotProduction.description` 不同时，前端把前者作为“任务补充要求”独立显示，相同时不重复。
 
+### 15.7.1 项目排期、未排期池与改期历史 API
+
+```http
+GET /shot-grid/projects/{projectId}/schedule
+Permission: shotgrid:task:list
+
+GET /shot-grid/projects/{projectId}/schedule/unscheduled
+Permission: shotgrid:task:list
+
+GET /shot-grid/tasks/{taskId}/schedule-changes
+Permission: shotgrid:task:query
+
+PUT /shot-grid/tasks/{taskId}/schedule
+Permission: shotgrid:task:schedule
+Header: Idempotency-Key
+```
+
+#### 15.7.1.1 排期读取
+
+`GET /projects/{projectId}/schedule` 接收：
+
+```text
+windowStart, windowEnd
+targetKind=all|shot|asset_item
+groupBy=assignee|task_kind|status|episode|scene|asset_type
+assigneeUserIds, taskStatuses, priorities, keyword
+episodeIds, sceneIds, assetTypes
+pageNum, pageSize（最大 1000）
+```
+
+- `windowStart/windowEnd` 是必填秒级业务本地时间，不接受偏移时区或小数秒。
+- 当前排期或首版基线与窗口相交的任务进入结果；按分组稳定键、目标业务排序键和 `taskId` 分页。
+- `lanes[]` 返回 `laneId/laneType/name/sortOrder/taskCount/conflictCount`。
+- `rows[]` 返回任务/目标/负责人安全摘要、状态、优先级、当前范围、基线范围、`lockVersion`、项目内同人冲突摘要和 `allowedActions`。
+- 响应带 `serverTime`；正常、临期、逾期和基线偏差由前端根据原始时间本地重算，不保存为任务状态。
+- 当前筛选不得缩小冲突事实。冲突始终基于当前项目内同一负责人、未完成、活动且有完整当前排期的全部任务计算。
+
+`GET /schedule/unscheduled` 只返回已存在真实任务、负责人有效、未完成但当前排期为空的任务，支持相同领域筛选和服务端分页。未委派镜头或资产制作分项没有 `sg_task`，不得进入未排期池或由该接口生成虚拟任务。
+
+`GET /tasks/{taskId}/schedule-changes` 按 `createTime DESC, scheduleChangeId DESC` 分页返回结构化历史。读取仍受任务所属项目和项目访问范围约束，不能因知道任务 ID 跨项目读取。
+
+#### 15.7.1.2 排期写入
+
+请求示例：
+
+```json
+{
+  "lockVersion": 8,
+  "expectedStartTime": "2026-09-01T09:00:00",
+  "expectedEndTime": "2026-09-05T18:00:00",
+  "operationSource": "gantt",
+  "changeReason": "上游素材延迟交付",
+  "overlapAcknowledged": false,
+  "expectedConflictTaskIds": []
+}
+```
+
+写入规则：
+
+- 时间必须完整、秒级、无偏移且结束严格晚于开始；首版不接受两个时间同时为空来取消排期。
+- 排期更新允许开始时间早于服务端当前时间，以表达既有计划或延期；时间经过不触发状态动作。
+- 原因规范化后必须非空且不超过 500 字符。`operationSource` 只允许 `swimlane/gantt/dialog`；`changeType` 由后端根据前后范围推导。
+- 写权限要求 `shotgrid:task:schedule`，且操作者是目标项目 `director` 或具备 `has_all_scope` 管理范围。制作人员、已完成任务、归档/完成项目、逻辑删除任务和失效目标均拒绝。
+- Service 采用“项目协调锁 → 任务锁”顺序，锁内复核实时权限、数据范围、项目/目标/任务状态、负责人、`lockVersion`、时间、幂等键和冲突集合。
+- 首次排期同事务把当前范围复制到基线；后续改期严禁修改基线。当前范围、`dueDate`、任务锁版本、`sg_task_schedule_change` 和 `SysOperLog` 同事务提交或回滚。
+- 改期不修改负责人和任务状态，不创建目录 Outbox，不触发版本、审核、提交或 NAS/Redis/外部 I/O。
+
+#### 15.7.1.3 冲突二次确认
+
+同项目、同负责人、两个未完成活动任务的当前区间按 `[start,end)` 判断；前一任务结束等于后一任务开始不冲突。发现冲突且尚未确认时返回：
+
+```text
+HTTP 409 / SG_TASK_SCHEDULE_OVERLAP
+data = { conflicts[], conflictTaskIds[] }
+```
+
+前端展示冲突后，以 `overlapAcknowledged=true` 和服务端上次返回的稳定有序 `expectedConflictTaskIds` 重试。后端在项目协调锁内复算：集合相同则允许保存并记录确认快照；集合变化继续返回同一错误并要求重新确认；任务锁版本变化返回 `SG_OPTIMISTIC_LOCK_CONFLICT`。
+
+同一任务、操作人和 `Idempotency-Key` 重放返回首次成功结果，不重复写历史或递增版本；相同键绑定不同规范化命令返回 `SG_IDEMPOTENCY_CONFLICT`。
+
+#### 15.7.1.4 开工兼容
+
+- 任务已有当前排期：开工窗口只读展示该范围，开工命令省略时间并保留现值；计划开始已过去不构成拒绝开工理由。
+- 任务尚无当前排期：开工继续要求完整范围并拒绝新的过去开始时间；开工 Service 复用排期领域逻辑冻结基线并写首次历史。
+- 已有排期如需修改，必须先调用排期写接口；开工接口不得形成第二套改期规则。
+
 ### 15.8 版本与修改问题查询 API
 
 ```http
@@ -3991,6 +4123,7 @@ failed
 | 导入资产 | 导入批次、去重资产、逐行未分配制作分项、稳定目录快照、待匹配需求解析、镜头资产关系、操作审计；资产目录 Outbox 与任务创建数均固定为 0 |
 | 确认资产分项开工 | 管理人员在项目/任务/父资产/分项锁内复核三版本及人工确认，只开始选中任务；创建或复用共享目录 Outbox，同事务审计，失败全回滚。目录未就绪进入 `preparing`，已成功则 `in_progress`；Worker 只推进已 `preparing` 分项 |
 | 分配目标 | 锁定项目和目标；新建唯一任务，或携带任务锁版本改派 not_started 任务；已开工或存在任何非 committed 提交时整体拒绝，批量整批回滚 |
+| 创建或调整任务排期 | 按项目协调锁、任务锁顺序复核权限/范围/状态/负责人/时间/锁版本/幂等键和最新冲突集合；首次冻结基线，更新当前范围、`dueDate`、任务版本，新增结构化历史并写 `SysOperLog`；不改变负责人或任务状态 |
 | 暂存版本提交 | 锁定项目与任务、重查全部 open 问题、校验逐条处理说明覆盖、保留版本号、生成业务文件名和 NAS 目标、创建 `sg_version_submission` 与 `sg_version_issue_response`、建立 `shotgrid_version_submission` 临时文件引用 |
 | 正式提交版本 | 版本、版本文件及 NAS 摘要、切换为 `shotgrid_version` 主文件引用、自动审核单、任务状态、提交状态；版本通过 `submission_id` 反向关联 |
 | 保存/修改/删除问题草稿 | 当前待审核版本与活动自动审核单、草稿乐观锁、文字/标注至少一项门禁、操作审计；草稿不进入制作人问题查询 |
@@ -4084,6 +4217,9 @@ NAS I/O 不得在数据库事务内执行。`sg_storage_operation`、`sg_version
 | `SG_TASK_NOT_FOUND` | 404 | 任务不存在、不属于可访问项目或不可见 |
 | `SG_TASK_ACTION_DENIED` | 403 | 当前动作要求任务当前委派的活动 `creator` 本人执行，但当前用户不满足；`director`、管理员和全项目范围不构成代操作权限 |
 | `SG_TASK_REASSIGN_SUBMISSION_CONFLICT` | 409 | 任务存在非 committed 版本提交（包括 failed），禁止改派 |
+| `SG_TASK_SCHEDULE_INVALID` | 422 | 排期时间缺半、格式或精度错误、结束不晚于开始、原因无效，或请求尝试清空已有排期 |
+| `SG_TASK_SCHEDULE_OVERLAP` | 409 | 同项目同负责人存在尚未确认的任务时间重叠，或二次提交时冲突集合发生变化 |
+| `SG_TASK_SCHEDULE_READ_ONLY` | 409 | 项目、任务、负责人或目标当前不允许创建或调整排期 |
 | `SG_CROSS_PROJECT_REFERENCE` | 409 | 跨项目关联 |
 | `SG_RESOURCE_WRITE_CONFLICT` | 409 | 集、场次、镜头或资产写入遇到未归类的并发数据库约束冲突 |
 | `SG_OPTIMISTIC_LOCK_CONFLICT` | 409 | 乐观锁冲突 |
