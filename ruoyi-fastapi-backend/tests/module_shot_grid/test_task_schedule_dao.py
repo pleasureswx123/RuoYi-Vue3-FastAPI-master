@@ -118,6 +118,18 @@ def test_overlap_statement_uses_half_open_intervals_and_ignores_ui_filters() -> 
     assert 'priority' not in sql
 
 
+def test_overlap_pairs_statement_batches_page_conflicts_without_ui_filters() -> None:
+    sql = _sql(ShotGridTaskScheduleDao.build_overlap_pairs_statement(PROJECT_ID, [TASK_ID, 32]))
+
+    assert 'schedule_source_task.task_id in (31, 32)' in sql
+    assert 'schedule_pair_task.assignee_user_id = schedule_source_task.assignee_user_id' in sql
+    assert 'schedule_pair_task.expected_start_time < schedule_source_task.expected_end_time' in sql
+    assert 'schedule_pair_task.expected_end_time > schedule_source_task.expected_start_time' in sql
+    assert "schedule_source_task.task_status != 'completed'" in sql
+    assert "schedule_pair_task.task_status != 'completed'" in sql
+    assert 'order by schedule_source_task.task_id, schedule_pair_task.task_id' in sql
+
+
 def test_history_idempotency_and_lock_statements_keep_stable_scope() -> None:
     history_sql = _sql(ShotGridTaskScheduleDao.build_history_statement(TASK_ID))
     idempotency_sql = _sql(

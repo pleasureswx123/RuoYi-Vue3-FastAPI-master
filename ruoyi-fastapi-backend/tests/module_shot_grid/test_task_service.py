@@ -8,6 +8,7 @@ import pytest
 from sqlalchemy.exc import IntegrityError
 
 from module_admin.entity.vo.user_vo import CurrentUserModel, UserInfoModel
+from module_shot_grid.entity.do.task_schedule_change_do import ShotGridTaskScheduleChange
 from module_shot_grid.entity.vo.access_vo import ShotGridProjectAccessModel
 from module_shot_grid.entity.vo.task_vo import (
     ShotGridShotTaskBatchAssignModel,
@@ -156,6 +157,60 @@ def _task_row(**overrides: Any) -> dict[str, Any]:
     }
     row.update(overrides)
     return row
+
+
+def test_start_schedule_contract_preserves_existing_range_and_requires_new_future_range() -> None:
+    now = datetime(2026, 8, 31, 10)
+    existing = _task()
+    existing.expected_start_time = datetime(2026, 8, 29, 9)
+    existing.expected_end_time = datetime(2026, 8, 30, 18)
+    existing.baseline_start_time = existing.expected_start_time
+    existing.baseline_end_time = existing.expected_end_time
+
+    start, end, is_initial = ShotGridTaskService._resolve_start_schedule(
+        existing,
+        ShotGridTaskStartModel(lockVersion=INITIAL_TASK_LOCK_VERSION),
+        now,
+    )
+
+    assert (start, end, is_initial) == (
+        existing.expected_start_time,
+        existing.expected_end_time,
+        False,
+    )
+
+    with pytest.raises(ShotGridDomainException) as existing_override:
+        ShotGridTaskService._resolve_start_schedule(
+            existing,
+            ShotGridTaskStartModel(
+                lockVersion=INITIAL_TASK_LOCK_VERSION,
+                expectedStartTime='2026-09-01T09:00:00',
+                expectedEndTime='2026-09-02T18:00:00',
+            ),
+            now,
+        )
+    assert existing_override.value.error_key == 'SG_TASK_EXPECTED_TIME_INVALID'
+
+    fresh = _task()
+    with pytest.raises(ShotGridDomainException) as missing_range:
+        ShotGridTaskService._resolve_start_schedule(
+            fresh,
+            ShotGridTaskStartModel(lockVersion=INITIAL_TASK_LOCK_VERSION),
+            now,
+        )
+    assert missing_range.value.error_key == 'SG_TASK_EXPECTED_TIME_INVALID'
+
+    with pytest.raises(ShotGridDomainException) as past_range:
+        ShotGridTaskService._resolve_start_schedule(
+            fresh,
+            ShotGridTaskStartModel(
+                lockVersion=INITIAL_TASK_LOCK_VERSION,
+                expectedStartTime='2026-08-30T09:00:00',
+                expectedEndTime='2026-09-01T18:00:00',
+            ),
+            now,
+        )
+    assert past_range.value.error_key == 'SG_TASK_EXPECTED_TIME_INVALID'
 
 
 @pytest.mark.parametrize(
@@ -914,6 +969,10 @@ async def test_start_shot_allows_manager_and_increments_lock_in_same_transaction
         'module_shot_grid.service.task_service.ShotGridTaskDao.get_assignable_member',
         AsyncMock(return_value={'user_id': ASSIGNEE_USER_ID, 'producer_code': 'YJF'}),
     )
+    monkeypatch.setattr(
+        'module_shot_grid.service.task_service.ShotGridTaskScheduleDao.find_overlap_task_ids',
+        AsyncMock(return_value=[]),
+    )
     audit = AsyncMock()
     monkeypatch.setattr(
         'module_shot_grid.service.task_service.ShotGridTaskService._audit',
@@ -953,6 +1012,8 @@ async def test_start_shot_allows_manager_and_increments_lock_in_same_transaction
     assert task.task_status == 'preparing'
     assert task.expected_start_time == datetime(2026, 8, 29, 9)
     assert task.expected_end_time == datetime(2026, 8, 30, 18)
+    assert task.baseline_start_time == datetime(2026, 8, 29, 9)
+    assert task.baseline_end_time == datetime(2026, 8, 30, 18)
     assert task.due_date == date(2026, 8, 30)
     assert task.priority == 'urgent'
     assert shot.storage_dir_name == (existing_directory or '001_0001')
@@ -965,6 +1026,11 @@ async def test_start_shot_allows_manager_and_increments_lock_in_same_transaction
     assert audit.await_args.kwargs['payload']['confirmationMethod'] == 'manual'
     assert audit.await_args.kwargs['result']['operatedBy'] == access.user_id
     assert task.assignee_user_id == ASSIGNEE_USER_ID
+    history = next(
+        call.args[0] for call in db.add.call_args_list if isinstance(call.args[0], ShotGridTaskScheduleChange)
+    )
+    assert history.change_type == 'initial'
+    assert history.operation_source == 'start'
     db.commit.assert_awaited_once()
     db.rollback.assert_not_awaited()
 
@@ -1021,6 +1087,10 @@ async def test_start_asset_task_creates_shared_directory_outbox_and_enters_prepa
         AsyncMock(return_value=None),
     )
     monkeypatch.setattr(
+        'module_shot_grid.service.task_service.ShotGridTaskScheduleDao.find_overlap_task_ids',
+        AsyncMock(return_value=[]),
+    )
+    monkeypatch.setattr(
         'module_shot_grid.service.task_service.ShotGridTaskDao.flush',
         AsyncMock(),
     )
@@ -1068,6 +1138,8 @@ async def test_start_asset_task_creates_shared_directory_outbox_and_enters_prepa
     assert operation.idempotency_key == f'asset-directory:{PROJECT_ID}:{ASSET_ID}'
     assert task.expected_start_time == datetime(2026, 8, 29, 9)
     assert task.expected_end_time == datetime(2026, 8, 30, 18)
+    assert task.baseline_start_time == datetime(2026, 8, 29, 9)
+    assert task.baseline_end_time == datetime(2026, 8, 30, 18)
     assert task.priority == 'high'
     lock_asset.assert_awaited_once_with(db, PROJECT_ID, ASSET_ID)
     db.commit.assert_awaited_once()
@@ -1534,7 +1606,13 @@ async def test_shot_start_blocks_stale_unconfirmed_and_unauthorized_requests(
     audit = AsyncMock()
     monkeypatch.setattr(prefix + 'ShotGridTaskService._audit', audit)
     db = AsyncMock()
-    payload = {'lockVersion': 3, 'shotLockVersion': 0, 'assetsConfirmed': True}
+    payload = {
+        'lockVersion': 3,
+        'shotLockVersion': 0,
+        'assetsConfirmed': True,
+        'expectedStartTime': '2026-09-01T09:00:00',
+        'expectedEndTime': '2026-09-02T18:00:00',
+    }
     if case == 'unconfirmed':
         payload['assetsConfirmed'] = False
     if case == 'missing_shot_version':

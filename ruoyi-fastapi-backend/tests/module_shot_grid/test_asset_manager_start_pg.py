@@ -42,6 +42,7 @@ from module_shot_grid.entity.do.project_do import (
 )
 from module_shot_grid.entity.do.storage_do import ShotGridProjectStorage, ShotGridStorageRoot
 from module_shot_grid.entity.do.task_do import ShotGridTask
+from module_shot_grid.entity.do.task_schedule_change_do import ShotGridTaskScheduleChange
 from module_shot_grid.entity.vo.asset_crud_vo import (
     ShotGridAssetArchiveModel,
     ShotGridAssetItemDeleteModel,
@@ -137,6 +138,45 @@ async def test_expected_time_migration_preserves_tasks_and_enforces_range(pg_ses
                 {'task_id': FIRST_TASK_ID},
             )
         await db.rollback()
+
+
+async def test_task_schedule_migration_backfills_baseline_without_fabricating_history(
+    pg_sessions: SessionFactory,
+) -> None:
+    start = datetime(2026, 9, 1, 9)
+    end = datetime(2026, 9, 3, 18)
+    async with pg_sessions() as db:
+        await db.execute(
+            update(ShotGridTask)
+            .where(ShotGridTask.task_id == FIRST_TASK_ID)
+            .values(expected_start_time=start, expected_end_time=end)
+        )
+        await db.execute(text('DROP TABLE sg_task_schedule_change'))
+        await db.execute(
+            text(
+                'ALTER TABLE sg_task DROP CONSTRAINT ck_sg_task_baseline_time_range, '
+                'DROP COLUMN baseline_start_time, DROP COLUMN baseline_end_time'
+            )
+        )
+        connection = await db.connection()
+
+        def upgrade(sync_connection: Any) -> None:
+            migration = runpy.run_path(
+                str(BACKEND / 'alembic/versions/2026_08_31_1000-20260831_25_add_task_scheduling.py')
+            )
+            with Operations.context(MigrationContext.configure(sync_connection)):
+                migration['upgrade']()
+
+        await connection.run_sync(upgrade)
+        await db.commit()
+        task = await db.get(ShotGridTask, FIRST_TASK_ID)
+        assert (task.baseline_start_time, task.baseline_end_time) == (start, end)
+        assert (await db.execute(text('SELECT count(*) FROM sg_task_schedule_change'))).scalar_one() == 0
+        assert (
+            await db.execute(
+                text("SELECT count(*) FROM sys_menu WHERE perms = 'shotgrid:task:schedule' AND menu_type = 'F'")
+            )
+        ).scalar_one() == 1
 
 
 @pytest.fixture
@@ -306,13 +346,16 @@ def _user(user_id: int = DIRECTOR_ID, permissions: list[str] | None = None) -> C
     )
 
 
-def _command(**overrides: object) -> ShotGridTaskStartModel:
+def _command(*, task_id: int = FIRST_TASK_ID, **overrides: object) -> ShotGridTaskStartModel:
+    start = datetime.now().replace(microsecond=0) + timedelta(days=1 + task_id - FIRST_TASK_ID)
     return ShotGridTaskStartModel.model_validate(
         {
             'lockVersion': 0,
             'assetLockVersion': 0,
             'assetItemLockVersion': 0,
             'startConfirmed': True,
+            'expectedStartTime': start,
+            'expectedEndTime': start + timedelta(days=1),
             **overrides,
         }
     )
@@ -325,7 +368,12 @@ async def _start(
     command: ShotGridTaskStartModel | None = None,
 ) -> ShotGridTaskDetailModel:
     async with sessions() as db:
-        return await ShotGridTaskService.start_task(db, task_id, command or _command(), user or _user())
+        return await ShotGridTaskService.start_task(
+            db,
+            task_id,
+            command or _command(task_id=task_id),
+            user or _user(),
+        )
 
 
 async def test_expected_times_save_with_start_and_are_visible_to_creator(pg_sessions: SessionFactory) -> None:
@@ -343,10 +391,20 @@ async def test_expected_times_save_with_start_and_are_visible_to_creator(pg_sess
             'urgent',
             end.date(),
         )
+        assert (task.baseline_start_time, task.baseline_end_time) == (start, end)
+        history = (
+            await db.execute(
+                select(ShotGridTaskScheduleChange).where(ShotGridTaskScheduleChange.task_id == FIRST_TASK_ID)
+            )
+        ).scalar_one()
+        assert (history.change_type, history.operation_source) == ('initial', 'start')
+        assert (history.task_lock_version_before, history.task_lock_version_after) == (0, 1)
+        assert history.overlap_task_ids == []
         detail = await ShotGridTaskService.get_task_detail(
             db, FIRST_TASK_ID, _user(CREATOR_ID, ['shotgrid:task:query'])
         )
         assert (detail.expected_start_time, detail.expected_end_time) == (start, end)
+        assert (detail.baseline_start_time, detail.baseline_end_time) == (start, end)
 
 
 async def test_imported_asset_description_persists_on_parent_and_reaches_creator(pg_sessions: SessionFactory) -> None:
@@ -724,7 +782,7 @@ async def _snapshot(sessions: SessionFactory) -> dict[str, Any]:
         return {
             name: (await db.execute(text(statement))).mappings().all()
             for name, statement in {
-                'tasks': 'SELECT task_id, assignee_user_id, task_status, requirements, priority, due_date, expected_start_time, expected_end_time, lock_version, update_by FROM sg_task ORDER BY task_id',
+                'tasks': 'SELECT task_id, assignee_user_id, task_status, requirements, priority, due_date, expected_start_time, expected_end_time, baseline_start_time, baseline_end_time, lock_version, update_by FROM sg_task ORDER BY task_id',
                 'assets': 'SELECT asset_id, description, sort_order, remark, lock_version FROM sg_asset ORDER BY asset_id',
                 'items': 'SELECT asset_item_id, lock_version FROM sg_asset_item ORDER BY asset_item_id',
                 'operations': 'SELECT operation_id, operation_status, attempt_count FROM sg_storage_operation ORDER BY operation_id',

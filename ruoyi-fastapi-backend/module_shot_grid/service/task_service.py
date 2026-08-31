@@ -1,3 +1,5 @@
+import hashlib
+import json
 import re
 from datetime import datetime
 from typing import Any, Literal
@@ -10,9 +12,11 @@ from common.vo import PageModel
 from module_admin.entity.vo.user_vo import CurrentUserModel
 from module_shot_grid.dao.project_audit_dao import ShotGridProjectAuditDao
 from module_shot_grid.dao.task_dao import ShotGridTaskDao
+from module_shot_grid.dao.task_schedule_dao import ShotGridTaskScheduleDao
 from module_shot_grid.entity.do.project_do import ShotGridProject
 from module_shot_grid.entity.do.storage_do import ShotGridProjectStorage, ShotGridStorageOperation
 from module_shot_grid.entity.do.task_do import ShotGridTask
+from module_shot_grid.entity.do.task_schedule_change_do import ShotGridTaskScheduleChange
 from module_shot_grid.entity.vo.access_vo import ShotGridProjectAccessModel
 from module_shot_grid.entity.vo.task_vo import (
     ShotGridAssetItemTaskBatchAssignModel,
@@ -503,10 +507,7 @@ class ShotGridTaskService:
             if task.task_status != 'not_started':
                 raise shot_grid_error(409, 'SG_INVALID_STATE_TRANSITION', '只有未开始任务可以执行开始动作')
             cls._require_lock_version(task.lock_version, command.lock_version)
-            # 必须在等到项目/任务锁后检查，不能信任浏览器打开时的时间。
             now = cls._now()
-            if command.expected_start_time is not None and command.expected_start_time < now:
-                raise shot_grid_error(422, 'SG_TASK_EXPECTED_TIME_INVALID', '预期开始时间不能早于当前时间，请重新选择')
             asset = None
             if task.task_kind == 'asset_image':
                 asset_item_context = await ShotGridTaskDao.get_asset_item_project_context(
@@ -544,6 +545,34 @@ class ShotGridTaskService:
                         '当前负责人已不是有效制作人员，请重新分配任务',
                     )
 
+            schedule_start, schedule_end, is_initial_schedule = cls._resolve_start_schedule(task, command, now)
+            schedule_change: ShotGridTaskScheduleChange | None = None
+            if is_initial_schedule:
+                overlap_task_ids = await ShotGridTaskScheduleDao.find_overlap_task_ids(
+                    db,
+                    project_id=project_id,
+                    task_id=task_id,
+                    assignee_user_id=task.assignee_user_id,
+                    start_time=schedule_start,
+                    end_time=schedule_end,
+                )
+                if overlap_task_ids:
+                    raise shot_grid_error(
+                        409,
+                        'SG_TASK_SCHEDULE_OVERLAP',
+                        '首次排期与同一负责人其他任务重叠，请先在排期页处理',
+                        details={'conflictTaskIds': overlap_task_ids},
+                    )
+                schedule_change = cls._build_start_schedule_change(
+                    task=task,
+                    actor_user_id=actor_user_id,
+                    actor_name=actor_name,
+                    command=command,
+                    start_time=schedule_start,
+                    end_time=schedule_end,
+                    now=now,
+                )
+
             directory_operation_id: int | None = None
             if storage is None or storage.storage_status != 'ready':
                 raise shot_grid_error(409, 'SG_PROJECT_NOT_READY', '项目 NAS 存储尚未就绪，不能开始制作')
@@ -566,6 +595,9 @@ class ShotGridTaskService:
                         'SG_TASK_ASSIGNEE_INVALID',
                         '当前负责人已不是有效制作人员，请重新分配任务',
                     )
+                if schedule_change is not None:
+                    cls._apply_initial_schedule(task, schedule_start, schedule_end)
+                    db.add(schedule_change)
                 latest_directory_status = await ShotGridTaskDao.get_latest_shot_directory_operation_status(
                     db,
                     project_id,
@@ -599,6 +631,9 @@ class ShotGridTaskService:
                 shot.update_time = now
                 shot.lock_version += 1
             else:
+                if schedule_change is not None:
+                    cls._apply_initial_schedule(task, schedule_start, schedule_end)
+                    db.add(schedule_change)
                 latest_directory_status = await ShotGridTaskDao.get_latest_asset_directory_operation_status(
                     db,
                     project_id,
@@ -627,11 +662,6 @@ class ShotGridTaskService:
                         directory_operation_id = operation.operation_id
             if command.priority is not None:
                 task.priority = command.priority
-            if command.expected_start_time is not None:
-                task.expected_start_time = command.expected_start_time
-                task.expected_end_time = command.expected_end_time
-                # 截止日期仅保留为既有工作台筛选/排序的日期投影，不参与状态或提交门禁。
-                task.due_date = command.expected_end_time.date()
             task.update_by = actor_name
             task.update_time = now
             task.lock_version += 1
@@ -648,10 +678,8 @@ class ShotGridTaskService:
                     'taskId': task_id,
                     'lockVersion': command.lock_version,
                     'priority': task.priority,
-                    'expectedStartTime': command.expected_start_time.isoformat()
-                    if command.expected_start_time
-                    else None,
-                    'expectedEndTime': command.expected_end_time.isoformat() if command.expected_end_time else None,
+                    'expectedStartTime': schedule_start.isoformat(),
+                    'expectedEndTime': schedule_end.isoformat(),
                     **(
                         {
                             'projectId': project_id,
@@ -837,6 +865,101 @@ class ShotGridTaskService:
     def _require_task_not_started_for_edit(task: ShotGridTask) -> None:
         if task.task_status != 'not_started':
             raise shot_grid_error(409, 'SG_INVALID_STATE_TRANSITION', '任务开始制作后不可编辑')
+
+    @staticmethod
+    def _resolve_start_schedule(
+        task: ShotGridTask,
+        command: ShotGridTaskStartModel,
+        now: datetime,
+    ) -> tuple[datetime, datetime, bool]:
+        """已有排期只读沿用；未排期任务必须提交新的未来完整范围。"""
+
+        current_start = getattr(task, 'expected_start_time', None)
+        current_end = getattr(task, 'expected_end_time', None)
+        baseline_start = getattr(task, 'baseline_start_time', None)
+        baseline_end = getattr(task, 'baseline_end_time', None)
+        if (current_start is None) != (current_end is None) or (baseline_start is None) != (baseline_end is None):
+            raise shot_grid_error(409, 'SG_TASK_SCHEDULE_READ_ONLY', '任务排期数据不完整，请先修复后再开工')
+        if current_start is not None and current_end is not None:
+            if baseline_start is None or baseline_end is None:
+                raise shot_grid_error(409, 'SG_TASK_SCHEDULE_READ_ONLY', '任务首版排期缺失，请先修复后再开工')
+            if command.expected_start_time is not None or command.expected_end_time is not None:
+                raise shot_grid_error(
+                    422,
+                    'SG_TASK_EXPECTED_TIME_INVALID',
+                    '任务已有排期；如需调整请先使用排期功能，开工请求不要重复提交时间',
+                )
+            return current_start, current_end, False
+        if baseline_start is not None or baseline_end is not None:
+            raise shot_grid_error(409, 'SG_TASK_SCHEDULE_READ_ONLY', '任务当前排期缺失，请先修复后再开工')
+        if command.expected_start_time is None or command.expected_end_time is None:
+            raise shot_grid_error(422, 'SG_TASK_EXPECTED_TIME_INVALID', '未排期任务开工前必须填写完整预期制作时间')
+        if command.expected_start_time < now:
+            raise shot_grid_error(422, 'SG_TASK_EXPECTED_TIME_INVALID', '新排期开始时间不能早于当前时间，请重新选择')
+        return command.expected_start_time, command.expected_end_time, True
+
+    @staticmethod
+    def _build_start_schedule_change(
+        *,
+        task: ShotGridTask,
+        actor_user_id: int,
+        actor_name: str,
+        command: ShotGridTaskStartModel,
+        start_time: datetime,
+        end_time: datetime,
+        now: datetime,
+    ) -> ShotGridTaskScheduleChange:
+        idempotency_key = f'task-start:{task.task_id}:{command.lock_version}'
+        hash_payload = {
+            'taskId': task.task_id,
+            'lockVersion': command.lock_version,
+            'expectedStartTime': start_time.isoformat(),
+            'expectedEndTime': end_time.isoformat(),
+            'operationSource': 'start',
+        }
+        request_hash = hashlib.sha256(
+            json.dumps(hash_payload, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode('utf-8')
+        ).hexdigest()
+        next_lock_version = task.lock_version + 1
+        return ShotGridTaskScheduleChange(
+            project_id=task.project_id,
+            task_id=task.task_id,
+            operator_user_id=actor_user_id,
+            from_start_time=None,
+            from_end_time=None,
+            to_start_time=start_time,
+            to_end_time=end_time,
+            change_type='initial',
+            operation_source='start',
+            change_reason='首次排期（开工确认）',
+            overlap_acknowledged=False,
+            overlap_task_ids=[],
+            task_lock_version_before=task.lock_version,
+            task_lock_version_after=next_lock_version,
+            idempotency_key=idempotency_key,
+            request_hash=request_hash,
+            result_snapshot={
+                'taskId': task.task_id,
+                'projectId': task.project_id,
+                'currentStart': start_time.isoformat(),
+                'currentEnd': end_time.isoformat(),
+                'baselineStart': start_time.isoformat(),
+                'baselineEnd': end_time.isoformat(),
+                'lockVersion': next_lock_version,
+                'operationSource': 'start',
+            },
+            create_by=actor_name,
+            create_time=now,
+        )
+
+    @staticmethod
+    def _apply_initial_schedule(task: ShotGridTask, start_time: datetime, end_time: datetime) -> None:
+        task.expected_start_time = start_time
+        task.expected_end_time = end_time
+        task.baseline_start_time = start_time
+        task.baseline_end_time = end_time
+        # 截止日期只保留为既有工作台筛选/排序投影，不参与状态机。
+        task.due_date = end_time.date()
 
     @staticmethod
     def _require_lock_version(actual: int, expected: int) -> None:

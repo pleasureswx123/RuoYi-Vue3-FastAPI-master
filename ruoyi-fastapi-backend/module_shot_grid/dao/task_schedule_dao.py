@@ -127,6 +127,7 @@ class ShotGridTaskScheduleDao:
                 ShotGridTask.baseline_start_time,
                 ShotGridTask.baseline_end_time,
                 ShotGridTask.lock_version,
+                ShotGridProject.project_status,
                 assignee.user_name.label('assignee_user_name'),
                 assignee.nick_name.label('assignee_nick_name'),
                 target_id.label('target_id'),
@@ -395,6 +396,89 @@ class ShotGridTaskScheduleDao:
         )
 
     @staticmethod
+    def build_overlap_pairs_statement(project_id: int, task_ids: list[int]) -> Select:
+        """为当前页一次性计算任务对，避免逐任务查询冲突。"""
+
+        source = aliased(ShotGridTask, name='schedule_source_task')
+        other = aliased(ShotGridTask, name='schedule_pair_task')
+        member = aliased(ShotGridProjectMember, name='schedule_pair_member')
+        user = aliased(SysUser, name='schedule_pair_user')
+        shot = aliased(ShotGridShot, name='schedule_pair_shot')
+        episode = aliased(ShotGridEpisode, name='schedule_pair_episode')
+        scene = aliased(ShotGridScene, name='schedule_pair_scene')
+        asset_item = aliased(ShotGridAssetItem, name='schedule_pair_asset_item')
+        asset = aliased(ShotGridAsset, name='schedule_pair_asset')
+        target_active = or_(
+            and_(
+                other.task_kind == 'shot_video',
+                shot.lifecycle_status == 'active',
+                shot.del_flag == '0',
+                episode.lifecycle_status == 'active',
+                episode.del_flag == '0',
+                scene.lifecycle_status == 'active',
+                scene.del_flag == '0',
+            ),
+            and_(
+                other.task_kind == 'asset_image',
+                asset_item.lifecycle_status == 'active',
+                asset_item.del_flag == '0',
+                asset.lifecycle_status == 'active',
+                asset.del_flag == '0',
+            ),
+        )
+        return (
+            select(source.task_id.label('source_task_id'), other.task_id.label('conflict_task_id'))
+            .join(
+                other,
+                and_(
+                    other.project_id == source.project_id,
+                    other.assignee_user_id == source.assignee_user_id,
+                    other.task_id != source.task_id,
+                ),
+            )
+            .join(member, and_(member.project_id == other.project_id, member.user_id == other.assignee_user_id))
+            .join(user, user.user_id == other.assignee_user_id)
+            .outerjoin(shot, and_(shot.shot_id == other.shot_id, shot.project_id == other.project_id))
+            .outerjoin(
+                episode,
+                and_(episode.episode_id == shot.episode_id, episode.project_id == other.project_id),
+            )
+            .outerjoin(
+                scene,
+                and_(
+                    scene.scene_id == shot.scene_id,
+                    scene.episode_id == shot.episode_id,
+                    scene.project_id == other.project_id,
+                ),
+            )
+            .outerjoin(
+                asset_item,
+                and_(asset_item.asset_item_id == other.asset_item_id, asset_item.project_id == other.project_id),
+            )
+            .outerjoin(asset, and_(asset.asset_id == asset_item.asset_id, asset.project_id == other.project_id))
+            .where(
+                source.project_id == project_id,
+                source.task_id.in_(task_ids),
+                source.task_status != 'completed',
+                source.del_flag == '0',
+                source.expected_start_time.is_not(None),
+                source.expected_end_time.is_not(None),
+                other.task_status != 'completed',
+                other.del_flag == '0',
+                other.expected_start_time.is_not(None),
+                other.expected_end_time.is_not(None),
+                other.expected_start_time < source.expected_end_time,
+                other.expected_end_time > source.expected_start_time,
+                member.member_status == 'active',
+                member.project_role == 'creator',
+                user.status == '0',
+                user.del_flag == '0',
+                target_active,
+            )
+            .order_by(source.task_id, other.task_id)
+        )
+
+    @staticmethod
     def build_history_statement(task_id: int) -> Select:
         operator = aliased(SysUser, name='schedule_change_operator')
         return (
@@ -520,6 +604,27 @@ class ShotGridTaskScheduleDao:
         )
 
     @classmethod
+    async def get_task_rows_by_ids(
+        cls,
+        db: AsyncSession,
+        project_id: int,
+        task_ids: list[int],
+    ) -> list[dict[str, Any]]:
+        if not task_ids:
+            return []
+        query = ShotGridScheduleQueryModel(
+            windowStart=datetime(1970, 1, 1),
+            windowEnd=datetime(9998, 12, 31, 23, 59, 59),
+        )
+        statement = (
+            cls._base_task_statement(query)
+            .where(ShotGridTask.project_id == project_id, ShotGridTask.task_id.in_(task_ids))
+            .order_by(ShotGridTask.task_id)
+        )
+        result = await db.execute(statement)
+        return [dict(row) for row in result.mappings().all()]
+
+    @classmethod
     async def find_overlap_task_ids(
         cls,
         db: AsyncSession,
@@ -540,6 +645,18 @@ class ShotGridTaskScheduleDao:
             )
         )
         return [int(value) for value in values]
+
+    @classmethod
+    async def get_overlap_pairs(
+        cls,
+        db: AsyncSession,
+        project_id: int,
+        task_ids: list[int],
+    ) -> list[tuple[int, int]]:
+        if not task_ids:
+            return []
+        result = await db.execute(cls.build_overlap_pairs_statement(project_id, task_ids))
+        return [(int(row['source_task_id']), int(row['conflict_task_id'])) for row in result.mappings().all()]
 
     @classmethod
     async def get_idempotency_result(
