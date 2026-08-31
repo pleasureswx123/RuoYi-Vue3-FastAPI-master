@@ -61,6 +61,10 @@ class ShotGridStorageRootUpdateModel(ShotGridStorageRootBaseModel, ShotGridLockV
     """修改或启停 NAS 根目录。"""
 
 
+class ShotGridStorageRootDeleteModel(ShotGridLockVersionModel):
+    """删除已停用且未被项目引用的 NAS 根目录配置。"""
+
+
 class ShotGridStorageRootModel(ShotGridApiModel):
     """平台管理端 NAS 根目录详情。"""
 

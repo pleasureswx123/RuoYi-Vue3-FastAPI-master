@@ -232,13 +232,13 @@ PostgreSQL 迁移是当前项目的必需交付物。只有插件清单继续声
 
 ### 7.4 Shot Grid 当前数据库边界
 
-> 2026-08-31 后以 `20260831_25` 为当前 PostgreSQL head：20 在既有场内镜序、延迟目录、审核草稿和永久删除边界上新增“一个版本轮次包含多个候选文件”；21 新增审核通过后的最终版本 NAS 交付 Outbox；22 将单候选版本自动设为本轮最佳并回填历史数据；24 增加任务预期制作时间范围；25 增加不可变首版排期基线、只追加改期历史和独立排期权限。`approve` 必须在审核事务创建唯一 `sg_final_delivery(pending)`，版本 Worker 在事务外把最佳候选无覆盖发布到同任务目录的 `FINAL/` 并写 `FINAL.json`。候选原文件保持不变。部署必须先执行 `upgrade 20260831_25` 再启动对应新代码。
+> 2026-08-31 后以 `20260831_26` 为当前 PostgreSQL head：20 在既有场内镜序、延迟目录、审核草稿和永久删除边界上新增“一个版本轮次包含多个候选文件”；21 新增审核通过后的最终版本 NAS 交付 Outbox；22 将单候选版本自动设为本轮最佳并回填历史数据；24 增加任务预期制作时间范围；25 增加不可变首版排期基线、只追加改期历史和独立排期权限；26 增加 NAS 根目录平台配置删除权限。`approve` 必须在审核事务创建唯一 `sg_final_delivery(pending)`，版本 Worker 在事务外把最佳候选无覆盖发布到同任务目录的 `FINAL/` 并写 `FINAL.json`。候选原文件保持不变。部署必须先执行 `upgrade 20260831_26` 再启动对应新代码。
 
 - Shot Grid 领域模块位于 `module_shot_grid/`，包含 26 张 `sg_` 表 DO、项目访问依赖、范围导航、项目创建/存储状态/成员/范围查询、项目角色到固定平台角色的受管增量绑定、镜头与资产委派候选、v2 镜头/资产模板下载、两类 Excel 预检与正式提交、独立任务管理、版本提交/NAS 发布、`auto_single` 自动审核闭环，以及 NAS 目录 Outbox Worker、目录操作查询和人工重试接口。
 - 首个增量迁移为 `20260810_01`，并已同步 `sql/ruoyi-fastapi-pg.sql`、菜单、权限和字典种子。
 - `20260810_04` 是无版本历史库的采用/向前修复迁移：统一秒级时间精度和空字符串审计默认值，补强序场次、资产制作分项、主文件及集/场次编号约束；不得改写历史 01/02/03 代替修复。无 `alembic_version` 的历史库只能在备份和克隆核验后 stamp 01，再执行 upgrade head。04 必须在任何 ALTER 前预检冲突并整体失败，不能猜测修复业务数据；downgrade 不恢复从未被正式 revision 声明的旧弱漂移，秒以下精度只能从升级前备份恢复。
-- 当前 head `20260831_25` 是 PostgreSQL-only 增量链：15 至 19 保持镜头/资产延迟目录、连续编号、审核草稿和项目永久删除语义；20 至 22 完成候选级提交、最终交付和单候选规范化；23 更名标准开工菜单；24 增加成对预期时间；25 增加排期基线、结构化改期历史、`shotgrid:task:schedule` 权限和排期查询索引。
-- PostgreSQL 部署必须先执行 `upgrade 20260831_25`，再启动对应新代码。固定角色配置完成后，由同时具有 `shotgrid:project:all` 和 `system:user:edit` 的管理员调用 `POST /shot-grid/platform-role-bindings/reconcile` 对账存量成员；对账失败必须整体回滚。
+- 当前 head `20260831_26` 是 PostgreSQL-only 增量链：15 至 19 保持镜头/资产延迟目录、连续编号、审核草稿和项目永久删除语义；20 至 22 完成候选级提交、最终交付和单候选规范化；23 更名标准开工菜单；24 增加成对预期时间；25 增加排期基线、结构化改期历史、`shotgrid:task:schedule` 权限和排期查询索引；26 增加 `shotgrid:storageRoot:remove` 权限。
+- PostgreSQL 部署必须先执行 `upgrade 20260831_26`，再启动对应新代码。固定角色配置完成后，由同时具有 `shotgrid:project:all` 和 `system:user:edit` 的管理员调用 `POST /shot-grid/platform-role-bindings/reconcile` 对账存量成员；对账失败必须整体回滚。
 - 一次提交创建一个版本轮次和 `1..N` 个候选，候选不得拆成多个版本。只有全部候选完成无覆盖 NAS 发布，才允许在短事务中创建正式版本、候选、候选文件、一个自动审核单并把任务改为 `pending_review`；任一文件失败时不得暴露半个正式版本。
 - 单候选新轮次由系统在正式版本事务内直接设置 `selected_candidate_id` 和主审核文件，`selected_by/selected_time` 保持为空且不写审核人选择历史；多候选新轮次初始不选择，审核人显式选择后才能记录问题或提交结论。问题草稿、正式问题、历史问题确认和审核动作都必须校验并保存同一候选；存在草稿时禁止切换候选，禁止静默迁移批注。
 - 镜头与资产列表、详情、卡片和故事板的最新版本只读投影不得把“尚未选择最佳候选”误判为缺少审核媒体或无缩略图。存在 `selected_candidate_id` 时展示该候选；待审核且尚未选择时按 `sort_order/candidate_no/candidate_id` 稳定展示候选 01，并让缩略图、代理媒体和业务文件名使用同一展示候选。
@@ -249,7 +249,7 @@ PostgreSQL 迁移是当前项目的必需交付物。只有插件清单继续声
 - 已有平台 PostgreSQL 库通过 Alembic 执行增量迁移；新库通过同步后的 PostgreSQL 初始化 SQL 建立全量结构并写入 Alembic head。当前仍不存在完整平台 Alembic baseline，不得声称首个 Shot Grid revision 能从真正空库独立建立 RuoYi 平台。
 - 项目创建/编辑/归档、成员变更、集/场次/镜头/资产普通管理、任务分配/改派/开始、Excel 正式提交、版本正式提交、修改问题创建、版本逐条处理说明、审核逐条确认、审核动作和目录人工重试必须由 Service 在规定事务边界写领域数据、必要的 Outbox/文件引用与 `SysOperLog`；不得使用会异步入 Redis 的平台 `@Log` 冒充同事务审计。旧审核意见/回复/解决事务属于迁移前实现事实，不再作为新功能契约。项目、集、场次、镜头、资产和制作分项已实现业务归档而非物理删除；独立业务前端的项目、镜头、资产、跨项目“我的任务”工作台、任务详情/编辑/等待开工、版本提交恢复、版本历史/详情和鉴权下载已接入真实接口，不回退 Mock。旧 v1 镜头/资产导入旅程包含“导入时预分配并创建任务”的已废弃行为，不能验收 v2 新流程；任务/版本旅程只使用显式 `allow_local_root=True` 的 TEMP 适配器验证发布算法和前后端编排，不是正式 UNC/SMB/NAS 服务账号验收。任何子集旅程均不等于完整系统 E2E 或生产就绪。
 - 项目管理页面使用四项查询/预览类接口：`GET /shot-grid/storage-roots/options` 只返回 `enabled + healthy` 根目录的名称、编码、规范化 UNC 根路径和健康摘要，供已授权项目创建人直接确认保存位置；不得返回 `credentialRef`、内部路径键或错误堆栈。`POST /shot-grid/storage-roots/{storageRootId}/project-path-preview` 只执行规范化、路径拼接和占用检查，不写库、不创建目录；项目目录名称由项目名称唯一生成，前端在根目录或项目名称变化后自动防抖调用并展示结果，不要求用户额外点击预览按钮。`GET /shot-grid/member-candidates` 用于创建项目，要求 `shotgrid:project:add`；`GET /shot-grid/projects/{projectId}/member-candidates` 用于成员维护，要求 `shotgrid:member:add` 和项目管理人角色。两类候选查询均应用 `DataScopeDependency(SysUser)`，并支持可选的精确 `deptId` 过滤；创建项目页面必须传当前登录账号部门，只允许选择同部门账号。候选接口只分页返回有效平台账号的用户、昵称、头像和部门摘要，不返回联系方式、认证字段或密码。项目创建和添加/恢复成员事务也必须使用同一用户数据范围重新校验账号，路径预览不能替代创建事务内对根目录和路径冲突的重新校验。
-- 平台管理端通过 `GET/POST/PUT /shot-grid/admin/storage-roots` 和 `POST /shot-grid/admin/storage-roots/{storageRootId}/probe` 维护根目录白名单。探测必须由后端服务账号在事务外对规范化 UNC 根目录执行随机临时文件的独占创建、回读和删除，再以短事务持久化健康状态与同事务操作日志；不得把浏览器所在账号能打开共享目录当成后端可写证据。新增、路径变更或停用后重新启用时状态重置为 `unknown`，只有 `enabled + healthy` 才能进入创建项目选项。
+- 平台管理端通过 `GET/POST/PUT/DELETE /shot-grid/admin/storage-roots` 和 `POST /shot-grid/admin/storage-roots/{storageRootId}/probe` 维护根目录白名单。删除只允许具备 `shotgrid:storageRoot:remove` 的管理员删除已停用、未被任何 `sg_project_storage` 引用且锁版本一致的平台配置；必须在根目录行锁内复核并逻辑删除、同事务审计，绝不删除或改写实际 NAS 目录和文件。探测必须由后端服务账号在事务外对规范化 UNC 根目录执行随机临时文件的独占创建、回读和删除，再以短事务持久化健康状态与同事务操作日志；不得把浏览器所在账号能打开共享目录当成后端可写证据。新增、路径变更或停用后重新启用时状态重置为 `unknown`，只有 `enabled + healthy` 才能进入创建项目选项。
 - 镜头页通过 `GET /shot-grid/projects/{projectId}/shot-assignee-options` 分页查询可分配制作人；接口要求 `shotgrid:shot:list` 与项目访问，只返回 `projectRole=creator` 的活动项目成员和有效未删除平台账号，`keyword` 只匹配账号与昵称。兼容响应字段 `producerCode` 由 `sys_user.nick_name` 派生，不能再读取项目成员表旧缩写。该选项只服务独立委派/改派，镜头创建、编辑和导入不得接收制作人；分配写事务必须重新校验，不能把选项响应当成写入授权。
 - 资产页通过 `GET /shot-grid/projects/{projectId}/asset-assignee-options` 分页查询可分配制作人；接口要求 `shotgrid:asset:list` 与项目访问，分页、关键字和安全投影规则与镜头制作人选项一致。该选项只服务制作分项的独立委派/改派，资产、制作分项创建/编辑和导入不得接收制作人；首次分配和改派仍必须在写事务中重新校验项目状态、成员状态和平台用户昵称。
 - 资产列表批量分配以父资产为前端选择单位，但后端写入目标必须是活动制作分项任务；`POST /shot-grid/projects/{projectId}/asset-items/batch-assign` 接收最多 200 个 `assetItemId/taskLockVersion` 并整批回滚。资产单个或批量删除只允许无镜头引用、无版本且任务均未开始的资产，事务内软删除未开始任务、归档并软删除活动制作分项及父资产；不得绕过任务状态、引用和乐观锁门禁。
@@ -289,7 +289,7 @@ PostgreSQL 迁移是当前项目的必需交付物。只有插件清单继续声
 
 ### 7.5 任务预期制作时间
 
-- `20260828_24` 引入 `sg_task.expected_start_time/expected_end_time`；当前 PostgreSQL head 为 `20260831_25`。两字段为可空、成对、秒级业务本地时间，沿用 `SHOT_GRID_DATETIME`；DB 约束结束严格晚于开始，不能使用随时间变动的 CHECK。
+- `20260828_24` 引入 `sg_task.expected_start_time/expected_end_time`；当前 PostgreSQL head 为 `20260831_26`。两字段为可空、成对、秒级业务本地时间，沿用 `SHOT_GRID_DATETIME`；DB 约束结束严格晚于开始，不能使用随时间变动的 CHECK。
 - 管理人员开工命令可携带 `priority/expectedStartTime/expectedEndTime`。任务尚无计划时，前端开工表单要求完整范围；带时区、半个范围、反序/相等时间拒绝，取得项目和任务锁后拒绝新建的过去开始时间（422 / `SG_TASK_EXPECTED_TIME_INVALID`）。任务已有计划时，开工命令省略时间并保留原值，不因计划开始已过去拒绝；已有计划只通过排期 API 修改。首次时间/基线与原状态、版本、目录 Outbox、审计同事务保存，失败整体回滚。`due_date` 同步为预期结束的日期，仅兼容既有筛选/排序。
 - 预期时间仅供制作人参考。任务是否开工/完成由原有管理员确认、目录、提交和审核链决定；禁止定时到期完成，禁止把预期时间加入 preflight/create/retry 或普通改派门禁。制作人在合法状态下可提前或逾期提交。
 - 任务列表/详情、镜头列表顶层、镜头任务摘要和资产分项摘要返回两项预期时间；镜头列表直接复用原查询已有的任务时间投影，不额外逐行读取详情。正常/临近结束/延期是前端展示提醒，不新增任务状态或调度任务。旧日期保留、迁移前备份，降级遇到已填写时间时必须拒绝，避免静默丢失安排。

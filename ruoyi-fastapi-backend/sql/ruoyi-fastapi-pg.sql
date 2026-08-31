@@ -3123,6 +3123,7 @@ values
     ('files', 3, '新增 NAS 根目录配置', 'shotgrid:storageRoot:add'),
     ('files', 4, '修改或停用 NAS 根目录配置', 'shotgrid:storageRoot:edit'),
     ('files', 5, '执行 NAS 可达性和写权限探测', 'shotgrid:storageRoot:probe'),
+    ('files', 8, '删除已停用且未被项目引用的 NAS 根目录配置', 'shotgrid:storageRoot:remove'),
     ('projects', 1, '查看项目详情', 'shotgrid:project:query'),
     ('projects', 2, '创建项目', 'shotgrid:project:add'),
     ('projects', 3, '修改项目', 'shotgrid:project:edit'),
@@ -3233,7 +3234,8 @@ seed(menu_name, order_num, perms) as (
 values
     ('新增 NAS 根目录', 1, 'shotgrid:storageRoot:add'),
     ('修改或启停 NAS 根目录', 2, 'shotgrid:storageRoot:edit'),
-    ('探测 NAS 根目录', 3, 'shotgrid:storageRoot:probe')
+    ('探测 NAS 根目录', 3, 'shotgrid:storageRoot:probe'),
+    ('删除 NAS 根目录', 4, 'shotgrid:storageRoot:remove')
 )
 insert into sys_menu (
     menu_name, parent_id, order_num, path, component, query, route_name,
@@ -3260,7 +3262,7 @@ create table if not exists alembic_version (
     constraint alembic_version_pkc primary key (version_num)
 );
 delete from alembic_version;
-insert into alembic_version(version_num) values ('20260831_25');
+insert into alembic_version(version_num) values ('20260831_26');
 
 
 CREATE OR REPLACE FUNCTION "find_in_set"(int8, varchar)

@@ -11,6 +11,7 @@ from common.vo import DataResponseModel, PageResponseModel
 from module_admin.entity.vo.user_vo import CurrentUserModel
 from module_shot_grid.entity.vo.storage_root_vo import (
     ShotGridStorageRootCreateModel,
+    ShotGridStorageRootDeleteModel,
     ShotGridStorageRootModel,
     ShotGridStorageRootProbeModel,
     ShotGridStorageRootQueryModel,
@@ -92,6 +93,23 @@ async def update_storage_root(
     return ResponseUtil.success(msg='修改成功', data=result)
 
 
+@storage_root_controller.delete(
+    '/{storageRootId}',
+    summary='删除 NAS 根目录平台配置',
+    response_model=DataResponseModel[bool],
+    dependencies=[UserInterfaceAuthDependency('shotgrid:storageRoot:remove')],
+)
+async def delete_storage_root(
+    request: Request,
+    storage_root_id: Annotated[int, Path(alias='storageRootId', gt=0, le=SQL_BIGINT_MAX)],
+    command: ShotGridStorageRootDeleteModel,
+    query_db: Annotated[AsyncSession, DBSessionDependency()],
+    current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
+) -> Response:
+    result = await ShotGridStorageRootService.delete(query_db, storage_root_id, command, current_user)
+    return ResponseUtil.success(msg='删除成功', data=result)
+
+
 @storage_root_controller.post(
     '/{storageRootId}/probe',
     summary='执行 NAS 根目录读写探测',
@@ -105,5 +123,9 @@ async def probe_storage_root(
     current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
 ) -> Response:
     result = await ShotGridStorageRootService.probe(query_db, storage_root_id, current_user)
-    message = '探测通过，创建项目时已可选择' if result.last_probe_status == 'healthy' else '探测未通过，请检查目录和后端服务账号权限'
+    message = (
+        '探测通过，创建项目时已可选择'
+        if result.last_probe_status == 'healthy'
+        else '探测未通过，请检查目录和后端服务账号权限'
+    )
     return ResponseUtil.success(msg=message, data=result)

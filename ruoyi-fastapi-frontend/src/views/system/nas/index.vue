@@ -51,7 +51,7 @@
       <right-toolbar v-model:showSearch="showSearch" @queryTable="getList" />
     </el-row>
 
-    <el-table v-loading="loading" :data="rootList">
+    <el-table v-loading="loading" :data="rootList" row-key="storageRootId">
       <el-table-column label="名称" prop="rootName" min-width="140" />
       <el-table-column label="编码" prop="rootCode" width="130" />
       <el-table-column label="UNC 根路径" prop="uncRootPath" min-width="280" show-overflow-tooltip />
@@ -77,13 +77,14 @@
       <el-table-column label="错误摘要" prop="lastErrorMessage" min-width="210" show-overflow-tooltip>
         <template #default="scope">{{ scope.row.lastErrorMessage || '-' }}</template>
       </el-table-column>
-      <el-table-column label="操作" width="250" align="center" class-name="small-padding fixed-width">
+      <el-table-column label="操作" width="310" align="center" class-name="small-padding fixed-width">
         <template #default="scope">
           <el-button
             link
             type="primary"
             icon="Connection"
             :loading="probingId === scope.row.storageRootId"
+            :disabled="deletingId === scope.row.storageRootId"
             @click="handleProbe(scope.row)"
             v-hasPermi="['shotgrid:storageRoot:probe']"
           >探测</el-button>
@@ -91,15 +92,26 @@
             link
             type="primary"
             icon="Edit"
+            :disabled="deletingId === scope.row.storageRootId"
             @click="handleUpdate(scope.row)"
             v-hasPermi="['shotgrid:storageRoot:edit']"
           >修改</el-button>
           <el-button
             link
             :type="scope.row.rootStatus === 'enabled' ? 'danger' : 'success'"
+            :disabled="deletingId === scope.row.storageRootId"
             @click="handleToggle(scope.row)"
             v-hasPermi="['shotgrid:storageRoot:edit']"
           >{{ scope.row.rootStatus === 'enabled' ? '停用' : '启用' }}</el-button>
+          <el-button
+            v-if="scope.row.rootStatus === 'disabled'"
+            link
+            type="danger"
+            icon="Delete"
+            :loading="deletingId === scope.row.storageRootId"
+            @click="handleDelete(scope.row)"
+            v-hasPermi="['shotgrid:storageRoot:remove']"
+          >删除</el-button>
         </template>
       </el-table-column>
     </el-table>
@@ -148,6 +160,7 @@
 <script setup name="NasRoot">
 import {
   addStorageRoot,
+  deleteStorageRoot,
   getStorageRoot,
   listStorageRoots,
   probeStorageRoot,
@@ -158,6 +171,7 @@ const { proxy } = getCurrentInstance()
 
 const loading = ref(false)
 const probingId = ref(null)
+const deletingId = ref(null)
 const showSearch = ref(true)
 const rootList = ref([])
 const total = ref(0)
@@ -290,6 +304,23 @@ function handleToggle(row) {
     proxy.$modal.msgSuccess(`${actionText}成功`)
     getList()
   }).catch(() => {})
+}
+
+function handleDelete(row) {
+  return proxy.$modal
+    .confirm(`确认删除根目录“${row.rootName}”的平台配置吗？此操作不会删除 NAS 中的目录或文件。`)
+    .then(() => {
+      deletingId.value = row.storageRootId
+      return deleteStorageRoot(row.storageRootId, { lockVersion: row.lockVersion })
+    })
+    .then(() => {
+      proxy.$modal.msgSuccess('删除成功')
+      getList()
+    })
+    .catch(() => {})
+    .finally(() => {
+      deletingId.value = null
+    })
 }
 
 function handleProbe(row) {

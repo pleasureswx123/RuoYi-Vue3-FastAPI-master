@@ -14,6 +14,7 @@ from module_shot_grid.dao.storage_root_dao import ShotGridStorageRootDao
 from module_shot_grid.entity.do.storage_do import ShotGridStorageRoot
 from module_shot_grid.entity.vo.storage_root_vo import (
     ShotGridStorageRootCreateModel,
+    ShotGridStorageRootDeleteModel,
     ShotGridStorageRootModel,
     ShotGridStorageRootProbeModel,
     ShotGridStorageRootQueryModel,
@@ -180,6 +181,66 @@ class ShotGridStorageRootService:
             raise
 
     @classmethod
+    async def delete(
+        cls,
+        db: AsyncSession,
+        storage_root_id: int,
+        command: ShotGridStorageRootDeleteModel,
+        current_user: CurrentUserModel,
+    ) -> bool:
+        """软删除平台配置；真实 NAS 目录和文件始终保持不变。"""
+
+        try:
+            root = await ShotGridStorageRootDao.get_for_update(db, storage_root_id)
+            if root is None:
+                raise shot_grid_error(404, 'SG_STORAGE_ROOT_NOT_FOUND', 'NAS 根目录配置不存在')
+            if root.lock_version != command.lock_version:
+                raise shot_grid_error(409, 'SG_CONCURRENT_MODIFICATION', 'NAS 根目录已被其他操作修改，请刷新后重试')
+            if root.root_status != 'disabled':
+                raise shot_grid_error(
+                    409,
+                    'SG_STORAGE_ROOT_DELETE_REQUIRES_DISABLED',
+                    '请先停用 NAS 根目录，再删除平台配置',
+                )
+
+            project_count = await ShotGridStorageRootDao.count_project_references(db, storage_root_id)
+            if project_count > 0:
+                raise shot_grid_error(
+                    409,
+                    'SG_STORAGE_ROOT_IN_USE',
+                    '该 NAS 根目录仍被项目引用，不能删除',
+                    details={'projectCount': project_count},
+                )
+
+            actor_name, dept_name = cls._actor(current_user)
+            deleted = await ShotGridStorageRootDao.soft_delete(
+                db,
+                storage_root_id,
+                expected_lock_version=command.lock_version,
+                actor_name=actor_name,
+                update_time=cls._now(),
+            )
+            if not deleted:
+                raise shot_grid_error(409, 'SG_CONCURRENT_MODIFICATION', 'NAS 根目录已被其他操作修改，请刷新后重试')
+            await cls._audit(
+                db,
+                action='delete',
+                business_type=3,
+                actor_name=actor_name,
+                dept_name=dept_name,
+                storage_root_id=storage_root_id,
+                payload={'rootCode': root.root_code, 'rootName': root.root_name},
+            )
+            await db.commit()
+            return True
+        except ShotGridDomainException:
+            await db.rollback()
+            raise
+        except Exception:
+            await db.rollback()
+            raise
+
+    @classmethod
     async def probe(
         cls,
         db: AsyncSession,
@@ -326,7 +387,7 @@ class ShotGridStorageRootService:
             title='Shot Grid NAS 根目录管理',
             business_type=business_type,
             method=f'module_shot_grid.service.storage_root_service.ShotGridStorageRootService.{action}()',
-            request_method={'create': 'POST', 'update': 'PUT', 'probe': 'POST'}[action],
+            request_method={'create': 'POST', 'update': 'PUT', 'probe': 'POST', 'delete': 'DELETE'}[action],
             oper_name=actor_name,
             dept_name=dept_name,
             oper_url=(

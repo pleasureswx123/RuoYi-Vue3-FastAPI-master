@@ -25,7 +25,8 @@ SHOT_GRID_SINGLE_CANDIDATE_DEFAULT_SCHEMA_REVISION = '20260826_22'
 SHOT_GRID_MANAGER_START_SCHEMA_REVISION = '20260827_23'
 SHOT_GRID_TASK_EXPECTED_TIME_SCHEMA_REVISION = '20260828_24'
 SHOT_GRID_SCHEDULING_SCHEMA_REVISION = '20260831_25'
-SHOT_GRID_SCHEMA_REVISION = SHOT_GRID_SCHEDULING_SCHEMA_REVISION
+SHOT_GRID_STORAGE_ROOT_REMOVE_SCHEMA_REVISION = '20260831_26'
+SHOT_GRID_SCHEMA_REVISION = SHOT_GRID_STORAGE_ROOT_REMOVE_SCHEMA_REVISION
 
 SHOT_GRID_NAVIGATION_ROUTE_KEYS = ('workbench', 'projects', 'shots', 'assets', 'reviews', 'files')
 
@@ -73,6 +74,7 @@ SHOT_GRID_PERMISSION_CODES = frozenset(
         'shotgrid:storageRoot:add',
         'shotgrid:storageRoot:edit',
         'shotgrid:storageRoot:probe',
+        'shotgrid:storageRoot:remove',
         'shotgrid:navigation:list',
         'shotgrid:project:list',
         'shotgrid:project:query',

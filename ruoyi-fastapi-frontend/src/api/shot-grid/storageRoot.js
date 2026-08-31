@@ -35,6 +35,15 @@ export function updateStorageRoot(storageRootId, data) {
   })
 }
 
+// 删除平台中的 NAS 根目录配置，不删除实际目录或文件
+export function deleteStorageRoot(storageRootId, data) {
+  return request({
+    url: `/shot-grid/admin/storage-roots/${storageRootId}`,
+    method: 'delete',
+    data
+  })
+}
+
 // 由后端服务执行真实的 UNC 读写删除探测
 export function probeStorageRoot(storageRootId) {
   return request({

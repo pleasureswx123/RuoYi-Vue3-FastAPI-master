@@ -23,6 +23,7 @@ from module_shot_grid.schema import (
     SHOT_GRID_SCHEMA_REVISION,
     SHOT_GRID_SHOT_DELETE_SCHEMA_REVISION,
     SHOT_GRID_SINGLE_CANDIDATE_DEFAULT_SCHEMA_REVISION,
+    SHOT_GRID_STORAGE_ROOT_REMOVE_SCHEMA_REVISION,
     SHOT_GRID_STORAGE_WORKER_SCHEMA_REVISION,
     SHOT_GRID_TABLE_NAMES,
     SHOT_GRID_TASK_VERSION_REVIEW_SCHEMA_REVISION,
@@ -512,16 +513,30 @@ def test_initial_migration_seeds_frozen_and_legacy_permissions_without_duplicate
     migration = _migration_namespace(SHOT_GRID_INITIAL_SCHEMA_REVISION)
     purge_migration = _migration_namespace(SHOT_GRID_PROJECT_PURGE_SCHEMA_REVISION)
     schedule_migration = _migration_namespace(SHOT_GRID_SCHEDULING_SCHEMA_REVISION)
+    storage_root_remove_migration = _migration_namespace(SHOT_GRID_STORAGE_ROOT_REMOVE_SCHEMA_REVISION)
     permission_sequence = [migration['ROOT_MENU_SEED'][-1]]
     permission_sequence.extend(seed[-1] for seed in migration['CHILD_MENU_SEEDS'])
     permission_sequence.extend(seed[-1] for seed in migration['PERMISSION_BUTTON_SEEDS'])
     permission_sequence.append(purge_migration['PERMISSION'])
     permission_sequence.append(schedule_migration['PERMISSION'])
+    permission_sequence.append(storage_root_remove_migration['PERMISSION'])
     legacy_permissions = {'shotgrid:note:reply', 'shotgrid:note:resolve'}
 
     assert len(permission_sequence) == len(SHOT_GRID_PERMISSION_CODES | legacy_permissions)
     assert len(permission_sequence) == len(set(permission_sequence))
     assert set(permission_sequence) == SHOT_GRID_PERMISSION_CODES | legacy_permissions
+
+
+def test_storage_root_remove_migration_adds_only_the_independent_permission() -> None:
+    migration = _migration_namespace(SHOT_GRID_STORAGE_ROOT_REMOVE_SCHEMA_REVISION)
+    source = Path(migration['__file__']).read_text(encoding='utf-8')
+
+    assert migration['revision'] == SHOT_GRID_STORAGE_ROOT_REMOVE_SCHEMA_REVISION
+    assert migration['down_revision'] == SHOT_GRID_SCHEDULING_SCHEMA_REVISION
+    assert migration['PERMISSION'] == 'shotgrid:storageRoot:remove'
+    assert "MENU_ROUTE_NAME = 'ShotGridNasRoot'" in source
+    assert 'INSERT INTO sys_role_menu' not in source
+    assert 'CREATE TABLE' not in source
 
 
 def test_scheduling_migration_extends_task_expected_time_and_freezes_only_provable_baseline() -> None:
