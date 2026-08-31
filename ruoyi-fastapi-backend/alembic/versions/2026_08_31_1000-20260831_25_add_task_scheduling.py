@@ -13,10 +13,115 @@ depends_on: str | Sequence[str] | None = None
 
 SEED_MARKER = 'shotgrid_migration_20260831_25'
 PERMISSION = 'shotgrid:task:schedule'
+EXPECTED_SCHEDULE_HISTORY_COLUMNS = {
+    'schedule_change_id',
+    'project_id',
+    'task_id',
+    'operator_user_id',
+    'from_start_time',
+    'from_end_time',
+    'to_start_time',
+    'to_end_time',
+    'change_type',
+    'operation_source',
+    'change_reason',
+    'overlap_acknowledged',
+    'overlap_task_ids',
+    'task_lock_version_before',
+    'task_lock_version_after',
+    'idempotency_key',
+    'request_hash',
+    'result_snapshot',
+    'create_by',
+    'create_time',
+}
+EXPECTED_SCHEDULE_HISTORY_CONSTRAINTS = {
+    'sg_task_schedule_change_pkey',
+    'fk_sg_task_schedule_change_task_project',
+    'fk_sg_task_schedule_change_operator',
+    'uk_sg_task_schedule_idempotency',
+    'ck_sg_task_schedule_from_range',
+    'ck_sg_task_schedule_to_range',
+    'ck_sg_task_schedule_change_type',
+    'ck_sg_task_schedule_operation_source',
+    'ck_sg_task_schedule_reason',
+    'ck_sg_task_schedule_lock_versions',
+    'ck_sg_task_schedule_idempotency',
+    'ck_sg_task_schedule_request_hash',
+}
+EXPECTED_SCHEDULE_HISTORY_INDEXES = {
+    'uk_sg_task_schedule_idempotency',
+    'idx_sg_task_schedule_task_time',
+    'idx_sg_task_schedule_project_time',
+}
 
 
 def _is_postgresql() -> bool:
     return op.get_context().dialect.name == 'postgresql'
+
+
+def _use_compatible_existing_schedule_history_table() -> bool:
+    """只接管 ORM 提前创建且结构完整的审计表，禁止静默接受残缺结构。"""
+
+    bind = op.get_bind()
+    existing_table = bind.execute(sa.text("SELECT to_regclass('public.sg_task_schedule_change')")).scalar_one()
+    if existing_table is None:
+        return False
+
+    columns = set(
+        bind.execute(
+            sa.text(
+                'SELECT column_name FROM information_schema.columns '
+                "WHERE table_schema = 'public' AND table_name = 'sg_task_schedule_change'"
+            )
+        ).scalars()
+    )
+    constraints = set(
+        bind.execute(
+            sa.text("SELECT conname FROM pg_constraint WHERE conrelid = 'public.sg_task_schedule_change'::regclass")
+        ).scalars()
+    )
+    indexes = set(
+        bind.execute(
+            sa.text(
+                "SELECT indexname FROM pg_indexes WHERE schemaname = 'public' AND tablename = 'sg_task_schedule_change'"
+            )
+        ).scalars()
+    )
+    if (
+        columns != EXPECTED_SCHEDULE_HISTORY_COLUMNS
+        or not EXPECTED_SCHEDULE_HISTORY_CONSTRAINTS.issubset(constraints)
+        or not EXPECTED_SCHEDULE_HISTORY_INDEXES.issubset(indexes)
+    ):
+        raise RuntimeError(
+            'sg_task_schedule_change already exists but is incompatible with migration 20260831_25; '
+            'restore the expected schema from a backup before retrying'
+        )
+    return True
+
+
+def _seed_schedule_permission() -> None:
+    op.execute(
+        f"""
+INSERT INTO sys_menu (
+    menu_name, parent_id, order_num, path, component, query, route_name,
+    is_frame, is_cache, menu_type, visible, status, perms, icon,
+    create_by, create_time, update_by, update_time, remark
+)
+SELECT
+    '调整任务排期', parent.menu_id, 6, '#', '', '', '',
+    1, 0, 'F', '0', '0', '{PERMISSION}', '#',
+    '{SEED_MARKER}', current_timestamp, '', NULL, '仅授权项目管理人员可调整任务排期'
+FROM (
+    SELECT menu_id
+    FROM sys_menu
+    WHERE route_name = 'workbench' AND menu_type = 'C'
+    ORDER BY menu_id
+    LIMIT 1
+) parent
+WHERE NOT EXISTS (SELECT 1 FROM sys_menu WHERE perms = '{PERMISSION}' AND menu_type = 'F')
+"""
+    )
 
 
 def upgrade() -> None:
@@ -58,6 +163,11 @@ WHERE expected_start_time IS NOT NULL
   AND expected_end_time IS NOT NULL
 """
     )
+
+    if _use_compatible_existing_schedule_history_table():
+        op.execute("COMMENT ON TABLE sg_task_schedule_change IS 'Shot Grid任务排期不可变结构化历史表'")
+        _seed_schedule_permission()
+        return
 
     op.create_table(
         'sg_task_schedule_change',
@@ -147,27 +257,7 @@ WHERE expected_start_time IS NOT NULL
         ['project_id', sa.text('create_time DESC'), sa.text('schedule_change_id DESC')],
         unique=False,
     )
-    op.execute(
-        f"""
-INSERT INTO sys_menu (
-    menu_name, parent_id, order_num, path, component, query, route_name,
-    is_frame, is_cache, menu_type, visible, status, perms, icon,
-    create_by, create_time, update_by, update_time, remark
-)
-SELECT
-    '调整任务排期', parent.menu_id, 6, '#', '', '', '',
-    1, 0, 'F', '0', '0', '{PERMISSION}', '#',
-    '{SEED_MARKER}', current_timestamp, '', NULL, '仅授权项目管理人员可调整任务排期'
-FROM (
-    SELECT menu_id
-    FROM sys_menu
-    WHERE route_name = 'workbench' AND menu_type = 'C'
-    ORDER BY menu_id
-    LIMIT 1
-) parent
-WHERE NOT EXISTS (SELECT 1 FROM sys_menu WHERE perms = '{PERMISSION}' AND menu_type = 'F')
-"""
-    )
+    _seed_schedule_permission()
 
 
 def downgrade() -> None:

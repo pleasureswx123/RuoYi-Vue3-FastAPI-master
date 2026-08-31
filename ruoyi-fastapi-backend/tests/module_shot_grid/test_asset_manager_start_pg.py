@@ -140,7 +140,7 @@ async def test_expected_time_migration_preserves_tasks_and_enforces_range(pg_ses
         await db.rollback()
 
 
-async def test_task_schedule_migration_backfills_baseline_without_fabricating_history(
+async def test_task_schedule_migration_adopts_compatible_orm_table_and_backfills_baseline(
     pg_sessions: SessionFactory,
 ) -> None:
     start = datetime(2026, 9, 1, 9)
@@ -151,7 +151,8 @@ async def test_task_schedule_migration_backfills_baseline_without_fabricating_hi
             .where(ShotGridTask.task_id == FIRST_TASK_ID)
             .values(expected_start_time=start, expected_end_time=end)
         )
-        await db.execute(text('DROP TABLE sg_task_schedule_change'))
+        # 模拟开发服务先由 Base.metadata.create_all 建出新增表、Alembic 版本仍停留在上一版的真实启动顺序。
+        assert (await db.execute(text('SELECT count(*) FROM sg_task_schedule_change'))).scalar_one() == 0
         await db.execute(
             text(
                 'ALTER TABLE sg_task DROP CONSTRAINT ck_sg_task_baseline_time_range, '
@@ -177,6 +178,31 @@ async def test_task_schedule_migration_backfills_baseline_without_fabricating_hi
                 text("SELECT count(*) FROM sys_menu WHERE perms = 'shotgrid:task:schedule' AND menu_type = 'F'")
             )
         ).scalar_one() == 1
+
+
+async def test_task_schedule_migration_rejects_incompatible_existing_history_table(
+    pg_sessions: SessionFactory,
+) -> None:
+    async with pg_sessions() as db:
+        await db.execute(text('DROP INDEX idx_sg_task_schedule_project_time'))
+        await db.execute(
+            text(
+                'ALTER TABLE sg_task DROP CONSTRAINT ck_sg_task_baseline_time_range, '
+                'DROP COLUMN baseline_start_time, DROP COLUMN baseline_end_time'
+            )
+        )
+        connection = await db.connection()
+
+        def upgrade(sync_connection: Any) -> None:
+            migration = runpy.run_path(
+                str(BACKEND / 'alembic/versions/2026_08_31_1000-20260831_25_add_task_scheduling.py')
+            )
+            with Operations.context(MigrationContext.configure(sync_connection)):
+                migration['upgrade']()
+
+        with pytest.raises(RuntimeError, match='incompatible with migration 20260831_25'):
+            await connection.run_sync(upgrade)
+        await db.rollback()
 
 
 @pytest.fixture

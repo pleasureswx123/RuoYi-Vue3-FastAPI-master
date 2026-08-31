@@ -540,6 +540,8 @@ def test_scheduling_migration_extends_task_expected_time_and_freezes_only_provab
     assert 'expected_end_time IS NOT NULL' in source
     assert "'sg_task_schedule_change'" in source
     assert 'INSERT INTO sg_task_schedule_change' not in source
+    assert '_use_compatible_existing_schedule_history_table' in source
+    assert 'already exists but is incompatible with migration 20260831_25' in source
     assert 'cannot downgrade while task schedule baseline or history exists' in source
     assert 'UPDATE sg_task SET lock_version' not in source
     assert 'UPDATE sg_task SET task_status' not in source
