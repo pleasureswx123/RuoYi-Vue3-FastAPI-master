@@ -946,6 +946,8 @@ class ShotGridTaskService:
             dueDate=row['due_date'],
             expectedStartTime=row.get('expected_start_time'),
             expectedEndTime=row.get('expected_end_time'),
+            baselineStartTime=row.get('baseline_start_time'),
+            baselineEndTime=row.get('baseline_end_time'),
             requirements=row['requirements'],
             project=ShotGridTaskProjectSummaryModel(
                 projectId=row['project_id'],

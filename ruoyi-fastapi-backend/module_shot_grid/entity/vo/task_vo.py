@@ -266,6 +266,8 @@ class ShotGridTaskListItemModel(ShotGridApiModel):
     due_date: date | None = None
     expected_start_time: datetime | None = None
     expected_end_time: datetime | None = None
+    baseline_start_time: datetime | None = None
+    baseline_end_time: datetime | None = None
     requirements: str | None = None
     project: ShotGridTaskProjectSummaryModel
     assignee: ShotGridTaskAssigneeModel

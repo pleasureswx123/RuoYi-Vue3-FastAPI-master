@@ -104,6 +104,8 @@ class ShotGridTaskDao:
                 ShotGridTask.due_date,
                 ShotGridTask.expected_start_time,
                 ShotGridTask.expected_end_time,
+                ShotGridTask.baseline_start_time,
+                ShotGridTask.baseline_end_time,
                 ShotGridTask.requirements,
                 ShotGridTask.remark,
                 ShotGridTask.lock_version,

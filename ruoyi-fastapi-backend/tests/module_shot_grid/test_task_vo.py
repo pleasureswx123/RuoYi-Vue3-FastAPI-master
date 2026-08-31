@@ -6,6 +6,7 @@ from pydantic import ValidationError
 from module_shot_grid.entity.vo.task_vo import (
     ShotGridMineTaskListQueryModel,
     ShotGridTaskAssignModel,
+    ShotGridTaskListItemModel,
     ShotGridTaskListQueryModel,
     ShotGridTaskStartModel,
     ShotGridTaskUpdateModel,
@@ -128,6 +129,14 @@ def test_start_accepts_expected_time_range_without_changing_confirmation_contrac
     assert command.expected_end_time == datetime(2026, 8, 30, 18)
     assert command.priority == 'high'
     assert command.assets_confirmed is True
+
+
+def test_task_list_item_exposes_read_only_schedule_baseline_without_replacing_current_range() -> None:
+    field_names = ShotGridTaskListItemModel.model_fields
+
+    assert {'expected_start_time', 'expected_end_time', 'baseline_start_time', 'baseline_end_time'} <= set(field_names)
+    assert field_names['baseline_start_time'].alias == 'baselineStartTime'
+    assert field_names['baseline_end_time'].alias == 'baselineEndTime'
 
 
 @pytest.mark.parametrize(

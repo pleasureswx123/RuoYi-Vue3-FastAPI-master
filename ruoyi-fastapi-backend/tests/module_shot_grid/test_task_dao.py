@@ -35,6 +35,8 @@ def test_project_task_statement_applies_project_filters_and_stable_order() -> No
     assert "sg_task.task_kind = 'shot_video'" in sql
     assert "sg_task.task_status = 'in_progress'" in sql
     assert "sg_task.priority = 'high'" in sql
+    assert 'sg_task.baseline_start_time' in sql
+    assert 'sg_task.baseline_end_time' in sql
     assert 'order by sg_task.due_date asc nulls last, sg_task.task_id desc' in sql
 
 
