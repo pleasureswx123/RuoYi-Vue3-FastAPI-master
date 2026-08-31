@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'vitest'
 
-import {
+import * as svarGanttAdapter from '@/views/schedule/adapters/svarGanttAdapter'
+
+const {
   baselineOverlayStyle,
   ganttScaleFor,
   rangeChangeRequest,
   toGanttTasks,
   toSwimlaneRows
-} from '@/views/schedule/adapters/svarGanttAdapter'
+} = svarGanttAdapter
 
 describe('甘特自然时间刻度适配', () => {
   it('将日周月缩放映射为连续自然时间刻度', () => {
@@ -38,6 +40,16 @@ describe('甘特自然时间刻度适配', () => {
     expect(ganttScaleFor('day').scales[1].format(new Date(2026, 8, 3))).toBe('3日')
     expect(ganttScaleFor('week').scales[1].format(new Date(2026, 8, 3))).toBe('第36周')
     expect(ganttScaleFor('month').scales[0].format(new Date(2026, 8, 3))).toBe('2026年')
+  })
+
+  it('只保留任务名称和年月日格式的开始日期', () => {
+    const columns = svarGanttAdapter.ganttColumns?.()
+
+    expect(columns?.map(column => ({ id: column.id, header: column.header }))).toEqual([
+      { id: 'text', header: '任务名称' },
+      { id: 'start', header: '开始日期' }
+    ])
+    expect(columns?.[1].template(new Date(2026, 7, 30, 18, 0, 0))).toBe('2026-08-30')
   })
 })
 

@@ -1,5 +1,6 @@
 import { defineComponent, h, nextTick, onMounted } from 'vue'
 import { mount } from '@vue/test-utils'
+import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const ganttHarness = vi.hoisted(() => ({
@@ -15,6 +16,7 @@ vi.mock('@svar-ui/vue-gantt', () => ({
       tasks: { type: Array, default: () => [] },
       links: { type: Array, default: () => [] },
       scales: { type: Array, default: () => [] },
+      columns: { type: Array, default: () => [] },
       cellWidth: { type: Number, default: 0 },
       lengthUnit: { type: String, default: '' },
       taskTemplate: { type: Object, default: null },
@@ -64,6 +66,7 @@ const scheduleRow = {
 
 describe('ScheduleGanttAdapter', () => {
   beforeEach(() => {
+    setActivePinia(createPinia())
     ganttHarness.interceptors.clear()
     ganttHarness.listeners.clear()
     ganttHarness.receivedProps = null
@@ -96,6 +99,7 @@ describe('ScheduleGanttAdapter', () => {
     ]])
     expect(ganttHarness.receivedProps.readonly).toBe(false)
     expect(ganttHarness.receivedProps.lengthUnit).toBe('day')
+    expect(ganttHarness.receivedProps.columns.map(column => column.header)).toEqual(['任务名称', '开始日期'])
     expect(ganttHarness.receivedProps.taskTemplate?.name).toBe('ScheduleGanttTaskTemplate')
     expect(ganttHarness.receivedProps.start).toEqual(new Date('2026-09-01T00:00:00'))
     expect(ganttHarness.receivedProps.end).toEqual(new Date('2026-10-01T00:00:00'))

@@ -12,6 +12,38 @@ const formatYearMonth = date => `${date.getFullYear()}年${date.getMonth() + 1}�
 const formatDay = date => `${date.getDate()}日`
 const formatWeek = date => `第${isoWeekNumber(date)}周`
 
+function padDatePart(value) {
+  return String(value).padStart(2, '0')
+}
+
+function formatGanttDate(value) {
+  const date = value instanceof Date ? value : new Date(value)
+  if (Number.isNaN(date.getTime())) {
+    return ''
+  }
+  return `${date.getFullYear()}-${padDatePart(date.getMonth() + 1)}-${padDatePart(date.getDate())}`
+}
+
+export function ganttColumns() {
+  return [
+    {
+      id: 'text',
+      header: '任务名称',
+      width: 220,
+      flexgrow: 1,
+      sort: true
+    },
+    {
+      id: 'start',
+      header: '开始日期',
+      width: 128,
+      align: 'center',
+      sort: true,
+      template: formatGanttDate
+    }
+  ]
+}
+
 const SCALE_CONFIG = Object.freeze({
   day: Object.freeze({
     cellWidth: 72,
@@ -118,10 +150,6 @@ export function toGanttTasks(rows, { editable = false, groupBy = null } = {}) {
     }
     return [summary, ...group.tasks.map(task => ({ ...task, parent: groupId }))]
   })
-}
-
-function padDatePart(value) {
-  return String(value).padStart(2, '0')
 }
 
 function formatLocalDateTime(value) {
