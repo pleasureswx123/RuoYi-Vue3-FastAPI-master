@@ -27,6 +27,52 @@ Shot Grid 面向影视短片项目团队，统一管理项目、镜头、资产�
                                最终版本与制作履历
 ```
 
+## 系统界面预览
+
+以下截图展示 Shot Grid 从制作工作区登录、镜头与资产管理，到人员排期、任务修改和版本审核的主要界面。
+
+### 登录制作工作区
+
+使用平台账号进入影视制作协作工作区。
+
+![Shot Grid 登录制作工作区](image-interface/login.png)
+
+### 镜头管理
+
+按项目查看镜头、制作内容、负责人、排期和制作状态。
+
+![镜头管理：镜头列表、制作人、排期与状态](image-interface/镜头管理.png)
+
+### 资产管理
+
+以父资产和制作分项的层级结构，查看资产内容、分项负责人和制作进度。
+
+![资产管理：资产及其制作分项](image-interface/资产管理.png)
+
+### 人员泳道
+
+按制作人员查看时间轴上的任务安排，直观了解每个人的制作排期。
+
+![人员泳道：按制作人员展示任务排期](image-interface/人员泳道.png)
+
+### 任务甘特
+
+通过甘特视图查看任务的时间安排。
+
+![任务甘特：任务时间安排](image-interface/任务甘特.png)
+
+### 任务详情与修改反馈
+
+制作人员查看版本历史、画面标注和审核问题，并提交修改成果。
+
+![任务详情：审核反馈、画面标注与修改成果提交](image-interface/任务.png)
+
+### 版本审核
+
+并排对比当前版本与历史版本，在画面上标注问题、填写修改目标并提交审核结论。
+
+![版本审核：版本对比、画面标注与审核记录](image-interface/审核.png)
+
 ## 技术架构
 
 ```text
@@ -58,6 +104,48 @@ FastAPI（端口 9099）
 | `docker-compose.my.yml` | 保留的 MySQL 兼容拓扑，不是当前默认路径 |
 
 ## 本地开发
+
+### 日常启动速查（Windows PowerShell）
+
+以下步骤适用于已完成首次环境配置、后端 `.venv` 和前端依赖安装的本机开发环境。先打开 Docker Desktop，再按顺序启动 PostgreSQL、Redis、后端、管理端和制作平台端。首次安装参见下方环境要求与“方式二”。
+
+**1. 启动 PostgreSQL 和 Redis**
+
+```powershell
+cd D:\work\RuoYi-Vue3-FastAPI-master\RuoYi-Vue3-FastAPI-master
+docker compose -f docker-compose.dev.yml up -d postgres redis
+docker compose -f docker-compose.dev.yml ps
+```
+
+确认 PostgreSQL 和 Redis 正常运行后再启动后端。这两个服务在 Docker 后台运行，可继续使用当前终端。
+
+**2. 启动后端**
+
+```powershell
+cd D:\work\RuoYi-Vue3-FastAPI-master\RuoYi-Vue3-FastAPI-master\ruoyi-fastapi-backend
+.\.venv\Scripts\Activate.ps1
+ruoyi app run --env=dev
+```
+
+保留此终端运行后端。此方式使用宿主机后端；如果此前启动过 Docker 的 `backend` 服务，请先在仓库根目录执行 `docker compose -f docker-compose.dev.yml stop backend`，避免后端端口冲突。
+
+**3. 启动管理端（另开一个 PowerShell 终端）**
+
+```powershell
+cd D:\work\RuoYi-Vue3-FastAPI-master\RuoYi-Vue3-FastAPI-master\ruoyi-fastapi-frontend
+npm.cmd run dev
+```
+
+**4. 启动制作平台端（再开一个 PowerShell 终端）**
+
+```powershell
+cd D:\work\RuoYi-Vue3-FastAPI-master\RuoYi-Vue3-FastAPI-master\shot-grid-frontend
+npm.cmd run dev
+```
+
+PowerShell 中使用 `npm.cmd` 执行 npm 命令。两个前端终端均需保持运行，访问地址以各自终端实际输出为准。
+
+停止开发时，在后端和两个前端终端分别按 `Ctrl+C`；PostgreSQL 和 Redis 的停止方式见下方“停止本地环境”。
 
 ### 环境要求
 
