@@ -57,7 +57,9 @@ class ShotGridShotImportService:
     ) -> ShotImportPreviewResultModel:
         user_id, _ = cls._current_user_identity(current_user)
         safe_file_name = cls._safe_original_file_name(file_name)
-        file_sha256 = await ExcelSecurityService.validate_and_hash_in_thread(safe_file_name, contents, config)
+        file_sha256 = await ExcelSecurityService.validate_and_hash_in_thread(
+            safe_file_name, contents, config, ignore_images=True
+        )
         project, storage = await ShotGridShotImportDao.get_project_storage(db, project_id)
         cls._require_ready_project(project, storage)
 

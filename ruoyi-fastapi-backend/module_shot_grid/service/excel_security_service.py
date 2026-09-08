@@ -288,6 +288,8 @@ class ExcelSecurityService:
         file_name: str,
         contents: bytes,
         config: ShotGridImportConfig = SHOT_GRID_IMPORT_CONFIG,
+        *,
+        ignore_images: bool = False,
     ) -> str:
         if not file_name or not file_name.lower().endswith('.xlsx'):
             cls._raise(422, 'SG_IMPORT_FILE_TYPE_INVALID', '仅支持 .xlsx 格式')
@@ -299,7 +301,11 @@ class ExcelSecurityService:
         try:
             with zipfile.ZipFile(io.BytesIO(contents)) as archive:
                 entries = archive.infolist()
-                if len(entries) > config.max_archive_entries:
+                # 镜头只读缩略图使用独立、有界的预算，不挤占工作簿结构条目。
+                image_count = sum(cls._is_image_entry(entry) for entry in entries) if ignore_images else 0
+                if image_count > config.max_rows_per_workbook:
+                    cls._raise(422, 'SG_IMPORT_ARCHIVE_UNSAFE', '工作簿图片数量超过安全限制')
+                if len(entries) - image_count > config.max_archive_entries:
                     cls._raise(422, 'SG_IMPORT_ARCHIVE_UNSAFE', '工作簿内部文件数量超过限制')
                 cls._validate_raw_central_directory_names(contents, archive.start_dir, len(entries))
                 cls._validate_entry_names(entries)
@@ -327,9 +333,21 @@ class ExcelSecurityService:
         file_name: str,
         contents: bytes,
         config: ShotGridImportConfig = SHOT_GRID_IMPORT_CONFIG,
+        *,
+        ignore_images: bool = False,
     ) -> str:
         """在线程中执行 ZIP 与 OOXML 流式门禁，避免阻塞异步请求循环。"""
-        return await asyncio.to_thread(cls.validate_and_hash, file_name, contents, config)
+        return await asyncio.to_thread(cls.validate_and_hash, file_name, contents, config, ignore_images=ignore_images)
+
+    @staticmethod
+    def _is_image_entry(entry: zipfile.ZipInfo) -> bool:
+        path = PurePosixPath(entry.filename.casefold())
+        return (
+            not entry.is_dir()
+            and str(path.parent) == 'xl/media'
+            and path.suffix
+            in {'.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tif', '.tiff', '.webp', '.emf', '.wmf', '.svg'}
+        )
 
     @staticmethod
     async def parse_in_thread(parser: Callable[[bytes], T], contents: bytes) -> T:

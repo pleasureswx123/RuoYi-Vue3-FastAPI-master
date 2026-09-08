@@ -1,6 +1,7 @@
 import io
 import re
 import unicodedata
+import zipfile
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -53,7 +54,9 @@ class ShotExcelParser:
 
     def parse(self, contents: bytes) -> ShotExcelParseResultModel:
         try:
-            workbook = load_workbook(io.BytesIO(contents), read_only=False, data_only=False, keep_links=False)
+            workbook = load_workbook(
+                self._without_drawings(contents), read_only=False, data_only=False, keep_links=False
+            )
         except Exception as exc:
             raise shot_grid_error(422, 'SG_IMPORT_FILE_INVALID', '无法解析 XLSX 工作簿') from exc
 
@@ -61,6 +64,29 @@ class ShotExcelParser:
             return self._parse_workbook(workbook)
         finally:
             workbook.close()
+
+    @staticmethod
+    def _without_drawings(contents: bytes) -> io.BytesIO:
+        """构造仅用于解析的副本，保留单元格与合并结构，跳过图片解码。
+
+        调用链先对原始文件完成 ZIP/OOXML 安全检查与摘要计算；原文件不变。
+        绘图替换为空节点，避免 openpyxl 顺着绘图关系读取缩略图或图表。
+        """
+        output = io.BytesIO()
+        with zipfile.ZipFile(io.BytesIO(contents)) as source, zipfile.ZipFile(output, 'w') as target:
+            for entry in source.infolist():
+                name = entry.filename.casefold()
+                if name.startswith(('xl/media/', 'xl/drawings/_rels/')):
+                    continue
+                if name.startswith('xl/drawings/') and name.endswith('.xml'):
+                    target.writestr(
+                        entry.filename,
+                        b'<wsDr xmlns="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"/>',
+                    )
+                else:
+                    target.writestr(entry.filename, source.read(entry))
+        output.seek(0)
+        return output
 
     def _parse_workbook(self, workbook: Any) -> ShotExcelParseResultModel:
         rows: list[ShotImportPreviewRowModel] = []

@@ -1,13 +1,17 @@
 import io
+from typing import NoReturn
 
 import pytest
 from openpyxl import Workbook, load_workbook
+from openpyxl.drawing.image import Image
+from PIL import Image as PillowImage
 from pydantic import ValidationError
 
 from module_shot_grid.config import ShotGridImportConfig
 from module_shot_grid.entity.vo.import_common_vo import ImportIssueModel
 from module_shot_grid.entity.vo.shot_import_vo import ShotImportCommitRequestModel
 from module_shot_grid.exceptions import ShotGridDomainException
+from module_shot_grid.service.excel_security_service import ExcelSecurityService
 from module_shot_grid.service.shot_excel_parser import ShotExcelParser
 from module_shot_grid.service.shot_import_template_service import ShotGridShotImportTemplateService
 
@@ -324,3 +328,23 @@ def test_import_text_length_boundaries(column: str, limit: int, extra: int) -> N
     assert result.rows[0].can_import is (extra == 0)
     if extra:
         assert any(issue.error_key == 'SG_IMPORT_FIELD_TOO_LONG' for issue in result.rows[0].errors)
+
+
+def test_parser_skips_embedded_thumbnail_decoding(monkeypatch: pytest.MonkeyPatch) -> None:
+    workbook = _minimal_workbook()
+    for index in range(300):
+        stream = io.BytesIO()
+        PillowImage.new('RGB', (2, 2)).save(stream, format='PNG')
+        stream.seek(0)
+        workbook.active.add_image(Image(stream), f'D{index + 2}')
+    contents = _save_workbook(workbook)
+
+    ExcelSecurityService.validate_and_hash('镜头.xlsx', contents, ignore_images=True)
+
+    def reject_image_decode(*args, **kwargs) -> NoReturn:
+        raise AssertionError('镜头导入不应解码缩略图')
+
+    monkeypatch.setattr(PillowImage, 'open', reject_image_decode)
+    result = ShotExcelParser().parse(contents)
+    assert result.summary.valid_rows == 1
+    assert result.rows[0].normalized.description == '镜头描述'

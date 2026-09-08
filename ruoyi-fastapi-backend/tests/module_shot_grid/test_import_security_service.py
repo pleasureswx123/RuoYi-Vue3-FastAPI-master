@@ -229,3 +229,29 @@ def test_import_config_reads_scoped_environment(monkeypatch: pytest.MonkeyPatch)
 async def test_parse_in_thread_returns_sync_parser_result() -> None:
     result = await ExcelSecurityService.parse_in_thread(len, b'123')
     assert result == TEST_CONTENT_LENGTH
+
+
+def test_shot_thumbnail_entries_have_separate_bounded_budget() -> None:
+    contents = _replace_zip_entries(_xlsx_bytes(), {f'xl/media/image{i}.png': b'image' for i in range(300)})
+    assert len(ExcelSecurityService.validate_and_hash('镜头.xlsx', contents, ignore_images=True)) == SHA256_HEX_LENGTH
+    with pytest.raises(ShotGridDomainException):
+        ExcelSecurityService.validate_and_hash('资产.xlsx', contents)
+    with pytest.raises(ShotGridDomainException):
+        ExcelSecurityService.validate_and_hash(
+            '镜头.xlsx', contents, ShotGridImportConfig(max_rows_per_workbook=299), ignore_images=True
+        )
+
+
+@pytest.mark.parametrize('entry_name', ['xl/media/data.xml', 'xl/other.bin'])
+def test_ignoring_images_keeps_non_image_entry_limit(entry_name: str) -> None:
+    contents = _append_zip_entry(_xlsx_bytes(), entry_name)
+    with pytest.raises(ShotGridDomainException):
+        ExcelSecurityService.validate_and_hash(
+            '镜头.xlsx', contents, ShotGridImportConfig(max_archive_entries=1), ignore_images=True
+        )
+
+
+def test_ignored_images_still_obey_archive_size_limits() -> None:
+    contents = _replace_zip_entries(_xlsx_bytes(), {'xl/media/image.png': b'x' * 100_000})
+    with pytest.raises(ShotGridDomainException):
+        ExcelSecurityService.validate_and_hash('镜头.xlsx', contents, ignore_images=True)
