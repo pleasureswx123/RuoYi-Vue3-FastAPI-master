@@ -327,6 +327,13 @@ async function resetFilters() {
   await loadAssets()
 }
 
+function changePageSize(size) {
+  if (size === query.pageSize) return
+  query.pageSize = size
+  query.pageNum = 1
+  loadAssets()
+}
+
 function changePage(page) {
   if (page < 1 || page > pageCount.value || page === query.pageNum) return
   query.pageNum = page
@@ -686,10 +693,7 @@ onBeforeUnmount(() => {
   <AssetItemOperationHost v-if="currentProjectId" ref="itemOperations" :project-id="currentProjectId" :context-key="`${currentProjectId}:${appliedAssetQuery}`" :members="members" @busy-change="itemActionBusy = $event" @changed="handleItemOperationChanged" />
   <section class="sg-page asset-page">
     <header class="sg-page-heading asset-heading">
-      <div><p class="sg-eyebrow">ASSETS</p>
-        <h2 class="sg-page-title">资产库管理</h2>
-        <p class="sg-page-description">统一管理角色、场景和道具制作分项，也可切换人员泳道或任务甘特监管资产制作排期。</p>
-      </div>
+      <h2 class="sg-page-title">资产库管理</h2>
       <div class="asset-heading__actions">
         <el-button v-if="canImport" :icon="Upload" @click="openImportDialog">导入 Excel</el-button>
         <el-button v-if="canCreate" type="primary" :icon="Plus" @click="openCreateDialog">新建资产</el-button>
@@ -698,7 +702,7 @@ onBeforeUnmount(() => {
 
     <ProjectStatePanel v-if="projectsError" :title="projectsError.title" :message="projectsError.message" :retryable="projectsError.retryable" @retry="loadProjects" />
     <template v-else>
-      <el-form ref="projectContextForm" :model="projectContext" :rules="projectContextRules" class="project-context" size="large" inline label-position="top" aria-label="当前项目筛选">
+      <el-form ref="projectContextForm" :model="projectContext" :rules="projectContextRules" class="project-context" size="default" inline label-position="left" aria-label="当前项目筛选">
         <el-form-item label="当前项目" prop="selectedProjectId"><el-select v-model="projectContext.selectedProjectId" class="sg-select" :placeholder="projectsLoading ? '正在加载项目…' : '请选择项目'" :disabled="projectsLoading"><el-option :label="projectsLoading ? '正在加载项目…' : '请选择项目'" value="" /><el-option v-for="item in projects" :key="item.projectId" :label="`${item.projectCode} · ${item.projectName}`" :value="String(item.projectId)" /></el-select></el-form-item>
         <el-form-item v-if="canViewAll" label="项目范围" prop="scope"><el-select v-model="projectContext.scope" class="sg-select" placeholder="我的项目"><el-option label="我的项目" value="" /><el-option label="全部项目" value="all" /></el-select></el-form-item>
         <div v-if="project" class="project-context__meta"><el-tag size="small" effect="plain" type="primary">{{ project.projectTypeName }}</el-tag><el-tag size="small" effect="plain" type="info">{{ project.aspectRatio }}</el-tag><el-tag size="small" effect="plain" round :type="projectRoleMeta(project.myProjectRole).type">我的角色：{{ projectRoleMeta(project.myProjectRole).label }}</el-tag><el-tag size="small" effect="plain" round :type="tagTypeFromTone(storageMeta(project.storageStatus).tone)">存储：{{ storageMeta(project.storageStatus).label }}</el-tag></div>
@@ -709,7 +713,7 @@ onBeforeUnmount(() => {
 
       <template v-else-if="projectContext.selectedProjectId">
         <el-alert v-if="pollingError" :title="pollingError" type="warning" show-icon :closable="false" />
-        <el-form ref="assetFilterForm" :model="query" :rules="assetFilterRules" class="asset-filters" size="large" aria-label="资产筛选">
+        <el-form ref="assetFilterForm" :model="query" :rules="assetFilterRules" class="asset-filters" size="default" aria-label="资产筛选">
           <el-form-item class="asset-filter-item asset-filter-item--keyword" prop="keyword">
             <el-input v-model="query.keyword" class="asset-search sg-input" :prefix-icon="Search" maxlength="200" clearable placeholder="资产名称或描述" aria-label="按资产名称或描述搜索" />
           </el-form-item>
@@ -799,7 +803,7 @@ onBeforeUnmount(() => {
           </el-card>
         </div>
 
-        <el-pagination v-if="total" class="asset-pagination" background layout="prev, pager, next, total" :current-page="query.pageNum" :page-size="query.pageSize" :total="total" :disabled="assetsLoading" aria-label="资产分页" @current-change="changePage" />
+        <el-pagination v-if="total" class="asset-pagination" background layout="total, sizes, prev, pager, next" :page-sizes="[10, 20, 30, 40, 50, 100]" :current-page="query.pageNum" :page-size="query.pageSize" :total="total" :disabled="assetsLoading" aria-label="资产分页" @current-change="changePage" @size-change="changePageSize" />
       </template>
     </template>
 
@@ -886,3 +890,5 @@ onBeforeUnmount(() => {
 @media(max-width:700px){.asset-filters{grid-template-columns:1fr}}
 .asset-item-status-counts{display:flex;gap:4px;align-items:center;justify-content:center;flex-wrap:wrap;font-size:10px}.asset-item-status-counts--card{padding:0 14px;justify-content:flex-start}
 </style>
+
+<style scoped src="../../assets/styles/compact-list.css"></style>

@@ -12,15 +12,6 @@ SQL_BIGINT_MAX = 9_223_372_036_854_775_807
 SQL_INTEGER_MAX = 2_147_483_647
 
 
-def _strip_required_text(value: Any) -> str:
-    if not isinstance(value, str):
-        raise ValueError('镜头描述必须是字符串')
-    normalized = value.strip()
-    if not normalized:
-        raise ValueError('镜头描述不能为空')
-    return normalized
-
-
 def _strip_optional_text(value: Any) -> str | None:
     if value is None:
         return None
@@ -35,6 +26,8 @@ class ShotGridShotListQueryModel(ShotGridPageQueryModel):
 
     episode_id: int | None = Field(default=None, gt=0, le=SQL_BIGINT_MAX, description='集ID')
     scene_id: int | None = Field(default=None, gt=0, le=SQL_BIGINT_MAX, description='场次ID')
+    shot_no_start: int | None = Field(default=None, gt=0, le=2_147_483_647, description='起始镜头号，包含边界')
+    shot_no_end: int | None = Field(default=None, gt=0, le=2_147_483_647, description='结束镜头号，包含边界')
     shot_status: ShotStatus | None = Field(default=None, description='镜头聚合状态')
     assignee_user_id: int | None = Field(
         default=None,
@@ -53,6 +46,12 @@ class ShotGridShotListQueryModel(ShotGridPageQueryModel):
     ] = Field(default='sortOrder', description='排序字段')
     is_asc: Literal['ascending', 'descending'] = Field(default='ascending', description='排序方向')
 
+    @model_validator(mode='after')
+    def validate_shot_number_range(self) -> 'ShotGridShotListQueryModel':
+        if self.shot_no_start is not None and self.shot_no_end is not None and self.shot_no_start > self.shot_no_end:
+            raise ValueError('起始镜头号不能大于结束镜头号')
+        return self
+
 
 class ShotGridShotWriteFieldsModel(ShotGridApiModel):
     """镜头创建与修改共享的可写字段。"""
@@ -67,15 +66,15 @@ class ShotGridShotWriteFieldsModel(ShotGridApiModel):
         description='兼容字段；数字镜头号 由服务端按场内位置生成，业务前端不再提交',
     )
     duration_ms: int = Field(default=0, ge=0, le=SQL_BIGINT_MAX, description='镜头时长（毫秒）')
-    shot_size: str | None = Field(default=None, max_length=40, description='景别')
-    camera_position: str | None = Field(default=None, max_length=100, description='机位')
-    camera_movement: str | None = Field(default=None, max_length=100, description='镜头运动')
-    focal_length: str | None = Field(default=None, max_length=50, description='焦段原始文本')
-    description: str = Field(min_length=1, description='镜头制作内容描述')
+    shot_size: str | None = Field(default=None, max_length=500, description='景别')
+    camera_position: str | None = Field(default=None, max_length=500, description='机位')
+    camera_movement: str | None = Field(default=None, max_length=500, description='镜头运动')
+    focal_length: str | None = Field(default=None, max_length=500, description='焦段原始文本')
+    description: str = Field(default='', description='镜头制作内容描述，可后续补充')
     dialogue: str | None = Field(default=None, description='台词或对白')
     sound_effect: str | None = Field(default=None, description='音效说明')
     color_reference: str | None = Field(default=None, description='色调参考说明')
-    remark: str | None = Field(default=None, max_length=500, description='备注')
+    remark: str | None = Field(default=None, max_length=2000, description='备注')
     sort_order: int | None = Field(
         default=None,
         ge=0,
@@ -101,7 +100,7 @@ class ShotGridShotWriteFieldsModel(ShotGridApiModel):
     @field_validator('description', mode='before')
     @classmethod
     def normalize_description(cls, value: Any) -> str:
-        return _strip_required_text(value)
+        return _strip_optional_text(value) or ''
 
     @field_validator(
         'shot_size',
@@ -129,7 +128,19 @@ class ShotGridShotWriteFieldsModel(ShotGridApiModel):
 
 
 class ShotGridShotCreateModel(ShotGridShotWriteFieldsModel):
-    """创建镜头请求。"""
+    """创建镜头请求；编号由用户填写，不触发场内重排。"""
+
+    shot_no: int = Field(
+        gt=0,
+        le=SQL_INTEGER_MAX // 10,
+        description='必填场内镜头号；允许跳号，保留编号乘 10 的 INTEGER 排序键范围',
+    )
+
+    @model_validator(mode='after')
+    def reject_automatic_sequence(self) -> 'ShotGridShotCreateModel':
+        if self.sequence_position is not None or self.sort_order is not None:
+            raise ValueError('新建镜头请填写 shotNo，不再接受 sequencePosition 或 sortOrder')
+        return self
 
 
 class ShotGridShotUpdateModel(ShotGridShotWriteFieldsModel):

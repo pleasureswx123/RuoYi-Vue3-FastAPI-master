@@ -11,6 +11,8 @@ const DEFAULT_FILTERS = Object.freeze({
   keyword: '',
   episodeIds: [],
   sceneIds: [],
+  shotNoStart: null,
+  shotNoEnd: null,
   assetTypes: [],
   onlyConflicts: false,
   onlyDelayed: false

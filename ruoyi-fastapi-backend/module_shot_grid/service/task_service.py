@@ -43,6 +43,7 @@ from module_shot_grid.service.asset_task_rules import (
 )
 from module_shot_grid.service.project_access_service import ShotGridProjectAccessService
 from module_shot_grid.service.project_service import ShotGridProjectService
+from module_shot_grid.service.shot_task_rules import missing_shot_assignment_fields, require_shot_assignment_fields
 from module_shot_grid.shot_number import format_shot_code
 
 MAX_TASK_NAME_LENGTH = 240
@@ -180,6 +181,7 @@ class ShotGridTaskService:
             if context is None:
                 raise shot_grid_error(404, 'SG_SHOT_NOT_FOUND', '镜头不存在、不属于目标项目或不可见')
             shot, episode, scene = context
+            require_shot_assignment_fields(shot)
             task = await ShotGridTaskDao.get_task_for_shot_update(db, project_id, shot_id)
             command = cls._freeze_shot_assignment_command(
                 command,
@@ -250,6 +252,7 @@ class ShotGridTaskService:
                 if context is None:
                     raise shot_grid_error(404, 'SG_SHOT_NOT_FOUND', '镜头不存在、不属于目标项目或不可见')
                 shot, episode, scene = context
+                require_shot_assignment_fields(shot)
                 task = await ShotGridTaskDao.get_task_for_shot_update(db, project_id, item.shot_id)
                 assign_command = ShotGridTaskAssignModel(
                     assigneeUserId=command.assignee_user_id,
@@ -1174,6 +1177,15 @@ class ShotGridTaskService:
         owner = row['assignee_user_id'] == access.user_id
         owner_creator = access.project_role == 'creator' and owner
         target_ready = row['task_kind'] != 'asset_image' or is_asset_production_item_ready(row.get('production_item'))
+        assignment_ready = row['task_kind'] != 'shot_video' or not missing_shot_assignment_fields(
+            {
+                'description': row.get('shot_description'),
+                'shot_size': row.get('shot_size'),
+                'camera_position': row.get('shot_camera_position'),
+                'camera_movement': row.get('shot_camera_movement'),
+                'focal_length': row.get('shot_focal_length'),
+            }
+        )
         actions: list[str] = []
         if director and row['task_status'] == 'not_started' and cls._has_permission(current_user, 'shotgrid:task:edit'):
             actions.append('task.edit')
@@ -1182,6 +1194,7 @@ class ShotGridTaskService:
             and row['task_status'] == 'not_started'
             and target_ready
             and not row['has_uncommitted_submission']
+            and assignment_ready
             and cls._has_permission(current_user, 'shotgrid:task:assign')
         ):
             actions.append('task.assign')

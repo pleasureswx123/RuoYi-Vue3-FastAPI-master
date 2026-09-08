@@ -1,8 +1,8 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 
-import { createShot, getScenePage, getShotPage, updateShot } from '@/api/shot-grid/shots'
-import { formatShotCode, secondsToDurationMs, shotErrorState } from '@/views/shot/shotPresentation'
+import { createShot, getScenePage, updateShot } from '@/api/shot-grid/shots'
+import { secondsToDurationMs, shotErrorState } from '@/views/shot/shotPresentation'
 import ProjectModal from '@/views/project/components/ProjectModal.vue'
 
 const props = defineProps({
@@ -22,15 +22,10 @@ const operationContext = Object.freeze({
 const shotFormRef = ref(null)
 const busy = ref(false)
 const scenesLoading = ref(false)
-const positionsLoading = ref(false)
 const scenes = ref([])
-const sceneShots = ref([])
-const sceneShotCount = ref(0)
-const positionBlockedReason = ref('')
 const validationMessage = ref('')
 const requestError = ref(null)
 let scenesController = null
-let positionsController = null
 
 const form = reactive({
   episodeId: props.shot?.episodeId
@@ -49,27 +44,12 @@ const form = reactive({
   soundEffect: props.shot?.soundEffect || '',
   colorReference: props.shot?.colorReference || '',
   remark: props.shot?.remark || '',
-  sequencePosition: props.shot?.sequencePosition ?? null
+  shotNo: props.shot?.shotNo ? String(props.shot.shotNo) : ''
 })
 
 const isEdit = computed(() => Boolean(props.shot?.shotId))
-const isCurrentScene = computed(() => Number(form.sceneId) === Number(props.shot?.sceneId))
-const canSubmit = computed(() => !busy.value && !scenesLoading.value && !positionsLoading.value && !positionBlockedReason.value)
-const sequenceOptions = computed(() => {
-  const count = sceneShotCount.value + (!isEdit.value || !isCurrentScene.value ? 1 : 0)
-  return Array.from({ length: count }, (_, index) => {
-    const value = index + 1
-    return {
-      value,
-      label: value === count ? `第 ${value} 镜（本场末尾）` : `第 ${value} 镜`
-    }
-  }).filter(option => (
-    isEdit.value ||
-    option.value === count ||
-    sceneShots.value.slice(option.value - 1).every(isShotOrderMutable)
-  ))
-})
-const MAX_SCENE_POSITION_SHOTS = 2000
+const canSubmit = computed(() => !busy.value && !scenesLoading.value)
+const MAX_SHOT_NO = 214748364
 const positiveIdRule = message => ({
   validator: (_rule, value, callback) => {
     const id = Number(value)
@@ -84,11 +64,12 @@ const positiveIdRule = message => ({
 const shotFormRules = {
   episodeId: [positiveIdRule('请选择有效集')],
   sceneId: [positiveIdRule('请选择有效场次')],
-  sequencePosition: [{
+  shotNo: [{
     validator: (_rule, value, callback) => {
-      const sequencePosition = Number(value)
-      if (!Number.isSafeInteger(sequencePosition) || sequencePosition <= 0) {
-        callback(new Error('请选择场内镜头位置'))
+      if (isEdit.value) { callback(); return }
+      const shotNo = Number(value)
+      if (!/^[0-9]+$/.test(String(value).trim()) || !Number.isSafeInteger(shotNo) || shotNo <= 0 || shotNo > MAX_SHOT_NO) {
+        callback(new Error('镜头号须为 1 至 214748364 的整数'))
         return
       }
       callback()
@@ -106,12 +87,11 @@ const shotFormRules = {
     },
     trigger: 'change'
   }],
-  description: [{ required: true, whitespace: true, message: '制作内容描述不能为空', trigger: 'blur' }],
-  shotSize: [{ max: 40, message: '景别不能超过 40 个字符', trigger: 'blur' }],
-  cameraPosition: [{ max: 100, message: '机位不能超过 100 个字符', trigger: 'blur' }],
-  cameraMovement: [{ max: 100, message: '镜头运动不能超过 100 个字符', trigger: 'blur' }],
-  focalLength: [{ max: 50, message: '焦段不能超过 50 个字符', trigger: 'blur' }],
-  remark: [{ max: 500, message: '备注不能超过 500 个字符', trigger: 'blur' }]
+  shotSize: [{ max: 500, message: '景别不能超过 500 个字符', trigger: 'blur' }],
+  cameraPosition: [{ max: 500, message: '机位不能超过 500 个字符', trigger: 'blur' }],
+  cameraMovement: [{ max: 500, message: '镜头运动不能超过 500 个字符', trigger: 'blur' }],
+  focalLength: [{ max: 500, message: '焦段不能超过 500 个字符', trigger: 'blur' }],
+  remark: [{ max: 2000, message: '备注不能超过 2000 个字符', trigger: 'blur' }]
 }
 
 async function loadScenes(resetScene = false) {
@@ -119,9 +99,9 @@ async function loadScenes(resetScene = false) {
   scenes.value = []
   if (resetScene) {
     form.sceneId = ''
-    form.sequencePosition = null
+    form.shotNo = ''
     shotFormRef.value?.clearValidate('sceneId')
-    shotFormRef.value?.clearValidate('sequencePosition')
+    shotFormRef.value?.clearValidate('shotNo')
   }
   const episodeId = Number(form.episodeId)
   if (!Number.isSafeInteger(episodeId) || episodeId <= 0) return
@@ -138,10 +118,9 @@ async function loadScenes(resetScene = false) {
     scenes.value = Array.isArray(sceneResponse.rows) ? sceneResponse.rows : []
     if (form.sceneId && !scenes.value.some(scene => String(scene.sceneId) === String(form.sceneId))) {
       form.sceneId = ''
-      form.sequencePosition = null
+      form.shotNo = ''
     }
     if (!form.sceneId && scenes.value.length === 1) form.sceneId = String(scenes.value[0].sceneId)
-    if (form.sceneId) await loadScenePositions(resetScene)
   } catch (error) {
     if (error?.code !== 'ERR_CANCELED') requestError.value = shotErrorState(error, '场次选项加载失败')
   } finally {
@@ -149,87 +128,9 @@ async function loadScenes(resetScene = false) {
   }
 }
 
-async function loadScenePositions(resetPosition = false) {
-  positionsController?.abort()
-  sceneShots.value = []
-  sceneShotCount.value = 0
-  positionBlockedReason.value = ''
-  if (resetPosition) {
-    form.sequencePosition = null
-    shotFormRef.value?.clearValidate('sequencePosition')
-  }
-  const episodeId = Number(form.episodeId)
-  const sceneId = Number(form.sceneId)
-  if (!Number.isSafeInteger(episodeId) || episodeId <= 0 || !Number.isSafeInteger(sceneId) || sceneId <= 0) return
-  const controller = new AbortController()
-  positionsController = controller
-  positionsLoading.value = true
-  try {
-    const rows = []
-    let total = 0
-    let hasNext = true
-    for (let pageNum = 1; hasNext && pageNum <= 20; pageNum += 1) {
-      const response = await getShotPage(
-        operationContext.projectId,
-        { episodeId, sceneId, pageNum, pageSize: 100, lifecycleStatus: 'active', orderByColumn: 'sortOrder', isAsc: 'ascending' },
-        { signal: controller.signal }
-      )
-      const pageRows = Array.isArray(response.rows) ? response.rows : []
-      rows.push(...pageRows)
-      total = Number(response.total) || rows.length
-      if (!isEdit.value && total > MAX_SCENE_POSITION_SHOTS) {
-        positionBlockedReason.value = `当前场次超过 ${MAX_SCENE_POSITION_SHOTS} 镜，请通过导入或数据治理工具处理`
-        break
-      }
-      hasNext = Boolean(response.hasNext)
-    }
-    sceneShots.value = rows
-    sceneShotCount.value = total
-    if (!isEdit.value && !positionBlockedReason.value && rows.length !== total) {
-      positionBlockedReason.value = '未能加载完整场次，暂不能计算安全的镜头位置'
-    }
-    if (!isEdit.value && !positionBlockedReason.value && !isSceneSequenceConsistent(rows)) {
-      positionBlockedReason.value = '当前场次镜头号不连续，请先完成历史数据治理后再新建镜头'
-    }
-    if (positionBlockedReason.value) {
-      form.sequencePosition = null
-      return
-    }
-    if (!isEdit.value || !isCurrentScene.value) {
-      form.sequencePosition = sceneShotCount.value + 1
-    } else if (!form.sequencePosition) {
-      const currentShot = rows.find(row => Number(row.shotId) === operationContext.shotId)
-      form.sequencePosition = currentShot?.sequencePosition ?? null
-    }
-  } catch (error) {
-    if (error?.code !== 'ERR_CANCELED') requestError.value = shotErrorState(error, '场内镜头位置加载失败')
-  } finally {
-    if (positionsController === controller) positionsLoading.value = false
-  }
-}
-
-function isShotOrderMutable(shot) {
-  return (
-    ['unassigned', 'not_started'].includes(shot?.status) &&
-    !shot?.storageDirName &&
-    shot?.directoryStatus === 'not_created' &&
-    !shot?.latestVersion
-  )
-}
-
-function isSceneSequenceConsistent(rows) {
-  return rows.every((shot, index) => {
-    const expected = index + 1
-    return (
-      Number(shot?.sequencePosition) === expected &&
-      Number(shot?.shotNo) === expected &&
-      shot?.shotCode === formatShotCode(expected)
-    )
-  })
-}
-
 function changeScene() {
-  loadScenePositions(true)
+  if (!isEdit.value) form.shotNo = ''
+  shotFormRef.value?.clearValidate('shotNo')
 }
 
 function optionalText(value) {
@@ -240,12 +141,11 @@ function optionalText(value) {
 function buildPayload() {
   const sceneId = Number(form.sceneId)
   const durationSeconds = Number(form.durationSeconds)
-  const sequencePosition = Number(form.sequencePosition)
+  const shotNo = Number(form.shotNo)
   if (!Number.isSafeInteger(sceneId) || sceneId <= 0) throw new Error('请选择有效场次')
   const durationMs = secondsToDurationMs(durationSeconds)
-  if (!Number.isSafeInteger(sequencePosition) || sequencePosition <= 0) throw new Error('请选择场内镜头位置')
+  if (!isEdit.value && (!Number.isSafeInteger(shotNo) || shotNo <= 0 || shotNo > MAX_SHOT_NO)) throw new Error('镜头号须为 1 至 214748364 的整数')
   const description = form.description.trim()
-  if (!description) throw new Error('制作内容描述不能为空')
   const payload = {
     sceneId,
     durationMs,
@@ -260,22 +160,22 @@ function buildPayload() {
     remark: optionalText(form.remark),
     assetIds: isEdit.value ? (props.shot.assets || []).map(asset => asset.assetId) : []
   }
-  if (!isEdit.value) payload.sequencePosition = sequencePosition
+  if (!isEdit.value) payload.shotNo = shotNo
   if (isEdit.value) payload.lockVersion = props.shot.lockVersion
   return payload
 }
 
 async function submit() {
-  if (busy.value) return
+  if (busy.value || scenesLoading.value) return
+  busy.value = true
   validationMessage.value = ''
   requestError.value = null
   const valid = shotFormRef.value
     ? await shotFormRef.value.validate().catch(() => false)
     : false
-  if (!valid) return
+  if (!valid) { busy.value = false; return }
   let payload
-  try { payload = buildPayload() } catch (error) { validationMessage.value = error.message; return }
-  busy.value = true
+  try { payload = buildPayload() } catch (error) { validationMessage.value = error.message; busy.value = false; return }
   try {
     const response = isEdit.value
       ? await updateShot(operationContext.projectId, operationContext.shotId, payload)
@@ -299,14 +199,13 @@ watch(() => form.episodeId, () => loadScenes(true))
 onMounted(() => loadScenes(false))
 onBeforeUnmount(() => {
   scenesController?.abort()
-  positionsController?.abort()
 })
 </script>
 
 <template>
   <ProjectModal
     :title="isEdit ? `编辑 ${shot.shotCode}` : '新建镜头'"
-    :description="isEdit ? '镜头号由本场顺序生成，例如第 1 镜为 0001；顺序请回到列表拖拽调整。已有任务的负责人改派必须使用任务分配动作。' : '选择场内位置后，系统自动生成至少四位的数字镜头号；先创建未分配镜头，管理人员确认开工时再创建 NAS 镜头目录。'"
+    :description="isEdit ? '镜头号保持不变，可补充制作信息；负责人改派请使用任务分配动作。' : '手动填写镜头号，允许跳号，同一场次不能重复；创建后可继续补充制作信息。'"
     :busy="busy"
     wide
     @close="closeDialog"
@@ -315,22 +214,21 @@ onBeforeUnmount(() => {
       <div class="shot-form__grid">
         <el-form-item label="所属集" prop="episodeId" required><el-select v-model="form.episodeId" class="sg-select" placeholder="请选择集" :disabled="isEdit || busy"><el-option label="请选择集" value="" /><el-option v-for="episode in episodes" :key="episode.episodeId" :label="`${episode.episodeCode} ${episode.episodeName || ''}`" :value="String(episode.episodeId)" /></el-select></el-form-item>
         <el-form-item label="所属场次" prop="sceneId" required><el-select v-model="form.sceneId" class="sg-select" :placeholder="scenesLoading ? '正在加载…' : '请选择场次'" :disabled="isEdit || scenesLoading || busy" @change="changeScene"><el-option :label="scenesLoading ? '正在加载…' : '请选择场次'" value="" /><el-option v-for="scene in scenes" :key="scene.sceneId" :label="`${scene.sceneCode} ${scene.sceneName || ''}`" :value="String(scene.sceneId)" /></el-select></el-form-item>
-        <el-form-item label="场内镜头序号" prop="sequencePosition" :required="!isEdit"><el-select v-model="form.sequencePosition" class="sg-select" placeholder="请选择序号" :loading="positionsLoading" :disabled="isEdit || !form.sceneId || positionsLoading || Boolean(positionBlockedReason) || busy"><el-option v-for="option in sequenceOptions" :key="option.value" :label="`${option.label} · ${formatShotCode(option.value)}`" :value="option.value" /></el-select><small class="shot-form__field-hint">本场第 1 镜就是 0001，第 2 镜就是 0002；仅显示不会推动已冻结镜头的安全位置。</small></el-form-item>
+        <el-form-item label="镜头号" prop="shotNo" required><el-input v-model="form.shotNo" inputmode="numeric" maxlength="9" placeholder="例如：0010、0030" :disabled="isEdit || !form.sceneId || busy" @keyup.enter="submit" /><small class="shot-form__field-hint">允许不连续，无需从 0001 开始；同一场次内不能重复。</small></el-form-item>
         <el-form-item label="时长（秒）" prop="durationSeconds"><el-input-number v-model="form.durationSeconds" :min="0" :step="0.001" :precision="3" controls-position="right" :disabled="busy" /></el-form-item>
-        <el-form-item label="景别" prop="shotSize"><el-input v-model="form.shotSize" maxlength="40" placeholder="如：近景" :disabled="busy" /></el-form-item>
-        <el-form-item label="机位" prop="cameraPosition"><el-input v-model="form.cameraPosition" maxlength="100" :disabled="busy" /></el-form-item>
-        <el-form-item label="镜头运动" prop="cameraMovement"><el-input v-model="form.cameraMovement" maxlength="100" :disabled="busy" /></el-form-item>
-        <el-form-item label="焦段" prop="focalLength"><el-input v-model="form.focalLength" maxlength="50" placeholder="支持 35/25 等文本" :disabled="busy" /></el-form-item>
+        <el-form-item label="景别" prop="shotSize"><el-input v-model="form.shotSize" maxlength="500" placeholder="如：近景" :disabled="busy" /></el-form-item>
+        <el-form-item label="机位" prop="cameraPosition"><el-input v-model="form.cameraPosition" maxlength="500" :disabled="busy" /></el-form-item>
+        <el-form-item label="镜头运动" prop="cameraMovement"><el-input v-model="form.cameraMovement" maxlength="500" :disabled="busy" /></el-form-item>
+        <el-form-item label="焦段" prop="focalLength"><el-input v-model="form.focalLength" maxlength="500" placeholder="支持 35/25 等文本" :disabled="busy" /></el-form-item>
       </div>
-      <p class="shot-form__hint">镜头号只表达本场顺序，不承担数据库主键或 NAS 身份；镜头开始制作后顺序将被冻结。</p>
-      <el-alert v-if="positionBlockedReason" :title="positionBlockedReason" type="warning" show-icon :closable="false" />
+      <p class="shot-form__hint">镜头号由使用者填写，系统统一补齐至少四位显示；创建不会改变其他镜头编号。</p>
       <el-alert v-if="!isEdit" title="创建后状态：未分配" description="创建镜头不会同时创建制作任务；请返回镜头列表或详情，通过“分配任务”完成委派。" type="info" show-icon :closable="false" />
-      <el-form-item class="shot-form__full" label="制作内容描述" prop="description" required><el-input v-model="form.description" type="textarea" :rows="4" :disabled="busy" /></el-form-item>
+      <el-form-item class="shot-form__full" label="制作内容描述" prop="description"><el-input v-model="form.description" type="textarea" :rows="4" :disabled="busy" /></el-form-item>
       <div class="shot-form__grid shot-form__grid--text">
         <el-form-item label="台词 / 对白" prop="dialogue"><el-input v-model="form.dialogue" type="textarea" :rows="3" :disabled="busy" /></el-form-item>
         <el-form-item label="音效" prop="soundEffect"><el-input v-model="form.soundEffect" type="textarea" :rows="3" :disabled="busy" /></el-form-item>
         <el-form-item label="色调参考" prop="colorReference"><el-input v-model="form.colorReference" type="textarea" :rows="3" :disabled="busy" /></el-form-item>
-        <el-form-item label="备注" prop="remark"><el-input v-model="form.remark" type="textarea" :rows="3" maxlength="500" show-word-limit :disabled="busy" /></el-form-item>
+        <el-form-item label="备注" prop="remark"><el-input v-model="form.remark" type="textarea" :rows="3" maxlength="2000" show-word-limit :disabled="busy" /></el-form-item>
       </div>
       <p v-if="isEdit && shot.assets?.length" class="shot-form__hint">当前 {{ shot.assets.length }} 项关联资产将保持不变；如需调整，请前往资产管理。</p>
       <el-alert v-if="validationMessage || requestError" class="shot-form__alert" :type="requestError ? 'error' : 'warning'" :closable="false" show-icon :title="requestError?.title || '请检查表单'"><div class="form-alert-content"><p>{{ requestError?.message || validationMessage }}</p><el-button v-if="requestError?.status === 409" link type="primary" @click="emit('refresh')">刷新镜头后重试</el-button></div></el-alert>

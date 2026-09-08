@@ -197,3 +197,13 @@ async def test_find_overlap_task_ids_returns_stable_integer_list() -> None:
     assert result == [9, 12]
     statement = db.scalars.await_args.args[0]
     assert 'order by schedule_overlap_task.task_id' in _sql(statement)
+
+
+def test_schedule_preserves_shot_number_range() -> None:
+    sql = _sql(
+        ShotGridTaskScheduleDao.build_schedule_statement(
+            PROJECT_ID, _query(targetKind='shot', shotNoStart=10, shotNoEnd=50)
+        )
+    )
+    assert 'sg_shot.shot_no >= 10' in sql
+    assert 'sg_shot.shot_no <= 50' in sql

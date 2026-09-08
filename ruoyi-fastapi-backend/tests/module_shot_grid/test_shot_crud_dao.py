@@ -83,3 +83,15 @@ def test_read_projection_statement_uses_one_postgresql_lateral_query_for_latest_
     assert 'sg_note.version_id = shot_latest_version.version_id' in sql
     assert "CASE WHEN (sg_note.note_status = 'open') THEN 0 ELSE 1 END" in sql
     assert 'sg_note.create_time DESC, sg_note.note_id DESC' in sql
+
+
+def test_shot_number_range_is_inclusive_and_keeps_project_scope() -> None:
+    query = ShotGridShotListQueryModel(shotNoStart=10, shotNoEnd=50)
+    sql = str(
+        ShotGridShotCrudDao.build_list_statement(1001, query).compile(
+            dialect=postgresql.dialect(), compile_kwargs={'literal_binds': True}
+        )
+    )
+    assert 'sg_shot.shot_no >= 10' in sql
+    assert 'sg_shot.shot_no <= 50' in sql
+    assert 'sg_shot.project_id = 1001' in sql

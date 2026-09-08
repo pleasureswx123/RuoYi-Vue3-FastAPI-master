@@ -253,7 +253,7 @@ onBeforeUnmount(() => { previewController?.abort(); downloadController?.abort() 
           <strong>工作簿提醒</strong><ul><li v-for="issue in preview.workbookWarnings" :key="`${issue.errorKey}-${issue.message}`">{{ issue.message }}</li></ul>
         </section>
 
-        <el-alert class="assignment-boundary" title="导入后可在镜头列表统一分配制作任务" type="info" show-icon :closable="false" />
+        <el-alert class="assignment-boundary" title="仅场次、镜头号必填；其他字段可留空，导入后通过编辑镜头补充。时长留空默认为 0。" type="info" show-icon :closable="false" />
         <div class="selection-toolbar"><span>已选择 {{ selectedRows.length }} 条</span></div>
 
         <section v-for="(rows, sheetName) in groupedRows" :key="sheetName" class="sheet-block">

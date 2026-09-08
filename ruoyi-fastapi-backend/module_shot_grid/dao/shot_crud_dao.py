@@ -169,6 +169,10 @@ class ShotGridShotCrudDao:
             statement = statement.where(ShotGridShot.episode_id == query.episode_id)
         if query.scene_id is not None:
             statement = statement.where(ShotGridShot.scene_id == query.scene_id)
+        if query.shot_no_start is not None:
+            statement = statement.where(ShotGridShot.shot_no >= query.shot_no_start)
+        if query.shot_no_end is not None:
+            statement = statement.where(ShotGridShot.shot_no <= query.shot_no_end)
         if query.shot_status is not None:
             statement = statement.where(status_expression == query.shot_status)
         if query.assignee_user_id is not None:

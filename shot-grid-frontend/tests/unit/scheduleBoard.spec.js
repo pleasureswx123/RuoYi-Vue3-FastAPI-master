@@ -79,6 +79,22 @@ describe('共享任务排期面板', () => {
     getTaskScheduleChanges.mockResolvedValue({ rows: [], total: 0, hasNext: false })
   })
 
+  it('继承镜头号区间并在清空后移除查询范围', async () => {
+    const wrapper = mount(ScheduleBoard, {
+      props: {
+        projectId: 11, targetKind: 'shot',
+        initialWindowStart: '2026-09-01T00:00:00', initialWindowEnd: '2026-09-08T00:00:00',
+        initialFilters: { shotNoStart: 10, shotNoEnd: 50 }
+      }
+    })
+    await flushPromises()
+    expect(getProjectSchedule).toHaveBeenLastCalledWith(11, expect.objectContaining({ shotNoStart: 10, shotNoEnd: 50 }), expect.anything())
+    await wrapper.setProps({ initialFilters: {} })
+    await flushPromises()
+    expect(getProjectSchedule).toHaveBeenLastCalledWith(11, expect.objectContaining({ shotNoStart: null, shotNoEnd: null }), expect.anything())
+    wrapper.unmount()
+  })
+
   it('默认只读并让人员泳道稳定堆叠同人重叠任务', async () => {
     const wrapper = mount(ScheduleBoard, {
       props: {

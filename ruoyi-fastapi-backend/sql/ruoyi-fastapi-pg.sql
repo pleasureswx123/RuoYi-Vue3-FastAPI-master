@@ -2168,10 +2168,10 @@ CREATE TABLE sg_shot (
 	shot_no INTEGER NOT NULL,
 	storage_dir_name VARCHAR(32),
 	duration_ms BIGINT DEFAULT '0' NOT NULL,
-	shot_size VARCHAR(40),
-	camera_position VARCHAR(100),
-	camera_movement VARCHAR(100),
-	focal_length VARCHAR(50),
+	shot_size VARCHAR(500),
+	camera_position VARCHAR(500),
+	camera_movement VARCHAR(500),
+	focal_length VARCHAR(500),
 	description TEXT NOT NULL,
 	dialogue TEXT,
 	sound_effect TEXT,
@@ -2182,7 +2182,7 @@ CREATE TABLE sg_shot (
 	create_time TIMESTAMP(0) WITHOUT TIME ZONE NOT NULL,
 	update_by VARCHAR(64) DEFAULT '' NOT NULL,
 	update_time TIMESTAMP(0) WITHOUT TIME ZONE NOT NULL,
-	remark VARCHAR(500),
+	remark VARCHAR(2000),
 	lock_version INTEGER DEFAULT '0' NOT NULL,
 	del_flag CHAR(1) DEFAULT '0' NOT NULL,
 	PRIMARY KEY (shot_id),
@@ -3262,7 +3262,7 @@ create table if not exists alembic_version (
     constraint alembic_version_pkc primary key (version_num)
 );
 delete from alembic_version;
-insert into alembic_version(version_num) values ('20260831_26');
+insert into alembic_version(version_num) values ('20260908_27');
 
 
 CREATE OR REPLACE FUNCTION "find_in_set"(int8, varchar)

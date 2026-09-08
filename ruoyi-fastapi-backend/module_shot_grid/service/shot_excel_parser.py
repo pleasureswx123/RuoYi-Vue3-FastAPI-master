@@ -168,11 +168,11 @@ class ShotExcelParser:
         scene = self._parse_scene(cells[0].value, sheet_name, row_number, errors)
         shot_no = self._parse_shot_no(cells[1].value, sheet_name, row_number, errors)
         duration_ms = self._parse_duration(cells[2].value, sheet_name, row_number, errors)
-        description = self._required_text(cells[4].value, 'description', sheet_name, row_number, errors)
+        description = self._optional_text(cells[4].value) or ''
         environment_name = self._optional_text(cells[9].value)
 
         normalized: ShotImportNormalizedRowModel | None = None
-        if scene is not None and shot_no is not None and duration_ms is not None and description is not None:
+        if scene is not None and shot_no is not None and duration_ms is not None:
             scene_no, scene_name = scene
             requirements: list[ShotAssetRequirementPreviewModel] = []
             if environment_name:
@@ -209,21 +209,21 @@ class ShotExcelParser:
                 shotCode=format_shot_code(shot_no),
                 durationMs=duration_ms,
                 description=description,
-                shotSize=self._bounded_optional(cells[5].value, 40, 'shotSize', sheet_name, row_number, errors),
+                shotSize=self._bounded_optional(cells[5].value, 500, 'shotSize', sheet_name, row_number, errors),
                 cameraPosition=self._bounded_optional(
-                    cells[6].value, 100, 'cameraPosition', sheet_name, row_number, errors
+                    cells[6].value, 500, 'cameraPosition', sheet_name, row_number, errors
                 ),
                 cameraMovement=self._bounded_optional(
-                    cells[7].value, 100, 'cameraMovement', sheet_name, row_number, errors
+                    cells[7].value, 500, 'cameraMovement', sheet_name, row_number, errors
                 ),
                 focalLength=self._bounded_optional(
-                    self._canonical_number_text(cells[8].value), 50, 'focalLength', sheet_name, row_number, errors
+                    self._canonical_number_text(cells[8].value), 500, 'focalLength', sheet_name, row_number, errors
                 ),
                 assetRequirements=requirements,
                 dialogue=self._optional_text(cells[10].value),
                 soundEffect=self._optional_text(cells[11].value),
                 colorReference=self._optional_text(cells[12].value),
-                remark=self._bounded_optional(cells[13].value, 500, 'remark', sheet_name, row_number, errors),
+                remark=self._bounded_optional(cells[13].value, 2000, 'remark', sheet_name, row_number, errors),
             )
 
         return ShotImportPreviewRowModel(
@@ -323,6 +323,8 @@ class ShotExcelParser:
         row_number: int,
         errors: list[ImportIssueModel],
     ) -> int | None:
+        if self._optional_text(value) is None:
+            return 0
         try:
             decimal_value = Decimal(str(value).strip())
             if not decimal_value.is_finite() or decimal_value < 0:
@@ -358,27 +360,6 @@ class ShotExcelParser:
             decimal_value = Decimal(str(value))
             return format(decimal_value.normalize(), 'f')
         return str(value)
-
-    def _required_text(
-        self,
-        value: Any,
-        field_name: str,
-        sheet_name: str,
-        row_number: int,
-        errors: list[ImportIssueModel],
-    ) -> str | None:
-        text = self._optional_text(value)
-        if text is None:
-            errors.append(
-                self._issue(
-                    'SG_IMPORT_REQUIRED_FIELD_MISSING',
-                    '制作内容描述不能为空',
-                    field_name,
-                    sheet_name,
-                    row_number,
-                )
-            )
-        return text
 
     def _bounded_optional(
         self,

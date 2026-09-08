@@ -162,3 +162,9 @@ cython_debug/
 # 生产部署运行时文件
 /.deploy/
 /deploy/.env.production
+
+# 本地浏览器自动化调试产物
+/.playwright-cli/
+
+# 本地验证、截图及迁移备份产物
+/output/

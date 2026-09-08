@@ -421,8 +421,10 @@ async def test_list_reads_versions_files_and_feedback_in_one_batch_query(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('shot_no', [1, 10, 30])
 async def test_create_shot_defers_directory_until_start_and_audits_before_commit(
     monkeypatch: pytest.MonkeyPatch,
+    shot_no: int,
 ) -> None:
     monkeypatch.setattr(
         'module_shot_grid.service.shot_crud_service.ShotGridShotCrudDao.lock_project_storage',
@@ -446,6 +448,8 @@ async def test_create_shot_defers_directory_until_start_and_audits_before_commit
     )
 
     async def add_shot(_db: Any, shot: Any) -> Any:
+        assert shot.shot_no == shot_no
+        assert shot.sort_order == shot_no * 10
         shot.shot_id = SHOT_ID
         return shot
 
@@ -464,25 +468,9 @@ async def test_create_shot_defers_directory_until_start_and_audits_before_commit
         'module_shot_grid.service.shot_crud_service.ShotGridShotCrudDao.add_storage_operation',
         add_operation,
     )
-    monkeypatch.setattr(
-        'module_shot_grid.service.shot_crud_service.ShotGridShotCrudDao.list_scene_shots_for_renumber',
-        AsyncMock(
-            return_value=[
-                {
-                    'shot_id': SHOT_ID,
-                    'shot_no': 1,
-                    'storage_dir_name': None,
-                    'sort_order': 10,
-                    'lock_version': 0,
-                    'directory_operation_status': None,
-                }
-            ]
-        ),
-    )
-    monkeypatch.setattr(
-        'module_shot_grid.service.shot_crud_service.ShotGridShotCrudDao.list_scene_renumber_blockers',
-        AsyncMock(return_value=[]),
-    )
+    # 新建不能重新编号已有镜头，即使已有镜头有冻结目录或正在制作。
+    renumber = AsyncMock(side_effect=AssertionError('新建不得重排场内镜头'))
+    monkeypatch.setattr(ShotGridShotCrudService, '_synchronize_scene_numbers', renumber)
     monkeypatch.setattr(
         'module_shot_grid.service.shot_crud_service.ShotGridProjectAuditDao.add_success_log',
         audit,
@@ -504,7 +492,7 @@ async def test_create_shot_defers_directory_until_start_and_audits_before_commit
     db.commit = AsyncMock(side_effect=commit)
     command = ShotGridShotCreateModel(
         sceneId=20,
-        sequencePosition=1,
+        shotNo=shot_no,
         durationMs=6000,
         description='舱室内主角惊醒',
         assetIds=[4001, 4002],
@@ -516,6 +504,7 @@ async def test_create_shot_defers_directory_until_start_and_audits_before_commit
     assert events == ['freeze', 'commit']
     sync_assets.assert_awaited_once()
     add_operation.assert_not_awaited()
+    renumber.assert_not_awaited()
     assert not hasattr(ShotGridShotCrudDao, 'add_task')
     audit.assert_awaited_once()
     assert len(audit.await_args.kwargs['method']) < MAX_AUDIT_METHOD_LENGTH
@@ -597,44 +586,6 @@ async def test_scene_renumber_freezes_directory_mapping_and_audit_before_commit(
     assert storage.storage_status == 'migrating'
     audit.assert_awaited_once()
     db.commit.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_create_position_inserts_and_rewrites_only_shifted_internal_orders(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    rows = [
-        {'shot_id': SHOT_ID, 'sort_order': SEQUENCE_STEP, 'shot_no': 1, 'lock_version': 0},
-        {'shot_id': SECOND_SHOT_ID, 'sort_order': SEQUENCE_STEP * 2, 'shot_no': 2, 'lock_version': 0},
-    ]
-    monkeypatch.setattr(
-        'module_shot_grid.service.shot_crud_service.ShotGridShotCrudDao.list_scene_shot_order_for_update',
-        AsyncMock(return_value=rows),
-    )
-    update_order = AsyncMock()
-    monkeypatch.setattr(
-        'module_shot_grid.service.shot_crud_service.ShotGridShotCrudDao.update_shot_order',
-        update_order,
-    )
-    command = ShotGridShotCreateModel(
-        sceneId=20,
-        description='插入中间的镜头',
-        sequencePosition=2,
-    )
-
-    result = await ShotGridShotCrudService._resolve_create_sort_order(
-        AsyncMock(),
-        project_id=PROJECT_ID,
-        scene_id=20,
-        command=command,
-        actor_name='director',
-        now=datetime(2026, 8, 20, 12, 0, 0),
-    )
-
-    assert result == SEQUENCE_STEP * 2
-    update_order.assert_awaited_once()
-    assert update_order.await_args.kwargs['shot_id'] == SECOND_SHOT_ID
-    assert update_order.await_args.kwargs['sort_order'] == SEQUENCE_STEP * 3
 
 
 @pytest.mark.asyncio
@@ -1173,3 +1124,36 @@ def test_shot_start_action_requires_assigned_unstarted_mutable_shot(changed: dic
     user = _current_user()
     user.permissions.append('shotgrid:task:start')
     assert 'task.start' not in ShotGridShotCrudService._allowed_actions(row, user, _access())
+
+
+@pytest.mark.asyncio
+async def test_create_rejects_duplicate_number_before_writing(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(ShotGridShotCrudDao, 'lock_project_storage', AsyncMock(return_value=_project_storage()))
+    monkeypatch.setattr(ShotGridShotCrudDao, 'get_scene_context', AsyncMock(return_value=_scene_context()))
+    monkeypatch.setattr(ShotGridShotCrudDao, 'list_active_assets', AsyncMock(return_value=[]))
+    monkeypatch.setattr(ShotGridShotCrudDao, 'shot_no_exists', AsyncMock(return_value=True))
+    monkeypatch.setattr(ShotGridShotCrudDao, 'list_scene_shot_order_for_update', AsyncMock(return_value=[]))
+    add = AsyncMock()
+    monkeypatch.setattr(ShotGridShotCrudDao, 'add_shot', add)
+    db = AsyncMock()
+
+    with pytest.raises(ShotGridDomainException) as exc_info:
+        await ShotGridShotCrudService.create_shot(
+            db, PROJECT_ID, ShotGridShotCreateModel(sceneId=20, shotNo=1), _current_user(), _access()
+        )
+
+    assert exc_info.value.error_key == 'SG_SHOT_NO_CONFLICT'
+    add.assert_not_awaited()
+    db.rollback.assert_awaited_once()
+    db.commit.assert_not_awaited()
+
+
+@pytest.mark.parametrize('field', ['description', 'shot_size', 'camera_position', 'camera_movement', 'focal_length'])
+@pytest.mark.parametrize('value', [None, '', '   '])
+def test_assignment_action_hidden_until_production_fields_complete(field: str, value: str | None) -> None:
+    row = {**_shot_projection_row(), 'task_status': 'not_started', field: value}
+    user = _current_user()
+    user.permissions.append('shotgrid:task:assign')
+    assert 'task.assign' not in ShotGridShotCrudService._allowed_actions(row, user, _access())
+    row[field] = '已填写'
+    assert 'task.assign' in ShotGridShotCrudService._allowed_actions(row, user, _access())

@@ -422,7 +422,15 @@ async def test_assign_shot_locks_project_target_task_then_member_and_audits(
     async def lock_target(*_args: Any, **_kwargs: Any) -> tuple[Any, Any, Any]:
         events.append('target')
         return (
-            SimpleNamespace(shot_no=1, storage_dir_name='001_0001', description='镜头原始制作内容'),
+            SimpleNamespace(
+                shot_no=1,
+                storage_dir_name='001_0001',
+                description='镜头原始制作内容',
+                shot_size='近景',
+                camera_position='平视',
+                camera_movement='固定',
+                focal_length='35',
+            ),
             SimpleNamespace(episode_no=1),
             SimpleNamespace(scene_no=1),
         )
@@ -514,7 +522,15 @@ async def test_existing_task_assignment_requires_task_lock_and_rolls_back(
         'module_shot_grid.service.task_service.ShotGridTaskDao.lock_shot_target',
         AsyncMock(
             return_value=(
-                SimpleNamespace(shot_no=1, storage_dir_name='001_0001', description='镜头原始制作内容'),
+                SimpleNamespace(
+                    shot_no=1,
+                    storage_dir_name='001_0001',
+                    description='镜头原始制作内容',
+                    shot_size='近景',
+                    camera_position='平视',
+                    camera_movement='固定',
+                    focal_length='35',
+                ),
                 SimpleNamespace(episode_no=1),
                 SimpleNamespace(scene_no=1),
             )
@@ -597,12 +613,28 @@ async def test_batch_assign_shots_assigns_all_selected_shots_in_one_transaction(
     target_lock = AsyncMock(
         side_effect=[
             (
-                SimpleNamespace(shot_no=1, storage_dir_name='001_0001', description='第一镜制作内容'),
+                SimpleNamespace(
+                    shot_no=1,
+                    storage_dir_name='001_0001',
+                    description='第一镜制作内容',
+                    shot_size='近景',
+                    camera_position='平视',
+                    camera_movement='固定',
+                    focal_length='35',
+                ),
                 SimpleNamespace(episode_no=1),
                 SimpleNamespace(scene_no=1),
             ),
             (
-                SimpleNamespace(shot_no=2, storage_dir_name='001_0002', description='第二镜制作内容'),
+                SimpleNamespace(
+                    shot_no=2,
+                    storage_dir_name='001_0002',
+                    description='第二镜制作内容',
+                    shot_size='近景',
+                    camera_position='平视',
+                    camera_movement='固定',
+                    focal_length='35',
+                ),
                 SimpleNamespace(episode_no=1),
                 SimpleNamespace(scene_no=1),
             ),
@@ -1582,6 +1614,9 @@ async def test_shot_start_blocks_stale_unconfirmed_and_unauthorized_requests(
     if case.startswith('creator_'):
         access = _access(user_id=ASSIGNEE_USER_ID if case == 'creator_owner' else 8, role='creator')
     task = _task()
+    # 本组验证开工权限与确认门禁，提供完整既有排期以进入目标校验分支。
+    task.expected_start_time = task.baseline_start_time = datetime(2026, 8, 28, 10)
+    task.expected_end_time = task.baseline_end_time = datetime(2026, 8, 29, 18)
     if case == 'already_started':
         task.task_status = 'preparing'
     prefix = 'module_shot_grid.service.task_service.'
@@ -1610,8 +1645,6 @@ async def test_shot_start_blocks_stale_unconfirmed_and_unauthorized_requests(
         'lockVersion': 3,
         'shotLockVersion': 0,
         'assetsConfirmed': True,
-        'expectedStartTime': '2026-09-01T09:00:00',
-        'expectedEndTime': '2026-09-02T18:00:00',
     }
     if case == 'unconfirmed':
         payload['assetsConfirmed'] = False
@@ -1625,5 +1658,49 @@ async def test_shot_start_blocks_stale_unconfirmed_and_unauthorized_requests(
     assert exc_info.value.error_key == error_key
     assert shot.storage_dir_name is None
     audit.assert_not_awaited()
+    db.commit.assert_not_awaited()
+    db.rollback.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('field', ['description', 'shot_size', 'camera_position', 'camera_movement', 'focal_length'])
+@pytest.mark.parametrize('value', [None, '', '   '])
+@pytest.mark.parametrize('batch', [False, True])
+async def test_shot_assignment_rejects_incomplete_production_fields(
+    monkeypatch: pytest.MonkeyPatch, field: str, value: str | None, *, batch: bool
+) -> None:
+    shot = SimpleNamespace(
+        description='制作内容', shot_size='近景', camera_position='平视', camera_movement='固定', focal_length='35'
+    )
+    setattr(shot, field, value)
+    monkeypatch.setattr(ShotGridTaskService, '_lock_mutable_project', AsyncMock())
+    _patch_locked_access(monkeypatch, _access(role='director'))
+    monkeypatch.setattr(
+        'module_shot_grid.service.task_service.ShotGridTaskDao.lock_shot_target',
+        AsyncMock(return_value=(shot, SimpleNamespace(), SimpleNamespace())),
+    )
+    assign = AsyncMock()
+    monkeypatch.setattr(ShotGridTaskService, '_assign_task', assign)
+    db = AsyncMock()
+    with pytest.raises(ShotGridDomainException) as exc_info:
+        if batch:
+            await ShotGridTaskService.batch_assign_shots(
+                db,
+                PROJECT_ID,
+                ShotGridShotTaskBatchAssignModel(assigneeUserId=ASSIGNEE_USER_ID, items=[{'shotId': SHOT_ID}]),
+                _current_user(),
+                _access(role='director'),
+            )
+        else:
+            await ShotGridTaskService.assign_shot(
+                db,
+                PROJECT_ID,
+                SHOT_ID,
+                ShotGridTaskAssignModel(assigneeUserId=ASSIGNEE_USER_ID),
+                _current_user(),
+                _access(role='director'),
+            )
+    assert exc_info.value.error_key == 'SG_SHOT_PRODUCTION_FIELDS_REQUIRED'
+    assign.assert_not_awaited()
     db.commit.assert_not_awaited()
     db.rollback.assert_awaited_once()

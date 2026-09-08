@@ -367,6 +367,9 @@ git status --short
 
 ## 16. 当前已知工程风险
 
+2026-09-08 更新：当前 PostgreSQL head 为 `20260908_27`，在下述 26 版基线上仅扩容镜头文本字段（景别/机位/镜头运动/焦段 500 字符，备注 2000 字符）。Excel 导入仅场次和镜头号必填，其他字段可后续通过编辑补充；部署前须备份并升级迁移，降级遇到超旧上限数据会拒绝而不会截断。
+
+
 后续改动不得忽略以下现状：
 
 1. 当前主分支和 GitHub Actions 已统一为 `main`；内网生产 CD 只能由带 `ruoyi-prod` 标签的专用 self-hosted Runner 手动触发，并受 `intranet-production` Environment 审批约束。服务器外网依赖不稳定时，Windows 开发机使用 `deploy/remote-deploy.ps1` 从已提交的 `main` 构建并离线传输版本镜像，服务器仍必须执行同一套备份、迁移和健康门禁。

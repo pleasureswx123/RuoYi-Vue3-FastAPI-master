@@ -132,6 +132,8 @@ function applyInitialFilters(value) {
     keyword: typeof source.keyword === 'string' ? source.keyword : '',
     episodeIds: Array.isArray(source.episodeIds) ? source.episodeIds : [],
     sceneIds: Array.isArray(source.sceneIds) ? source.sceneIds : [],
+    shotNoStart: source.shotNoStart ?? null,
+    shotNoEnd: source.shotNoEnd ?? null,
     assetTypes: Array.isArray(source.assetTypes) ? source.assetTypes : [],
     onlyConflicts: Boolean(source.onlyConflicts),
     onlyDelayed: Boolean(source.onlyDelayed)

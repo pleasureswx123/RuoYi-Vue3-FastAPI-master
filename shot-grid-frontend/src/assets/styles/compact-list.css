@@ -1,0 +1,92 @@
+/* 镜头与资产列表共用紧凑顶部，优先为列表保留可视空间。 */
+.sg-page {
+  padding-top: 16px;
+}
+.sg-page-heading {
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.sg-page-title {
+  flex-shrink: 0;
+  font-size: 22px;
+  line-height: 32px;
+}
+.asset-page {
+  gap: 10px;
+}
+.asset-heading {
+  margin-bottom: 0;
+}
+.project-context {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  padding: 8px 12px;
+  margin-bottom: 10px;
+}
+.asset-page .project-context {
+  margin-bottom: 0;
+}
+.project-context :deep(.el-form-item) {
+  min-width: 0;
+  margin: 0;
+  align-items: center;
+}
+.project-context :deep(.el-form-item__label) {
+  min-width: 0;
+  height: 32px;
+  padding: 0 8px 0 0;
+  font-size: 12px;
+  line-height: 32px;
+}
+.project-context :deep(.el-form-item__content) {
+  width: 220px;
+  min-width: 0;
+}
+.project-context__tags,
+.project-context__meta {
+  gap: 6px;
+  align-items: center;
+}
+.shot-filters {
+  padding: 8px 10px;
+  margin-bottom: 8px;
+}
+.shot-search :deep(.el-input__wrapper) {
+  min-height: 32px;
+}
+.shot-filter-range__separator {
+  line-height: 32px;
+}
+.shot-list-toolbar {
+  margin-bottom: 8px;
+}
+.shot-heading__actions,
+.asset-heading__actions {
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.shot-heading__actions :deep(.el-button + .el-button),
+.asset-heading__actions :deep(.el-button + .el-button) {
+  margin-left: 0;
+}
+@media (max-width: 760px) {
+  .sg-page-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .project-context :deep(.el-form-item) {
+    flex: 1 1 260px;
+  }
+  .project-context :deep(.el-form-item__content) {
+    width: auto;
+  }
+  .project-context__tags,
+  .project-context__meta {
+    flex-basis: 100%;
+    justify-content: flex-start;
+  }
+}

@@ -9,10 +9,12 @@ from pydantic import ValidationError
 from module_shot_grid.dao.import_batch_dao import ShotGridImportBatchDao
 from module_shot_grid.dao.project_audit_dao import ShotGridProjectAuditDao
 from module_shot_grid.dao.shot_import_dao import ShotGridShotImportDao
+from module_shot_grid.entity.do.project_do import ShotGridShot
 from module_shot_grid.entity.vo.import_common_vo import ImportPreviewTokenPayloadModel
 from module_shot_grid.entity.vo.shot_import_vo import (
     ShotImportCommitRequestModel,
     ShotImportCommitResultModel,
+    ShotImportNormalizedRowModel,
     ShotImportPreviewRowModel,
     ShotImportSelectedRowModel,
 )
@@ -386,3 +388,72 @@ def test_completed_or_archived_project_cannot_preview_or_commit_import(project_s
 
     assert exc_info.value.error_key == 'SG_INVALID_STATE_TRANSITION'
     assert exc_info.value.http_status == CONFLICT_STATUS
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('existing_numbers', 'imported_numbers'),
+    [([], [10]), ([], [30, 10, 80]), ([10, 80], [50, 20]), ([1], [8])],
+)
+async def test_import_preserves_noncontiguous_numbers_in_any_order(
+    monkeypatch: pytest.MonkeyPatch, existing_numbers: list[int], imported_numbers: list[int]
+) -> None:
+    db, rows = _numbered_import(monkeypatch, existing_numbers, imported_numbers)
+
+    result = await ShotGridShotImportService._write_selected_rows(
+        db, project_id=2, batch_id=1, rows=rows, audit_user='manager'
+    )
+
+    assert result.created_shots == len(imported_numbers)
+    assert [shot.shot_no for shot in db.added if isinstance(shot, ShotGridShot)] == imported_numbers
+
+
+@pytest.mark.asyncio
+async def test_import_still_rejects_existing_scene_number(monkeypatch: pytest.MonkeyPatch) -> None:
+    db, rows = _numbered_import(monkeypatch, [30], [10, 30])
+
+    with pytest.raises(ShotGridDomainException) as exc_info:
+        await ShotGridShotImportService._write_selected_rows(
+            db, project_id=2, batch_id=1, rows=rows, audit_user='manager'
+        )
+
+    assert exc_info.value.error_key == 'SG_SHOT_NO_CONFLICT'
+    assert not db.added
+
+
+def _numbered_import(
+    monkeypatch: pytest.MonkeyPatch, existing_numbers: list[int], imported_numbers: list[int]
+) -> tuple[Any, list[ShotImportPreviewRowModel]]:
+    # 仅替换数据库 I/O，实际执行导入校验与实体构造。
+    episode = SimpleNamespace(episode_id=3, episode_no=1, lifecycle_status='active')
+    scene = SimpleNamespace(scene_id=4, episode_id=3, scene_no=1, lifecycle_status='active')
+    monkeypatch.setattr(ShotGridShotImportDao, 'list_episodes', AsyncMock(return_value=[episode]))
+    monkeypatch.setattr(ShotGridShotImportDao, 'list_scenes', AsyncMock(return_value=[scene]))
+    monkeypatch.setattr(
+        ShotGridShotImportDao,
+        'list_shots',
+        AsyncMock(return_value=[SimpleNamespace(scene_id=4, shot_no=number) for number in existing_numbers]),
+    )
+    monkeypatch.setattr(ShotGridShotImportDao, 'flush', AsyncMock())
+    added: list[Any] = []
+    db = SimpleNamespace(added=added, add=added.append, add_all=added.extend)
+    rows = [
+        ShotImportPreviewRowModel(
+            sheetName='EP001',
+            rowNumber=index + 2,
+            canImport=True,
+            normalized=ShotImportNormalizedRowModel(
+                episodeNo=1,
+                episodeCode='EP001',
+                sceneNo=1,
+                sceneCode='001',
+                shotNo=number,
+                shotCode=f'{number:04d}',
+                sortOrder=index * 10,
+                durationMs=1000,
+                description='导入镜头',
+            ),
+        )
+        for index, number in enumerate(imported_numbers)
+    ]
+    return db, rows

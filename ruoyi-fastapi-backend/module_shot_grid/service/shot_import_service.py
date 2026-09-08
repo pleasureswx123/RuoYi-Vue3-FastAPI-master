@@ -33,7 +33,6 @@ from module_shot_grid.exceptions import ShotGridDomainException, shot_grid_error
 from module_shot_grid.service.excel_security_service import ExcelSecurityService
 from module_shot_grid.service.import_preview_store import ImportPreviewStore
 from module_shot_grid.service.shot_excel_parser import ShotExcelParser
-from module_shot_grid.shot_number import format_shot_code
 from utils.log_util import logger
 
 
@@ -275,7 +274,7 @@ class ShotGridShotImportService:
             raise shot_grid_error(500, 'SG_IMPORT_COMMIT_FAILED', '镜头导入提交失败') from exc
 
     @classmethod
-    async def _write_selected_rows(  # noqa: PLR0912, PLR0915 - 导入的层级补齐、连续性和关系写入必须同事务
+    async def _write_selected_rows(  # noqa: PLR0915 - 导入的层级补齐、冲突校验和关系写入必须同事务
         cls,
         db: AsyncSession,
         *,
@@ -372,39 +371,7 @@ class ShotGridShotImportService:
                 },
             )
 
-        existing_numbers_by_scene: dict[int, set[int]] = defaultdict(set)
-        imported_numbers_by_scene: dict[int, set[int]] = defaultdict(set)
-        scene_label_by_id: dict[int, tuple[str, str]] = {}
-        for shot in existing_shots:
-            existing_numbers_by_scene[shot.scene_id].add(shot.shot_no)
-        for row in normalized_rows:
-            episode = episodes[row.episode_no]
-            scene = scenes[(episode.episode_id, row.scene_no)]
-            imported_numbers_by_scene[scene.scene_id].add(row.shot_no)
-            scene_label_by_id[scene.scene_id] = (row.episode_code, row.scene_code)
-
-        discontinuous_scenes = []
-        for scene_id, imported_numbers in imported_numbers_by_scene.items():
-            combined_numbers = existing_numbers_by_scene[scene_id] | imported_numbers
-            expected_numbers = set(range(1, len(combined_numbers) + 1))
-            if combined_numbers != expected_numbers:
-                episode_code, scene_code = scene_label_by_id[scene_id]
-                discontinuous_scenes.append(
-                    {
-                        'episodeCode': episode_code,
-                        'sceneCode': scene_code,
-                        'actualShotCodes': [format_shot_code(number) for number in sorted(combined_numbers)],
-                        'expectedShotCodes': [format_shot_code(number) for number in sorted(expected_numbers)],
-                    }
-                )
-        if discontinuous_scenes:
-            raise shot_grid_error(
-                409,
-                'SG_SHOT_SEQUENCE_NOT_CONTIGUOUS',
-                '镜头导入后的场内编号必须从 0001 起连续递增',
-                details={'scenes': discontinuous_scenes},
-            )
-
+        # 镜头号沿用 Excel 输入，仅要求场内唯一；允许任意起号、跳号和乱序。
         created_shots: list[tuple[ShotGridShot, ShotImportNormalizedRowModel]] = []
         for row in normalized_rows:
             episode = episodes[row.episode_no]

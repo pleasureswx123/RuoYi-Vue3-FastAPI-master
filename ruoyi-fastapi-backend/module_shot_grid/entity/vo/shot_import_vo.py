@@ -33,17 +33,17 @@ class ShotImportNormalizedRowModel(ShotGridApiModel):
     sort_order: int = Field(ge=0, le=SQL_INTEGER_MAX)
     shot_no: int = Field(gt=0, le=SQL_INTEGER_MAX)
     shot_code: str = Field(pattern=r'^[0-9]{4,}$')
-    duration_ms: int = Field(ge=0, le=SQL_BIGINT_MAX)
-    description: str = Field(min_length=1)
-    shot_size: str | None = Field(default=None, max_length=40)
-    camera_position: str | None = Field(default=None, max_length=100)
-    camera_movement: str | None = Field(default=None, max_length=100)
-    focal_length: str | None = Field(default=None, max_length=50)
+    duration_ms: int = Field(default=0, ge=0, le=SQL_BIGINT_MAX)
+    description: str = Field(default='')
+    shot_size: str | None = Field(default=None, max_length=500)
+    camera_position: str | None = Field(default=None, max_length=500)
+    camera_movement: str | None = Field(default=None, max_length=500)
+    focal_length: str | None = Field(default=None, max_length=500)
     asset_requirements: list[ShotAssetRequirementPreviewModel] = Field(default_factory=list)
     dialogue: str | None = None
     sound_effect: str | None = None
     color_reference: str | None = None
-    remark: str | None = Field(default=None, max_length=500)
+    remark: str | None = Field(default=None, max_length=2000)
 
 
 class ShotImportPreviewRowModel(ShotGridApiModel):

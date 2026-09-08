@@ -11,7 +11,7 @@ from module_shot_grid.entity.vo.shot_crud_vo import (
 )
 
 SQL_BIGINT_MAX = 9_223_372_036_854_775_807
-SECOND_SEQUENCE_POSITION = 2
+MANUAL_SHOT_NUMBER = 30
 
 
 def test_shot_write_model_normalizes_text_and_rejects_duplicate_assets() -> None:
@@ -40,31 +40,12 @@ def test_shot_write_model_normalizes_text_and_rejects_duplicate_assets() -> None
         )
 
 
-def test_shot_write_uses_one_scene_position_for_shot_number_and_rejects_dual_semantics() -> None:
-    command = ShotGridShotCreateModel(
-        sceneId=20,
-        description='镜头描述',
-        sequencePosition=SECOND_SEQUENCE_POSITION,
-    )
-
-    assert command.sequence_position == SECOND_SEQUENCE_POSITION
-    assert command.sort_order is None
-
-    with pytest.raises(ValidationError):
-        ShotGridShotCreateModel(
-            sceneId=20,
-            shotNo=1,
-            description='镜头描述',
-            sequencePosition=SECOND_SEQUENCE_POSITION,
-        )
-
-    with pytest.raises(ValidationError):
-        ShotGridShotCreateModel(
-            sceneId=20,
-            description='镜头描述',
-            sequencePosition=SECOND_SEQUENCE_POSITION,
-            sortOrder=20,
-        )
+def test_create_requires_manual_number_and_rejects_automatic_position() -> None:
+    command = ShotGridShotCreateModel(sceneId=20, shotNo=30)
+    assert command.shot_no == MANUAL_SHOT_NUMBER
+    for fields in ({}, {'shotNo': 30, 'sequencePosition': 30}, {'shotNo': 30, 'sortOrder': 10}):
+        with pytest.raises(ValidationError):
+            ShotGridShotCreateModel(sceneId=20, **fields)
 
 
 def test_update_requires_complete_asset_snapshot_and_rejects_task_assignment() -> None:
@@ -177,3 +158,46 @@ def test_shot_write_rejects_id_outside_postgresql_bigint(payload: dict[str, obje
     }
     with pytest.raises(ValidationError):
         ShotGridShotCreateModel.model_validate(command)
+
+
+@pytest.mark.parametrize('description', ['', '   '])
+def test_imported_shot_can_be_supplemented_without_description(description: str) -> None:
+    command = ShotGridShotUpdateModel(
+        sceneId=20, lockVersion=0, assetIds=[], description=description, remark='稍后补充制作内容'
+    )
+
+    assert command.description == ''
+    assert command.remark == '稍后补充制作内容'
+
+
+@pytest.mark.parametrize(
+    ('field', 'limit'),
+    [('shotSize', 500), ('cameraPosition', 500), ('cameraMovement', 500), ('focalLength', 500), ('remark', 2000)],
+)
+def test_shot_edit_text_length_boundaries(field: str, limit: int) -> None:
+    fields = {'sceneId': 20, 'shotNo': 30, 'description': '制作内容', field: '文' * limit}
+    command = ShotGridShotCreateModel.model_validate(fields)
+    assert command.model_dump(by_alias=True)[field] == '文' * limit
+    fields[field] += '文'
+    with pytest.raises(ValidationError):
+        ShotGridShotCreateModel.model_validate(fields)
+
+
+@pytest.mark.parametrize('number', [0, -1, 214748365])
+def test_manual_number_rejects_invalid_or_sort_key_overflow(number: int) -> None:
+    with pytest.raises(ValidationError):
+        ShotGridShotCreateModel(sceneId=20, shotNo=number)
+
+
+@pytest.mark.parametrize(
+    'fields', [{'shotNoStart': 0}, {'shotNoEnd': -1}, {'shotNoStart': 50, 'shotNoEnd': 10}, {'shotNoEnd': 2147483648}]
+)
+def test_shot_number_range_rejects_invalid_bounds(fields: dict) -> None:
+    with pytest.raises(ValidationError):
+        ShotGridShotListQueryModel.model_validate(fields)
+
+
+@pytest.mark.parametrize('fields', [{}, {'shotNoStart': 10}, {'shotNoEnd': 50}, {'shotNoStart': 10, 'shotNoEnd': 10}])
+def test_shot_number_range_accepts_open_or_equal_bounds(fields: dict) -> None:
+    result = ShotGridShotListQueryModel.model_validate(fields).model_dump(by_alias=True)
+    assert all(result[key] == value for key, value in fields.items())

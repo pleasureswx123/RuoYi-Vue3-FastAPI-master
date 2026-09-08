@@ -235,7 +235,7 @@ def test_episode_number_must_fit_database_integer() -> None:
         ('A', str(SQL_INTEGER_OVERFLOW), 'SG_IMPORT_SCENE_INVALID'),
         ('B', str(SQL_INTEGER_OVERFLOW), 'SG_IMPORT_SHOT_NO_INVALID'),
         ('C', SQL_BIGINT_MILLISECONDS_OVERFLOW_SECONDS, 'SG_IMPORT_DURATION_INVALID'),
-        ('F', '大' * 41, 'SG_IMPORT_FIELD_TOO_LONG'),
+        ('F', '大' * 501, 'SG_IMPORT_FIELD_TOO_LONG'),
     ],
 )
 def test_row_values_must_fit_database_and_member_boundaries(column: str, value: object, error_key: str) -> None:
@@ -285,3 +285,42 @@ def test_real_sample_has_no_formula_in_main_region() -> None:
         )
     finally:
         workbook.close()
+
+
+@pytest.mark.parametrize('blank', [None, '', '   '])
+def test_import_only_requires_scene_and_shot_number(blank: object) -> None:
+    workbook = _minimal_workbook()
+    sheet = workbook.active
+    for column in range(3, 16):
+        sheet.cell(row=2, column=column).value = blank
+
+    result = ShotExcelParser().parse(_save_workbook(workbook))
+
+    assert result.summary.valid_rows == 1
+    assert result.rows[0].errors == []
+    assert result.rows[0].normalized.duration_ms == 0
+    assert result.rows[0].normalized.description == ''
+
+
+@pytest.mark.parametrize('column', ['A', 'B'])
+def test_import_still_requires_scene_and_shot_number(column: str) -> None:
+    workbook = _minimal_workbook()
+    workbook.active[f'{column}2'] = None
+
+    result = ShotExcelParser().parse(_save_workbook(workbook))
+
+    assert result.summary.error_rows == 1
+    assert not result.rows[0].can_import
+
+
+@pytest.mark.parametrize(('column', 'limit'), [('F', 500), ('G', 500), ('H', 500), ('I', 500), ('N', 2000)])
+@pytest.mark.parametrize('extra', [0, 1])
+def test_import_text_length_boundaries(column: str, limit: int, extra: int) -> None:
+    workbook = _minimal_workbook()
+    workbook.active[f'{column}2'] = '文' * (limit + extra)
+
+    result = ShotExcelParser().parse(_save_workbook(workbook))
+
+    assert result.rows[0].can_import is (extra == 0)
+    if extra:
+        assert any(issue.error_key == 'SG_IMPORT_FIELD_TOO_LONG' for issue in result.rows[0].errors)

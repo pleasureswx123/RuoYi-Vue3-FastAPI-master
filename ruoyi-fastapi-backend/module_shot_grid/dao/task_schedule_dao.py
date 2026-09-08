@@ -209,6 +209,15 @@ class ShotGridTaskScheduleDao:
             )
         )
 
+    @staticmethod
+    def _apply_shot_number_range(statement: Select, query: ShotGridScheduleQueryModel) -> Select:
+        """数值闭区间同时用于已排期和待排期镜头。"""
+        if query.shot_no_start is not None:
+            statement = statement.where(ShotGridShot.shot_no >= query.shot_no_start)
+        if query.shot_no_end is not None:
+            statement = statement.where(ShotGridShot.shot_no <= query.shot_no_end)
+        return statement
+
     @classmethod
     def _apply_filters(
         cls,
@@ -235,6 +244,7 @@ class ShotGridTaskScheduleDao:
             statement = statement.where(ShotGridShot.scene_id.in_(query.scene_ids))
         if query.asset_types:
             statement = statement.where(ShotGridAsset.asset_type.in_(query.asset_types))
+        statement = cls._apply_shot_number_range(statement, query)
         if query.keyword:
             keyword = f'%{query.keyword}%'
             statement = statement.where(

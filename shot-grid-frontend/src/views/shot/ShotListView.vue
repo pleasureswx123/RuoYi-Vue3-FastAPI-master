@@ -77,13 +77,58 @@ const projectContextForm = ref(null)
 const shotFilterForm = ref(null)
 const batchAssignFormRef = ref(null)
 const shotTableRef = ref(null)
+const shotPageRef = ref(null)
+const shotPaginationRef = ref(null)
+const shotTableHeight = ref(320)
+let tableHeightObserver = null
+let tableHeightFrame = null
+
+function updateTableHeight() {
+  const table = shotTableRef.value?.$el
+  if (!table) return
+  const pagination = shotPageRef.value?.querySelector('.shot-pagination')
+  const paginationStyle = pagination ? window.getComputedStyle(pagination) : null
+  const paginationHeight = pagination
+    ? pagination.getBoundingClientRect().height + (parseFloat(paginationStyle.marginTop) || 0) + (parseFloat(paginationStyle.marginBottom) || 0)
+    : 0
+  // 使用页面坐标，避免整页滚动时表格高度反复增减。
+  const tableTop = table.getBoundingClientRect().top + window.scrollY
+  shotTableHeight.value = Math.max(200, Math.floor(window.innerHeight - tableTop - paginationHeight - 18))
+}
+
+function scheduleTableHeight() {
+  if (tableHeightFrame !== null) cancelAnimationFrame(tableHeightFrame)
+  tableHeightFrame = requestAnimationFrame(() => {
+    tableHeightFrame = null
+    updateTableHeight()
+  })
+}
+
+watch([shotTableRef, shotPaginationRef], () => {
+  tableHeightObserver?.disconnect()
+  if (shotTableRef.value && shotPageRef.value && typeof ResizeObserver !== 'undefined') {
+    tableHeightObserver = new ResizeObserver(scheduleTableHeight)
+    // 标题、筛选及分页尺寸变化均会影响表格剩余空间。
+    for (const element of shotPageRef.value.children) tableHeightObserver.observe(element)
+    tableHeightObserver.observe(shotPageRef.value)
+  }
+  scheduleTableHeight()
+}, { flush: 'post' })
+
+onMounted(() => window.addEventListener('resize', scheduleTableHeight))
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', scheduleTableHeight)
+  tableHeightObserver?.disconnect()
+  if (tableHeightFrame !== null) cancelAnimationFrame(tableHeightFrame)
+})
 const projectContext = reactive({ projectId: '', scope: '' })
 const batchAssignForm = reactive({ assigneeUserId: '' })
 const query = reactive({
-  keyword: '', episodeId: '', sceneId: '', shotStatus: '', assigneeUserId: '',
-  pageNum: 1, pageSize: 100, orderByColumn: 'sortOrder', isAsc: 'ascending'
+  keyword: '', episodeId: '', sceneId: '', shotNoStart: '', shotNoEnd: '', shotStatus: '', assigneeUserId: '',
+  pageNum: 1, pageSize: 10, orderByColumn: 'sortOrder', isAsc: 'ascending'
 })
 const appliedQuery = ref('')
+const appliedShotRange = ref({ shotNoStart: null, shotNoEnd: null })
 let projectController = null
 let shotController = null
 let sceneController = null
@@ -122,6 +167,7 @@ const isSceneOrderScope = computed(() => (
   !query.keyword.trim() &&
   !query.shotStatus &&
   !query.assigneeUserId &&
+  !query.shotNoStart.trim() && !query.shotNoEnd.trim() &&
   query.orderByColumn === 'sortOrder' &&
   query.isAsc === 'ascending'
 ))
@@ -148,7 +194,7 @@ const dragSortHint = computed(() => {
   if (!canEdit.value || viewMode.value !== 'table' || shotsLoading.value) return ''
   if (!query.episodeId) return ' · 选择具体集和场次后可排序'
   if (!query.sceneId) return ' · 请选择具体场次后可排序'
-  if (query.keyword.trim() || query.shotStatus || query.assigneeUserId) return ' · 清空附加筛选后可排序'
+  if (query.keyword.trim() || query.shotStatus || query.assigneeUserId || query.shotNoStart.trim() || query.shotNoEnd.trim()) return ' · 清空附加筛选后可排序'
   if (total.value > MAX_SCENE_SORT_SHOTS) return ` · 当前场次超过 ${MAX_SCENE_SORT_SHOTS} 镜，不能在线拖拽排序`
   if (!sceneOrderFullyLoaded.value) return ' · 正在加载完整场次，完成后可排序'
   if (!sceneSequenceConsistent.value) return ' · 当前场次镜头号不连续，请先完成历史数据治理后再排序'
@@ -165,6 +211,7 @@ const scheduleInitialFilters = computed(() => ({
   assigneeUserIds: query.assigneeUserId ? [Number(query.assigneeUserId)] : [],
   episodeIds: query.episodeId ? [Number(query.episodeId)] : [],
   sceneIds: query.sceneId ? [Number(query.sceneId)] : [],
+  ...appliedShotRange.value,
   taskStatuses: query.shotStatus && query.shotStatus !== 'unassigned'
     ? [query.shotStatus === 'reviewing' ? 'pending_review' : query.shotStatus]
     : []
@@ -215,7 +262,28 @@ const projectContextRules = {
     trigger: 'change'
   }]
 }
+function shotRangeError() {
+  if (!query.sceneId) return ''
+  for (const value of [query.shotNoStart, query.shotNoEnd]) {
+    if (value.trim() && (!/^[0-9]+$/.test(value.trim()) || Number(value) < 1 || Number(value) > 2147483647)) {
+      return '镜头号须为 1 至 2147483647 的整数'
+    }
+  }
+  if (query.shotNoStart.trim() && query.shotNoEnd.trim() && Number(query.shotNoStart) > Number(query.shotNoEnd)) {
+    return '起始镜头号不能大于结束镜头号'
+  }
+  return ''
+}
+const shotRangeRule = {
+  validator: (_rule, _value, callback) => {
+    const message = shotRangeError()
+    callback(message ? new Error(message) : undefined)
+  },
+  trigger: 'blur'
+}
 const shotFilterRules = {
+  shotNoStart: [shotRangeRule],
+  shotNoEnd: [shotRangeRule],
   keyword: [{ max: 200, message: '搜索内容不能超过 200 个字符', trigger: 'blur' }],
   episodeId: [optionalPositiveIdRule('请选择有效集')],
   sceneId: [optionalPositiveIdRule('请选择有效场次')],
@@ -509,7 +577,11 @@ async function loadScenes(resetScene = true) {
 
 async function loadShots(existingController = null, background = false) {
   const projectId = currentProjectId.value
-  if (!projectId) return
+  if (!projectId || shotRangeError()) return
+  appliedShotRange.value = {
+    shotNoStart: query.sceneId && query.shotNoStart.trim() ? Number(query.shotNoStart) : null,
+    shotNoEnd: query.sceneId && query.shotNoEnd.trim() ? Number(query.shotNoEnd) : null
+  }
   if (!existingController) shotController?.abort()
   const controller = existingController || new AbortController()
   shotController = controller
@@ -526,6 +598,8 @@ async function loadShots(existingController = null, background = false) {
       keyword: query.keyword.trim() || undefined,
       episodeId: query.episodeId || undefined,
       sceneId: query.sceneId || undefined,
+      shotNoStart: query.sceneId && query.shotNoStart.trim() ? Number(query.shotNoStart) : undefined,
+      shotNoEnd: query.sceneId && query.shotNoEnd.trim() ? Number(query.shotNoEnd) : undefined,
       shotStatus: query.shotStatus || undefined,
       assigneeUserId: query.assigneeUserId || undefined,
       pageNum: query.pageNum,
@@ -591,6 +665,13 @@ function resetFilters() {
   shotFilterForm.value?.clearValidate()
   query.pageNum = 1
   loadScenes(false)
+  loadShots()
+}
+
+function changePageSize(size) {
+  if (size === query.pageSize) return
+  query.pageSize = size
+  query.pageNum = 1
   loadShots()
 }
 
@@ -1023,6 +1104,12 @@ watch(() => projectContext.projectId, (next, previous) => {
     loadProjectContext()
   }
 })
+watch(() => query.sceneId, () => {
+  query.shotNoStart = ''
+  query.shotNoEnd = ''
+  appliedShotRange.value = { shotNoStart: null, shotNoEnd: null }
+  shotFilterForm.value?.clearValidate(['shotNoStart', 'shotNoEnd'])
+}, { flush: 'sync' })
 watch(() => appliedQuery.value, closeSingleAssign)
 watch(() => projectContext.scope, () => loadProjects())
 watch(viewMode, mode => {
@@ -1044,15 +1131,15 @@ onBeforeUnmount(() => { disposed = true; closeSingleAssign(); destroyRowSortable
 
 <template>
   <TaskStartDialog v-if="startDialog" :context="startDialog" @close="closeStartDialog" @started="finishStartDialog" @failed="failStartDialog" />
-  <section class="sg-page shot-page">
+  <section ref="shotPageRef" class="sg-page shot-page" :class="{ 'shot-page--table': viewMode === 'table' }">
     <header class="sg-page-heading shot-heading">
-      <div><p class="sg-eyebrow">SHOTS</p><h2 class="sg-page-title">镜头管理</h2><p class="sg-page-description">按项目查看和维护镜头，也可切换人员泳道或任务甘特监管镜头制作排期。</p></div>
+      <h2 class="sg-page-title">镜头管理</h2>
       <div class="shot-heading__actions"><el-button v-if="canCreateEpisode" @click="openHierarchyCreate('episode')">新建集</el-button><el-button v-if="canCreateScene" :disabled="!episodes.length" @click="openHierarchyCreate('scene')">新建场次</el-button><el-button v-if="canImport" :icon="Upload" @click="openImportDialog">导入 Excel</el-button><el-button v-if="canCreate" type="primary" :icon="Plus" @click="openCreateDialog">新建镜头</el-button></div>
     </header>
 
     <ProjectStatePanel v-if="projectsError" :title="projectsError.title" :message="projectsError.message" :retryable="projectsError.retryable" @retry="loadProjects" />
     <template v-else>
-      <el-form ref="projectContextForm" :model="projectContext" :rules="projectContextRules" class="project-context" size="large" inline label-position="top" aria-label="项目选择">
+      <el-form ref="projectContextForm" :model="projectContext" :rules="projectContextRules" class="project-context" size="default" inline label-position="left" aria-label="项目选择">
         <el-form-item label="当前项目" prop="projectId"><el-select v-model="projectContext.projectId" class="sg-select" :placeholder="projectsLoading ? '正在加载项目…' : '请选择项目'" :disabled="projectsLoading"><el-option :label="projectsLoading ? '正在加载项目…' : '请选择项目'" value="" /><el-option v-for="item in projects" :key="item.projectId" :label="`${item.projectCode} · ${item.projectName}`" :value="String(item.projectId)" /></el-select></el-form-item>
         <el-form-item v-if="canViewAll" label="项目范围" prop="scope"><el-select v-model="projectContext.scope" class="sg-select" placeholder="我的项目"><el-option label="我的项目" value="" /><el-option label="全部项目" value="all" /></el-select></el-form-item>
         <div v-if="project" class="project-context__tags"><el-tag size="small" effect="plain" round type="primary">{{ project.projectTypeName }}</el-tag><el-tag size="small" effect="plain" round type="info">{{ project.aspectRatio }}</el-tag><el-tag size="small" effect="plain" round :type="projectRoleMeta(project.myProjectRole).type">我的角色：{{ projectRoleMeta(project.myProjectRole).label }}</el-tag><el-tag size="small" effect="plain" round :type="tagTypeFromTone(storageMeta(project.storageStatus).tone)">{{ storageMeta(project.storageStatus).label }}</el-tag></div>
@@ -1061,7 +1148,7 @@ onBeforeUnmount(() => { disposed = true; closeSingleAssign(); destroyRowSortable
       <el-empty v-if="!projectContext.projectId && !projectsLoading" class="shot-empty" description="当前范围暂无可选项目"><p>请先创建项目，或请项目管理人将你加入项目；如可查看全部项目，也可切换“全部项目”。</p></el-empty>
 
       <template v-else-if="projectContext.projectId">
-        <el-form ref="shotFilterForm" :model="query" :rules="shotFilterRules" class="shot-filters" size="large" aria-label="镜头筛选">
+        <el-form ref="shotFilterForm" :model="query" :rules="shotFilterRules" class="shot-filters" size="default" aria-label="镜头筛选">
           <el-form-item class="shot-filter-item shot-filter-item--keyword" prop="keyword">
             <el-input v-model="query.keyword" class="shot-search" :prefix-icon="Search" maxlength="200" clearable placeholder="镜头号、制作内容、台词或场次名称" aria-label="搜索镜头" />
           </el-form-item>
@@ -1071,6 +1158,15 @@ onBeforeUnmount(() => { disposed = true; closeSingleAssign(); destroyRowSortable
           <el-form-item class="shot-filter-item" prop="sceneId">
             <el-select v-model="query.sceneId" class="sg-select" :placeholder="scenesLoading ? '加载场次中…' : '全部场次'" aria-label="按场次筛选" :disabled="!query.episodeId || scenesLoading" @change="submitFilters"><el-option :label="scenesLoading ? '加载场次中…' : '全部场次'" value="" /><el-option v-for="scene in scenes" :key="scene.sceneId" :label="`${scene.sceneCode} ${scene.sceneName || ''}`" :value="String(scene.sceneId)" /></el-select>
           </el-form-item>
+          <div class="shot-filter-range" role="group" aria-label="镜头号区间">
+            <el-form-item class="shot-filter-item" prop="shotNoStart">
+              <el-input v-model="query.shotNoStart" :disabled="!query.sceneId" inputmode="numeric" clearable placeholder="起始镜头号" aria-label="起始镜头号" @keyup.enter="submitFilters" />
+            </el-form-item>
+            <span class="shot-filter-range__separator">至</span>
+            <el-form-item class="shot-filter-item" prop="shotNoEnd">
+              <el-input v-model="query.shotNoEnd" :disabled="!query.sceneId" inputmode="numeric" clearable placeholder="结束镜头号" aria-label="结束镜头号" @keyup.enter="submitFilters" />
+            </el-form-item>
+          </div>
           <el-form-item class="shot-filter-item" prop="shotStatus">
             <el-select v-model="query.shotStatus" class="sg-select" placeholder="全部状态" aria-label="按状态筛选" @change="submitFilters"><el-option label="全部状态" value="" /><el-option v-for="status in ['unassigned','not_started','preparing','in_progress','reviewing','revision','completed']" :key="status" :label="shotStatusMeta(status).label" :value="status" /></el-select>
           </el-form-item>
@@ -1084,7 +1180,7 @@ onBeforeUnmount(() => { disposed = true; closeSingleAssign(); destroyRowSortable
           </el-form-item>
         </el-form>
 
-        <div class="shot-list-toolbar"><div class="shot-list-toolbar__summary"><strong>{{ total }}</strong><span>个镜头<span v-if="shotsLoading"> · 正在刷新</span><span v-else>{{ dragSortHint }}</span></span><template v-if="viewMode === 'table' && selectedShots.length"><el-button v-if="canAssign" text type="primary" :loading="assigning" :disabled="deleting" @click="openBatchAssignDialog">{{ batchAssignLabel }}（{{ selectedShots.length }}）</el-button><el-button v-if="canDelete" text type="danger" :icon="Delete" :disabled="!canDeleteSelection || deleting || assigning" :loading="deleting" :title="!canDeleteSelection ? '选中项包含已开始任务，不能批量删除' : ''" @click="confirmDeleteShots(selectedShots)">批量删除（{{ selectedShots.length }}）</el-button></template></div><el-radio-group v-model="viewMode" class="shot-list-toolbar__views" size="small" aria-label="镜头视图"><el-radio-button value="table"><el-icon><List /></el-icon>表格</el-radio-button><el-radio-button value="card"><el-icon><Grid /></el-icon>卡片</el-radio-button><el-radio-button value="storyboard"><el-icon><VideoCamera /></el-icon>故事板</el-radio-button><el-radio-button value="swimlane"><el-icon><Clock /></el-icon>人员泳道</el-radio-button><el-radio-button value="gantt"><el-icon><Calendar /></el-icon>任务甘特</el-radio-button></el-radio-group></div>
+        <div class="shot-list-toolbar"><div class="shot-list-toolbar__summary"><strong>{{ total }}</strong><span>个镜头<span v-if="shotsLoading"> · 正在刷新</span><span v-else>{{ dragSortHint }}</span></span><template v-if="viewMode === 'table' && selectedShots.length"><el-button v-if="canAssign && selectedShots.every(canAssignShot)" text type="primary" :loading="assigning" :disabled="deleting" @click="openBatchAssignDialog">{{ batchAssignLabel }}（{{ selectedShots.length }}）</el-button><el-button v-if="canDelete" text type="danger" :icon="Delete" :disabled="!canDeleteSelection || deleting || assigning" :loading="deleting" :title="!canDeleteSelection ? '选中项包含已开始任务，不能批量删除' : ''" @click="confirmDeleteShots(selectedShots)">批量删除（{{ selectedShots.length }}）</el-button></template></div><el-radio-group v-model="viewMode" class="shot-list-toolbar__views" size="small" aria-label="镜头视图"><el-radio-button value="table"><el-icon><List /></el-icon>表格</el-radio-button><el-radio-button value="card"><el-icon><Grid /></el-icon>卡片</el-radio-button><el-radio-button value="storyboard"><el-icon><VideoCamera /></el-icon>故事板</el-radio-button><el-radio-button value="swimlane"><el-icon><Clock /></el-icon>人员泳道</el-radio-button><el-radio-button value="gantt"><el-icon><Calendar /></el-icon>任务甘特</el-radio-button></el-radio-group></div>
 
         <el-alert v-if="pollingError" :title="pollingError" type="warning" show-icon :closable="false" />
         <Suspense v-if="['swimlane', 'gantt'].includes(viewMode) && currentProjectId">
@@ -1096,7 +1192,7 @@ onBeforeUnmount(() => { disposed = true; closeSingleAssign(); destroyRowSortable
         <el-empty v-else-if="viewMode !== 'table' && !shots.length" class="shot-empty" description="当前筛选没有镜头"><p>可以调整集、场次、状态或制作人筛选；项目管理人也可以新建或导入镜头。</p></el-empty>
 
         <div v-else-if="viewMode === 'table'" class="shot-table-wrap">
-          <el-table ref="shotTableRef" v-loading="shotsLoading" class="shot-data-table" :data="shots" row-key="shotId" max-height="620" empty-text="当前筛选没有镜头" @selection-change="handleShotSelectionChange">
+          <el-table ref="shotTableRef" v-loading="shotsLoading" class="shot-data-table" :data="shots" row-key="shotId" :height="shotTableHeight" empty-text="当前筛选没有镜头" @selection-change="handleShotSelectionChange">
             <template #empty><el-empty class="shot-empty" description="当前筛选没有镜头"><p>可以调整集、场次、状态或制作人筛选；项目管理人也可以新建或导入镜头。</p></el-empty></template>
             <!-- <el-table-column v-if="canDragSort" width="38" fixed="left" align="center"><template #default="scope"><el-icon class="shot-drag-handle" :class="{ 'is-disabled': !isShotOrderMutable(scope.row) }" :title="isShotOrderMutable(scope.row) ? '拖拽调整场内顺序，镜头号将同步更新' : shotOrderLockReason(scope.row)"><Rank /></el-icon></template></el-table-column> -->
             <el-table-column type="selection" width="48" fixed="left" align="center" :selectable="isShotSelectable" reserve-selection />
@@ -1174,7 +1270,7 @@ onBeforeUnmount(() => { disposed = true; closeSingleAssign(); destroyRowSortable
 
         <div v-else class="storyboard" :class="{ 'is-refreshing':shotsLoading }"><el-card v-for="shot in shots" :key="shot.shotId" class="story-frame" shadow="hover" role="link" tabindex="0" @click="openShot(shot)" @keydown.enter="openShot(shot)" @keydown.space.prevent="openShot(shot)"><span class="story-frame__index" title="本场镜头序号">{{ String(shot.shotNo).padStart(2,'0') }}</span><ProtectedThumbnail class="shot-thumb" :thumbnail="shot.thumbnail" :video="shot.proxyMedia" :alt="`${shot.shotCode} 缩略图`" /><div><strong>{{ shot.episodeCode }} · {{ shot.sceneCode }} · {{ shot.shotCode }}</strong><p>{{ shot.description }}</p><small>本场第 {{ shot.shotNo }} 镜 · {{ formatShotDuration(shot.durationMs) }} · {{ shot.shotSize || '未设景别' }} · {{ shotAssigneeName(shot.assignee, members) }}</small><el-button v-if="canStartShot(shot)" size="small" type="primary" :icon="VideoPlay" :loading="startingOperation?.shotId === shot.shotId" :disabled="startDisabled" @click.stop="confirmStartShot(shot)" @keydown.stop>开始任务</el-button></div></el-card></div>
 
-        <el-pagination v-if="shots.length && !sceneOrderFullyLoaded" class="shot-pagination" background layout="prev, pager, next, total" :current-page="query.pageNum" :page-size="query.pageSize" :total="total" :disabled="shotsLoading" aria-label="镜头分页" @current-change="changePage" />
+        <el-pagination ref="shotPaginationRef" v-if="shots.length && !sceneOrderFullyLoaded" class="shot-pagination" background layout="total, sizes, prev, pager, next" :page-sizes="[10, 20, 30, 40, 50, 100]" :current-page="query.pageNum" :page-size="query.pageSize" :total="total" :disabled="shotsLoading" aria-label="镜头分页" @current-change="changePage" @size-change="changePageSize" />
       </template>
     </template>
 
@@ -1200,14 +1296,15 @@ onBeforeUnmount(() => { disposed = true; closeSingleAssign(); destroyRowSortable
 .shot-card__media{position:relative}
 .shot-directory-status{height:16px;padding:0 5px;font-size:10px;line-height:1}
 .shot-list-toolbar>.shot-list-toolbar__summary{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:0;background:transparent;border:0}.shot-list-toolbar__summary>strong{color:var(--sg-text);font-size:23px;line-height:1}.shot-list-toolbar__summary>span{color:var(--sg-text-muted);font-size:11px}.shot-list-toolbar__summary:deep(.el-button){margin-left:0}.batch-assign-summary{display:grid;gap:6px;margin-bottom:20px;padding:14px;color:var(--sg-text-secondary);background:var(--sg-accent-soft);border-radius:10px}.batch-assign-summary strong{color:var(--sg-text)}.batch-assign-summary span{font-size:12px;line-height:1.5}.batch-assign-form:deep(.el-form-item){margin-bottom:0}.batch-assign-form:deep(.el-select){width:100%}.shot-selection{width:15px;height:15px;cursor:pointer}.shot-selection:disabled{cursor:not-allowed;opacity:.35}.shot-row-actions{display:flex;gap:2px;align-items:center;white-space:nowrap}.shot-long-text{line-height:1.55;white-space:pre-wrap}.shot-identity strong,.shot-identity small,.shot-parameters span,.shot-parameters small{display:block}.shot-identity small,.shot-parameters small{margin-top:5px;color:var(--sg-text-muted)}.shot-assets{display:flex;gap:5px;align-items:flex-start;flex-direction:column}.shot-assets__empty{color:var(--sg-text-muted)}.shot-status{display:grid;gap:5px;justify-items:start}
-.shot-page{position:relative}.shot-heading__actions{display:flex;gap:10px}.project-context{display:flex;gap:16px;align-items:end;margin-bottom:14px;padding:16px;background:linear-gradient(90deg,rgba(255,182,87,.06),transparent),var(--sg-surface);border:1px solid var(--sg-border);border-radius:var(--sg-radius-md)}.project-context label{display:grid;min-width:280px;gap:6px}.project-context label>span{color:var(--sg-text-muted);font-size:10px}select,input{color:var(--sg-text);background:var(--sg-surface-soft);border:1px solid var(--sg-border);border-radius:9px}select{height:40px;padding:0 10px}.shot-filters{display:grid;grid-template-columns:minmax(240px,1.6fr) repeat(4,minmax(130px,.7fr)) auto auto;gap:9px;margin-bottom:14px;padding:14px;background:var(--sg-surface);border:1px solid var(--sg-border);border-radius:var(--sg-radius-md)}.shot-search{display:flex;height:40px;gap:8px;align-items:center;padding:0 11px;background:var(--sg-surface-soft);border:1px solid var(--sg-border);border-radius:9px}.shot-search input{min-width:0;flex:1;background:transparent;border:0;outline:0}.shot-list-toolbar{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin:0 2px 12px;color:var(--sg-text-muted);font-size:12px}.shot-list-toolbar>div{display:flex;gap:5px;padding:4px;background:var(--sg-surface);border:1px solid var(--sg-border);border-radius:9px}.shot-list-toolbar button{display:flex;gap:5px;align-items:center;padding:7px 9px;color:var(--sg-text-muted);cursor:pointer;background:transparent;border:0;border-radius:6px}.shot-list-toolbar button.active{color:var(--sg-accent);background:var(--sg-accent-soft)}.shot-loading,.shot-empty{display:grid;min-height:320px;place-items:center;align-content:center;padding:30px;color:var(--sg-text-muted);background:var(--sg-surface);border:1px dashed var(--sg-border-strong);border-radius:var(--sg-radius-lg)}.shot-empty>.el-icon{color:var(--sg-accent);font-size:34px}.shot-empty h3,.shot-empty p{margin:12px 0 0}.shot-empty p{max-width:600px;font-size:12px;text-align:center}.shot-table-wrap{overflow:hidden;background:var(--sg-surface);border:1px solid var(--sg-border);border-radius:var(--sg-radius-md)}.shot-data-table{--el-table-text-color:var(--sg-text-secondary);--el-table-header-text-color:var(--sg-text-muted);--el-table-border-color:var(--sg-border);width:100%}.shot-data-table:deep(.el-table__cell){padding:12px 0;font-size:11px}.shot-data-table:deep(th.el-table__cell){font-weight:650}.shot-description{line-height:1.55}.feedback-cell{line-height:1.55}.shot-thumb{position:relative;overflow:hidden;aspect-ratio:16/9;background:var(--sg-surface-soft);border-radius:10px}.shot-thumb img{width:100%;height:100%;object-fit:cover}.shot-thumb>div{display:grid;width:100%;height:100%;gap:5px;color:var(--sg-text-muted);place-items:center;align-content:center}.shot-thumb--small{width:90px}.shot-thumb--small>.el-icon{position:absolute;top:50%;left:50%;color:var(--sg-text-muted);font-size:20px;transform:translate(-50%,-50%)}.shot-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:15px}.shot-card{padding:12px;cursor:pointer;background:var(--sg-surface);border:1px solid var(--sg-border);border-radius:var(--sg-radius-md);transition:transform .15s,border-color .15s}.shot-card:hover,.shot-card:focus-visible,.story-frame:hover,.story-frame:focus-visible{border-color:rgba(255,182,87,.35);outline:0;transform:translateY(-2px)}.shot-card__duration{position:absolute;right:8px;bottom:8px;padding:4px 6px;color:white;font-size:10px;background:rgba(0,0,0,.72);border-radius:5px}.shot-card header,.shot-card footer{display:flex;gap:10px;align-items:center;justify-content:space-between}.shot-card header{margin-top:13px}.shot-card h3,.shot-card small,.shot-card p{margin:0}.shot-card h3{margin-top:3px;font-size:18px}.shot-card small,.shot-card footer{color:var(--sg-text-muted);font-size:10px}.shot-card>p{min-height:44px;margin:11px 0;color:var(--sg-text-secondary);font-size:12px;line-height:1.55}.storyboard{display:grid;gap:10px}.story-frame{display:grid;grid-template-columns:45px 230px 1fr;gap:14px;align-items:center;padding:10px;cursor:pointer;background:var(--sg-surface);border:1px solid var(--sg-border);border-radius:var(--sg-radius-md);transition:transform .15s,border-color .15s}.story-frame__index{color:var(--sg-accent);font-size:12px;font-weight:800;text-align:center}.story-frame p{margin:7px 0;color:var(--sg-text-secondary);font-size:12px}.story-frame small{color:var(--sg-text-muted)}.is-refreshing{opacity:.55}.shot-pagination{display:flex;gap:14px;align-items:center;justify-content:center;margin-top:20px;color:var(--sg-text-muted);font-size:12px}@media(max-width:1180px){.shot-filters{grid-template-columns:repeat(3,minmax(0,1fr))}.shot-search{grid-column:span 2}.shot-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.project-context{align-items:stretch;flex-direction:column}}@media(max-width:760px){.shot-filters,.shot-grid{grid-template-columns:1fr}.shot-search{grid-column:auto}.story-frame{grid-template-columns:35px 120px 1fr}.project-context label{min-width:0}}
+.shot-page{position:relative}.shot-heading__actions{display:flex;gap:10px}.project-context{display:flex;gap:16px;align-items:end;margin-bottom:14px;padding:16px;background:linear-gradient(90deg,rgba(255,182,87,.06),transparent),var(--sg-surface);border:1px solid var(--sg-border);border-radius:var(--sg-radius-md)}.project-context label{display:grid;min-width:280px;gap:6px}.project-context label>span{color:var(--sg-text-muted);font-size:10px}select,input{color:var(--sg-text);background:var(--sg-surface-soft);border:1px solid var(--sg-border);border-radius:9px}select{height:40px;padding:0 10px}.shot-filters{display:grid;grid-template-columns:minmax(240px,1.6fr) repeat(4,minmax(130px,.7fr)) auto auto;gap:9px;margin-bottom:14px;padding:14px;background:var(--sg-surface);border:1px solid var(--sg-border);border-radius:var(--sg-radius-md)}.shot-search{display:flex;height:40px;gap:8px;align-items:center;padding:0 11px;background:var(--sg-surface-soft);border:1px solid var(--sg-border);border-radius:9px}.shot-search input{min-width:0;flex:1;background:transparent;border:0;outline:0}.shot-list-toolbar{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin:0 2px 12px;color:var(--sg-text-muted);font-size:12px}.shot-list-toolbar>div{display:flex;gap:5px;padding:4px;background:var(--sg-surface);border:1px solid var(--sg-border);border-radius:9px}.shot-list-toolbar button{display:flex;gap:5px;align-items:center;padding:7px 9px;color:var(--sg-text-muted);cursor:pointer;background:transparent;border:0;border-radius:6px}.shot-list-toolbar button.active{color:var(--sg-accent);background:var(--sg-accent-soft)}.shot-loading,.shot-empty{display:grid;min-height:320px;place-items:center;align-content:center;padding:30px;color:var(--sg-text-muted);background:var(--sg-surface);border:1px dashed var(--sg-border-strong);border-radius:var(--sg-radius-lg)}.shot-empty>.el-icon{color:var(--sg-accent);font-size:34px}.shot-empty h3,.shot-empty p{margin:12px 0 0}.shot-empty p{max-width:600px;font-size:12px;text-align:center}.shot-table-wrap{overflow:hidden;background:var(--sg-surface);border:1px solid var(--sg-border);border-radius:var(--sg-radius-md)}.shot-data-table{--el-table-text-color:var(--sg-text-secondary);--el-table-header-text-color:var(--sg-text-muted);--el-table-border-color:var(--sg-border);width:100%}.shot-data-table:deep(.el-table__cell){padding:12px 0;font-size:11px}.shot-data-table:deep(th.el-table__cell){font-weight:650}.shot-description{line-height:1.55}.feedback-cell{line-height:1.55}.shot-thumb{position:relative;overflow:hidden;aspect-ratio:16/9;background:var(--sg-surface-soft);border-radius:10px}.shot-thumb img{width:100%;height:100%;object-fit:cover}.shot-thumb>div{display:grid;width:100%;height:100%;gap:5px;color:var(--sg-text-muted);place-items:center;align-content:center}.shot-thumb--small{width:90px}.shot-thumb--small>.el-icon{position:absolute;top:50%;left:50%;color:var(--sg-text-muted);font-size:20px;transform:translate(-50%,-50%)}.shot-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:15px}.shot-card{padding:12px;cursor:pointer;background:var(--sg-surface);border:1px solid var(--sg-border);border-radius:var(--sg-radius-md);transition:transform .15s,border-color .15s}.shot-card:hover,.shot-card:focus-visible,.story-frame:hover,.story-frame:focus-visible{border-color:rgba(255,182,87,.35);outline:0;transform:translateY(-2px)}.shot-card__duration{position:absolute;right:8px;bottom:8px;padding:4px 6px;color:white;font-size:10px;background:rgba(0,0,0,.72);border-radius:5px}.shot-card header,.shot-card footer{display:flex;gap:10px;align-items:center;justify-content:space-between}.shot-card header{margin-top:13px}.shot-card h3,.shot-card small,.shot-card p{margin:0}.shot-card h3{margin-top:3px;font-size:18px}.shot-card small,.shot-card footer{color:var(--sg-text-muted);font-size:10px}.shot-card>p{min-height:44px;margin:11px 0;color:var(--sg-text-secondary);font-size:12px;line-height:1.55}.storyboard{display:grid;gap:10px}.story-frame{display:grid;grid-template-columns:45px 230px 1fr;gap:14px;align-items:center;padding:10px;cursor:pointer;background:var(--sg-surface);border:1px solid var(--sg-border);border-radius:var(--sg-radius-md);transition:transform .15s,border-color .15s}.story-frame__index{color:var(--sg-accent);font-size:12px;font-weight:800;text-align:center}.story-frame p{margin:7px 0;color:var(--sg-text-secondary);font-size:12px}.story-frame small{color:var(--sg-text-muted)}.is-refreshing{opacity:.55}.shot-pagination{display:flex;gap:14px;align-items:center;justify-content:center;margin-top:20px;color:var(--sg-text-muted);font-size:12px}@media(max-width:1480px){.shot-filters{grid-template-columns:repeat(3,minmax(0,1fr))}.shot-search{grid-column:span 2}.shot-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.project-context{align-items:stretch;flex-direction:column}}@media(max-width:760px){.shot-filters,.shot-grid{grid-template-columns:1fr}.shot-search{grid-column:auto}.story-frame{grid-template-columns:35px 120px 1fr}.project-context label{min-width:0}}
 .shot-list-toolbar>.shot-list-toolbar__summary{gap:8px;padding:0;background:transparent;border:0;border-radius:0}.shot-list-toolbar>.shot-list-toolbar__summary .el-button{margin-left:0;padding:8px 15px;color:inherit;background:transparent;border-radius:4px}.shot-list-toolbar>.shot-list-toolbar__summary .el-button--primary{color:var(--el-color-primary)}.shot-list-toolbar>.shot-list-toolbar__summary .el-button--danger{color:var(--el-color-danger)}
 .project-context:deep(.el-form-item){min-width:280px;margin:0}.project-context:deep(.el-form-item__label){height:auto;padding-bottom:6px;color:var(--sg-text-muted);font-size:10px;line-height:1}.shot-filters .shot-search{height:auto;padding:0;background:transparent;border:0}.shot-search:deep(.el-input__wrapper){min-height:40px;background:var(--sg-surface-soft);box-shadow:0 0 0 1px var(--sg-border) inset}.shot-list-toolbar__views{padding:0!important;background:transparent!important}.shot-list-toolbar__views:deep(.el-radio-button__inner){display:flex;gap:6px;align-items:center;color:var(--sg-text-muted);background:var(--sg-surface);border-color:var(--sg-border);box-shadow:none}.shot-list-toolbar__views:deep(.el-radio-button__original-radio:checked+.el-radio-button__inner){color:var(--sg-accent);background:var(--sg-accent-soft);border-color:rgba(255,182,87,.32);box-shadow:-1px 0 0 0 rgba(255,182,87,.32)}.shot-card{padding:0}.shot-card:deep(.el-card__body){padding:12px}.shot-card:deep(.el-card__body)>p{min-height:44px;margin:11px 0;color:var(--sg-text-secondary);font-size:12px;line-height:1.55}.story-frame{display:block;padding:0}.story-frame:deep(.el-card__body){display:grid;grid-template-columns:45px 230px minmax(0,1fr);gap:14px;align-items:center;padding:10px}.shot-pagination{margin-top:20px}.shot-pagination:deep(.el-pager li),.shot-pagination:deep(button){background:var(--sg-surface)!important}.shot-pagination:deep(.is-active){color:#17130d!important;background:var(--sg-accent)!important}@media(max-width:760px){.story-frame:deep(.el-card__body){grid-template-columns:35px 120px minmax(0,1fr)}}
-.shot-filters{grid-template-columns:minmax(240px,1.6fr) repeat(4,minmax(110px,.7fr)) auto}
+.shot-filters{grid-template-columns:minmax(200px,1.4fr) repeat(2,minmax(100px,.65fr)) minmax(240px,1.3fr) repeat(2,minmax(100px,.65fr)) auto}
+.shot-filter-range{display:flex;gap:6px;align-items:flex-start;min-width:0}.shot-filter-range>.shot-filter-item{flex:1;min-width:0}.shot-filter-range__separator{line-height:40px;color:var(--sg-text-muted)}
 .shot-filters:deep(.el-form-item){min-width:0;margin-bottom:0}
 .shot-filter-item:deep(.el-form-item__content),.shot-filter-item:deep(.el-select),.shot-filter-item:deep(.el-input){width:100%;min-width:0}
 .shot-filter-actions:deep(.el-form-item__content){flex-wrap:nowrap;justify-content:flex-end}
-@media(max-width:1180px){.shot-filters{grid-template-columns:repeat(3,minmax(0,1fr))}.shot-filter-item--keyword{grid-column:span 2}.shot-filter-actions:deep(.el-form-item__content){justify-content:flex-start}}
+@media(max-width:1480px){.shot-filters{grid-template-columns:repeat(3,minmax(0,1fr))}.shot-filter-item--keyword{grid-column:span 2}.shot-filter-actions:deep(.el-form-item__content){justify-content:flex-start}}
 @media(max-width:760px){.shot-filters{grid-template-columns:1fr}.shot-filter-item--keyword{grid-column:auto}}
 .shot-loading.el-card{display:block;padding:0}
 .shot-loading:deep(.el-card__body){width:100%;box-sizing:border-box;padding:30px}
@@ -1224,6 +1321,8 @@ onBeforeUnmount(() => { disposed = true; closeSingleAssign(); destroyRowSortable
 @media (max-width: 1180px) {
   .project-context__tags { justify-content: flex-start; }
 }
+
+.shot-page.shot-page--table { padding-bottom: 16px; }
 
 .shot-drag-handle {
   color: var(--sg-text-muted);
@@ -1245,3 +1344,5 @@ onBeforeUnmount(() => { disposed = true; closeSingleAssign(); destroyRowSortable
 .shot-row-actions :deep(.el-button) { margin-left: 0; }
 .task-date-cell { white-space: nowrap; font-variant-numeric: tabular-nums; }
 </style>
+
+<style scoped src="../../assets/styles/compact-list.css"></style>

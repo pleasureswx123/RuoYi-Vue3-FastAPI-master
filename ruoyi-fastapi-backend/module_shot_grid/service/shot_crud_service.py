@@ -38,6 +38,7 @@ from module_shot_grid.entity.vo.shot_crud_vo import (
     ShotGridShotUpdateModel,
 )
 from module_shot_grid.exceptions import ShotGridDomainException, shot_grid_error
+from module_shot_grid.service.shot_task_rules import missing_shot_assignment_fields
 from module_shot_grid.shot_number import format_shot_code
 
 
@@ -123,29 +124,21 @@ class ShotGridShotCrudService:
         actor_user_id, actor_name, dept_name = cls._actor(current_user)
         try:
             cls._require_write_access(access, project_id, actor_user_id)
-            project, storage = await cls._lock_writable_project(db, project_id, require_storage_ready=True)
+            project, _storage = await cls._lock_writable_project(db, project_id, require_storage_ready=True)
             scene, episode = await cls._require_scene(db, project_id, command.scene_id)
             await cls._require_assets(db, project_id, command.asset_ids)
 
             now = cls._now()
-            rows = await ShotGridShotCrudDao.list_scene_shot_order_for_update(db, project_id, scene.scene_id)
-            position = command.sequence_position or command.shot_no or len(rows) + 1
-            cls._require_sequence_position(position, max_position=len(rows) + 1)
-            affected_ids = [row['shot_id'] for row in rows[position - 1 :]]
-            await cls._require_scene_order_mutable(db, project_id, affected_ids)
-            ordered_shot_ids: list[int | None] = [row['shot_id'] for row in rows]
-            ordered_shot_ids.insert(position - 1, None)
-            initial_shot_no = position
-            occupied_numbers = {int(row['shot_no']) for row in rows}
-            if initial_shot_no in occupied_numbers:
-                initial_shot_no = cls._allocate_temporary_shot_numbers(rows, 1)[0]
+            # 在项目协调锁内查重；数据库场次内唯一索引继续处理并发冲突。
+            if await ShotGridShotCrudDao.shot_no_exists(db, scene.scene_id, command.shot_no):
+                raise shot_grid_error(409, 'SG_SHOT_NO_CONFLICT', '该场次镜头号已存在，请填写其他编号')
             shot = await ShotGridShotCrudDao.add_shot(
                 db,
                 ShotGridShot(
                     project_id=project_id,
                     episode_id=episode.episode_id,
                     scene_id=scene.scene_id,
-                    shot_no=initial_shot_no,
+                    shot_no=command.shot_no,
                     storage_dir_name=None,
                     duration_ms=command.duration_ms,
                     shot_size=command.shot_size,
@@ -156,7 +149,7 @@ class ShotGridShotCrudService:
                     dialogue=command.dialogue,
                     sound_effect=command.sound_effect,
                     color_reference=command.color_reference,
-                    sort_order=(len(rows) + 1) * 10,
+                    sort_order=command.shot_no * 10,
                     lifecycle_status='active',
                     remark=command.remark,
                     create_by=actor_name,
@@ -175,22 +168,6 @@ class ShotGridShotCrudService:
                 actor_name=actor_name,
                 now=now,
             )
-            renumber_rows = await ShotGridShotCrudDao.list_scene_shots_for_renumber(db, project_id, scene.scene_id)
-            renumber_row_by_id = {row['shot_id']: row for row in renumber_rows}
-            ordered_renumber_rows = [
-                renumber_row_by_id[shot.shot_id if ordered_id is None else ordered_id]
-                for ordered_id in ordered_shot_ids
-            ]
-            renumber_result, _lock_versions = await cls._synchronize_scene_numbers(
-                db,
-                project=project,
-                storage=storage,
-                scene=scene,
-                episode=episode,
-                rows=ordered_renumber_rows,
-                actor_name=actor_name,
-                now=now,
-            )
             await cls._audit(
                 db,
                 business_type=1,
@@ -202,13 +179,11 @@ class ShotGridShotCrudService:
                 shot_id=shot.shot_id,
                 payload={
                     'sceneId': scene.scene_id,
-                    'sequencePosition': position,
+                    'shotNo': command.shot_no,
                     'assetIds': command.asset_ids,
                 },
                 result={
                     'directoryStatus': 'not_created',
-                    'operationStatus': renumber_result.operation_status,
-                    'operationId': renumber_result.operation_id,
                 },
             )
             frozen = await cls._freeze_detail(db, project_id, shot.shot_id, current_user, access)
@@ -1124,35 +1099,6 @@ class ShotGridShotCrudService:
         return assets
 
     @classmethod
-    async def _resolve_create_sort_order(
-        cls,
-        db: AsyncSession,
-        *,
-        project_id: int,
-        scene_id: int,
-        command: ShotGridShotCreateModel,
-        actor_name: str,
-        now: datetime,
-    ) -> int:
-        if command.sort_order is not None:
-            return command.sort_order
-
-        rows = await ShotGridShotCrudDao.list_scene_shot_order_for_update(db, project_id, scene_id)
-        position = command.sequence_position or len(rows) + 1
-        cls._require_sequence_position(position, max_position=len(rows) + 1)
-        ordered_shot_ids: list[int | None] = [row['shot_id'] for row in rows]
-        ordered_shot_ids.insert(position - 1, None)
-        await cls._rewrite_scene_sort_orders(
-            db,
-            project_id=project_id,
-            rows=rows,
-            ordered_shot_ids=ordered_shot_ids,
-            actor_name=actor_name,
-            now=now,
-        )
-        return position * 10
-
-    @classmethod
     async def _resolve_update_sort_order(
         cls,
         db: AsyncSession,
@@ -1442,7 +1388,11 @@ class ShotGridShotCrudService:
         candidates = []
         if row.get('task_id') is not None and row.get('task_status') == 'not_started':
             candidates.append(('task.start', 'shotgrid:task:start'))
-        if row.get('task_status') in {None, 'not_started'} and not row['has_uncommitted_submission']:
+        if (
+            row.get('task_status') in {None, 'not_started'}
+            and not row['has_uncommitted_submission']
+            and not missing_shot_assignment_fields(row)
+        ):
             candidates.append(('task.assign', 'shotgrid:task:assign'))
         if row.get('task_status') in {None, 'not_started'}:
             candidates.append(('shot.edit', 'shotgrid:shot:edit'))

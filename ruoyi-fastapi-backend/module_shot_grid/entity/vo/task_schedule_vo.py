@@ -66,6 +66,8 @@ class ShotGridScheduleQueryModel(ShotGridApiModel):
     priorities: list[TaskPriority] = Field(default_factory=list, max_length=10)
     episode_ids: list[int] = Field(default_factory=list, max_length=100)
     scene_ids: list[int] = Field(default_factory=list, max_length=100)
+    shot_no_start: int | None = Field(default=None, gt=0, le=2_147_483_647, description='起始镜头号，包含边界')
+    shot_no_end: int | None = Field(default=None, gt=0, le=2_147_483_647, description='结束镜头号，包含边界')
     asset_types: list[AssetType] = Field(default_factory=list, max_length=10)
     keyword: str | None = Field(default=None, max_length=200)
     only_conflicts: bool = False
@@ -96,6 +98,12 @@ class ShotGridScheduleQueryModel(ShotGridApiModel):
     def validate_window(self) -> 'ShotGridScheduleQueryModel':
         if self.window_end <= self.window_start:
             raise ValueError('windowEnd 必须晚于 windowStart')
+        return self
+
+    @model_validator(mode='after')
+    def validate_shot_number_range(self) -> 'ShotGridScheduleQueryModel':
+        if self.shot_no_start is not None and self.shot_no_end is not None and self.shot_no_start > self.shot_no_end:
+            raise ValueError('起始镜头号不能大于结束镜头号')
         return self
 
 
