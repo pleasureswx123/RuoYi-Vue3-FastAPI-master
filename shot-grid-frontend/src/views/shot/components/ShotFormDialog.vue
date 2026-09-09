@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 
 import { createShot, getScenePage, updateShot } from '@/api/shot-grid/shots'
 import { secondsToDurationMs, shotErrorState } from '@/views/shot/shotPresentation'
+import ProjectDrawer from '@/views/project/components/ProjectDrawer.vue'
 import ProjectModal from '@/views/project/components/ProjectModal.vue'
 
 const props = defineProps({
@@ -203,7 +204,8 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <ProjectModal
+  <component
+    :is="isEdit ? ProjectDrawer : ProjectModal"
     :title="isEdit ? `编辑 ${shot.shotCode}` : '新建镜头'"
     :description="isEdit ? '镜头号保持不变，可补充制作信息；负责人改派请使用任务分配动作。' : '手动填写镜头号，允许跳号，同一场次不能重复；创建后可继续补充制作信息。'"
     :busy="busy"
@@ -234,7 +236,7 @@ onBeforeUnmount(() => {
       <el-alert v-if="validationMessage || requestError" class="shot-form__alert" :type="requestError ? 'error' : 'warning'" :closable="false" show-icon :title="requestError?.title || '请检查表单'"><div class="form-alert-content"><p>{{ requestError?.message || validationMessage }}</p><el-button v-if="requestError?.status === 409" link type="primary" @click="emit('refresh')">刷新镜头后重试</el-button></div></el-alert>
       <footer><el-button :disabled="busy" @click="closeDialog">取消</el-button><el-button type="primary" :loading="busy" :disabled="!canSubmit" @click="submit">{{ isEdit ? '保存修改' : '创建镜头' }}</el-button></footer>
     </el-form>
-  </ProjectModal>
+  </component>
 </template>
 
 <style scoped>

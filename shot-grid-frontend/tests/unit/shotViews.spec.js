@@ -1641,6 +1641,9 @@ describe('镜头 Element Plus 表单契约', () => {
       global: { components: formComponents, stubs: { ProjectModal: projectModalStub } }
     })
     await flushPromises()
+    expect(wrapper.findComponent(ElDrawer).exists()).toBe(true)
+    expect(wrapper.findComponent(ElDialog).exists()).toBe(false)
+    expect(wrapper.findComponent(ElDrawer).props('direction')).toBe('rtl')
     const form = wrapper.findComponent(ElForm)
     const field = prop => form.findAllComponents(ElFormItem).find(item => item.props('prop') === prop).findComponent(ElInput)
     const submit = wrapper.findAllComponents(ElButton).find(button => buttonLabel(button).includes('保存'))
@@ -1656,6 +1659,8 @@ describe('镜头 Element Plus 表单契约', () => {
       description: '', durationMs: 0, shotSize: '景'.repeat(500), remark: '注'.repeat(2000)
     }))
     expect(wrapper.emitted('saved')).toHaveLength(1)
+    await wrapper.findAllComponents(ElButton).find(button => buttonLabel(button) === '取消').trigger('click')
+    expect(wrapper.emitted('close')).toHaveLength(1)
     wrapper.unmount()
   })
 
