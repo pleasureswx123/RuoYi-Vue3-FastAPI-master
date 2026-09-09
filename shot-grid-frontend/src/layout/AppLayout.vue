@@ -3,8 +3,8 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
-  ArrowLeftBold,
-  ArrowRightBold,
+  Fold,
+  Expand,
   Box,
   Collection,
   Film,
@@ -24,7 +24,7 @@ import ThemeModeSwitch from '@/components/theme/ThemeModeSwitch.vue'
 const route = useRoute()
 const router = useRouter()
 const sessionStore = useSessionStore()
-const collapsed = ref(false)
+const collapsed = ref(true)
 const searchVisible = ref(false)
 const fullscreenSupported = ref(false)
 const isFullscreen = ref(false)
@@ -167,7 +167,7 @@ onBeforeUnmount(() => {
         </span>
       </div>
 
-      <nav class="app-navigation">
+      <nav id="shot-grid-navigation" class="app-navigation">
         <p v-show="!collapsed" class="app-navigation__label">制作工作区</p>
         <el-menu
           v-if="navigationItems.length"
@@ -201,26 +201,25 @@ onBeforeUnmount(() => {
       >
         <span class="app-company-brand__logo" aria-hidden="true"></span>
       </div>
-
-      <el-button
-        class="app-sidebar__toggle"
-        text
-        :aria-label="collapsed ? '展开侧边栏' : '收起侧边栏'"
-        @click="collapsed = !collapsed"
-      >
-        <el-icon>
-          <ArrowRightBold v-if="collapsed" />
-          <ArrowLeftBold v-else />
-        </el-icon>
-        <span v-show="!collapsed">收起导航</span>
-      </el-button>
     </el-aside>
 
     <el-container class="app-stage" direction="vertical">
       <el-header class="app-header" height="auto">
-        <div class="app-header__heading">
-          <p class="app-header__context">AI 影视短片制作</p>
-          <h1>{{ pageTitle }}</h1>
+        <div class="app-header__leading">
+          <el-tooltip :content="collapsed ? '展开侧边栏' : '收起侧边栏'" placement="bottom" :show-after="350">
+            <el-button
+              class="app-header__navigation-toggle"
+              :icon="collapsed ? Expand : Fold"
+              :aria-label="collapsed ? '展开侧边栏' : '收起侧边栏'"
+              :aria-expanded="!collapsed"
+              aria-controls="shot-grid-navigation"
+              @click="collapsed = !collapsed"
+            />
+          </el-tooltip>
+          <div class="app-header__heading">
+            <p class="app-header__context">AI 影视短片制作</p>
+            <h1>{{ pageTitle }}</h1>
+          </div>
         </div>
         <div class="app-account">
           <el-button
@@ -285,6 +284,17 @@ onBeforeUnmount(() => {
   flex-direction: column;
   overflow: hidden;
   background: var(--sg-sidebar-bg);
+  // 导航和公司标识共用连续背景，主题色遮罩保证可读。
+  background-image:
+    linear-gradient(
+      to bottom,
+      color-mix(in srgb, var(--sg-sidebar-bg) 88%, transparent),
+      color-mix(in srgb, var(--sg-sidebar-bg) 65%, transparent)
+    ),
+    url('../assets/branding/cinematic-sidebar.png');
+  background-repeat: no-repeat;
+  background-position: center bottom, right bottom;
+  background-size: 100% calc(100% - var(--app-header-height)), auto calc(100% - var(--app-header-height));
   border-right: 1px solid var(--sg-border);
   backdrop-filter: blur(18px);
   transition: background-color 180ms ease, border-color 180ms ease;
@@ -450,8 +460,8 @@ onBeforeUnmount(() => {
   display: block;
   width: 112px;
   height: 25px;
-  opacity: 0.72;
-  background-color: var(--sg-text-muted);
+  opacity: 1;
+  background-color: var(--sg-text);
   pointer-events: none;
   mask-image: var(--app-company-logo-mask);
   mask-position: center;
@@ -461,22 +471,6 @@ onBeforeUnmount(() => {
   -webkit-mask-position: center;
   -webkit-mask-repeat: no-repeat;
   -webkit-mask-size: contain;
-}
-
-.app-sidebar__toggle {
-  width: 100%;
-  height: 58px;
-  gap: 10px;
-  justify-content: flex-start;
-  margin: 0;
-  padding: 0 24px;
-  color: var(--sg-text-muted);
-  border-top: 1px solid var(--sg-border);
-  border-radius: 0;
-}
-
-.app-sidebar__toggle:hover {
-  color: var(--sg-text);
 }
 
 .app-stage {
@@ -493,7 +487,7 @@ onBeforeUnmount(() => {
   gap: 16px;
   align-items: center;
   justify-content: space-between;
-  padding: 0 clamp(20px, 3vw, 48px);
+  padding: 0 clamp(20px, 3vw, 48px) 0 8px;
   background-position: calc(-1 * var(--app-sidebar-width)) center;
   box-shadow: 0 4px 18px rgba(5, 9, 14, 0.12);
 }
@@ -519,6 +513,21 @@ onBeforeUnmount(() => {
   white-space: nowrap;
 }
 
+.app-header__leading {
+  display: flex;
+  min-width: 0;
+  gap: 12px;
+  align-items: center;
+}
+
+.app-header__navigation-toggle {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  padding: 0;
+  font-size: 19px;
+}
+
 .app-account {
   display: flex;
   flex: 0 0 auto;
@@ -527,6 +536,7 @@ onBeforeUnmount(() => {
 }
 
 // 图片上的操作区固定使用深底亮字，组件仍通过 Element Plus 变量处理交互状态。
+.app-header__navigation-toggle,
 .app-account > .el-button {
   --el-button-text-color: #e7ebf0;
   --el-button-bg-color: rgba(8, 14, 22, 0.56);
@@ -542,6 +552,7 @@ onBeforeUnmount(() => {
   --el-button-disabled-border-color: rgba(221, 231, 242, 0.12);
 }
 
+.app-header__navigation-toggle:focus-visible,
 .app-account > .el-button:focus-visible {
   outline: 2px solid #ffce8d;
   outline-offset: 3px;
@@ -621,7 +632,6 @@ onBeforeUnmount(() => {
   .app-navigation__label,
   .app-navigation__empty,
   .app-company-brand,
-  .app-sidebar__toggle span,
   .app-account__name {
     display: none;
   }
@@ -637,10 +647,6 @@ onBeforeUnmount(() => {
     display: none;
   }
 
-  .app-sidebar__toggle {
-    justify-content: center;
-    padding: 0;
-  }
 }
 
 @media (max-width: 560px) {
@@ -650,7 +656,11 @@ onBeforeUnmount(() => {
 
   .app-header {
     gap: 8px;
-    padding: 0 12px;
+    padding: 0 12px 0 8px;
+  }
+
+  .app-header__leading {
+    gap: 8px;
   }
 
   .app-account {
