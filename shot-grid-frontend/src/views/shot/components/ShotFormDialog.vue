@@ -258,6 +258,7 @@ onBeforeUnmount(() => {
           <el-input v-model="form.shotNo" inputmode="numeric" maxlength="9" placeholder="例如：0010、0030" :disabled="isEdit || !form.sceneId || busy" @keyup.enter="submit" /></el-form-item>
         <el-form-item label="时长（秒）" prop="durationSeconds"><el-input-number v-model="form.durationSeconds" :min="0" :step="0.001" :precision="3" controls-position="right" :disabled="busy" /></el-form-item>
       </div>
+      <el-form-item class="shot-form__full" label="制作内容描述" prop="description"><el-input v-model="form.description" type="textarea" :rows="4" :disabled="busy" /></el-form-item>
       <div class="shot-form__grid shot-form__grid--parameters">
         <el-form-item label="景别" prop="shotSize"><el-input v-model="form.shotSize" maxlength="500" placeholder="如：近景" :disabled="busy" /></el-form-item>
         <el-form-item label="机位" prop="cameraPosition"><el-input v-model="form.cameraPosition" maxlength="500" :disabled="busy" /></el-form-item>
@@ -265,8 +266,6 @@ onBeforeUnmount(() => {
       </div>
       <el-form-item label="镜头运动" prop="cameraMovement"><el-input v-model="form.cameraMovement" maxlength="500" :disabled="busy" /></el-form-item>
 
-      <el-alert v-if="!isEdit" title="创建后状态：未分配" description="创建镜头不会同时创建制作任务；请返回镜头列表或详情，通过“分配任务”完成委派。" type="info" show-icon :closable="false" />
-      <el-form-item class="shot-form__full" label="制作内容描述" prop="description"><el-input v-model="form.description" type="textarea" :rows="4" :disabled="busy" /></el-form-item>
       <div class="shot-form__grid shot-form__grid--text">
         <el-form-item label="台词 / 对白" prop="dialogue"><el-input v-model="form.dialogue" type="textarea" :rows="3" :disabled="busy" /></el-form-item>
         <el-form-item label="音效" prop="soundEffect"><el-input v-model="form.soundEffect" type="textarea" :rows="3" :disabled="busy" /></el-form-item>

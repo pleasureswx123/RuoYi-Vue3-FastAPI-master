@@ -1619,7 +1619,7 @@ describe('镜头 Element Plus 表单契约', () => {
     expect(createPayload).not.toHaveProperty('sequencePosition')
     expect(createPayload).not.toHaveProperty('assigneeUserId')
     expect(createPayload).not.toHaveProperty('taskDescription')
-    expect(wrapper.text()).toContain('创建后状态：未分配')
+    expect(wrapper.text()).not.toContain('创建后状态：未分配')
     expect(wrapper.emitted('saved')).toHaveLength(1)
 
     await wrapper.findAllComponents(ElButton).find(button => buttonLabel(button) === '取消').trigger('click')

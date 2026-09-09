@@ -4,14 +4,11 @@ from module_shot_grid.exceptions import shot_grid_error
 
 SHOT_ASSIGNMENT_FIELDS = {
     'description': '制作内容描述',
-    'shot_size': '景别',
-    'camera_position': '机位',
-    'camera_movement': '镜头运动',
 }
 
 
 def missing_shot_assignment_fields(shot: object) -> list[str]:
-    """镜头保存可以留空，分配任务前必须补齐制作信息。"""
+    """镜头保存可以留空，分配任务前仅要求制作内容为非空白文本。"""
     missing = []
     for field, label in SHOT_ASSIGNMENT_FIELDS.items():
         value = shot.get(field) if isinstance(shot, Mapping) else getattr(shot, field, None)
