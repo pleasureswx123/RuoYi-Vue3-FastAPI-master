@@ -185,7 +185,7 @@ onBeforeUnmount(() => {
             :aria-label="item.title"
           >
             <el-icon><component :is="item.icon" /></el-icon>
-            <template #title>{{ item.title }}</template>
+            <template #title><span>{{ item.title }}</span></template>
           </el-menu-item>
         </el-menu>
 
@@ -218,7 +218,7 @@ onBeforeUnmount(() => {
 
     <el-container class="app-stage" direction="vertical">
       <el-header class="app-header" height="auto">
-        <div>
+        <div class="app-header__heading">
           <p class="app-header__context">AI 影视短片制作</p>
           <h1>{{ pageTitle }}</h1>
         </div>
@@ -266,6 +266,7 @@ onBeforeUnmount(() => {
 <style scoped lang="scss">
 .app-shell {
   --app-sidebar-width: 244px;
+  --app-header-height: 76px;
   min-height: 100vh;
   transition: 180ms ease;
 }
@@ -289,13 +290,33 @@ onBeforeUnmount(() => {
   transition: background-color 180ms ease, border-color 180ms ease;
 }
 
+// 顶部共用影棚全景，品牌区选取暖光局部，主栏保留摄影机与冷暖光束。
+.app-brand,
+.app-header {
+  color: #f6f3ee;
+  background-color: #080d13;
+  background-image:
+    linear-gradient(90deg, rgba(5, 9, 14, 0.55), rgba(5, 9, 14, 0.25) 42%, rgba(5, 9, 14, 0.42) 64%, rgba(5, 9, 14, 0.92)),
+    url('../assets/branding/cinematic-masthead.webp');
+  background-repeat: no-repeat;
+  background-position: 0 center;
+  background-size: max(100vw, 1280px) auto;
+  border-bottom: 1px solid rgba(255, 182, 87, 0.28);
+}
+
 .app-brand {
   display: flex;
-  height: 76px;
+  height: var(--app-header-height);
+  flex: 0 0 auto;
   gap: 13px;
   align-items: center;
   padding: 0 20px;
-  border-bottom: 1px solid var(--sg-border);
+  background-image:
+    linear-gradient(90deg, rgba(5, 9, 14, 0.64), rgba(5, 9, 14, 0.4)),
+    url('../assets/branding/cinematic-masthead.webp');
+  background-position: center, 19% 34%;
+  background-size: 100% 100%, 760px auto;
+  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.65);
 }
 
 .app-brand__mark {
@@ -309,6 +330,7 @@ onBeforeUnmount(() => {
   padding: 8px;
   background: var(--sg-accent-surface);
   border-radius: 10px;
+  box-shadow: 0 0 22px rgba(255, 173, 72, 0.2);
   transform: rotate(-2deg);
 }
 
@@ -339,7 +361,7 @@ onBeforeUnmount(() => {
 
 .app-brand__copy small {
   margin-top: 3px;
-  color: var(--sg-text-muted);
+  color: #c5cbd3;
   font-size: 10px;
 }
 
@@ -466,33 +488,71 @@ onBeforeUnmount(() => {
   top: 0;
   z-index: 10;
   display: flex;
-  height: 76px;
+  height: var(--app-header-height);
+  flex: 0 0 auto;
+  gap: 16px;
   align-items: center;
   justify-content: space-between;
   padding: 0 clamp(20px, 3vw, 48px);
-  background: var(--sg-header-bg);
-  border-bottom: 1px solid var(--sg-border);
-  backdrop-filter: blur(18px);
-  transition: background-color 180ms ease, border-color 180ms ease;
+  background-position: calc(-1 * var(--app-sidebar-width)) center;
+  box-shadow: 0 4px 18px rgba(5, 9, 14, 0.12);
+}
+
+.app-header__heading {
+  min-width: 0;
+  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.75);
 }
 
 .app-header__context {
   margin: 0 0 2px;
-  color: var(--sg-text-muted);
+  color: #f5c98f;
   font-size: 10px;
   letter-spacing: 0.08em;
 }
 
 .app-header h1 {
   margin: 0;
+  overflow: hidden;
   font-size: 16px;
   font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .app-account {
   display: flex;
+  flex: 0 0 auto;
   gap: 10px;
   align-items: center;
+}
+
+// 图片上的操作区固定使用深底亮字，组件仍通过 Element Plus 变量处理交互状态。
+.app-account > .el-button {
+  --el-button-text-color: #e7ebf0;
+  --el-button-bg-color: rgba(8, 14, 22, 0.56);
+  --el-button-border-color: rgba(221, 231, 242, 0.24);
+  --el-button-hover-text-color: #ffffff;
+  --el-button-hover-bg-color: rgba(255, 182, 87, 0.17);
+  --el-button-hover-border-color: rgba(255, 198, 120, 0.62);
+  --el-button-active-text-color: #ffce8d;
+  --el-button-active-bg-color: rgba(255, 182, 87, 0.24);
+  --el-button-active-border-color: #ffce8d;
+  --el-button-disabled-text-color: #8d97a4;
+  --el-button-disabled-bg-color: rgba(8, 14, 22, 0.56);
+  --el-button-disabled-border-color: rgba(221, 231, 242, 0.12);
+}
+
+.app-account > .el-button:focus-visible {
+  outline: 2px solid #ffce8d;
+  outline-offset: 3px;
+}
+
+.app-account :deep(.theme-mode-switch) {
+  --sg-theme-switch-track: #29323d;
+  --sg-theme-switch-border: #637080;
+  --sg-theme-switch-action: #f3e9d9;
+  --sg-theme-switch-icon: #493216;
+  --sg-theme-switch-shadow: 0 1px 6px rgba(0, 0, 0, 0.25);
 }
 
 .app-fullscreen-toggle {
@@ -500,20 +560,20 @@ onBeforeUnmount(() => {
   height: 32px;
   flex: 0 0 32px;
   padding: 0;
-  --el-button-text-color: var(--sg-text-secondary);
-  --el-button-hover-text-color: var(--sg-text);
-  --el-button-hover-bg-color: var(--sg-fill-soft);
-  --el-button-hover-border-color: transparent;
+}
+
+.app-search-trigger {
+  backdrop-filter: blur(10px);
 }
 
 .app-search-trigger kbd {
   margin-left: 8px;
   padding: 1px 5px;
-  color: var(--sg-text-muted);
+  color: #c5cbd3;
   font-family: inherit;
   font-size: 10px;
-  background: var(--sg-fill-soft);
-  border: 1px solid var(--sg-border);
+  background: rgba(230, 236, 244, 0.08);
+  border: 1px solid rgba(221, 231, 242, 0.2);
   border-radius: 4px;
 }
 
@@ -525,12 +585,12 @@ onBeforeUnmount(() => {
 }
 
 .app-account__name {
-  color: var(--sg-text-secondary);
+  color: #e7ebf0;
   font-size: 13px;
 }
 
 .app-content {
-  min-height: calc(100vh - 76px);
+  min-height: calc(100vh - var(--app-header-height));
   padding: 0;
   // 页面使用整页滚动，避免 ElMain 默认 overflow: auto 让 Affix 监听错误容器。
   overflow: visible;
@@ -584,19 +644,29 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 560px) {
+  .app-shell {
+    --app-header-height: 68px;
+  }
+
   .app-header {
-    height: 68px;
-    padding: 0 16px;
+    gap: 8px;
+    padding: 0 12px;
+  }
+
+  .app-account {
+    gap: 6px;
+  }
+
+  .app-account > .el-button {
+    width: 32px;
+    flex: 0 0 32px;
+    margin-left: 0;
+    padding: 0;
   }
 
   .app-header__context,
-  .app-account .el-button:not(.app-search-trigger) span,
-  .app-search-trigger span {
+  .app-account :deep(.el-button > span) {
     display: none;
-  }
-
-  .app-content {
-    min-height: calc(100vh - 68px);
   }
 }
 </style>
