@@ -19,6 +19,7 @@ from module_shot_grid.entity.vo.shot_crud_vo import (
 )
 from module_shot_grid.exceptions import ShotGridDomainException
 from module_shot_grid.service.shot_crud_service import ShotGridShotCrudService
+from module_shot_grid.service.shot_task_rules import require_shot_assignment_fields
 
 PROJECT_ID = 1001
 SHOT_ID = 3001
@@ -1148,7 +1149,7 @@ async def test_create_rejects_duplicate_number_before_writing(monkeypatch: pytes
     db.commit.assert_not_awaited()
 
 
-@pytest.mark.parametrize('field', ['description', 'shot_size', 'camera_position', 'camera_movement', 'focal_length'])
+@pytest.mark.parametrize('field', ['description', 'shot_size', 'camera_position', 'camera_movement'])
 @pytest.mark.parametrize('value', [None, '', '   '])
 def test_assignment_action_hidden_until_production_fields_complete(field: str, value: str | None) -> None:
     row = {**_shot_projection_row(), 'task_status': 'not_started', field: value}
@@ -1157,3 +1158,12 @@ def test_assignment_action_hidden_until_production_fields_complete(field: str, v
     assert 'task.assign' not in ShotGridShotCrudService._allowed_actions(row, user, _access())
     row[field] = '已填写'
     assert 'task.assign' in ShotGridShotCrudService._allowed_actions(row, user, _access())
+
+
+@pytest.mark.parametrize('value', [None, '', '   '])
+def test_assignment_allows_empty_focal_length(value: str | None) -> None:
+    row = {**_shot_projection_row(), 'task_status': 'not_started', 'focal_length': value}
+    user = _current_user()
+    user.permissions.append('shotgrid:task:assign')
+    assert 'task.assign' in ShotGridShotCrudService._allowed_actions(row, user, _access())
+    require_shot_assignment_fields(row)

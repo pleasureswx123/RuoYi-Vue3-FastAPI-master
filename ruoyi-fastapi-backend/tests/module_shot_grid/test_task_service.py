@@ -1663,7 +1663,7 @@ async def test_shot_start_blocks_stale_unconfirmed_and_unauthorized_requests(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('field', ['description', 'shot_size', 'camera_position', 'camera_movement', 'focal_length'])
+@pytest.mark.parametrize('field', ['description', 'shot_size', 'camera_position', 'camera_movement'])
 @pytest.mark.parametrize('value', [None, '', '   '])
 @pytest.mark.parametrize('batch', [False, True])
 async def test_shot_assignment_rejects_incomplete_production_fields(

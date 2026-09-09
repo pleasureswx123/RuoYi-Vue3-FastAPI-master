@@ -7,7 +7,6 @@ SHOT_ASSIGNMENT_FIELDS = {
     'shot_size': '景别',
     'camera_position': '机位',
     'camera_movement': '镜头运动',
-    'focal_length': '焦段',
 }
 
 
