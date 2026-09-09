@@ -1148,6 +1148,9 @@ describe('镜头管理真实列表页', () => {
     await flushPromises()
 
     const dialog = wrapper.findComponent(ShotFormDialog)
+    expect(getScenePage).toHaveBeenLastCalledWith(8, 21, expect.objectContaining({
+      orderByColumn: 'sceneNo', isAsc: 'ascending'
+    }), expect.anything())
     expect(dialog.props()).toMatchObject({
       initialEpisodeId: '21',
       initialSceneId: '31'

@@ -112,7 +112,7 @@ async function loadScenes(resetScene = false) {
     const sceneResponse = await getScenePage(
       operationContext.projectId,
       episodeId,
-      { pageNum: 1, pageSize: 100, lifecycleStatus: 'active', orderByColumn: 'sortOrder', isAsc: 'ascending' },
+      { pageNum: 1, pageSize: 100, lifecycleStatus: 'active', orderByColumn: 'sceneNo', isAsc: 'ascending' },
       { signal: controller.signal }
     )
     scenes.value = Array.isArray(sceneResponse.rows) ? sceneResponse.rows : []
