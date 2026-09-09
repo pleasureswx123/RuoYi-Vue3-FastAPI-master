@@ -3,7 +3,7 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Lock, Refresh, User } from '@element-plus/icons-vue'
 
-import loginSceneImageUrl from '@/assets/login-production-stage.webp'
+import LoginStageMedia from '@/components/login/LoginStageMedia.vue'
 import { useSessionStore } from '@/store/modules/session'
 import { sanitizeInternalRedirect } from '@/router/routeRegistry'
 
@@ -81,8 +81,9 @@ onMounted(() => refreshCaptcha().catch(() => undefined))
 </script>
 
 <template>
-  <main class="login-page" :style="{ '--login-scene-image': `url(${loginSceneImageUrl})` }">
+  <main class="login-page">
     <section class="login-scene" aria-label="Shot Grid 产品介绍">
+      <LoginStageMedia />
       <div class="login-scene__frame-lines" aria-hidden="true"></div>
       <img
         class="login-scene__company-logo"
@@ -223,9 +224,9 @@ onMounted(() => refreshCaptcha().catch(() => undefined))
   z-index: 0;
   inset: 28px;
   background:
-    linear-gradient(180deg, rgba(4, 7, 11, 0.08) 0%, rgba(4, 7, 11, 0.32) 42%, rgba(4, 7, 11, 0.92) 100%),
-    linear-gradient(90deg, rgba(4, 7, 11, 0.68) 0%, rgba(4, 7, 11, 0.16) 58%, rgba(4, 7, 11, 0.08) 100%),
-    var(--login-scene-image) center / cover no-repeat;
+    linear-gradient(180deg, rgba(4, 7, 11, 0.02) 0%, rgba(4, 7, 11, 0.08) 36%, rgba(4, 7, 11, 0.92) 82%, rgba(4, 7, 11, 0.98) 100%),
+    linear-gradient(90deg, rgba(4, 7, 11, 0.22) 0%, transparent 60%);
+
   border: 1px solid rgba(255, 255, 255, 0.06);
   box-shadow: inset 0 0 90px rgba(0, 0, 0, 0.28);
   pointer-events: none;
@@ -281,7 +282,7 @@ onMounted(() => refreshCaptcha().catch(() => undefined))
 
 .login-scene h1 {
   margin: 0;
-  font-size: clamp(38px, 5vw, 68px);
+  font-size: clamp(28px, 3vw, 48px);
   font-weight: 600;
   letter-spacing: -0.055em;
   line-height: 1.14;
