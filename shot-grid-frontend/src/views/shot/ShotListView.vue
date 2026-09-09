@@ -1228,7 +1228,7 @@ onBeforeUnmount(() => { disposed = true; closeSingleAssign(); destroyRowSortable
             <el-table-column prop="expectedEndTime" label="结束时间" width="120" class-name="task-expected-end">
               <template #default="{ row }"><span class="task-date-cell">{{ formatTaskDateTime(row.expectedEndTime) }}</span></template>
             </el-table-column>
-            <el-table-column label="镜头参数" width="120">
+            <el-table-column label="镜头参数" width="160">
               <template #default="scope"><div v-if="scope?.row" class="shot-parameters"><span>{{ scope.row.shotSize || '—' }}</span><small>{{ [scope.row.cameraPosition, scope.row.cameraMovement, scope.row.focalLength].filter(Boolean).join(' · ') || '暂无参数' }}</small></div></template>
             </el-table-column>
             <el-table-column label="场景 / 角色" width="150">
