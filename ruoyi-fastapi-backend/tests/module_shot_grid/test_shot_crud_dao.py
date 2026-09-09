@@ -35,10 +35,7 @@ def test_list_statement_uses_status_asset_filters_and_latest_directory_operation
     assert 'sg_shot_asset.asset_id = 4001' in sql
     assert "shot_list_task.task_status = 'pending_review'" in sql
     assert 'sg_shot.shot_no AS sequence_position' in sql
-    assert (
-        'ORDER BY sg_episode.sort_order, sg_episode.episode_no, sg_scene.sort_order, '
-        'sg_scene.scene_no, sg_shot.sort_order ASC'
-    ) in sql
+    assert ('ORDER BY sg_episode.episode_no, sg_scene.scene_no, sg_shot.sort_order ASC') in sql
     assert "sg_shot.lifecycle_status = 'active'" in sql
     assert (
         "lpad(CAST(sg_shot.shot_no AS VARCHAR), greatest(4, length(CAST(sg_shot.shot_no AS VARCHAR))), '0') ILIKE '%%0001%%'"

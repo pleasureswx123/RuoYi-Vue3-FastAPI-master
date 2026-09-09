@@ -200,9 +200,7 @@ class ShotGridShotCrudDao:
         direction = asc if query.is_asc == 'ascending' else desc
         if query.order_by_column == 'sortOrder':
             return statement.order_by(
-                ShotGridEpisode.sort_order,
                 ShotGridEpisode.episode_no,
-                ShotGridScene.sort_order,
                 ShotGridScene.scene_no,
                 direction(ShotGridShot.sort_order),
                 ShotGridShot.shot_no,

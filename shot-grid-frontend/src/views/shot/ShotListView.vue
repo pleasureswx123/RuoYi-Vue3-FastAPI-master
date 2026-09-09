@@ -1,4 +1,5 @@
 <script setup>
+import { shotFeatures } from './shotFeatures'
 import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -60,6 +61,7 @@ const currentTime = useCurrentTime()
 const { startDialog, requestStartDialog, closeStartDialog, finishStartDialog, failStartDialog } = useTaskStartDialog()
 const reordering = ref(false)
 const sceneOrderFullyLoaded = ref(false)
+const sceneOrderMode = ref(false)
 const showHierarchyCreate = ref(false)
 const hierarchyCreateMode = ref('episode')
 const showBatchAssign = ref(false)
@@ -185,17 +187,20 @@ const canDragSort = computed(() => (
   canEdit.value &&
   !shotsLoading.value &&
   !reordering.value &&
+  sceneOrderMode.value &&
   isSceneOrderScope.value &&
   sceneOrderFullyLoaded.value &&
   sceneSequenceConsistent.value &&
   shots.value.length > 1
 ))
 const dragSortHint = computed(() => {
-  if (!canEdit.value || viewMode.value !== 'table' || shotsLoading.value) return ''
+  if (!shotFeatures.manualSortEnabled || !canEdit.value || viewMode.value !== 'table' || shotsLoading.value) return ''
   if (!query.episodeId) return ' · 选择具体集和场次后可排序'
   if (!query.sceneId) return ' · 请选择具体场次后可排序'
   if (query.keyword.trim() || query.shotStatus || query.assigneeUserId || query.shotNoStart.trim() || query.shotNoEnd.trim()) return ' · 清空附加筛选后可排序'
   if (total.value > MAX_SCENE_SORT_SHOTS) return ` · 当前场次超过 ${MAX_SCENE_SORT_SHOTS} 镜，不能在线拖拽排序`
+  if (!sceneOrderMode.value) return ''
+  if (shotsError.value) return ' · 完整场次加载失败，请重试或退出排序模式'
   if (!sceneOrderFullyLoaded.value) return ' · 正在加载完整场次，完成后可排序'
   if (!sceneSequenceConsistent.value) return ' · 当前场次镜头号不连续，请先完成历史数据治理后再排序'
   if (shots.value.length <= 1) return ' · 当前场次无需排序'
@@ -523,7 +528,7 @@ async function loadProjectContext() {
       getProjectDetail(projectId, { signal: controller.signal }),
       fetchAllPages(
         (params, options) => getEpisodePage(projectId, params, options),
-        { lifecycleStatus: 'active', orderByColumn: 'sortOrder', isAsc: 'ascending' },
+        { lifecycleStatus: 'active', orderByColumn: 'episodeNo', isAsc: 'ascending' },
         controller.signal
       ),
       fetchAllPages(
@@ -565,7 +570,7 @@ async function loadScenes(resetScene = true) {
   try {
     scenes.value = await fetchAllPages(
       (params, options) => getScenePage(projectId, episodeId, params, options),
-      { lifecycleStatus: 'active', orderByColumn: 'sortOrder', isAsc: 'ascending' },
+      { lifecycleStatus: 'active', orderByColumn: 'sceneNo', isAsc: 'ascending' },
       controller.signal
     )
   } catch (error) {
@@ -592,7 +597,7 @@ async function loadShots(existingController = null, background = false) {
     sceneOrderFullyLoaded.value = false
     appliedQuery.value = JSON.stringify(query)
   }
-  const fullScene = isSceneOrderScope.value
+  const fullScene = sceneOrderMode.value && canEdit.value && isSceneOrderScope.value
   try {
     const params = {
       keyword: query.keyword.trim() || undefined,
@@ -645,11 +650,20 @@ async function loadShots(existingController = null, background = false) {
   }
 }
 
+async function toggleSceneOrderMode() {
+  if (shotsLoading.value || reordering.value || assigning.value || deleting.value) return
+  if (!sceneOrderMode.value && (!canEdit.value || !isSceneOrderScope.value || total.value > MAX_SCENE_SORT_SHOTS)) return
+  sceneOrderMode.value = !sceneOrderMode.value
+  query.pageNum = 1
+  await loadShots()
+}
+
 async function submitFilters() {
   const valid = shotFilterForm.value
     ? await shotFilterForm.value.validate().catch(() => false)
     : false
   if (!valid) return
+  sceneOrderMode.value = false
   query.pageNum = 1
   await loadShots()
 }
@@ -661,6 +675,7 @@ function changeEpisodeFilter() {
 }
 
 function resetFilters() {
+  sceneOrderMode.value = false
   shotFilterForm.value?.resetFields()
   shotFilterForm.value?.clearValidate()
   query.pageNum = 1
@@ -1062,7 +1077,7 @@ async function loadEpisodesAfterWrite() {
   try {
     const rows = await fetchAllPages(
       (params, options) => getEpisodePage(projectId, params, options),
-      { lifecycleStatus: 'active', orderByColumn: 'sortOrder', isAsc: 'ascending' },
+      { lifecycleStatus: 'active', orderByColumn: 'episodeNo', isAsc: 'ascending' },
       controller.signal
     )
     if (episodeRefreshController === controller && currentProjectId.value === projectId) episodes.value = rows
@@ -1089,6 +1104,7 @@ async function handleImported(result, operationContext) {
 
 watch(() => projectContext.projectId, (next, previous) => {
   if (next !== previous) {
+    sceneOrderMode.value = false
     closeCreateDialog()
     closeImportDialog()
     closeEditDialog()
@@ -1113,6 +1129,7 @@ watch(() => query.sceneId, () => {
 watch(() => appliedQuery.value, closeSingleAssign)
 watch(() => projectContext.scope, () => loadProjects())
 watch(viewMode, mode => {
+  sceneOrderMode.value = false
   query.pageNum = 1
   if (!['swimlane', 'gantt'].includes(mode)) loadShots()
 })
@@ -1180,7 +1197,7 @@ onBeforeUnmount(() => { disposed = true; closeSingleAssign(); destroyRowSortable
           </el-form-item>
         </el-form>
 
-        <div class="shot-list-toolbar"><div class="shot-list-toolbar__summary"><strong>{{ total }}</strong><span>个镜头<span v-if="shotsLoading"> · 正在刷新</span><span v-else>{{ dragSortHint }}</span></span><template v-if="viewMode === 'table' && selectedShots.length"><el-button v-if="canAssign && selectedShots.every(canAssignShot)" text type="primary" :loading="assigning" :disabled="deleting" @click="openBatchAssignDialog">{{ batchAssignLabel }}（{{ selectedShots.length }}）</el-button><el-button v-if="canDelete" text type="danger" :icon="Delete" :disabled="!canDeleteSelection || deleting || assigning" :loading="deleting" :title="!canDeleteSelection ? '选中项包含已开始任务，不能批量删除' : ''" @click="confirmDeleteShots(selectedShots)">批量删除（{{ selectedShots.length }}）</el-button></template></div><el-radio-group v-model="viewMode" class="shot-list-toolbar__views" size="small" aria-label="镜头视图"><el-radio-button value="table"><el-icon><List /></el-icon>表格</el-radio-button><el-radio-button value="card"><el-icon><Grid /></el-icon>卡片</el-radio-button><el-radio-button value="storyboard"><el-icon><VideoCamera /></el-icon>故事板</el-radio-button><el-radio-button value="swimlane"><el-icon><Clock /></el-icon>人员泳道</el-radio-button><el-radio-button value="gantt"><el-icon><Calendar /></el-icon>任务甘特</el-radio-button></el-radio-group></div>
+        <div class="shot-list-toolbar"><div class="shot-list-toolbar__summary"><strong>{{ total }}</strong><span>个镜头<span v-if="shotsLoading"> · 正在刷新</span><span v-else>{{ dragSortHint }}</span></span><template v-if="viewMode === 'table' && selectedShots.length"><el-button v-if="canAssign && selectedShots.every(canAssignShot)" text type="primary" :loading="assigning" :disabled="deleting" @click="openBatchAssignDialog">{{ batchAssignLabel }}（{{ selectedShots.length }}）</el-button><el-button v-if="canDelete" text type="danger" :icon="Delete" :disabled="!canDeleteSelection || deleting || assigning" :loading="deleting" :title="!canDeleteSelection ? '选中项包含已开始任务，不能批量删除' : ''" @click="confirmDeleteShots(selectedShots)">批量删除（{{ selectedShots.length }}）</el-button></template></div><el-button v-if="shotFeatures.manualSortEnabled && viewMode === 'table' && (canEdit || sceneOrderMode)" size="small" :type="sceneOrderMode ? 'primary' : 'default'" :disabled="shotsLoading || reordering || assigning || deleting || (!sceneOrderMode && (!isSceneOrderScope || total > MAX_SCENE_SORT_SHOTS))" @click="toggleSceneOrderMode">{{ sceneOrderMode ? '退出排序' : '排序模式' }}</el-button><el-radio-group v-model="viewMode" class="shot-list-toolbar__views" size="small" aria-label="镜头视图"><el-radio-button value="table"><el-icon><List /></el-icon>表格</el-radio-button><el-radio-button value="card"><el-icon><Grid /></el-icon>卡片</el-radio-button><el-radio-button value="storyboard"><el-icon><VideoCamera /></el-icon>故事板</el-radio-button><el-radio-button value="swimlane"><el-icon><Clock /></el-icon>人员泳道</el-radio-button><el-radio-button value="gantt"><el-icon><Calendar /></el-icon>任务甘特</el-radio-button></el-radio-group></div>
 
         <el-alert v-if="pollingError" :title="pollingError" type="warning" show-icon :closable="false" />
         <Suspense v-if="['swimlane', 'gantt'].includes(viewMode) && currentProjectId">
@@ -1196,34 +1213,34 @@ onBeforeUnmount(() => { disposed = true; closeSingleAssign(); destroyRowSortable
             <template #empty><el-empty class="shot-empty" description="当前筛选没有镜头"><p>可以调整集、场次、状态或制作人筛选；项目管理人也可以新建或导入镜头。</p></el-empty></template>
             <!-- <el-table-column v-if="canDragSort" width="38" fixed="left" align="center"><template #default="scope"><el-icon class="shot-drag-handle" :class="{ 'is-disabled': !isShotOrderMutable(scope.row) }" :title="isShotOrderMutable(scope.row) ? '拖拽调整场内顺序，镜头号将同步更新' : shotOrderLockReason(scope.row)"><Rank /></el-icon></template></el-table-column> -->
             <el-table-column type="selection" width="48" fixed="left" align="center" :selectable="isShotSelectable" reserve-selection />
-            <el-table-column label="集 / 场 / 镜头" width="180" fixed="left">
+            <el-table-column label="集 / 场 / 镜头" width="150" fixed="left">
               <template #default="scope"><div v-if="scope?.row" class="shot-identity"><strong>{{ scope.row.episodeCode }} / {{ scope.row.sceneCode }} / {{ scope.row.shotCode }}</strong><small>本场第 {{ scope.row.shotNo }} 镜 · {{ formatShotDuration(scope.row.durationMs) }}</small></div></template>
             </el-table-column>
             <el-table-column label="缩略图" width="115">
               <template #default="scope"><ProtectedThumbnail v-if="scope?.row" class="shot-thumb shot-thumb--small" :thumbnail="scope.row.thumbnail" :video="scope.row.proxyMedia" :alt="`${scope.row.shotCode} 缩略图`" /></template>
             </el-table-column>
-            <el-table-column label="制作内容" width="280">
+            <el-table-column label="制作内容" width="300">
               <template #default="scope"><div v-if="scope?.row" class="shot-description">{{ scope.row.description }}</div></template>
             </el-table-column>
-            <el-table-column prop="expectedStartTime" label="开始时间" width="150" class-name="task-expected-start">
+            <el-table-column prop="expectedStartTime" label="开始时间" width="120" class-name="task-expected-start">
               <template #default="{ row }"><span class="task-date-cell">{{ formatTaskDateTime(row.expectedStartTime) }}</span></template>
             </el-table-column>
-            <el-table-column prop="expectedEndTime" label="结束时间" width="150" class-name="task-expected-end">
+            <el-table-column prop="expectedEndTime" label="结束时间" width="120" class-name="task-expected-end">
               <template #default="{ row }"><span class="task-date-cell">{{ formatTaskDateTime(row.expectedEndTime) }}</span></template>
             </el-table-column>
-            <el-table-column label="镜头参数" width="190">
+            <el-table-column label="镜头参数" width="120">
               <template #default="scope"><div v-if="scope?.row" class="shot-parameters"><span>{{ scope.row.shotSize || '—' }}</span><small>{{ [scope.row.cameraPosition, scope.row.cameraMovement, scope.row.focalLength].filter(Boolean).join(' · ') || '暂无参数' }}</small></div></template>
             </el-table-column>
-            <el-table-column label="场景 / 角色" width="160">
+            <el-table-column label="场景 / 角色" width="150">
               <template #default="scope"><div v-if="scope?.row" class="shot-assets"><el-tag v-for="asset in scope.row.environmentAssets" :key="`environment-${asset.assetId}`" :type="tagTypeFromTone('environment')" size="small" effect="plain" round>场景 · {{ asset.assetName }}</el-tag><el-tag v-for="asset in scope.row.characterAssets" :key="`character-${asset.assetId}`" :type="tagTypeFromTone('character')" size="small" effect="plain" round>角色 · {{ asset.assetName }}</el-tag><span v-if="!scope.row.environmentAssets.length && !scope.row.characterAssets.length" class="shot-assets__empty">—</span></div></template>
             </el-table-column>
             <el-table-column label="台词 / 对白" width="150">
               <template #default="scope"><div v-if="scope?.row" class="shot-long-text">{{ scope.row.dialogue || '—' }}</div></template>
             </el-table-column>
-            <el-table-column label="音效" width="220">
+            <el-table-column label="音效" width="150">
               <template #default="scope"><div v-if="scope?.row" class="shot-long-text">{{ scope.row.soundEffect || '—' }}</div></template>
             </el-table-column>
-            <el-table-column label="色调参考" width="220">
+            <el-table-column label="色调参考" width="200">
               <template #default="scope"><div v-if="scope?.row" class="shot-long-text">{{ scope.row.colorReference || '—' }}</div></template>
             </el-table-column>
             <el-table-column label="备注" width="220">
@@ -1235,10 +1252,10 @@ onBeforeUnmount(() => { disposed = true; closeSingleAssign(); destroyRowSortable
             <el-table-column label="时间状态" fixed="right" width="120" class-name="task-time-state">
               <template #default="{ row }"><el-tag :type="tagTypeFromTone(shotTimeState(row).tone)" size="small" effect="light" round>{{ shotTimeState(row).label }}</el-tag></template>
             </el-table-column>
-            <el-table-column label="制作人" fixed="right" width="110">
+            <el-table-column label="制作人" fixed="right" width="100">
               <template #default="scope"><span v-if="scope?.row" class="sg-table-assignee" :class="{ 'is-unassigned': !scope.row.assignee }">{{ shotAssigneeName(scope.row.assignee, members) }}</span></template>
             </el-table-column>
-            <el-table-column label="状态" fixed="right" width="125">
+            <el-table-column label="状态" fixed="right" width="120">
               <template #default="scope">
                 <div v-if="scope?.row">
                   <el-tag class="shot-status-tag" :class="shotStatusTagClass(scope.row.status)"
@@ -1252,7 +1269,7 @@ onBeforeUnmount(() => { disposed = true; closeSingleAssign(); destroyRowSortable
                 </div>
               </template>
             </el-table-column>
-            <el-table-column label="操作" fixed="right" width="420">
+            <el-table-column label="操作" fixed="right" width="320">
               <template #default="scope">
                 <div v-if="scope?.row" class="shot-row-actions">
                   <TableActionButton v-if="canStartShot(scope.row)" label="开始任务" type="primary" :plain="false" :icon="VideoPlay" :loading="startingOperation?.shotId === scope.row.shotId" :disabled="startDisabled" @click="confirmStartShot(scope.row)" />

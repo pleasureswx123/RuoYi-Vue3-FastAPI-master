@@ -26,11 +26,14 @@ import {
 import { useSessionStore } from '@/store/modules/session'
 import { buttonLabel, completeTaskStartForm, expectedTaskTimes, setElSelectValue } from '../helpers/elementPlus'
 import ShotDetailView from '@/views/shot/ShotDetailView.vue'
+import { shotFeatures } from '@/views/shot/shotFeatures'
 import ShotListView from '@/views/shot/ShotListView.vue'
 import ShotAssignDialog from '@/views/shot/components/ShotAssignDialog.vue'
 import EpisodeSceneCreateDialog from '@/views/shot/components/EpisodeSceneCreateDialog.vue'
 import ShotFormDialog from '@/views/shot/components/ShotFormDialog.vue'
 import ShotImportDialog from '@/views/shot/components/ShotImportDialog.vue'
+
+vi.mock('@/views/shot/shotFeatures', () => ({ shotFeatures: { manualSortEnabled: false } }))
 
 const sortableCreate = vi.hoisted(() => vi.fn(() => ({ destroy: vi.fn() })))
 
@@ -222,6 +225,7 @@ function shotDetail(projectId, shotId, shotCode, description) {
 
 describe('镜头管理真实列表页', () => {
   beforeEach(() => {
+    shotFeatures.manualSortEnabled = false
     sortableCreate.mockClear()
     getProjectPage.mockResolvedValue({ rows: [projectRow], total: 1, hasNext: false })
     getProjectDetail.mockResolvedValue({ data: { ...projectRow, projectTypeName: 'AI 影视短片', aspectRatio: '16:9', projectStatus: 'active', storageStatus: 'ready', myProjectRole: 'director' } })
@@ -800,7 +804,22 @@ describe('镜头管理真实列表页', () => {
     wrapper.unmount()
   })
 
+  it('本期隐藏排序入口和引导并保留场次分页', async () => {
+    const { wrapper } = await mountView(['shotgrid:shot:list', 'shotgrid:shot:edit', 'shotgrid:member:list'])
+    const selects = wrapper.find('.shot-filters').findAllComponents(ElSelect)
+    await setElSelectValue(selects[0], '21')
+    await flushPromises()
+    await setElSelectValue(selects[1], '31')
+    await flushPromises()
+    expect(wrapper.text()).not.toContain('排序模式')
+    expect(wrapper.text()).not.toContain('后可排序')
+    expect(wrapper.findComponent(ElPagination).exists()).toBe(true)
+    expect(sortableCreate).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
   it('单场无附加筛选时通过表格拖拽调用专用场内重排接口', async () => {
+    shotFeatures.manualSortEnabled = true
     const mutableShot = {
       ...shotRow,
       status: 'unassigned',
@@ -825,6 +844,10 @@ describe('镜头管理真实列表页', () => {
 
     await setElSelectValue(filterSelects[1], '31')
     await flushPromises()
+    expect(wrapper.findComponent(ElPagination).exists()).toBe(true)
+    await wrapper.findAllComponents(ElButton).find(button => buttonLabel(button) === '排序模式').trigger('click')
+    await flushPromises()
+    await flushPromises()
     await flushPromises()
 
     expect(sortableCreate).toHaveBeenCalled()
@@ -844,6 +867,7 @@ describe('镜头管理真实列表页', () => {
   })
 
   it('历史镜头号不连续时失败关闭排序入口', async () => {
+    shotFeatures.manualSortEnabled = true
     getShotPage.mockResolvedValue({
       rows: [
         { ...shotRow, status: 'unassigned', shotNo: 2, shotCode: '0002', sequencePosition: 2 },
@@ -863,6 +887,10 @@ describe('镜头管理真实列表页', () => {
     await flushPromises()
     await setElSelectValue(filterSelects[1], '31')
     await flushPromises()
+    expect(wrapper.findComponent(ElPagination).exists()).toBe(true)
+    await wrapper.findAllComponents(ElButton).find(button => buttonLabel(button) === '排序模式').trigger('click')
+    await flushPromises()
+    await flushPromises()
     await flushPromises()
 
     expect(wrapper.text()).toContain('当前场次镜头号不连续，请先完成历史数据治理后再排序')
@@ -872,6 +900,7 @@ describe('镜头管理真实列表页', () => {
   })
 
   it('移动区间存在冻结目录时不提交重排', async () => {
+    shotFeatures.manualSortEnabled = true
     const firstShot = {
       ...shotRow,
       status: 'unassigned',
@@ -902,6 +931,10 @@ describe('镜头管理真实列表页', () => {
     await flushPromises()
     await setElSelectValue(filterSelects[1], '31')
     await flushPromises()
+    expect(wrapper.findComponent(ElPagination).exists()).toBe(true)
+    await wrapper.findAllComponents(ElButton).find(button => buttonLabel(button) === '排序模式').trigger('click')
+    await flushPromises()
+    await flushPromises()
     await flushPromises()
 
     const options = sortableCreate.mock.calls.at(-1)[1]
@@ -918,6 +951,7 @@ describe('镜头管理真实列表页', () => {
   })
 
   it('具体场次超过一页时先加载整场，再按整场位置拖拽', async () => {
+    shotFeatures.manualSortEnabled = true
     const sceneShots = Array.from({ length: 25 }, (_value, index) => ({
       ...shotRow,
       shotId: 100 + index,
@@ -947,6 +981,10 @@ describe('镜头管理真实列表页', () => {
     await flushPromises()
     await setElSelectValue(filterSelects[1], '31')
     await flushPromises()
+    expect(wrapper.findComponent(ElPagination).exists()).toBe(true)
+    await wrapper.findAllComponents(ElButton).find(button => buttonLabel(button) === '排序模式').trigger('click')
+    await flushPromises()
+    await flushPromises()
     await flushPromises()
 
     expect(wrapper.findAll('.shot-identity')).toHaveLength(25)
@@ -959,10 +997,15 @@ describe('镜头管理真实列表页', () => {
       lockVersion: 0,
       sequencePosition: 25
     })
+    await wrapper.findAllComponents(ElButton).find(button => buttonLabel(button) === '退出排序').trigger('click')
+    await flushPromises()
+    expect(wrapper.findComponent(ElPagination).exists()).toBe(true)
+    expect(wrapper.findAll('.shot-identity')).toHaveLength(20)
     wrapper.unmount()
   }, 10_000)
 
   it('具体场次只保留拖拽排序，不再暴露独立重编号动作', async () => {
+    shotFeatures.manualSortEnabled = true
     const { wrapper } = await mountView([
       'shotgrid:shot:list',
       'shotgrid:shot:edit',
@@ -975,6 +1018,10 @@ describe('镜头管理真实列表页', () => {
     expect(wrapper.findAllComponents(ElButton).some(button => buttonLabel(button) === '按当前顺序重新编号')).toBe(false)
 
     await setElSelectValue(filterSelects[1], '31')
+    await flushPromises()
+    expect(wrapper.findComponent(ElPagination).exists()).toBe(true)
+    await wrapper.findAllComponents(ElButton).find(button => buttonLabel(button) === '排序模式').trigger('click')
+    await flushPromises()
     await flushPromises()
     expect(wrapper.findAllComponents(ElButton).some(button => buttonLabel(button) === '按当前顺序重新编号')).toBe(false)
     expect(wrapper.text()).toContain('当前场次无需排序')
