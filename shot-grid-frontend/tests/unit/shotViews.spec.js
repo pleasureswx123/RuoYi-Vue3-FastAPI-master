@@ -1629,6 +1629,29 @@ describe('镜头 Element Plus 表单契约', () => {
     wrapper.unmount()
   })
 
+  it('编辑抽屉未保存时取消关闭保留输入，确认后才关闭', async () => {
+    const confirm = vi.spyOn(ElMessageBox, 'confirm')
+    confirm.mockRejectedValueOnce('cancel').mockResolvedValueOnce('confirm')
+    const wrapper = mount(ShotFormDialog, {
+      props: { projectId: 8, operationGeneration: 1, shot: shotRow, episodes: [{ episodeId: 21, episodeCode: 'EP001' }] },
+      global: { components: formComponents }
+    })
+    await flushPromises()
+    const form = wrapper.findComponent(ElForm)
+    const description = form.findAllComponents(ElFormItem).find(item => item.props('prop') === 'description').findComponent(ElInput)
+    description.vm.$emit('update:modelValue', '尚未保存的修改')
+    await wrapper.findAllComponents(ElButton).find(button => buttonLabel(button) === '取消').trigger('click')
+    await flushPromises()
+    expect(wrapper.emitted('close')).toBeUndefined()
+    expect(form.props('model').description).toBe('尚未保存的修改')
+    const done = vi.fn()
+    await wrapper.findComponent(ElDrawer).props('beforeClose')(done)
+    expect(done).toHaveBeenCalledOnce()
+    expect(confirm).toHaveBeenCalledTimes(2)
+    wrapper.unmount()
+    confirm.mockRestore()
+  })
+
   it('编辑导入镜头可留空制作内容并按新上限分次补充，超限时 Form 拦截', async () => {
     updateShot.mockResolvedValue({ data: { ...shotRow, description: '' } })
     const wrapper = mount(ShotFormDialog, {
@@ -1644,6 +1667,8 @@ describe('镜头 Element Plus 表单契约', () => {
     expect(wrapper.findComponent(ElDrawer).exists()).toBe(true)
     expect(wrapper.findComponent(ElDialog).exists()).toBe(false)
     expect(wrapper.findComponent(ElDrawer).props('direction')).toBe('rtl')
+    expect(wrapper.findComponent(ElForm).find('footer').exists()).toBe(false)
+    expect(document.querySelector('.project-drawer .el-drawer__footer')?.textContent).toContain('保存修改')
     const form = wrapper.findComponent(ElForm)
     const field = prop => form.findAllComponents(ElFormItem).find(item => item.props('prop') === prop).findComponent(ElInput)
     const submit = wrapper.findAllComponents(ElButton).find(button => buttonLabel(button).includes('保存'))

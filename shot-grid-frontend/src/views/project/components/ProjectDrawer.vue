@@ -4,12 +4,15 @@ const props = defineProps({
   title: { type: String, required: true },
   description: { type: String, default: '' },
   busy: { type: Boolean, default: false },
-  wide: { type: Boolean, default: false }
+  wide: { type: Boolean, default: false },
+  closeGuard: { type: Function, default: null }
 })
 
 const emit = defineEmits(['close'])
 
-function beforeClose(done) {
+async function beforeClose(done) {
+  if (props.busy) return
+  if (props.closeGuard && !await props.closeGuard()) return
   if (!props.busy) done()
 }
 
@@ -41,6 +44,7 @@ function closeDialog() {
       </div>
     </template>
     <div class="project-drawer__body" v-loading="busy"><slot /></div>
+    <template v-if="$slots.footer" #footer><slot name="footer" /></template>
   </el-drawer>
 </template>
 
@@ -83,8 +87,17 @@ function closeDialog() {
 }
 
 :global(.project-drawer .el-drawer__body) {
+  min-height: 0;
+  overflow: auto;
   padding: 24px 28px 28px;
   color: var(--sg-text);
+}
+
+:global(.project-drawer .el-drawer__footer) {
+  flex-shrink: 0;
+  padding: 16px 28px;
+  border-top: 1px solid var(--sg-border);
+  background: var(--sg-surface-raised);
 }
 
 @media (max-width: 640px) {
@@ -93,7 +106,8 @@ function closeDialog() {
   }
 
   :global(.project-drawer .el-drawer__header),
-  :global(.project-drawer .el-drawer__body) {
+  :global(.project-drawer .el-drawer__body),
+  :global(.project-drawer .el-drawer__footer) {
     padding-right: 18px;
     padding-left: 18px;
   }
