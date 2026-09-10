@@ -3780,6 +3780,8 @@ pageNum, pageSize（最大 1000）
 
 #### 15.7.1.3 冲突二次确认
 
+- 2026-09-10 开工规则：镜头任务和资产制作分项任务在开工时建立首次排期，不因同一负责人其他任务的排期重叠而拒绝，也不要求先到排期页处理。仍须校验开工权限、项目范围、状态、乐观锁、负责人、时间范围及人工确认，并在同一事务保存首次排期基线、历史、目录 Outbox 和审计。排期 API 的冲突提示与二次确认规则保持不变。
+
 同项目、同负责人、两个未完成活动任务的当前区间按 `[start,end)` 判断；前一任务结束等于后一任务开始不冲突。发现冲突且尚未确认时返回：
 
 ```text
@@ -3798,7 +3800,6 @@ data = { conflicts[], conflictTaskIds[] }
 - 已有排期如需修改，必须先调用排期写接口；开工接口不得形成第二套改期规则。
 
 ### 15.8 版本与修改问题查询 API
-
 ```http
 GET  /shot-grid/tasks/{taskId}/versions
 GET  /shot-grid/versions/{versionId}
@@ -3819,6 +3820,18 @@ Permissions:
 - 草稿参考文件下载：`GET /shot-grid/issue-drafts/{draftId}/reference-files/{fileId}/download`；仅审核方在实时项目权限校验通过后访问。正式问题参考文件下载：`GET /shot-grid/issues/{issueId}/reference-files/{fileId}/download`；制作人与其他授权项目成员必须同时通过项目关系、问题引用和平台显式 deny 校验。
 - 镜头视频草稿的 `mediaTimeMs` 不能超过媒体允许范围；资产图片草稿禁止携带 `mediaTimeMs`。草稿在审核待决期间可携带乐观锁编辑或删除；经 `reject` 发布为正式问题后不可覆盖，状态只由后续版本审核动作改变。
 - 旧 `/versions/{versionId}/notes` 与 `/notes/{noteId}/replies|reply|resolve` 全部移除。
+
+
+#### 退回后追加问题（2026-09-10）
+
+2026-09-10：退回动作无论是否含新草稿都须二次提醒审核人检查是否还有遗漏或待补充问题，取消保留当前内容。最新退回版本在任务仍为 revision、制作人尚未受理下一版提交时，允许有 shotgrid:note:add 权限的项目管理人或全范围管理员追加正式问题（文字、画面标注、附件复用既有契约）；发送后立即进入制作人问题查询，已发送内容仍不可修改或删除。追加必须持有项目、任务、版本锁，复核最新版本和未解决提交；不重开审核单、不改变任务状态或候选，递增来源版本锁，同事务写 sg_note、文件引用和审计。下一版已受理（含发布中、失败待重试）或已生成时禁止追加旧版；追加先成功则原提交预检快照失效，制作人须刷新并补齐处理说明。
+
+- 新增 `POST /shot-grid/versions/{versionId}/additional-issues`，要求 `shotgrid:note:add` 与项目审核管理范围；请求复用问题内容字段，增加必填 `lockVersion`（来源版本锁）。响应为 `ShotGridIssueDetailModel`，沿用标准响应 envelope。
+- `GET /shot-grid/versions/{versionId}/review-context` 增加 `canAppendIssues`；前端须再与接口权限、当前选中候选相交。写入时始终在锁内复核，不以查询结果代替授权。
+- 追加使用独立“追加并发送问题”按钮及二次确认；取消或失败保留输入和附件。正式问题继续绑定原版本、原选中候选，并进入既有跨版本处理与确认流程。
+- 无数据库结构变更，不增加新意见表，不变更普通待审核草稿接口语义。
+
+
 
 ### 15.9 人工批量审核单 API
 

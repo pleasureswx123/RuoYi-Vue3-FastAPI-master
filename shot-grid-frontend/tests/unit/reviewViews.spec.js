@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { getProjectPage } from '@/api/shot-grid/projects'
 import {
   addVersionIssueDraft,
+  appendVersionIssue,
   createManualReviewList,
   createReviewAction,
   deleteVersionIssueDraft,
@@ -42,6 +43,7 @@ vi.mock('@/api/shot-grid/projects', () => ({
 }))
 vi.mock('@/api/shot-grid/reviews', () => ({
   addVersionIssueDraft: vi.fn(),
+  appendVersionIssue: vi.fn(),
   createManualReviewList: vi.fn(),
   createReviewAction: vi.fn(),
   getReviewActions: vi.fn(),
@@ -707,4 +709,57 @@ describe('版本审核页面', () => {
     expect(createManualReviewList).not.toHaveBeenCalled()
     wrapper.unmount()
   })
+  it('没有新草稿的退回也提醒检查遗漏，取消时不发送', async () => {
+    getVersionReviewContext.mockResolvedValue({ data: {
+      currentVersion: version, candidates: version.candidates, carriedIssues: [], currentVersionDrafts: [],
+      currentVersionIssues: [{ issueId: 501, content: '已发布问题', status: 'open', originVersionId: 33 }]
+    } })
+    const confirmSpy = vi.spyOn(ElMessageBox, 'confirm').mockRejectedValue('cancel')
+    const { wrapper } = await mountDetail()
+    await wrapper.findAllComponents(ElButton).find(button => button.text().startsWith('退回并发送问题')).trigger('click')
+    await flushPromises()
+    expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining('还有没有需要补充'), expect.any(String), expect.any(Object))
+    expect(createReviewAction).not.toHaveBeenCalled()
+    wrapper.unmount()
+    confirmSpy.mockRestore()
+  })
+
+  it('退回后通过原问题表单追加，取消保留输入，确认后发送并清空', async () => {
+    const rejected = { ...version, versionStatus: 'rejected' }
+    getReviewListDetail.mockResolvedValue({ data: { ...review, reviewStatus: 'completed', version: rejected } })
+    getVersionDetail.mockResolvedValue({ data: rejected })
+    getVersionReviewContext.mockResolvedValue({ data: { currentVersion: rejected, candidates: version.candidates, canAppendIssues: true, carriedIssues: [], currentVersionIssues: [], currentVersionDrafts: [] } })
+    appendVersionIssue.mockRejectedValueOnce(new Error('发送失败')).mockResolvedValue({ data: { issueId: 503 } })
+    const confirmSpy = vi.spyOn(ElMessageBox, 'confirm').mockRejectedValueOnce('cancel').mockResolvedValue('confirm')
+    const { wrapper } = await mountDetail(['shotgrid:reviewList:query', 'shotgrid:version:query', 'shotgrid:version:review', 'shotgrid:note:list', 'shotgrid:note:add'])
+    expect(wrapper.find('.issue-compose').exists()).toBe(true)
+    await wrapper.find('.issue-compose textarea').setValue('边缘有穿帮，需要补修')
+    const send = wrapper.findAllComponents(ElButton).find(button => button.text() === '追加并发送问题')
+    await send.trigger('click')
+    await flushPromises()
+    expect(appendVersionIssue).not.toHaveBeenCalled()
+    expect(wrapper.find('.issue-compose textarea').element.value).toBe('边缘有穿帮，需要补修')
+    await send.trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.issue-compose textarea').element.value).toBe('边缘有穿帮，需要补修')
+    await send.trigger('click')
+    await flushPromises()
+    expect(appendVersionIssue).toHaveBeenCalledWith(33, expect.objectContaining({ content: expect.stringContaining('边缘有穿帮'), lockVersion: 2 }))
+    expect(addVersionIssueDraft).not.toHaveBeenCalled()
+    expect(wrapper.find('.issue-compose textarea').element.value).toBe('')
+    wrapper.unmount()
+    confirmSpy.mockRestore()
+  })
+
+  it('下一版已受理时关闭旧版追加入口', async () => {
+    const rejected = { ...version, versionStatus: 'rejected' }
+    getReviewListDetail.mockResolvedValue({ data: { ...review, reviewStatus: 'completed', version: rejected } })
+    getVersionDetail.mockResolvedValue({ data: rejected })
+    getVersionReviewContext.mockResolvedValue({ data: { currentVersion: rejected, candidates: version.candidates, canAppendIssues: false, carriedIssues: [], currentVersionIssues: [], currentVersionDrafts: [] } })
+    const { wrapper } = await mountDetail(['shotgrid:reviewList:query', 'shotgrid:version:query', 'shotgrid:version:review', 'shotgrid:note:add'])
+    expect(wrapper.find('.issue-compose').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('追加并发送问题')
+    wrapper.unmount()
+  })
+
 })

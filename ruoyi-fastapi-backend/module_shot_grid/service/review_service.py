@@ -23,6 +23,7 @@ from module_shot_grid.dao.project_audit_dao import ShotGridProjectAuditDao
 from module_shot_grid.dao.project_dao import ShotGridProjectDao
 from module_shot_grid.dao.project_member_dao import ShotGridProjectMemberDao
 from module_shot_grid.dao.review_dao import ShotGridReviewDao
+from module_shot_grid.dao.version_submission_dao import ShotGridVersionSubmissionDao
 from module_shot_grid.entity.do.final_delivery_do import ShotGridFinalDelivery
 from module_shot_grid.entity.do.review_do import (
     ShotGridIssueVerification,
@@ -39,6 +40,7 @@ from module_shot_grid.entity.vo.review_vo import (
     ShotGridAutoReviewListSummaryModel,
     ShotGridCarriedIssueModel,
     ShotGridFinalDeliveryModel,
+    ShotGridIssueAppendModel,
     ShotGridIssueDetailModel,
     ShotGridIssueDraftModel,
     ShotGridIssueDraftUpdateModel,
@@ -650,7 +652,15 @@ class ShotGridReviewService:
                         currentVersionResponse=response,
                     )
                 )
+        can_append = (
+            context['version_status'] == 'rejected'
+            and context['task_status'] == 'revision'
+            and context.get('selected_candidate_id') is not None
+            and await ShotGridReviewDao.get_latest_version_no(db, int(context['task_id'])) == int(context['version_no'])
+            and not await ShotGridVersionSubmissionDao.has_unresolved_submission(db, int(context['task_id']))
+        )
         return ShotGridReviewContextModel(
+            canAppendIssues=can_append,
             currentVersion=ShotGridReviewVersionSummaryModel(
                 versionId=version_id,
                 versionNo=int(context['version_no']),
@@ -912,6 +922,105 @@ class ShotGridReviewService:
         except ShotGridDomainException:
             await db.rollback()
             raise
+        except Exception:
+            await db.rollback()
+            raise
+
+    @classmethod
+    async def append_rejected_issue(
+        cls,
+        db: AsyncSession,
+        version_id: int,
+        command: ShotGridIssueAppendModel,
+        current_user: CurrentUserModel,
+    ) -> ShotGridIssueDetailModel:
+        """在下一版提交受理前，为最新退回版本追加不可变的正式问题。"""
+        user_id, actor_name, _, dept_name = cls._actor(current_user)
+        context, access = await cls._resolve_version_access(db, version_id, current_user)
+        try:
+            project_id, task, version, access = await cls._lock_version_graph(db, context, current_user, access)
+            cls._require_director(access)
+            if version.version_status != 'rejected' or task.task_status != 'revision':
+                raise cls._invalid_transition('只有待修改任务的退回版本可以追加问题')
+            cls._ensure_lock_version(version.lock_version, command.lock_version)
+            if await ShotGridReviewDao.get_latest_version_no(db, task.task_id) != version.version_no:
+                raise cls._invalid_transition('已有新版本，不能向旧版追加问题')
+            # 与版本提交持有相同的项目、任务锁，覆盖已受理但尚未发布的下一版。
+            if await ShotGridVersionSubmissionDao.get_unresolved_submission_for_update(db, task.task_id):
+                raise cls._invalid_transition('制作人已提交下一版，不能再追加问题，请等待新版本审核')
+            if version.selected_candidate_id is None:
+                raise shot_grid_error(409, 'SG_REVIEW_CANDIDATE_REQUIRED', '退回版本没有选中的候选作品')
+            review_list = await ShotGridReviewDao.get_auto_review_list_for_update(db, project_id, version_id)
+            if review_list is None or review_list.review_status != 'completed':
+                raise cls._auto_review_integrity_error()
+            await cls._ensure_auto_review_relation(db, int(review_list.review_list_id), version_id)
+            locked_context = await ShotGridReviewDao.get_version_context(db, version_id)
+            if locked_context is None:
+                raise shot_grid_error(404, 'SG_VERSION_NOT_FOUND', '版本不存在或不可见')
+            cls._validate_note_media(locked_context, command)
+            now = datetime.now()
+            note = await ShotGridReviewDao.add_note(
+                db,
+                ShotGridNote(
+                    project_id=project_id,
+                    version_id=version_id,
+                    origin_candidate_id=version.selected_candidate_id,
+                    reviewer_user_id=user_id,
+                    content=command.content,
+                    media_time_ms=command.media_time_ms,
+                    annotations=command.annotations.model_dump(mode='json', by_alias=True)
+                    if command.annotations
+                    else None,
+                    note_status='open',
+                    resolved_in_version_id=None,
+                    create_time=now,
+                    update_time=now,
+                ),
+            )
+            references = (
+                await cls._replace_issue_reference_files(
+                    db,
+                    business_type=REVIEW_ISSUE_REFERENCE_TYPE,
+                    business_id=int(note.note_id),
+                    file_ids=command.reference_file_ids,
+                    user_id=user_id,
+                    actor_name=actor_name,
+                )
+                if command.reference_file_ids
+                else []
+            )
+            version.lock_version += 1
+            version.update_time = now
+            result = ShotGridIssueDetailModel(
+                issueId=note.note_id,
+                projectId=project_id,
+                originVersionId=version_id,
+                originCandidateId=version.selected_candidate_id,
+                originVersionNumber=f'V{int(version.version_no):03d}',
+                reviewerUserId=user_id,
+                reviewerName=actor_name,
+                content=note.content,
+                mediaTimeMs=note.media_time_ms,
+                annotations=note.annotations,
+                referenceFiles=references,
+                status='open',
+                pendingVersionId=version_id,
+                pendingVersionNumber=f'V{int(version.version_no):03d}',
+                createTime=now,
+                updateTime=now,
+            )
+            await cls._audit(
+                db,
+                actor_name=actor_name,
+                dept_name=dept_name,
+                business_type=BusinessType.INSERT.value,
+                method='append_rejected_issue',
+                oper_url=f'/shot-grid/versions/{version_id}/additional-issues',
+                payload={'versionId': version_id, 'lockVersion': command.lock_version},
+                result={'issueId': note.note_id, 'lockVersion': version.lock_version},
+            )
+            await db.commit()
+            return result
         except Exception:
             await db.rollback()
             raise

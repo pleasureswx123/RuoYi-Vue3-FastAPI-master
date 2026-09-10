@@ -735,7 +735,10 @@ async def test_create_rejects_task_before_production_without_reading_source(
 
 
 @pytest.mark.asyncio
-async def test_create_freezes_source_storage_key_before_preflight_rollback(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize('issues_changed', [False, True])
+async def test_create_freezes_source_storage_key_before_preflight_rollback(
+    monkeypatch: pytest.MonkeyPatch, issues_changed: bool
+) -> None:
     source = _RollbackExpiringSource('2026/08/source.mp4')
     rollback_count = 0
 
@@ -753,7 +756,9 @@ async def test_create_freezes_source_storage_key_before_preflight_rollback(monke
         hasAllScope=False,
     )
     project = SimpleNamespace(project_id=PROJECT_ID, project_status='active')
-    task = SimpleNamespace(task_id=TASK_ID, assignee_user_id=USER_ID, task_status='in_progress')
+    task = SimpleNamespace(
+        task_id=TASK_ID, assignee_user_id=USER_ID, task_status='revision' if issues_changed else 'in_progress'
+    )
     inspection = SimpleNamespace(extension='mp4', sha256=FILE_HASH, file_size=10)
     locked_file = SimpleNamespace(
         file_id=FILE_ID,
@@ -816,7 +821,7 @@ async def test_create_freezes_source_storage_key_before_preflight_rollback(monke
     )
     monkeypatch.setattr(
         'module_shot_grid.service.version_submission_service.ShotGridVersionSubmissionDao.get_open_issue_identities',
-        AsyncMock(return_value=[]),
+        AsyncMock(return_value=[{'issue_id': 3001, 'origin_version_id': 9001}] if issues_changed else []),
     )
     monkeypatch.setattr(
         'module_shot_grid.service.version_submission_service.FileInfoDao.get_file_info_by_id_for_update',
@@ -841,7 +846,9 @@ async def test_create_freezes_source_storage_key_before_preflight_rollback(monke
             _current_user(),
         )
 
-    assert exc_info.value.error_key == 'SG_VERSION_FILE_ALREADY_BOUND'
+    assert exc_info.value.error_key == (
+        'SG_ISSUE_SNAPSHOT_CONFLICT' if issues_changed else 'SG_VERSION_FILE_ALREADY_BOUND'
+    )
     assert source.expired
     db.commit.assert_not_awaited()
 

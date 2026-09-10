@@ -12,7 +12,6 @@ from common.vo import PageModel
 from module_admin.entity.vo.user_vo import CurrentUserModel
 from module_shot_grid.dao.project_audit_dao import ShotGridProjectAuditDao
 from module_shot_grid.dao.task_dao import ShotGridTaskDao
-from module_shot_grid.dao.task_schedule_dao import ShotGridTaskScheduleDao
 from module_shot_grid.entity.do.project_do import ShotGridProject
 from module_shot_grid.entity.do.storage_do import ShotGridProjectStorage, ShotGridStorageOperation
 from module_shot_grid.entity.do.task_do import ShotGridTask
@@ -551,21 +550,6 @@ class ShotGridTaskService:
             schedule_start, schedule_end, is_initial_schedule = cls._resolve_start_schedule(task, command, now)
             schedule_change: ShotGridTaskScheduleChange | None = None
             if is_initial_schedule:
-                overlap_task_ids = await ShotGridTaskScheduleDao.find_overlap_task_ids(
-                    db,
-                    project_id=project_id,
-                    task_id=task_id,
-                    assignee_user_id=task.assignee_user_id,
-                    start_time=schedule_start,
-                    end_time=schedule_end,
-                )
-                if overlap_task_ids:
-                    raise shot_grid_error(
-                        409,
-                        'SG_TASK_SCHEDULE_OVERLAP',
-                        '首次排期与同一负责人其他任务重叠，请先在排期页处理',
-                        details={'conflictTaskIds': overlap_task_ids},
-                    )
                 schedule_change = cls._build_start_schedule_change(
                     task=task,
                     actor_user_id=actor_user_id,

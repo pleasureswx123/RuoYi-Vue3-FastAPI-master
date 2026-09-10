@@ -6,6 +6,7 @@ import { ElAffix, ElMessage, ElMessageBox, ElRadio, ElRadioGroup } from 'element
 
 import {
   addVersionIssueDraft,
+  appendVersionIssue,
   createReviewAction,
   deleteVersionIssueDraft,
   getReviewActions,
@@ -125,7 +126,8 @@ const reviewVersion = computed(() => activeCandidate.value
   ? { ...version.value, files: activeCandidate.value.files || [], mediaDerivationStatus: activeCandidate.value.mediaDerivationStatus }
   : version.value)
 const isSelectedCandidateActive = computed(() => Boolean(selectedCandidateId.value) && Number(activeCandidate.value?.candidateId) === Number(selectedCandidateId.value))
-const canAddIssue = computed(() => hasPermission('shotgrid:note:add') && canSubmitDecision.value && isSelectedCandidateActive.value)
+const canAppendIssue = computed(() => canReview.value && hasPermission('shotgrid:note:add') && Boolean(reviewContext.value?.canAppendIssues))
+const canAddIssue = computed(() => hasPermission('shotgrid:note:add') && (canSubmitDecision.value || canAppendIssue.value) && isSelectedCandidateActive.value)
 const canReview = computed(() => hasPermission('shotgrid:version:review'))
 const canRetryFinalDelivery = computed(() => hasPermission('shotgrid:version:retry'))
 const canActivateManual = computed(() => hasPermission('shotgrid:reviewList:activate'))
@@ -465,7 +467,8 @@ async function focusIssueDraft() {
 }
 
 async function submitIssue() {
-  if (issueBusy.value) return
+  if (!canAddIssue.value || issueBusy.value || actionBusy.value) return
+  const isAppending = canAppendIssue.value
   issueBusy.value = true
   try {
     let valid = false
@@ -485,9 +488,25 @@ async function submitIssue() {
       annotations: issueDraft.annotations,
       referenceFileIds: []
     }
+    if (isAppending) {
+      try {
+        await ElMessageBox.confirm(
+          '追加问题将立即发送给制作人，发送后不可修改或删除。确认追加吗？',
+          '确认追加问题',
+          { type: 'warning', confirmButtonText: '追加并发送', cancelButtonText: '继续补充' }
+        )
+      } catch {
+        return
+      }
+    }
     await uploadPendingReferenceFiles()
     payload.referenceFileIds = referenceAttachments.value.map(file => file.fileId)
-    if (editingDraftId.value) {
+    if (isAppending) {
+      await appendVersionIssue(version.value.versionId, {
+        ...payload,
+        lockVersion: reviewContext.value?.currentVersion?.lockVersion ?? version.value.lockVersion
+      })
+    } else if (editingDraftId.value) {
       await updateVersionIssueDraft(version.value.versionId, editingDraftId.value, {
         ...payload,
         lockVersion: editingDraftLockVersion.value
@@ -497,10 +516,10 @@ async function submitIssue() {
     }
     const wasEditing = Boolean(editingDraftId.value)
     clearIssueDraft()
-    ElMessage.success(wasEditing ? '问题草稿已更新，制作人仍不可见' : '问题已保存为草稿，点击“退回并发送问题”后才会发送给制作人')
+    ElMessage.success(isAppending ? '补充问题已发送给制作人' : wasEditing ? '问题草稿已更新，制作人仍不可见' : '问题已保存为草稿，点击“退回并发送问题”后才会发送给制作人')
     await loadReview()
   } catch (error) {
-    ElMessage.error(reviewErrorState(error, editingDraftId.value ? '更新问题草稿失败' : '保存问题草稿失败').message)
+    ElMessage.error(reviewErrorState(error, isAppending ? '追加问题失败' : editingDraftId.value ? '更新问题草稿失败' : '保存问题草稿失败').message)
   } finally {
     issueBusy.value = false
   }
@@ -673,7 +692,7 @@ function candidateSelectionHint(candidate) {
 }
 
 async function submitDecision(actionType) {
-  if (!canSubmitDecision.value || actionBusy.value) return
+  if (!canSubmitDecision.value || actionBusy.value || issueBusy.value) return
   if (hasUnsavedIssueDraft.value) {
     ElMessage.warning('还有未保存的问题草稿，请先保存或清空后再提交审核结论')
     return
@@ -690,27 +709,27 @@ async function submitDecision(actionType) {
     ElMessage.warning('退回前需要存在仍未修复的历史问题，或至少一条当前版新问题')
     return
   }
-  if (actionType === 'reject' && currentVersionDrafts.value.length) {
-    try {
-      await ElMessageBox.confirm(
-        `将退回当前版本，并把 ${currentVersionDrafts.value.length} 条问题草稿正式发送给制作人。发布后问题不可修改或删除。`,
-        '确认退回并发布问题',
-        { type: 'warning', confirmButtonText: '退回并发送', cancelButtonText: '继续检查' }
-      )
-    } catch {
-      return
-    }
-  }
-  const payload = {
-    actionType,
-    selectedCandidateId: selectedCandidateId.value,
-    reason: decisionReason.value.trim() || null,
-    lockVersion: reviewContext.value?.currentVersion?.lockVersion ?? version.value.lockVersion,
-    issueVerifications: actionType === 'defer' ? [] : verificationItems.value
-  }
-  const context = { reviewListId: reviewListId.value, versionId: version.value.versionId, ...payload }
   actionBusy.value = actionType
   try {
+    if (actionType === 'reject') {
+      try {
+        await ElMessageBox.confirm(
+          `是否已检查完所有问题，还有没有需要补充的内容？目前有 ${currentVersionDrafts.value.length} 条新问题。`,
+          '确认退回并发布问题',
+          { type: 'warning', confirmButtonText: '已检查完，退回并发送', cancelButtonText: '继续检查和补充' }
+        )
+      } catch {
+        return
+      }
+    }
+    const payload = {
+      actionType,
+      selectedCandidateId: selectedCandidateId.value,
+      reason: decisionReason.value.trim() || null,
+      lockVersion: reviewContext.value?.currentVersion?.lockVersion ?? version.value.lockVersion,
+      issueVerifications: actionType === 'defer' ? [] : verificationItems.value
+    }
+    const context = { reviewListId: reviewListId.value, versionId: version.value.versionId, ...payload }
     const response = await createReviewAction(version.value.versionId, payload, actionIdempotency.forPayload(context))
     actionIdempotency.reset()
     if (actionType === 'approve' && response.data?.finalDelivery) {
@@ -860,8 +879,8 @@ onBeforeUnmount(() => {
                 </section>
 
                 <section ref="issueComposer" class="assistant-section current-panel" :class="{ 'is-draft-focus': issueDraftPulse }">
-                  <header class="assistant-section-heading"><span class="step-number">2</span><div><h3>记录发现的问题</h3><p>先保存为审核草稿；只有点击“退回并发送问题”后，制作人才会看到。</p></div><strong>{{ currentVersionDrafts.length }} 条草稿</strong></header>
-                  <el-form v-if="canAddIssue" ref="issueFormRef" :model="issueDraft" :rules="issueRules" class="issue-compose" label-position="top" aria-label="记录当前版新问题">
+                  <header class="assistant-section-heading"><span class="step-number">2</span><div><h3>记录发现的问题</h3><p>{{ canAppendIssue ? '制作人提交下一版前可追加问题；确认发送后制作人立即可见。' : isReviewDecisionOpen ? '先保存为审核草稿；只有点击“退回并发送问题”后，制作人才会看到。' : '本轮已结束。仅在任务待修改且制作人尚未提交下一版时可以追加问题。' }}</p></div><strong>{{ isReviewDecisionOpen ? `${currentVersionDrafts.length} 条草稿` : `${currentVersionIssues.length} 条已发布` }}</strong></header>
+                  <el-form v-if="canAddIssue" ref="issueFormRef" :disabled="issueBusy || Boolean(actionBusy)" :model="issueDraft" :rules="issueRules" class="issue-compose" label-position="top" aria-label="记录当前版新问题">
                     <el-form-item label="问题描述" prop="problem"><el-input ref="issueProblemInput" v-model="issueDraft.problem" type="textarea" :rows="2" maxlength="1000" show-word-limit placeholder="看到什么问题？例如：眼睛红色饱和度过高。" /></el-form-item>
                     <el-form-item label="修改目标" prop="target"><el-input v-model="issueDraft.target" type="textarea" :rows="2" maxlength="1000" show-word-limit placeholder="希望如何修改？例如：降低红色饱和度，并保持肤色不变。" /></el-form-item>
                     <el-form-item label="参考内容（可选）">
@@ -893,7 +912,7 @@ onBeforeUnmount(() => {
                         <el-button link type="danger" @click="clearIssueDraft">清除定位</el-button>
                       </div>
                     </el-form-item>
-                    <el-form-item class="issue-compose__actions"><el-button v-if="hasUnsavedIssueDraft" :disabled="issueBusy" @click="clearIssueDraft">{{ editingDraftId ? '取消编辑' : '清空草稿' }}</el-button><el-button type="primary" :loading="issueBusy" @click="submitIssue">{{ editingDraftId ? '更新问题草稿' : '保存问题草稿' }}</el-button></el-form-item>
+                    <el-form-item class="issue-compose__actions"><el-button v-if="hasUnsavedIssueDraft" :disabled="issueBusy" @click="clearIssueDraft">{{ editingDraftId ? '取消编辑' : canAppendIssue ? '清空内容' : '清空草稿' }}</el-button><el-button type="primary" :loading="issueBusy" @click="submitIssue">{{ canAppendIssue ? '追加并发送问题' : editingDraftId ? '更新问题草稿' : '保存问题草稿' }}</el-button></el-form-item>
                   </el-form>
                   <div v-if="currentVersionDrafts.length" class="issue-list current-list">
                     <el-card v-for="(draft, index) in currentVersionDrafts" :key="draft.draftId" class="issue-card issue-draft-card" :class="{ 'is-selected': selectedIssueId === `draft-${draft.draftId}` }" shadow="never">

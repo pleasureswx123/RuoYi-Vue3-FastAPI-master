@@ -144,6 +144,16 @@ export function selectVersionCandidate(versionId, data, idempotencyKey, options 
   })
 }
 
+export function appendVersionIssue(versionId, data, options = {}) {
+  return request({
+    url: `/shot-grid/versions/${assertPositiveId(versionId, '版本')}/additional-issues`,
+    method: 'post',
+    data,
+    signal: options.signal,
+    silentError: true
+  })
+}
+
 export function addVersionIssueDraft(versionId, data, options = {}) {
   return request({
     url: `/shot-grid/versions/${assertPositiveId(versionId, '版本')}/issues`,

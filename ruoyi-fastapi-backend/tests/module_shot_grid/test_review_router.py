@@ -25,6 +25,7 @@ EXPECTED_ROUTES = {
     ('GET', '/shot-grid/versions/{versionId}/review-context'): 'shotgrid:version:review',
     ('PUT', '/shot-grid/versions/{versionId}/selected-candidate'): 'shotgrid:version:review',
     ('POST', '/shot-grid/versions/{versionId}/issues'): 'shotgrid:note:add',
+    ('POST', '/shot-grid/versions/{versionId}/additional-issues'): 'shotgrid:note:add',
     ('PUT', '/shot-grid/versions/{versionId}/issue-drafts/{draftId}'): 'shotgrid:note:add',
     ('DELETE', '/shot-grid/versions/{versionId}/issue-drafts/{draftId}'): 'shotgrid:note:add',
     ('GET', '/shot-grid/issue-drafts/{draftId}/reference-files/{fileId}/download'): 'shotgrid:file:download',

@@ -950,10 +950,12 @@ async def test_reassignment_is_blocked_after_start_or_by_uncommitted_submission(
 @pytest.mark.asyncio
 @pytest.mark.parametrize('all_scope', [False, True])
 @pytest.mark.parametrize('existing_directory', [None, '001_S001'])
+@pytest.mark.parametrize('overlap_task_ids', [[], [999]])
 async def test_start_shot_allows_manager_and_increments_lock_in_same_transaction(
     monkeypatch: pytest.MonkeyPatch,
     all_scope: bool,
     existing_directory: str | None,
+    overlap_task_ids: list[int],
 ) -> None:
     monkeypatch.setattr(ShotGridTaskService, '_now', staticmethod(lambda: datetime(2026, 8, 28, 10)))
     task = _task(assignee_user_id=ASSIGNEE_USER_ID, lock_version=INITIAL_TASK_LOCK_VERSION)
@@ -1002,8 +1004,8 @@ async def test_start_shot_allows_manager_and_increments_lock_in_same_transaction
         AsyncMock(return_value={'user_id': ASSIGNEE_USER_ID, 'producer_code': 'YJF'}),
     )
     monkeypatch.setattr(
-        'module_shot_grid.service.task_service.ShotGridTaskScheduleDao.find_overlap_task_ids',
-        AsyncMock(return_value=[]),
+        'module_shot_grid.dao.task_schedule_dao.ShotGridTaskScheduleDao.find_overlap_task_ids',
+        AsyncMock(return_value=overlap_task_ids),
     )
     audit = AsyncMock()
     monkeypatch.setattr(
@@ -1068,8 +1070,10 @@ async def test_start_shot_allows_manager_and_increments_lock_in_same_transaction
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('overlap_task_ids', [[], [999]])
 async def test_start_asset_task_creates_shared_directory_outbox_and_enters_preparing(
     monkeypatch: pytest.MonkeyPatch,
+    overlap_task_ids: list[int],
 ) -> None:
     monkeypatch.setattr(ShotGridTaskService, '_now', staticmethod(lambda: datetime(2026, 8, 28, 10)))
     task = _task(assignee_user_id=ASSIGNEE_USER_ID, lock_version=INITIAL_TASK_LOCK_VERSION)
@@ -1119,8 +1123,8 @@ async def test_start_asset_task_creates_shared_directory_outbox_and_enters_prepa
         AsyncMock(return_value=None),
     )
     monkeypatch.setattr(
-        'module_shot_grid.service.task_service.ShotGridTaskScheduleDao.find_overlap_task_ids',
-        AsyncMock(return_value=[]),
+        'module_shot_grid.dao.task_schedule_dao.ShotGridTaskScheduleDao.find_overlap_task_ids',
+        AsyncMock(return_value=overlap_task_ids),
     )
     monkeypatch.setattr(
         'module_shot_grid.service.task_service.ShotGridTaskDao.flush',

@@ -16,6 +16,7 @@ from module_shot_grid.entity.vo.access_vo import ShotGridProjectAccessModel
 from module_shot_grid.entity.vo.common_vo import ShotGridLockVersionModel
 from module_shot_grid.entity.vo.review_vo import (
     ShotGridFinalDeliveryModel,
+    ShotGridIssueAppendModel,
     ShotGridIssueDetailModel,
     ShotGridIssueDraftModel,
     ShotGridIssueDraftUpdateModel,
@@ -389,6 +390,23 @@ async def add_shot_grid_version_issue_draft(
     current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
 ) -> Response:
     result = await ShotGridReviewService.add_issue_draft(query_db, version_id, command, current_user)
+    return ResponseUtil.success(data=result)
+
+
+@review_controller.post(
+    '/versions/{versionId}/additional-issues',
+    summary='向退回版本追加并发布问题',
+    response_model=DataResponseModel[ShotGridIssueDetailModel],
+    dependencies=[UserInterfaceAuthDependency('shotgrid:note:add')],
+)
+async def append_shot_grid_version_issue(
+    request: Request,
+    version_id: Annotated[int, Path(alias='versionId', gt=0, le=SQL_BIGINT_MAX)],
+    command: ShotGridIssueAppendModel,
+    query_db: Annotated[AsyncSession, DBSessionDependency()],
+    current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
+) -> Response:
+    result = await ShotGridReviewService.append_rejected_issue(query_db, version_id, command, current_user)
     return ResponseUtil.success(data=result)
 
 

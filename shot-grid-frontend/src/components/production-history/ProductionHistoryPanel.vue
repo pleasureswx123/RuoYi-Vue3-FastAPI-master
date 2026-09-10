@@ -61,7 +61,7 @@ const currentStage = computed(() => String(stageSource.value?.currentStage || 'c
 const activeStep = computed(() => productionHistoryActiveStep(currentStage.value, stageSource.value?.activeStep))
 const currentStageMeta = computed(() => historyStageMeta(currentStage.value))
 const currentAssignee = computed(() => assigneeDisplayName(selectedLane.value?.task?.assignee))
-const selectedEvents = computed(() => eventsForLane(history.value?.events, selectedLane.value?.laneId))
+const selectedEvents = computed(() => eventsForLane(history.value?.events, selectedLane.value?.laneId).reverse())
 const metrics = computed(() => {
   const source = selectedLane.value || history.value?.summary || {}
   return [

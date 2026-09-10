@@ -7,7 +7,7 @@ import pytest
 from sqlalchemy.exc import IntegrityError, MissingGreenlet
 
 from module_admin.entity.vo.user_vo import CurrentUserModel, UserInfoModel
-from module_shot_grid.entity.do.review_do import ShotGridReviewAction
+from module_shot_grid.entity.do.review_do import ShotGridNote, ShotGridReviewAction
 from module_shot_grid.entity.vo.access_vo import ShotGridProjectAccessModel
 from module_shot_grid.entity.vo.review_vo import (
     ShotGridIssueDraftUpdateModel,
@@ -1284,3 +1284,130 @@ async def test_auto_review_list_relation_must_contain_only_auto_version(
         await ShotGridReviewService._ensure_auto_review_relation(AsyncMock(), REVIEW_LIST_ID, VERSION_ID)
 
     assert exc_info.value.error_key == 'SG_AUTO_REVIEW_LIST_INTEGRITY_CONFLICT'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    'blocked', [None, 'submitted', 'new_version', 'completed', 'stale', 'creator', 'reference_failed']
+)
+async def test_append_rejected_issue_only_before_next_submission(
+    monkeypatch: pytest.MonkeyPatch,
+    blocked: str | None,
+) -> None:
+    db = AsyncMock()
+    task, version, review_list = _locked_graph()
+    task.task_status = 'completed' if blocked == 'completed' else 'revision'
+    version.version_status = 'rejected'
+    review_list.review_status = 'completed'
+    access = _access(role='creator' if blocked == 'creator' else 'director')
+    context = _version_context()
+    monkeypatch.setattr(ShotGridReviewService, '_resolve_version_access', AsyncMock(return_value=(context, access)))
+    monkeypatch.setattr(
+        ShotGridReviewService, '_lock_version_graph', AsyncMock(return_value=(PROJECT_ID, task, version, access))
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.dao.review_dao.ShotGridReviewDao.get_latest_version_no',
+        AsyncMock(return_value=2 if blocked == 'new_version' else 1),
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.dao.version_submission_dao.ShotGridVersionSubmissionDao.get_unresolved_submission_for_update',
+        AsyncMock(return_value=object() if blocked == 'submitted' else None),
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.dao.review_dao.ShotGridReviewDao.get_auto_review_list_for_update',
+        AsyncMock(return_value=review_list),
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.dao.review_dao.ShotGridReviewDao.get_auto_review_relation_version_ids',
+        AsyncMock(return_value=[VERSION_ID]),
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.dao.review_dao.ShotGridReviewDao.get_version_context', AsyncMock(return_value=context)
+    )
+    notes = []
+
+    async def add_note(_db: Any, note: ShotGridNote) -> ShotGridNote:
+        note.note_id = ISSUE_ID
+        notes.append(note)
+        return note
+
+    monkeypatch.setattr('module_shot_grid.dao.review_dao.ShotGridReviewDao.add_note', add_note)
+    monkeypatch.setattr(ShotGridReviewService, '_audit', AsyncMock())
+    if blocked == 'reference_failed':
+        monkeypatch.setattr(
+            ShotGridReviewService,
+            '_replace_issue_reference_files',
+            AsyncMock(side_effect=ShotGridReviewService._invalid_transition('参考文件不可用')),
+        )
+    command = SimpleNamespace(
+        content='补充：修复边缘穿帮',
+        media_time_ms=None,
+        annotations=None,
+        reference_file_ids=['11111111-1111-4111-8111-111111111111'] if blocked == 'reference_failed' else [],
+        lock_version=99 if blocked == 'stale' else version.lock_version,
+    )
+    if blocked:
+        with pytest.raises(ShotGridDomainException):
+            await ShotGridReviewService.append_rejected_issue(db, VERSION_ID, command, _current_user())
+        assert len(notes) == (1 if blocked == 'reference_failed' else 0)
+        db.commit.assert_not_awaited()
+        db.rollback.assert_awaited_once()
+        return
+
+    initial_version_lock = version.lock_version
+    result = await ShotGridReviewService.append_rejected_issue(db, VERSION_ID, command, _current_user())
+    assert result.issue_id == ISSUE_ID
+    assert result.content == '补充：修复边缘穿帮'
+    assert result.status == 'open'
+    assert result.pending_version_id == VERSION_ID
+    assert notes[0].origin_candidate_id == CANDIDATE_ID
+    assert task.task_status == 'revision'
+    assert version.version_status == 'rejected'
+    assert review_list.review_status == 'completed'
+    assert version.lock_version == initial_version_lock + 1
+    db.commit.assert_awaited_once()
+    db.rollback.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    'task_status,latest,submitted,expected',
+    [
+        ('revision', 1, False, True),
+        ('revision', 1, True, False),
+        ('revision', 2, False, False),
+        ('pending_review', 2, False, False),
+        ('completed', 1, False, False),
+    ],
+)
+async def test_review_context_exposes_append_window(
+    monkeypatch: pytest.MonkeyPatch,
+    task_status: str,
+    latest: int,
+    submitted: bool,
+    expected: bool,
+) -> None:
+    context = {**_version_context(), 'version_status': 'rejected', 'task_status': task_status}
+    monkeypatch.setattr(ShotGridReviewService, '_resolve_version_access', AsyncMock(return_value=(context, _access())))
+    for method in (
+        'get_task_issues',
+        'get_version_candidates',
+        'get_version_files',
+        'get_issue_drafts',
+        'get_issue_responses',
+        'get_issue_verifications',
+        'get_issue_reference_files',
+    ):
+        monkeypatch.setattr(f'module_shot_grid.dao.review_dao.ShotGridReviewDao.{method}', AsyncMock(return_value=[]))
+    monkeypatch.setattr(
+        'module_shot_grid.dao.final_delivery_dao.ShotGridFinalDeliveryDao.get_by_version', AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.dao.review_dao.ShotGridReviewDao.get_latest_version_no', AsyncMock(return_value=latest)
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.dao.version_submission_dao.ShotGridVersionSubmissionDao.has_unresolved_submission',
+        AsyncMock(return_value=submitted),
+    )
+    result = await ShotGridReviewService.get_review_context(AsyncMock(), VERSION_ID, _current_user())
+    assert result.can_append_issues is expected

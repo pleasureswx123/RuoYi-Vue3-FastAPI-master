@@ -396,6 +396,12 @@ class ShotGridNoteCreateModel(ShotGridApiModel):
         raise ValueError('修改问题必须填写文字内容或至少添加一项画面标注')
 
 
+class ShotGridIssueAppendModel(ShotGridNoteCreateModel):
+    """向最新退回版本追加正式问题，以版本锁防止重复或过期发送。"""
+
+    lock_version: int = Field(ge=0, le=SQL_INTEGER_MAX)
+
+
 class ShotGridIssueDraftUpdateModel(ShotGridNoteCreateModel):
     """更新尚未随退回动作发布的问题草稿。"""
 
@@ -522,6 +528,7 @@ class ShotGridReviewContextModel(ShotGridApiModel):
     """审核当前版本所需的历史问题与本版新问题。"""
 
     current_version: ShotGridReviewVersionSummaryModel
+    can_append_issues: bool = False
     candidates: list[ShotGridVersionCandidateModel] = Field(default_factory=list)
     carried_issues: list[ShotGridCarriedIssueModel] = Field(default_factory=list)
     current_version_issues: list[ShotGridIssueDetailModel] = Field(default_factory=list)
