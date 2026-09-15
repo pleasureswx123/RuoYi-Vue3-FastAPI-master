@@ -122,25 +122,29 @@ onBeforeUnmount(() => {
 
 <style scoped lang="scss">
 .login-stage-media {
-  position: absolute;
-  inset: 28px;
+  position: relative;
+  grid-row: 2;
+  min-width: 0;
+  min-height: 260px;
+  overflow: hidden;
   pointer-events: none;
-  background: #091117;
 }
 
 .login-stage-media__image {
   position: absolute;
-  inset: 80px 0 0;
+  // 动画独占中间布局行，完整显示展台，不与品牌及介绍文字重叠。
+  inset: 0;
   background-repeat: no-repeat;
-  background-position: center top;
+  background-position: center;
   background-size: contain;
+  mask-image: linear-gradient(to bottom, transparent, #000 6%, #000 88%, transparent);
 }
 
 .login-stage-media__video {
   width: 100%;
   height: 100%;
   object-fit: contain;
-  object-position: center top;
+  object-position: center;
   opacity: 0;
   transition: opacity 500ms ease;
 
@@ -152,8 +156,8 @@ onBeforeUnmount(() => {
 .login-stage-media__toggle {
   position: absolute;
   z-index: 4;
-  top: 16px;
-  right: 16px;
+  top: 4px;
+  right: 4px;
   color: rgba(243, 245, 247, 0.76);
   pointer-events: auto;
   background: rgba(8, 14, 20, 0.6);

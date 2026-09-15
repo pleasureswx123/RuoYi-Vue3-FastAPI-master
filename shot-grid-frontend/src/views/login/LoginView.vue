@@ -96,10 +96,10 @@ onMounted(() => refreshCaptcha().catch(() => undefined))
         <p class="login-scene__eyebrow">AI FILM PRODUCTION</p>
         <h1>让每一个镜头，<br />沿着清晰的制作链路完成。</h1>
         <p>
-          Shot Grid 连接项目、镜头、资产、版本与审核，让团队在同一个业务空间中协作。
+          从分镜与资产、任务排期，到版本审核与最终交付，让团队沿着同一条制作链路协作。
         </p>
         <div class="login-scene__sequence" aria-hidden="true">
-          <span>PROJECT</span><i></i><span>SHOT</span><i></i><span>VERSION</span><i></i><span>REVIEW</span>
+          <span>SHOT / ASSET</span><i></i><span>PRODUCTION</span><i></i><span>REVIEW</span><i></i><span>DELIVERY</span>
         </div>
       </div>
     </section>
@@ -184,20 +184,21 @@ onMounted(() => refreshCaptcha().catch(() => undefined))
 .login-scene {
   position: relative;
   isolation: isolate;
-  display: flex;
+  display: grid;
   min-height: 100vh;
-  align-items: flex-end;
-  padding: clamp(48px, 7vw, 104px);
+  grid-template-rows: auto minmax(260px, 1fr) auto;
+  gap: 20px;
+  padding: clamp(48px, 4.5vw, 76px);
   overflow: hidden;
   color: var(--sg-on-media);
   background:
-    linear-gradient(180deg, rgba(7, 9, 13, 0.05), rgba(7, 9, 13, 0.92)),
-    radial-gradient(circle at 65% 30%, rgba(255, 181, 87, 0.25), transparent 27%),
-    linear-gradient(135deg, #232833 0%, #121721 46%, #090b0f 100%);
+    radial-gradient(ellipse at 60% 40%, rgba(29, 57, 66, 0.22), transparent 65%),
+    #060c10;
 }
 
 .login-scene::before,
 .login-scene::after {
+  display: none;
   position: absolute;
   z-index: 1;
   content: '';
@@ -221,11 +222,8 @@ onMounted(() => refreshCaptcha().catch(() => undefined))
 
 .login-scene__frame-lines {
   position: absolute;
-  z-index: 0;
+  z-index: 1;
   inset: 28px;
-  background:
-    linear-gradient(180deg, rgba(4, 7, 11, 0.02) 0%, rgba(4, 7, 11, 0.08) 36%, rgba(4, 7, 11, 0.92) 82%, rgba(4, 7, 11, 0.98) 100%),
-    linear-gradient(90deg, rgba(4, 7, 11, 0.22) 0%, transparent 60%);
 
   border: 1px solid rgba(255, 255, 255, 0.06);
   box-shadow: inset 0 0 90px rgba(0, 0, 0, 0.28);
@@ -255,12 +253,11 @@ onMounted(() => refreshCaptcha().catch(() => undefined))
 }
 
 .login-scene__company-logo {
-  position: absolute;
-  top: clamp(52px, 7vw, 104px);
-  left: clamp(52px, 7vw, 104px);
+  position: relative;
+  grid-row: 1;
   z-index: 2;
   display: block;
-  width: clamp(300px, 26vw, 380px);
+  width: clamp(200px, 19vw, 280px);
   height: auto;
   opacity: 0.9;
   pointer-events: none;
@@ -268,6 +265,7 @@ onMounted(() => refreshCaptcha().catch(() => undefined))
 
 .login-scene__content {
   position: relative;
+  grid-row: 3;
   z-index: 2;
   max-width: 760px;
 }
@@ -282,7 +280,7 @@ onMounted(() => refreshCaptcha().catch(() => undefined))
 
 .login-scene h1 {
   margin: 0;
-  font-size: clamp(28px, 3vw, 48px);
+  font-size: clamp(28px, 2.5vw, 40px);
   font-weight: 600;
   letter-spacing: -0.055em;
   line-height: 1.14;
@@ -290,7 +288,7 @@ onMounted(() => refreshCaptcha().catch(() => undefined))
 
 .login-scene__content > p:not(.login-scene__eyebrow) {
   max-width: 620px;
-  margin: 28px 0 38px;
+  margin: 20px 0 24px;
   color: rgba(243, 245, 247, 0.68);
   font-size: 15px;
   line-height: 1.85;
