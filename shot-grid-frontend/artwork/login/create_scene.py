@@ -30,7 +30,14 @@ def material(name, color, metal=0, roughness=0.4, emission=0):
     mat = bpy.data.materials.new(name)
     mat.diffuse_color = (*color, 1)
     mat.use_nodes = True
-    shader = mat.node_tree.nodes.get("Principled BSDF")
+    # 使用节点类型定位，兼容中文界面生成的本地化默认节点名。
+    shader = next((node for node in mat.node_tree.nodes if node.type == "BSDF_PRINCIPLED"), None)
+    if shader is None:
+        shader = mat.node_tree.nodes.new("ShaderNodeBsdfPrincipled")
+        output = next((node for node in mat.node_tree.nodes if node.type == "OUTPUT_MATERIAL"), None)
+        if output is None:
+            output = mat.node_tree.nodes.new("ShaderNodeOutputMaterial")
+        mat.node_tree.links.new(shader.outputs["BSDF"], output.inputs["Surface"])
     shader.inputs["Base Color"].default_value = (*color, 1)
     shader.inputs["Metallic"].default_value = metal
     shader.inputs["Roughness"].default_value = roughness
