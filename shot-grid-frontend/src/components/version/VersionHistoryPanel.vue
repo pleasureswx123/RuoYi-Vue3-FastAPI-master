@@ -7,6 +7,7 @@ import 'element-plus/es/components/tab-pane/style/css'
 import { Refresh } from '@element-plus/icons-vue'
 
 import { getReviewActions, getTaskIssues } from '@/api/shot-grid/reviews'
+import { useVersionRealtime } from '@/composables/useVersionRealtime'
 import { getTaskVersions, getVersionDetail } from '@/api/shot-grid/versions'
 import ReviewReferenceFiles from '@/components/review/ReviewReferenceFiles.vue'
 import { tagTypeFromTone } from '@/utils/tag'
@@ -39,8 +40,19 @@ const detailLoading = ref(false)
 const listError = ref(null)
 const detailError = ref(null)
 const feedbackNotes = ref([])
+const feedbackRealtimeId = computed(() => props.canListNotes && props.canQuery ? selectedVersionId.value : null)
+useVersionRealtime(feedbackRealtimeId, async versionId => {
+  const targetTaskId = Number(props.taskId)
+  const generation = contextGeneration
+  const operation = Number(props.operationGeneration)
+  const response = await getTaskIssues(targetTaskId, {})
+  if (!stillCurrent(generation, targetTaskId, operation) || versionId !== selectedVersionId.value || detailLoading.value || !versionDetail.value) return
+  // 仅替换问题数据，保留当前文件、预览位置和页签。
+  feedbackNotes.value = buildVersionFeedback(response.data || [], Number(versionId))
+})
 const feedbackActions = ref([])
 const selectedFeedback = ref(null)
+const feedbackCategory = ref('files')
 const selectedFeedbackGroupKey = ref('')
 const feedbackScope = ref('pending')
 const opinionTab = ref('current')
@@ -76,7 +88,7 @@ const feedbackGroups = computed(() => {
       const candidate = Number(source?.versionId) === Number(note.originVersionId)
         ? source?.candidates?.find(item => Number(item.candidateId) === Number(note.originCandidateId)) : null
       addGroup(note.originVersionId, candidate || { candidateId: note.originCandidateId, files: [] }, key,
-        candidate?.candidateNumber || `${note.originVersionNumber || `来源版本 #${note.originVersionId}`} · ${note.originCandidateId ? `文件 #${note.originCandidateId}` : '历史文件'}`)
+        candidate?.candidateNumber || `${note.originVersionNumber || `来源版本 #${note.originVersionId}`} · ${note.originCandidateId ? `文件 #${note.originCandidateId}` : '整体反馈'}`)
     }
     const group = groups.get(key)
     group.notes.push(note)
@@ -85,7 +97,14 @@ const feedbackGroups = computed(() => {
   }
   return [...groups.values()]
 })
-const currentFeedbackGroups = computed(() => feedbackGroups.value.filter(group => group.versionId === Number(versionDetail.value?.versionId)))
+const currentFeedbackGroups = computed(() => feedbackGroups.value.filter(group => group.versionId === Number(versionDetail.value?.versionId) && group.candidateId != null))
+const overallFeedbackNotes = computed(() => feedbackNotes.value.filter(note => Number(note.originVersionId) === Number(versionDetail.value?.versionId) && note.originCandidateId == null))
+watch(overallFeedbackNotes, notes => {
+  if (!notes.length) feedbackCategory.value = 'files'
+})
+const overallPendingCount = computed(() => overallFeedbackNotes.value.filter(note => note.displayScope === 'pending').length)
+const fileFeedbackPendingCount = computed(() => pendingFeedbackCount.value - overallPendingCount.value)
+const currentFilePendingCount = computed(() => currentFeedbackGroups.value.reduce((total, group) => total + group.pendingCount, 0))
 const previousNotes = computed(() => feedbackNotes.value.filter(note => Number(note.originVersionId) !== Number(versionDetail.value?.versionId)))
 const previousPending = computed(() => previousNotes.value.filter(note => note.displayScope === 'pending'))
 const newPendingCount = computed(() => feedbackNotes.value.filter(note => note.displayScope === 'pending' && Number(note.originVersionId) === Number(selectedVersionId.value)).length)
@@ -97,6 +116,7 @@ const previousPanes = computed(() => [
   { name: 'other', label: '其他记录', notes: previousNotes.value.filter(note => note.displayScope !== 'pending' && note.noteStatus !== 'resolved') }
 ].filter(pane => pane.notes.length))
 function showPreviousPending() {
+  feedbackCategory.value = 'files'
   opinionTab.value = 'previous'
   feedbackPanel.value?.scrollIntoView?.({ behavior: 'smooth', block: 'start' })
 }
@@ -110,7 +130,7 @@ watch(previousPanes, panes => {
 const previousGroups = computed(() => feedbackGroups.value.filter(group => group.versionId !== Number(versionDetail.value?.versionId)).map(group => {
   const source = previousSourceDetails.value[group.versionId]
   const candidate = source?.candidates?.find(item => Number(item.candidateId) === Number(group.candidateId))
-  return { ...group, label: candidate?.candidateNumber || `${source?.versionNumber || group.notes[0]?.originVersionNumber || '历史版本'} · 原文件`, unavailable: !source }
+  return { ...group, label: candidate?.candidateNumber || `${source?.versionNumber || group.notes[0]?.originVersionNumber || '历史版本'} · ${group.candidateId == null ? '整体反馈' : '原文件'}`, unavailable: !source }
 }))
 watch([previousPanes, previousGroups], ([panes]) => {
   const next = {}
@@ -145,11 +165,11 @@ const sourceMediaVersion = computed(() => {
   if (!detail || !sourceNote.value) return null
   const candidate = detail.candidates?.find(item => Number(item.candidateId) === Number(sourceNote.value.originCandidateId))
   return { ...detail, candidateId: sourceNote.value.originCandidateId, versionNumber: candidate?.candidateNumber || detail.versionNumber,
-    files: candidate?.files || (sourceNote.value.originCandidateId ? [] : detail.files || []),
+    files: candidate?.files || [],
     mediaDerivationStatus: candidate?.mediaDerivationStatus || detail.mediaDerivationStatus }
 })
 const activeFeedbackGroup = computed(() => feedbackGroups.value.find(item => item.key === selectedFeedbackGroupKey.value) || null)
-const pendingFileCount = computed(() => feedbackGroups.value.filter(item => item.pendingCount).length)
+const pendingFileCount = computed(() => feedbackGroups.value.filter(item => item.candidateId != null && item.pendingCount).length)
 const visibleFeedbackNotes = computed(() => (activeFeedbackGroup.value?.notes || []).filter(note =>
   feedbackScope.value === 'pending' ? note.displayScope === 'pending' : note.displayScope !== 'pending'
 ))
@@ -306,6 +326,10 @@ function buildVersionFeedback(issues, versionId) {
     })
 }
 
+function feedbackAuthor(note) {
+  return note.reviewerName || (note.reviewerUserId ? `用户 #${note.reviewerUserId}` : '未知审核人')
+}
+
 function feedbackBadgeMeta(note) {
   if (note.displayScope === 'pending') {
     return {
@@ -333,6 +357,7 @@ function feedbackBadgeMeta(note) {
 }
 
 function feedbackCandidateLabel(note) {
+  if (note.originCandidateId == null) return `${note.originVersionNumber || '来源版本'} · 整体反馈`
   return note.originCandidateNumber || versionDetail.value?.candidates?.find(item => Number(item.candidateId) === Number(note.originCandidateId))?.candidateNumber
     || `${note.originVersionNumber || '来源版本'} · 文件 #${note.originCandidateId}`
 }
@@ -668,8 +693,26 @@ defineExpose({ focusIssue })
               </header>
               <el-skeleton v-if="feedbackLoading" class="feedback-state" :rows="4" animated />
               <el-alert v-else-if="feedbackError" class="feedback-state is-error" :title="feedbackError.title" :description="feedbackError.message" type="error" :closable="false" show-icon />
-              <div v-else-if="currentFeedbackGroups.length || previousNotes.length" class="feedback-layout">
-                <nav class="feedback-file-nav" aria-label="按文件查看修改意见">
+              <ElTabs v-else-if="currentFeedbackGroups.length || previousNotes.length || overallFeedbackNotes.length" v-model="feedbackCategory" tab-position="left" type="border-card" class="feedback-category-tabs" :class="{ 'is-file-only': !overallFeedbackNotes.length }" aria-label="反馈类型">
+                <ElTabPane v-if="overallFeedbackNotes.length" name="overall-feedback" label="本版整体反馈">
+                  <template #label><span class="feedback-category-title"><span class="feedback-category-label">本版整体反馈</span><el-tag v-if="overallPendingCount" class="feedback-category-count" type="danger" effect="dark" round size="small" :aria-label="`整体反馈待处理 ${overallPendingCount} 条`">{{ overallPendingCount }}</el-tag></span></template>
+                <section v-if="overallFeedbackNotes.length" class="overall-feedback" aria-label="本版整体反馈">
+                  <header><strong>本版整体反馈</strong><el-tag size="small" type="warning" effect="plain" round>待处理 {{ overallPendingCount }} 条</el-tag></header>
+                  <div class="overall-feedback__items">
+                    <el-card v-for="note in overallFeedbackNotes" :key="note.noteId" class="feedback-item" shadow="never">
+                      <p class="overall-feedback__content">{{ note.content }}</p>
+                      <p v-if="displayedResponse(note)" class="feedback-response">制作人处理说明：{{ displayedResponse(note).responseText }}</p>
+                      <p v-if="feedbackVerificationComment(note)" class="feedback-verification">审核人未通过原因：{{ feedbackVerificationComment(note) }}</p>
+                      <small class="feedback-author">{{ feedbackAuthor(note) }} · {{ formatReviewDateTime(note.createTime) }} 提出</small>
+                      <ReviewReferenceFiles :files="note.referenceFiles || []" compact />
+                    </el-card>
+                  </div>
+                </section>
+                </ElTabPane>
+                <ElTabPane name="files" label="文件反馈">
+                  <template #label><span class="feedback-category-title"><span class="feedback-category-label">文件反馈</span><el-tag v-if="fileFeedbackPendingCount" class="feedback-category-count" type="danger" effect="dark" round size="small" :aria-label="`文件反馈待处理 ${fileFeedbackPendingCount} 条`">{{ fileFeedbackPendingCount }}</el-tag></span></template>
+                <div class="feedback-layout">
+                <nav v-if="currentFeedbackGroups.length" class="feedback-file-nav" aria-label="按文件查看修改意见">
                   <el-button v-for="group in currentFeedbackGroups" :key="group.key" class="feedback-file" :title="group.candidate.files?.find(file => file.role === 'review_media')?.businessFileName" :class="{ active: group.key === selectedFeedbackGroupKey }" :aria-pressed="group.key === selectedFeedbackGroupKey" @click="selectFeedbackGroup(group.key)">
                     <span class="feedback-file__content">
                       <ReviewCandidateThumbnail :version-id="group.versionId" :candidate="group.candidate" :can-preview="canDownload" :active="group.key === selectedFeedbackGroupKey" />
@@ -680,12 +723,12 @@ defineExpose({ focusIssue })
                     </span>
                   </el-button>
                 </nav>
-                <div class="feedback-media">
+                <div v-if="currentFeedbackGroups.length" class="feedback-media">
                   <ReviewMediaWorkspace v-if="feedbackMediaVersion" :ref="element => feedbackMedia = element" :version="feedbackMediaVersion" :selected-note="selectedFeedback" :can-download="canDownload" feedback-mode @clear-note-focus="selectedFeedback = null" />
                 </div>
-                <aside class="feedback-list-panel">
+                <aside v-if="currentFeedbackGroups.length || previousNotes.length" class="feedback-list-panel">
                   <ElTabs v-model="opinionTab" type="border-card" class="opinion-tabs" stretch>
-                    <ElTabPane name="current" :label="`本轮问题 ${newPendingCount}`">
+                    <ElTabPane name="current" :label="`本轮问题 ${currentFilePendingCount}`">
                   <h4>{{ activeFeedbackGroup?.label }} · 修改意见</h4>
                   <ElTabs v-model="feedbackScope" stretch @tab-change="selectFeedbackScope">
                     <ElTabPane v-for="scope in ['pending', 'history']" :key="scope" :name="scope" :label="scope === 'pending' ? `待处理（${activeFeedbackGroup?.pendingCount || 0}）` : `历史（${activeFeedbackGroup?.historyCount || 0}）`">
@@ -699,7 +742,8 @@ defineExpose({ focusIssue })
                         <small class="feedback-context">{{ feedbackContext(note) }}</small>
                         <p v-if="displayedResponse(note)" class="feedback-response">制作人对 {{ displayedResponse(note).versionNumber || '后续版本' }} 的处理说明：{{ displayedResponse(note).responseText }}</p>
                         <p v-if="feedbackVerificationComment(note)" class="feedback-verification">审核人未通过原因：{{ feedbackVerificationComment(note) }}</p>
-                        <small><template v-if="note.annotations?.items?.length">{{ note.annotations.items.length }} 个画面标注 · </template><template v-if="note.mediaTimeMs !== null && note.mediaTimeMs !== undefined">{{ formatMediaTime(note.mediaTimeMs) }} · </template>{{ formatReviewDateTime(note.createTime) }}</small>
+                        <small class="feedback-author">{{ feedbackAuthor(note) }} · {{ formatReviewDateTime(note.createTime) }} 提出</small>
+                        <small v-if="note.annotations?.items?.length || (note.mediaTimeMs !== null && note.mediaTimeMs !== undefined)"><template v-if="note.annotations?.items?.length">{{ note.annotations.items.length }} 个画面标注</template><template v-if="note.mediaTimeMs !== null && note.mediaTimeMs !== undefined"> · {{ formatMediaTime(note.mediaTimeMs) }}</template></small>
                       </span>
                     </el-button>
                     <ReviewReferenceFiles :files="note.referenceFiles || []" compact />
@@ -723,7 +767,8 @@ defineExpose({ focusIssue })
                         <p>{{ note.content || '该问题仅包含画面标注' }}</p>
                         <p v-if="feedbackVerificationComment(note)" class="feedback-verification">审核人未通过原因：{{ feedbackVerificationComment(note) }}</p>
                         <p v-if="displayedResponse(note)" class="feedback-response">处理说明：{{ displayedResponse(note).responseText }}</p>
-                        <small><template v-if="note.annotations?.items?.length">{{ note.annotations.items.length }} 个画面标注 · </template><template v-if="note.mediaTimeMs !== null && note.mediaTimeMs !== undefined">{{ formatMediaTime(note.mediaTimeMs) }} · </template>{{ formatReviewDateTime(note.createTime) }}</small>
+                        <small class="feedback-author">{{ feedbackAuthor(note) }} · {{ formatReviewDateTime(note.createTime) }} 提出</small>
+                        <small v-if="note.annotations?.items?.length || (note.mediaTimeMs !== null && note.mediaTimeMs !== undefined)"><template v-if="note.annotations?.items?.length">{{ note.annotations.items.length }} 个画面标注</template><template v-if="note.mediaTimeMs !== null && note.mediaTimeMs !== undefined"> · {{ formatMediaTime(note.mediaTimeMs) }}</template></small>
                       </span>
                     </el-button>
                     <ReviewReferenceFiles :files="note.referenceFiles || []" compact />
@@ -736,7 +781,9 @@ defineExpose({ focusIssue })
                     </ElTabPane>
                   </ElTabs>
                 </aside>
-              </div>
+                </div>
+                </ElTabPane>
+              </ElTabs>
               <el-empty v-else class="feedback-state" :image-size="48" description="审核人没有在该版本提出修改问题" />
             </el-card>
           </div>
@@ -749,12 +796,13 @@ defineExpose({ focusIssue })
       <el-pagination v-if="total > pageSize" class="version-pagination" small background layout="prev, pager, next" :current-page="pageNum" :page-size="pageSize" :total="total" :disabled="loading" aria-label="版本历史分页" @current-change="changePage" />
     </div>
     </el-card>
-    <ElDrawer v-model="sourceDrawerOpen" title="上一轮意见 · 原始画面与标注" size="min(960px, 92vw)" append-to-body destroy-on-close @close="closeSourceNote">
+    <ElDrawer v-model="sourceDrawerOpen" :title="sourceNote?.originCandidateId == null ? '上一轮整体反馈' : '上一轮意见 · 原始画面与标注'" size="min(960px, 92vw)" append-to-body destroy-on-close @close="closeSourceNote">
       <el-skeleton v-if="feedbackSourceLoading" :rows="6" animated />
       <el-alert v-else-if="feedbackSourceError" :title="feedbackSourceError.message" type="error" :closable="false"><el-button @click="loadFeedbackSource">重新加载来源文件</el-button></el-alert>
       <template v-else-if="sourceMediaVersion">
         <p>来源 {{ sourceMediaVersion.versionNumber }} · 当前主区域仍为 {{ versionDetail?.versionNumber }}</p>
-        <ReviewMediaWorkspace ref="sourceMedia" :version="sourceMediaVersion" :selected-note="sourceNote" :can-download="canDownload" feedback-mode />
+        <p v-if="sourceNote?.originCandidateId == null">{{ sourceNote?.content }}</p>
+        <ReviewMediaWorkspace v-else ref="sourceMedia" :version="sourceMediaVersion" :selected-note="sourceNote" :can-download="canDownload" feedback-mode />
         <ReviewReferenceFiles :files="sourceNote?.referenceFiles || []" />
       </template>
     </ElDrawer>
@@ -822,6 +870,10 @@ defineExpose({ focusIssue })
 .feedback-decision p { flex: 1; min-width: 180px; margin: 0; overflow-wrap: anywhere; color: var(--sg-text-secondary); font-size: 11px; line-height: 1.55; }
 .feedback-decision small { margin-left: auto; color: var(--sg-text-muted); font-size: 12px; white-space: nowrap; }
 .feedback-decision__count { color: var(--sg-accent); font-size: 13px; font-weight: 700; }
+.overall-feedback { min-width: 0; padding: 12px; border: 1px solid var(--sg-border); border-radius: 8px; background: var(--sg-accent-soft); }
+.overall-feedback > header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.overall-feedback__items { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
+.overall-feedback__content { white-space: pre-wrap; overflow-wrap: anywhere; margin: 8px 0; }
 .feedback-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 0.44fr); gap: 14px; align-items: start; }
 .feedback-list { display: grid; max-height: min(620px, calc(100dvh - 116px)); align-content: start; overflow-x: hidden; overflow-y: auto; scrollbar-width: thin; gap: 10px; }
 .feedback-list .feedback-item { width: 100%; min-width: 0; color: var(--sg-text); background: rgba(255, 255, 255, 0.025); border-color: var(--sg-border); border-radius: 9px; }
@@ -918,4 +970,17 @@ defineExpose({ focusIssue })
 @media (max-width: 600px) {
   .version-rail { grid-template-columns: 1fr; }
 }
+</style>
+
+<style scoped>
+.feedback-category-tabs.is-file-only { border: 0; box-shadow: none; }
+.feedback-category-tabs.is-file-only :deep(> .el-tabs__header) { display: none; }
+.feedback-category-tabs.is-file-only :deep(> .el-tabs__content) { padding: 0; }
+.feedback-category-tabs :deep(> .el-tabs__content) { min-width: 0; }
+.feedback-category-tabs :deep(> .el-tabs__header .el-tabs__item) { height: auto; width: 36px; padding: 14px 8px; justify-content: center; font-size: 12px; }
+.feedback-category-title { display: flex; flex-direction: column; align-items: center; gap: 5px; }
+.feedback-category-count { min-width: 16px; height: 16px; padding: 0 3px; font-size: 10px; line-height: 14px; }
+.feedback-category-label { writing-mode: vertical-rl; text-orientation: upright; letter-spacing: 2px; line-height: 18px; }
+.feedback-category-tabs .overall-feedback { background: transparent; }
+.version-feedback-panel .feedback-author { font-size: 10px; }
 </style>

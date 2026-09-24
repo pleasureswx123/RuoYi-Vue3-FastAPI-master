@@ -7,6 +7,8 @@ import { ArrowLeft, Edit, Refresh } from '@element-plus/icons-vue'
 
 import { assertPositiveId } from '@/api/shot-grid/projects'
 import { getTaskIssues } from '@/api/shot-grid/reviews'
+import { showWorkflowSuccess } from '@/utils/workflowSuccess'
+import { useVersionRealtime } from '@/composables/useVersionRealtime'
 import { getTaskDetail } from '@/api/shot-grid/tasks'
 import VersionWorkspace from '@/components/version/VersionWorkspace.vue'
 import { useSessionStore } from '@/store/modules/session'
@@ -31,6 +33,7 @@ const PREPARATION_POLL_INTERVAL_MS = 1500
 const PREPARATION_POLL_MAX_ATTEMPTS = 80
 
 const props = defineProps({ targetTaskId: { type: [Number, String], default: null }, embedded: { type: Boolean, default: false } })
+const emit = defineEmits(['completed'])
 const route = useRoute()
 const router = useRouter()
 const sessionStore = useSessionStore()
@@ -60,6 +63,26 @@ const taskId = computed(() => {
 })
 const wildcard = computed(() => sessionStore.permissions.includes('*:*:*'))
 const hasPermission = permission => wildcard.value || sessionStore.permissions.includes(permission)
+const issueRealtimeVersionId = computed(() => hasPermission('shotgrid:version:query') && ['pending_review', 'revision'].includes(task.value?.taskStatus)
+  ? task.value?.latestVersion?.versionId : null)
+useVersionRealtime(issueRealtimeVersionId, async versionId => {
+  const targetTaskId = taskId.value
+  const generation = loadGeneration
+  const [taskResponse, response] = await Promise.all([
+    getTaskDetail(targetTaskId),
+    hasPermission('shotgrid:note:list') ? getTaskIssues(targetTaskId, { status: 'open' }) : Promise.resolve({ data: [] })
+  ])
+  if (disposed || loading.value || generation !== loadGeneration || targetTaskId !== taskId.value || versionId !== issueRealtimeVersionId.value) return
+  const knownIds = new Set(openIssues.value.map(issue => issue.issueId))
+  const updated = response.data || []
+  const added = updated.filter(issue => !knownIds.has(issue.issueId)).length
+  const previousStatus = task.value?.taskStatus
+  task.value = taskResponse.data
+  openIssues.value = updated
+  if (previousStatus === 'pending_review' && task.value?.taskStatus === 'revision') ElMessage.info('审核已退回，请按修改意见继续制作')
+  else if (previousStatus === 'pending_review' && task.value?.taskStatus === 'completed') ElMessage.success('审核已通过，任务已完成')
+  else if (added) ElMessage.info(`审核人追加了 ${added} 条修改意见，已更新问题列表`)
+})
 const transferDialog = ref(null)
 const allowedActions = computed(() => new Set(task.value?.allowedActions || []))
 const canEdit = computed(() => (
@@ -305,9 +328,10 @@ async function handleVersionCommitted(_status, operationContext) {
     ElMessage.success('版本已发布，请返回原任务查看最新结果。')
     return
   }
-  ElMessage.success(task.value?.taskStatus === 'pending_review'
-    ? '候选已追加到当前审核轮次'
-    : '新版本已发布并创建自动审核单')
+  const submittedTaskId = taskId.value
+  showWorkflowSuccess(task.value?.taskStatus === 'pending_review' ? 'appended' : 'submitted').then(confirmed => {
+    if (confirmed && !disposed && props.embedded && taskId.value === submittedTaskId) emit('completed')
+  })
   await loadDetail()
 }
 
@@ -324,7 +348,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <section class="sg-page task-detail-page">
+  <section class="sg-page task-detail-page" :class="{ 'task-detail-page--embedded': embedded }">
     <RevisionTransferDialog ref="transferDialog" @saved="loadDetail" />
     <el-button v-if="!embedded" class="back-link" link :icon="ArrowLeft" @click="router.push('/workbench')">返回任务工作台</el-button>
 
@@ -456,6 +480,7 @@ onBeforeUnmount(() => {
 <style scoped>
 .brief-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
 .task-detail-page{display:grid;gap:18px}.back-link{display:inline-flex;width:max-content;gap:7px;align-items:center;padding:0;color:var(--sg-text-muted);cursor:pointer;background:transparent;border:0}.back-link:hover{color:var(--sg-text)}.task-detail-loading{display:grid;min-height:360px;color:var(--sg-text-muted);background:var(--sg-surface);border:1px solid var(--sg-border);border-radius:var(--sg-radius-lg);place-items:center}.task-hero{display:flex;gap:24px;align-items:center;justify-content:space-between;padding:26px;background:linear-gradient(135deg,rgba(255,182,87,.075),transparent 42%),var(--sg-surface);border:1px solid var(--sg-border);border-radius:var(--sg-radius-lg)}.task-hero__main{min-width:0}.task-hero__title{display:flex;gap:12px;align-items:center}.task-hero h2,.task-hero p{margin:0}.task-hero h2{font-size:clamp(23px,3vw,31px);letter-spacing:-.025em}.task-hero__main>p:not(.sg-eyebrow){margin-top:9px;color:var(--sg-text-secondary);font-size:13px}.task-hero small{display:block;margin-top:8px;color:var(--sg-text-muted)}.task-hero__actions{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap}.task-detail-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.task-card{padding:21px;background:var(--sg-surface);border:1px solid var(--sg-border);border-radius:var(--sg-radius-md)}.task-card--wide{grid-column:1/-1}.task-card header{display:flex;gap:12px;align-items:flex-start;justify-content:space-between}.task-card h3,.task-card p{margin:0}.task-card h3{margin-bottom:16px;font-size:17px}.task-card>strong{display:block;font-size:16px}.task-card>strong+p{margin-top:7px;color:var(--sg-text-secondary);font-size:12px;line-height:1.7}.task-requirements,.task-remark,.version-workspace-anchor>p:not(.sg-eyebrow){color:var(--sg-text-secondary);font-size:13px;line-height:1.8;white-space:pre-wrap}.task-additional-requirements{display:grid;gap:6px;margin-top:12px;padding:12px 14px;background:var(--sg-accent-soft);border-radius:9px}.task-additional-requirements strong{color:var(--sg-accent);font-size:11px}.task-additional-requirements p{color:var(--sg-text-secondary);font-size:12px;line-height:1.7;white-space:pre-wrap}.version-workspace-anchor{background:linear-gradient(135deg,rgba(93,176,255,.055),transparent 46%),var(--sg-surface)}.version-workspace-anchor code{color:var(--sg-accent)}.task-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1px;margin:16px 0 0;overflow:hidden;background:var(--sg-border);border-radius:9px}.task-fields--four{grid-template-columns:repeat(4,minmax(0,1fr))}.task-fields div{padding:13px;background:rgba(13,16,21,.92)}dt{color:var(--sg-text-muted);font-size:10px}dd{margin:5px 0 0;color:var(--sg-text-secondary);font-size:12px;overflow-wrap:anywhere}.text-action{margin-top:15px;padding:0;color:var(--sg-accent);cursor:pointer;background:transparent;border:0}.version-number{display:inline!important;margin-right:9px;color:var(--sg-accent);font-size:25px!important}.task-empty{padding:20px;color:var(--sg-text-muted);font-size:12px;text-align:center;background:rgba(255,255,255,.02);border:1px dashed var(--sg-border);border-radius:9px}.final-version-tag{margin-top:14px}@media(max-width:820px){.task-hero{align-items:flex-start;flex-direction:column}.task-hero__actions{justify-content:flex-start}.task-fields--four{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:620px){.task-detail-grid{grid-template-columns:1fr}.task-card--wide{grid-column:auto}.task-fields,.task-fields--four{grid-template-columns:1fr}.task-hero__title{align-items:flex-start;flex-direction:column}}
+.task-detail-page.task-detail-page--embedded { padding: 0; }
 .task-card.el-card{padding:0;overflow:visible;background:var(--sg-surface);border-color:var(--sg-border)}
 .task-card > :deep(.el-card__body){padding:16px}
 .version-workspace-anchor > :deep(.el-card__body) { overflow: visible; }

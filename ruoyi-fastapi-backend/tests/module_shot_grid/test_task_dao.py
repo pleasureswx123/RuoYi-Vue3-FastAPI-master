@@ -64,3 +64,16 @@ def test_project_mine_scope_requires_server_supplied_actor_scope() -> None:
         assert str(exc) == 'scope=mine 必须由服务端提供当前用户范围'
     else:
         raise AssertionError('scope=mine 未强制服务端注入当前用户范围')
+
+
+def test_mine_tasks_sort_by_numeric_shot_hierarchy() -> None:
+    sql = _compile(
+        ShotGridTaskDao.build_task_statement(
+            ShotGridMineTaskListQueryModel(orderByColumn='shotNo', isAsc='ascending'), mine_user_id=8
+        )
+    )
+    assert 'sg_task.assignee_user_id = 8' in sql
+    assert (
+        'order by sg_task.project_id asc, sg_episode.episode_no asc nulls last, sg_scene.scene_no asc nulls last, sg_shot.shot_no asc nulls last, sg_task.task_id asc'
+        in sql
+    )

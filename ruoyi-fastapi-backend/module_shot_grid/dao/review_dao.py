@@ -8,7 +8,13 @@ from sqlalchemy.orm import aliased
 from module_admin.entity.do.file_do import SysFileInfo, SysFileReference
 from module_admin.entity.do.user_do import SysUser
 from module_shot_grid.entity.do.asset_do import ShotGridAsset, ShotGridAssetItem
-from module_shot_grid.entity.do.project_do import ShotGridProject, ShotGridProjectMember, ShotGridShot
+from module_shot_grid.entity.do.project_do import (
+    ShotGridEpisode,
+    ShotGridProject,
+    ShotGridProjectMember,
+    ShotGridScene,
+    ShotGridShot,
+)
 from module_shot_grid.entity.do.review_do import (
     ShotGridIssueVerification,
     ShotGridNote,
@@ -219,6 +225,53 @@ class ShotGridReviewDao:
         if query.version_status:
             statement = statement.where(ShotGridVersion.version_status == query.version_status)
         statement = statement.order_by(ShotGridVersion.submitted_time.desc(), ShotGridVersion.version_id.desc())
+        shot_columns = [
+            ShotGridTask.project_id,
+            ShotGridEpisode.episode_no,
+            ShotGridScene.scene_no,
+            ShotGridShot.shot_no,
+        ]
+        if query.order_by_column == 'shotNo':
+            statement = (
+                statement.outerjoin(ShotGridShot, ShotGridShot.shot_id == ShotGridTask.shot_id)
+                .outerjoin(ShotGridEpisode, ShotGridEpisode.episode_id == ShotGridShot.episode_id)
+                .outerjoin(ShotGridScene, ShotGridScene.scene_id == ShotGridShot.scene_id)
+            )
+            direction = asc if query.is_asc == 'ascending' else desc
+            statement = statement.order_by(None).order_by(
+                ShotGridTask.project_id.asc(),
+                *[direction(column).nulls_last() for column in shot_columns[1:]],
+                ShotGridTask.task_id.asc(),
+                ShotGridVersion.version_no.desc(),
+                ShotGridVersion.version_id.desc(),
+            )
+        if query.group_by_task:
+            matched = (
+                statement.with_only_columns(
+                    ShotGridVersion.task_id,
+                    ShotGridVersion.submitted_time,
+                    *[column.label(f'shot_order_{i}') for i, column in enumerate(shot_columns)]
+                    if query.order_by_column == 'shotNo'
+                    else [],
+                    maintain_column_froms=True,
+                )
+                .order_by(None)
+                .subquery()
+            )
+            groups = select(matched.c.task_id).group_by(matched.c.task_id)
+            total = int((await db.execute(select(func.count()).select_from(groups.subquery()))).scalar_one())
+            group_orders = [func.max(matched.c.submitted_time).desc(), matched.c.task_id.desc()]
+            if query.order_by_column == 'shotNo':
+                group_orders = [
+                    func.min(matched.c.shot_order_0).asc(),
+                    *[direction(func.min(matched.c[f'shot_order_{i}'])).nulls_last() for i in range(1, 4)],
+                    matched.c.task_id.asc(),
+                ]
+            page_groups = (
+                groups.order_by(*group_orders).offset((query.page_num - 1) * query.page_size).limit(query.page_size)
+            )
+            rows = (await db.execute(statement.where(ShotGridVersion.task_id.in_(page_groups)))).mappings()
+            return [dict(row) for row in rows], total
         total = int(
             (await db.execute(select(func.count()).select_from(statement.order_by(None).subquery()))).scalar_one()
         )
@@ -588,6 +641,7 @@ class ShotGridReviewDao:
                 ShotGridReviewList.review_status,
                 ShotGridReviewList.auto_version_id,
                 ShotGridVersion.task_id,
+                ShotGridTask.task_name,
                 ShotGridVersion.version_no,
                 ShotGridVersion.version_status,
                 relation_count.label('version_count'),
@@ -597,6 +651,7 @@ class ShotGridReviewDao:
                 ShotGridReviewList.create_time,
             )
             .outerjoin(ShotGridVersion, ShotGridVersion.version_id == ShotGridReviewList.auto_version_id)
+            .outerjoin(ShotGridTask, ShotGridTask.task_id == ShotGridVersion.task_id)
             .where(ShotGridReviewList.project_id == project_id, ShotGridReviewList.del_flag == '0')
         )
         if query.review_mode:
@@ -616,6 +671,63 @@ class ShotGridReviewDao:
             asc(order_column) if query.is_asc == 'ascending' else desc(order_column),
             ShotGridReviewList.review_list_id.desc(),
         )
+        shot_columns = [
+            ShotGridTask.project_id,
+            ShotGridEpisode.episode_no,
+            ShotGridScene.scene_no,
+            ShotGridShot.shot_no,
+        ]
+        if query.order_by_column == 'shotNo':
+            statement = (
+                statement.outerjoin(ShotGridShot, ShotGridShot.shot_id == ShotGridTask.shot_id)
+                .outerjoin(ShotGridEpisode, ShotGridEpisode.episode_id == ShotGridShot.episode_id)
+                .outerjoin(ShotGridScene, ShotGridScene.scene_id == ShotGridShot.scene_id)
+            )
+            direction = asc if query.is_asc == 'ascending' else desc
+            statement = statement.order_by(None).order_by(
+                ShotGridTask.project_id.asc(),
+                *[direction(column).nulls_last() for column in shot_columns[1:]],
+                ShotGridTask.task_id.asc(),
+                ShotGridVersion.version_no.desc(),
+                ShotGridReviewList.review_list_id.desc(),
+            )
+        if query.group_by_task:
+            # 自动审核单按任务分页，人工批量单独成组；筛选先于分组。
+            matched = (
+                statement.with_only_columns(
+                    ShotGridVersion.task_id,
+                    ShotGridReviewList.review_list_id,
+                    ShotGridReviewList.create_time,
+                    ShotGridReviewList.review_date,
+                    *[column.label(f'shot_order_{i}') for i, column in enumerate(shot_columns)]
+                    if query.order_by_column == 'shotNo'
+                    else [],
+                    maintain_column_froms=True,
+                )
+                .order_by(None)
+                .subquery()
+            )
+            group_key = func.coalesce(matched.c.task_id, -matched.c.review_list_id)
+            group_order = func.max(
+                matched.c.create_time if query.order_by_column == 'createTime' else matched.c.review_date
+            )
+            groups = select(group_key.label('group_key')).group_by(group_key)
+            total = int((await db.execute(select(func.count()).select_from(groups.subquery()))).scalar_one())
+            group_orders = [asc(group_order) if query.is_asc == 'ascending' else desc(group_order), group_key]
+            if query.order_by_column == 'shotNo':
+                group_orders = [
+                    func.min(matched.c.shot_order_0).asc(),
+                    *[direction(func.min(matched.c[f'shot_order_{i}'])).nulls_last() for i in range(1, 4)],
+                    group_key,
+                ]
+            page_groups = (
+                groups.order_by(*group_orders).offset((query.page_num - 1) * query.page_size).limit(query.page_size)
+            )
+            statement = statement.where(
+                func.coalesce(ShotGridVersion.task_id, -ShotGridReviewList.review_list_id).in_(page_groups)
+            )
+            rows = (await db.execute(statement)).mappings()
+            return [dict(row) for row in rows], total
         total = int(
             (await db.execute(select(func.count()).select_from(statement.order_by(None).subquery()))).scalar_one()
         )
@@ -1440,6 +1552,11 @@ class ShotGridReviewDao:
                 )
             )
         ).scalar_one_or_none()
+
+    @classmethod
+    async def delete_note(cls, db: AsyncSession, note: ShotGridNote) -> None:
+        await db.delete(note)
+        await db.flush()
 
     @classmethod
     async def add_note(cls, db: AsyncSession, note: ShotGridNote) -> ShotGridNote:

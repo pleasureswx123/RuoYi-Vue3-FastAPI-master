@@ -1,7 +1,10 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { Plus, Refresh, Search, Tickets } from '@element-plus/icons-vue'
+import { ElTable, ElTableColumn } from 'element-plus'
+import 'element-plus/es/components/table/style/css'
+import 'element-plus/es/components/table-column/style/css'
+import { Plus, Refresh, Search } from '@element-plus/icons-vue'
 
 import { getProjectPage } from '@/api/shot-grid/projects'
 import { getReviewListPage } from '@/api/shot-grid/reviews'
@@ -10,6 +13,7 @@ import { tagTypeFromTone } from '@/utils/tag'
 import ProjectStatePanel from '@/views/project/components/ProjectStatePanel.vue'
 import ProtectedThumbnail from '@/views/shot/components/ProtectedThumbnail.vue'
 import ManualReviewDialog from '@/views/review/components/ManualReviewDialog.vue'
+import RelatedDetailDrawer from '@/components/RelatedDetailDrawer.vue'
 import { taskVersionStatusMeta } from '@/views/task/taskPresentation'
 import {
   formatReviewDateTime,
@@ -19,10 +23,30 @@ import {
 
 const router = useRouter()
 const sessionStore = useSessionStore()
+const taskDrawer = ref(null)
+const canQueryTask = computed(() => sessionStore.permissions.includes('*:*:*') || sessionStore.permissions.includes('shotgrid:task:query'))
 const projects = ref([])
 const selectedProjectId = ref('')
 const reviews = ref([])
 const total = ref(0)
+const reviewTree = computed(() => {
+  const groups = new Map()
+  for (const item of reviews.value) {
+    const isTask = item.reviewMode === 'auto_single' && item.taskId
+    const key = `${selectedProjectId.value}:${isTask ? 'task' : 'manual'}:${isTask ? item.taskId : item.reviewListId}`
+    if (!isTask) {
+      groups.set(key, { ...item, rowKey: key, title: item.reviewListName })
+      continue
+    }
+    if (!groups.has(key)) groups.set(key, { rowKey: key, isTask: true, title: item.taskName || `任务 #${item.taskId}`, children: [] })
+    groups.get(key).children.push({ ...item, rowKey: `${key}:review:${item.reviewListId}`, title: item.versionNumber || item.reviewListName })
+  }
+  return [...groups.values()].map(group => {
+    if (!group.isTask) return group
+    group.children.sort((a, b) => Number(b.versionNo) - Number(a.versionNo))
+    return { ...group.children[0], ...group }
+  })
+})
 const projectsLoading = ref(false)
 const reviewsLoading = ref(false)
 const projectsError = ref(null)
@@ -38,6 +62,19 @@ const canListReviews = computed(() => sessionStore.permissions.includes('*:*:*')
 const canCreateManual = computed(() => sessionStore.permissions.includes('*:*:*') || sessionStore.permissions.includes('shotgrid:reviewList:add'))
 const manualCandidates = computed(() => reviews.value.filter(item => item.reviewStatus === 'active' && item.reviewMode === 'auto_single' && item.versionStatus === 'pending_review'))
 const reviewFilterModel = computed(() => ({ projectId: selectedProjectId.value, reviewStatus: query.reviewStatus }))
+
+function listStatusMeta(status) {
+  return status === 'completed' ? { label: '已结束', tone: 'neutral' } : reviewStatusMeta(status)
+}
+
+function cardStatusMeta(item) {
+  if (item.reviewMode === 'auto_single' && item.versionStatus === 'final') {
+    return { label: '已通过', tone: 'success' }
+  }
+  return item.reviewMode === 'auto_single' && item.versionStatus
+    ? taskVersionStatusMeta(item.versionStatus)
+    : listStatusMeta(item.reviewStatus)
+}
 
 async function loadProjects() {
   projectsController?.abort()
@@ -79,10 +116,10 @@ async function loadReviews() {
   try {
     const response = await getReviewListPage(selectedProjectId.value, {
       reviewStatus: query.reviewStatus || undefined,
+      groupByTask: true,
       pageNum: query.pageNum,
       pageSize: query.pageSize,
-      orderByColumn: 'createTime',
-      isAsc: 'descending'
+      orderByColumn: 'shotNo', isAsc: 'ascending'
     }, { signal: controller.signal })
     if (reviewsController !== controller) return
     reviews.value = response.rows || []
@@ -127,7 +164,7 @@ onBeforeUnmount(() => {
 <template>
   <section class="sg-page review-page">
     <header class="sg-page-heading">
-      <div><p class="sg-eyebrow">REVIEWS</p><h2 class="sg-page-title">版本审核</h2><p class="sg-page-description">处理自动单版本审核单，意见与审核动作始终绑定不可覆盖的具体版本。</p></div>
+      <div><p class="sg-eyebrow">REVIEWS</p><h2 class="sg-page-title">版本审核</h2><p class="sg-page-description">按任务查看审核进度，展开任务可查看各版本审核记录。</p></div>
       <div class="heading-actions"><el-button v-if="canCreateManual && selectedProjectId" type="primary" :icon="Plus" @click="manualDialogVisible = true">创建批量审核单</el-button><el-button :icon="Refresh" :loading="projectsLoading || reviewsLoading" @click="refreshAll">刷新</el-button></div>
     </header>
 
@@ -135,46 +172,40 @@ onBeforeUnmount(() => {
     <template v-else>
       <el-form ref="reviewFilterFormRef" :model="reviewFilterModel" class="review-toolbar" size="large" label-position="top" aria-label="审核单筛选">
         <el-form-item label="当前项目" prop="projectId"><el-select v-model="selectedProjectId" class="sg-select" :placeholder="projectsLoading ? '正在加载项目…' : '请选择项目'" :loading="projectsLoading" :disabled="projectsLoading"><el-option v-for="project in projects" :key="project.projectId" :label="`${project.projectCode} · ${project.projectName}`" :value="String(project.projectId)" /></el-select></el-form-item>
-        <el-form-item label="审核状态" prop="reviewStatus"><el-select v-model="query.reviewStatus" class="sg-select" placeholder="全部状态"><el-option label="全部状态" value="" /><el-option label="草稿" value="draft" /><el-option label="待审核" value="active" /><el-option label="已完成" value="completed" /><el-option label="已归档" value="archived" /></el-select></el-form-item>
-        <div class="review-toolbar__summary"><el-icon><Search /></el-icon><span>当前筛选 {{ total }} 条审核单</span></div>
+        <el-form-item label="审核单状态" prop="reviewStatus"><el-select v-model="query.reviewStatus" class="sg-select" placeholder="全部状态"><el-option label="全部状态" value="" /><el-option label="草稿" value="draft" /><el-option label="待审核" value="active" /><el-option label="已结束" value="completed" /><el-option label="已归档" value="archived" /></el-select></el-form-item>
+        <div class="review-toolbar__summary"><el-icon><Search /></el-icon><span>当前筛选 {{ total }} 个任务 / 批量单</span></div>
       </el-form>
 
       <ProjectStatePanel v-if="reviewsError" :title="reviewsError.title" :message="reviewsError.message" :retryable="reviewsError.retryable" @retry="loadReviews" />
       <el-card v-else-if="reviewsLoading && !reviews.length" class="review-loading" shadow="never" aria-busy="true"><el-skeleton animated :rows="6" /></el-card>
-      <section v-else-if="reviews.length" class="review-list" :class="{ 'is-refreshing': reviewsLoading }">
-        <el-card v-for="item in reviews" :key="item.reviewListId" class="review-card" shadow="hover" role="link"
-                 tabindex="0" @click="router.push(`/reviews/${item.reviewListId}`)"
-                 @keydown.enter="router.push(`/reviews/${item.reviewListId}`)"
-                 @keydown.space.prevent="router.push(`/reviews/${item.reviewListId}`)">
-          <span class="review-card__preview"><ProtectedThumbnail v-if="item.thumbnail" :thumbnail="item.thumbnail"
-                                                                 :alt="`${item.reviewListName} 缩略图`"/><span v-else
-                                                                                                               class="review-card__icon"><el-icon><Tickets/></el-icon></span></span>
-          <div class="review-card__main">
-            <div><strong>{{ item.reviewListName }}</strong>
-              <el-tag size="small" effect="dark" round
-                      :type="tagTypeFromTone(reviewStatusMeta(item.reviewStatus).tone)">
-                {{ reviewStatusMeta(item.reviewStatus).label }}
-              </el-tag>
-            </div>
-            <p>{{
-                item.description || (item.reviewMode === 'manual_batch' ? '人工集中审核单' : '单版本自动审核单')
-              }}</p><small>{{
-              item.reviewMode === 'manual_batch' ? `${item.versionCount} 个版本` : `版本 ${item.versionNumber}`
-            }} · 创建于 {{ formatReviewDateTime(item.createTime) }}</small></div>
-          <div class="review-card__meta"><span>{{ item.taskId ? `任务 #${item.taskId}` : '集中审核' }}</span><strong
-              v-if="item.reviewMode === 'manual_batch'">{{ item.versionCount }} 项</strong>
-            <el-tag v-else size="small" effect="light" round
-                    :type="tagTypeFromTone(taskVersionStatusMeta(item.versionStatus).tone)">
-              {{ taskVersionStatusMeta(item.versionStatus).label }}
-            </el-tag>
-          </div>
-        </el-card>
-      </section>
+      <el-table v-else-if="reviews.length" :data="reviewTree" row-key="rowKey" :tree-props="{ children: 'children' }" class="review-tree" :aria-busy="reviewsLoading">
+        <el-table-column label="任务 / 版本审核单" min-width="330">
+          <template #default="{ row }">
+            <strong>{{ row.title }}</strong>
+            <el-tag v-if="row.isTask" size="small" type="info" class="review-count">{{ row.children.length }} 个匹配版本</el-tag>
+            <el-tag v-else-if="row.reviewMode === 'manual_batch'" size="small" type="info">批量审核</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="预览" width="108">
+          <template #default="{ row }"><ProtectedThumbnail v-if="row.thumbnail" class="review-tree-preview" :thumbnail="row.thumbnail" :alt="`${row.title} 缩略图`" /><span v-else>—</span></template>
+        </el-table-column>
+        <el-table-column label="审核状态" min-width="150">
+          <template #default="{ row }"><el-tag :type="tagTypeFromTone(cardStatusMeta(row).tone)" size="small">{{ cardStatusMeta(row).label }}</el-tag><small v-if="row.isTask" class="review-tree-hint">{{ query.reviewStatus ? '筛选内最新' : '最新版本' }} {{ row.versionNumber }}</small></template>
+        </el-table-column>
+        <el-table-column label="创建时间" min-width="160"><template #default="{ row }">{{ formatReviewDateTime(row.createTime) }}</template></el-table-column>
+        <el-table-column label="操作" width="145" fixed="right">
+          <template #default="{ row }">
+            <el-button v-if="row.isTask && canQueryTask" size="small" @click="taskDrawer?.open(`/tasks/${row.taskId}`)">查看任务</el-button>
+            <el-button v-else-if="!row.isTask" size="small" :type="row.reviewStatus === 'active' ? 'primary' : 'default'" @click="router.push(`/reviews/${row.reviewListId}`)">{{ row.reviewStatus === 'active' ? '去审核' : '查看审核' }}</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
       <el-empty v-else class="review-empty" :description="selectedProjectId ? '当前筛选没有审核单' : '当前范围暂无项目'"><p>{{ selectedProjectId ? '版本提交成功后，系统会自动创建一张单版本审核单。' : '请先创建或加入项目。' }}</p></el-empty>
 
-      <el-pagination v-if="total > query.pageSize" class="review-pagination" background layout="prev, pager, next, total" :current-page="query.pageNum" :page-size="query.pageSize" :total="total" :disabled="reviewsLoading" aria-label="审核单分页" @current-change="changePage" />
+      <el-pagination v-if="total > query.pageSize" class="review-pagination" background layout="prev, pager, next, total" :current-page="query.pageNum" :page-size="query.pageSize" :total="total" :disabled="reviewsLoading" aria-label="任务审核分组分页" @current-change="changePage" />
     </template>
     <ManualReviewDialog v-if="manualDialogVisible && selectedProjectId" v-model="manualDialogVisible" :project-id="selectedProjectId" :candidates="manualCandidates" @created="openCreatedManual" />
+    <RelatedDetailDrawer ref="taskDrawer" @closed="loadReviews" />
   </section>
 </template>
 
@@ -193,5 +224,10 @@ onBeforeUnmount(() => {
 .review-empty.el-empty{padding:30px;background:var(--sg-surface);border:1px dashed var(--sg-border-strong);border-radius:var(--sg-radius-lg)}
 .review-empty p{margin:0;color:var(--sg-text-muted);font-size:12px}
 .review-pagination{justify-content:center}
+.review-card__meta .review-card__explanation{max-width:260px;color:var(--sg-text-secondary);font-size:12px;line-height:1.6}
 @media(max-width:760px){.review-card:deep(.el-card__body){grid-template-columns:auto 1fr}.review-card__meta{grid-column:2}}
+.review-tree { width: 100%; }
+.review-count { margin-left: 8px; }
+.review-tree-hint { display: block; margin-top: 4px; color: var(--sg-text-muted); font-size: 11px; }
+.review-tree-preview { display: block; width: 80px; height: 46px; overflow: hidden; border-radius: 6px; }
 </style>

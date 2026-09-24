@@ -1214,11 +1214,27 @@ def test_unknown_integrity_constraint_is_not_disguised_as_version_conflict() -> 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('append', [False, True])
+@pytest.mark.parametrize('has_previous', [False, True])
+@pytest.mark.parametrize('commit_fails', [False, True])
 async def test_formal_commit_creates_all_candidates_and_commits_whole_review_chain(  # noqa: PLR0915
     monkeypatch: pytest.MonkeyPatch,
     append: bool,
+    has_previous: bool,
+    commit_fails: bool,
 ) -> None:
     db = AsyncMock()
+    notifications = []
+
+    async def publish(version_id: int, reason: str) -> None:
+        db.commit.assert_awaited_once()
+        notifications.append((version_id, reason))
+
+    monkeypatch.setattr('module_shot_grid.service.version_submission_service.publish_version_changed', publish)
+    monkeypatch.setattr(
+        ShotGridVersionSubmissionDao,
+        'get_latest_version',
+        AsyncMock(return_value=SimpleNamespace(version_id=VERSION_ID - 1) if has_previous else None),
+    )
     task = SimpleNamespace(
         task_id=TASK_ID,
         task_name='镜头任务',
@@ -1394,6 +1410,19 @@ async def test_formal_commit_creates_all_candidates_and_commits_whole_review_cha
             ),
         )
 
+    if commit_fails:
+        db.commit.side_effect = RuntimeError('提交失败')
+        with pytest.raises(RuntimeError, match='提交失败'):
+            await ShotGridVersionSubmissionService.commit_published_submission(
+                db,
+                submission_id=SUBMISSION_ID,
+                worker_id='worker:claim',
+                attempt_count=1,
+            )
+        assert notifications == []
+        db.rollback.assert_awaited_once()
+        return
+
     result = await ShotGridVersionSubmissionService.commit_published_submission(
         db,
         submission_id=SUBMISSION_ID,
@@ -1404,6 +1433,10 @@ async def test_formal_commit_creates_all_candidates_and_commits_whole_review_cha
     )
 
     assert result == (VERSION_ID, REVIEW_LIST_ID)
+    expected_notifications = [(VERSION_ID, 'candidates.appended' if append else 'version.created')]
+    if has_previous and not append:
+        expected_notifications.append((VERSION_ID - 1, 'version.superseded'))
+    assert notifications == expected_notifications
     assert task.task_status == 'pending_review'
     assert submission.submission_status == 'committed'
     replace_reference.assert_awaited_once()

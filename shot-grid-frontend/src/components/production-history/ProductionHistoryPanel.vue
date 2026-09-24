@@ -2,6 +2,9 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useDetailNavigation } from '@/composables/useDetailNavigation'
 import { Refresh, Right } from '@element-plus/icons-vue'
+import { taskPriorityMeta, taskStatusMeta } from '@/views/task/taskPresentation'
+import TaskTimeReminder from '@/views/task/components/TaskTimeReminder.vue'
+import { useCurrentTime } from '@/composables/useCurrentTime'
 
 import { getProductionHistory } from '@/api/shot-grid/productionHistory'
 import {
@@ -9,7 +12,9 @@ import {
   actorDisplayName,
   assigneeDisplayName,
   assertProductionHistoryData,
+  currentProductionHandoff,
   eventsForLane,
+  expandProductionTimeline,
   formatHistoryDateTime,
   historyEventMeta,
   historyImportBatchStatusMeta,
@@ -33,6 +38,7 @@ const props = defineProps({
 })
 
 const navigate = useDetailNavigation()
+const currentTime = useCurrentTime()
 const history = ref(null)
 const loading = ref(false)
 const errorState = ref(null)
@@ -56,7 +62,8 @@ const currentStage = computed(() => String(stageSource.value?.currentStage || 'c
 const activeStep = computed(() => productionHistoryActiveStep(currentStage.value, stageSource.value?.activeStep))
 const currentStageMeta = computed(() => historyStageMeta(currentStage.value))
 const currentAssignee = computed(() => assigneeDisplayName(selectedLane.value?.task?.assignee))
-const selectedEvents = computed(() => eventsForLane(history.value?.events, selectedLane.value?.laneId).reverse())
+const currentHandoff = computed(() => currentProductionHandoff(selectedLane.value))
+const selectedEvents = computed(() => expandProductionTimeline(eventsForLane(history.value?.events, selectedLane.value?.laneId)))
 const metrics = computed(() => {
   const source = selectedLane.value || history.value?.summary || {}
   return [
@@ -203,13 +210,10 @@ defineExpose({ refresh: loadHistory })
 function cycleFiles(cycle) {
   return cycle.files?.length ? cycle.files : cycle.primaryFile ? [cycle.primaryFile] : []
 }
-function cycleSummary(cycle) {
-  const last = [...(cycle.reviewActions || [])].sort((a, b) => String(b.createTime).localeCompare(String(a.createTime)))[0]
-  const result = last ? `${actorDisplayName(last.reviewer)} · ${historyReviewActionMeta(last.actionType).label}` : '等待审核'
-  const issues = cycle.sourceIssues?.length || 0
-  const responses = cycle.issueResponses?.length || 0
-  return `${result}${issues ? ` · 提出 ${issues} 条修改意见` : ''}${responses ? ` · 已提交 ${responses} 条处理说明` : ''}`
+function taskForEvent(event) {
+  return lanes.value.find(lane => Number(lane.task?.taskId) === Number(event.resourceRef?.resourceId))?.task
 }
+
 </script>
 
 <template>
@@ -259,7 +263,7 @@ function cycleSummary(cycle) {
         <header class="history-stage__heading">
           <div class="history-stage__identity">
             <strong>{{ allAssetLanesSelected ? '资产整体进度' : selectedLane?.name || history.subject.name }}</strong>
-            <span v-if="selectedLane?.task">当前负责人：{{ currentAssignee }}</span>
+            <span v-if="selectedLane?.task">制作负责人：{{ currentAssignee }}</span>
           </div>
           <div class="history-metrics">
             <el-statistic v-for="metric in metrics" :key="metric.key" :title="metric.label" :value="metric.value" />
@@ -270,7 +274,14 @@ function cycleSummary(cycle) {
             <el-tag :type="historyTagType(currentStageMeta)" effect="plain" round>{{ currentStageMeta.label }}</el-tag>
           </div>
         </header>
-        <el-steps class="history-stage__steps" :active="activeStep" align-center finish-status="success" :process-status="currentStage === 'final' ? 'success' : currentStage === 'revision' ? 'error' : 'process'" aria-label="制作阶段">
+        <section v-if="currentHandoff" class="history-handoff" aria-label="当前流转状态">
+          <span class="history-handoff__stage">当前环节 <el-tag :type="currentHandoff.type === 'error' ? 'warning' : currentHandoff.type" size="small" effect="light" round>{{ currentHandoff.stage }}</el-tag></span>
+          <span v-if="selectedLane?.task" class="history-handoff__stage">任务状态 <el-tag :type="historyTagType(taskStatusMeta(selectedLane.task.taskStatus))" size="small" effect="light" round>{{ taskStatusMeta(selectedLane.task.taskStatus).label }}</el-tag></span>
+          <strong class="history-handoff__owner">{{ currentHandoff.owner }}</strong>
+          <span class="history-handoff__next">下一步：{{ currentHandoff.next }}</span>
+        </section>
+        <el-alert v-else-if="allAssetLanesSelected" class="history-handoff" type="info" :closable="false" title="各制作分项独立流转，请选择具体分项查看当前处理方与下一步。" show-icon />
+        <el-steps class="history-stage__steps" :active="activeStep" align-center finish-status="success" :process-status="currentStage === 'final' ? 'success' : 'process'" aria-label="制作阶段">
           <el-step v-for="step in PRODUCTION_HISTORY_STEPS" :key="step" :title="step" />
         </el-steps>
       </section>
@@ -316,7 +327,7 @@ function cycleSummary(cycle) {
             size="large"
             placement="top"
           >
-            <el-card class="history-event" :class="{ 'history-event--version': event.eventType === 'version_cycle' }" shadow="always">
+            <el-card class="history-event" :class="{ 'history-event--version': event.versionCycle }" shadow="always">
               <header v-if="!event.versionCycle" class="history-event__heading">
                 <div>
                   <span class="history-event__title-row">
@@ -324,7 +335,7 @@ function cycleSummary(cycle) {
                     <el-tag :type="historyTagType(historyEventMeta(event.eventType))" size="small" effect="plain" round>{{ historyEventMeta(event.eventType).label }}</el-tag>
                     <el-tag v-if="event.evidenceLevel === 'inferred'" type="info" size="small" effect="plain" round>按现有记录推断</el-tag>
                   </span>
-                  <small>{{ actorDisplayName(event.actor) }}</small>
+                  <small v-if="event.eventType !== 'task_created'">{{ actorDisplayName(event.actor) }}</small>
                 </div>
                 <el-button
                   v-if="showEventResourceAction(event)"
@@ -335,6 +346,14 @@ function cycleSummary(cycle) {
                 >{{ resourceActionLabel(event.resourceRef.resourceType) }}</el-button>
               </header>
               <p v-if="event.description && !event.versionCycle" class="history-event__description">{{ event.description }}</p>
+              <el-descriptions v-if="event.eventType === 'task_created' && taskForEvent(event)" class="event-import" :column="2" border size="small">
+                <el-descriptions-item label="任务创建人">{{ event.actor ? actorDisplayName(event.actor) : '未记录' }}</el-descriptions-item>
+                <el-descriptions-item label="创建时间">{{ formatHistoryDateTime(event.occurredAt) }}</el-descriptions-item>
+                <el-descriptions-item label="任务名称">{{ taskForEvent(event).taskName }}</el-descriptions-item>
+                <el-descriptions-item label="当前制作人">{{ assigneeDisplayName(taskForEvent(event).assignee) }}</el-descriptions-item>
+                <el-descriptions-item label="当前优先级" :span="2"><el-tag :type="historyTagType(taskPriorityMeta(taskForEvent(event).priority))" size="small" effect="plain" round>{{ taskPriorityMeta(taskForEvent(event).priority).label }}</el-tag></el-descriptions-item>
+                <el-descriptions-item label="当前计划制作时间" :span="2"><TaskTimeReminder :task="taskForEvent(event)" :now="currentTime" compact /></el-descriptions-item>
+              </el-descriptions>
 
               <template v-if="event.importBatch">
                 <el-descriptions class="event-import" :column="3" border>
@@ -348,22 +367,34 @@ function cycleSummary(cycle) {
                 </el-descriptions>
               </template>
 
-              <template v-if="event.versionCycle">
+              <section v-if="event.reviewAction" class="version-cycle review-action">
+                <header class="version-cycle__heading">
+                  <div>
+                    <strong>{{ event.versionCycle.versionNumber }} 审核</strong>
+                    <el-tag :type="historyTagType(historyReviewActionMeta(event.reviewAction.actionType))" size="small" effect="light" round>{{ historyReviewActionMeta(event.reviewAction.actionType).label }}</el-tag>
+                  </div>
+                  <el-button v-if="reviewListRef(event.versionCycle)" size="small" type="primary" :icon="Right" @click="openResource(reviewListRef(event.versionCycle))">查看审核</el-button>
+                </header>
+                <div class="version-cycle__meta"><span>审核人：{{ actorDisplayName(event.reviewAction.reviewer) }}</span></div>
+                <p v-if="event.reviewAction.reason?.trim()">{{ event.reviewAction.reason }}</p>
+                <span v-if="event.versionCycle.sourceIssues?.length" class="version-cycle__summary">本版累计 {{ event.versionCycle.sourceIssues.length }} 条修改意见（含后续补充）</span>
+              </section>
+              <template v-else-if="event.versionCycle">
                 <section class="version-cycle">
                   <header class="version-cycle__heading">
                     <div>
-                      <strong>{{ event.versionCycle.versionNumber }}</strong>
-                      <el-tag :class="{ 'version-cycle__status--pending': event.versionCycle.versionStatus === 'pending_review' }" :type="historyTagType(historyVersionStatusMeta(event.versionCycle.versionStatus))" size="small" :effect="event.versionCycle.versionStatus === 'pending_review' ? 'dark' : 'plain'" round>{{ historyVersionStatusMeta(event.versionCycle.versionStatus).label }}</el-tag>
+                      <strong>{{ event.versionCycle.versionNumber }} 提交</strong>
+                      <el-tag :type="historyTagType(historyVersionStatusMeta(event.versionCycle.versionStatus))" size="small" effect="plain" round>当前：{{ historyVersionStatusMeta(event.versionCycle.versionStatus).label }}</el-tag>
                       <el-tag v-if="cycleFiles(event.versionCycle).length" type="info" size="small" effect="plain" round>{{ cycleFiles(event.versionCycle).length }} 个文件</el-tag>
                     </div>
                     <div class="version-cycle__actions">
                       <el-button size="small" plain type="primary" :icon="Right" @click="openResource({ resourceType: 'version', resourceId: event.versionCycle.versionId })">查看作品</el-button>
-                      <el-button v-if="reviewListRef(event.versionCycle)" size="small" type="primary" :icon="Right" @click="openResource(reviewListRef(event.versionCycle))">查看审核</el-button>
+                      <el-button v-if="!event.versionCycle.reviewActions?.length && reviewListRef(event.versionCycle)" size="small" type="primary" :icon="Right" @click="openResource(reviewListRef(event.versionCycle))">查看审核</el-button>
                     </div>
                   </header>
                   <div class="version-cycle__meta">
-                    <span>提交人：{{ actorDisplayName(event.versionCycle.submitter) }} · {{ formatHistoryDateTime(event.versionCycle.submittedTime) }}</span>
-                    <span class="version-cycle__summary">{{ cycleSummary(event.versionCycle) }}</span>
+                    <span>提交人：{{ actorDisplayName(event.versionCycle.submitter) }}</span>
+                    <span v-if="event.versionCycle.issueResponses?.length" class="version-cycle__summary">已提交 {{ event.versionCycle.issueResponses.length }} 条处理说明</span>
                   </div>
                   <p>{{ event.versionCycle.changelog || '本版未填写整体修改说明。' }}</p>
 
@@ -405,6 +436,11 @@ function cycleSummary(cycle) {
 .history-stage__heading span { color: var(--sg-text-muted); font-size: 11px; }
 .history-stage__tags { flex: 0 0 auto; }
 .history-stage__steps { --el-color-primary: var(--sg-accent); }
+.history-handoff { display: flex; align-items: center; justify-content: center; gap: 10px 18px; margin-bottom: 20px; padding: 10px 14px; background: var(--sg-accent-soft); border-radius: 6px; font-size: 12px; line-height: 1.6; text-align: center; }
+.history-handoff__stage { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 8px; color: var(--sg-text-secondary); }
+.history-handoff__owner { flex: 0 0 auto; color: var(--sg-text); font-size: 13px; }
+.history-handoff__next { color: var(--sg-text-secondary); }
+@media (max-width: 850px) { .history-handoff { flex-wrap: wrap; } }
 .history-stage__steps:deep(.el-step__icon) { width: 28px; height: 28px; background: var(--sg-surface-raised); border-width: 2px; }
 .history-stage__steps:deep(.el-step__icon-inner) { font-size: 11px; font-weight: 700; }
 .history-stage__steps:deep(.el-step__line) { top: 13px; height: 2px; background: var(--sg-border-strong); }
@@ -448,7 +484,7 @@ function cycleSummary(cycle) {
 .event-import:deep(.el-descriptions__content) { color: var(--sg-text-secondary); font-size: 10px; overflow-wrap: anywhere; }
 .version-cycle { display: grid; margin-top: 0; gap: 6px; }
 .version-cycle__meta { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 20px; font-size: 12px; line-height: 1.5; }
-.version-cycle__summary { color: var(--sg-text-muted); }
+.version-cycle__summary { color: var(--sg-text-muted); font-size: 12px; }
 .version-cycle__heading strong { font-size: 20px; }
 .version-cycle__status--pending { --el-tag-bg-color: var(--sg-accent); --el-tag-border-color: var(--sg-accent); --el-tag-text-color: #fff; color: #fff; padding: 0 10px; font-size: 12px; font-weight: 700; }
 .version-cycle > p { margin: 0; color: var(--sg-text-secondary); font-size: 12px; line-height: 1.7; }

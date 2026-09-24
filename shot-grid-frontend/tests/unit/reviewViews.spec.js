@@ -8,6 +8,7 @@ import { getProjectPage } from '@/api/shot-grid/projects'
 import {
   addVersionIssueDraft,
   appendVersionIssue,
+  updatePublishedVersionIssue,
   createManualReviewList,
   createReviewAction,
   deleteVersionIssueDraft,
@@ -35,6 +36,10 @@ import ReviewListView from '@/views/review/ReviewListView.vue'
 import ManualReviewDialog from '@/views/review/components/ManualReviewDialog.vue'
 
 const realtimeHarness = vi.hoisted(() => ({ refresh: null }))
+const openTaskDrawer = vi.hoisted(() => vi.fn())
+vi.mock('@/components/RelatedDetailDrawer.vue', () => ({ default: {
+  name: 'RelatedDetailDrawer', template: '<div />', setup: (_props, { expose }) => { expose({ open: openTaskDrawer }) }
+} }))
 vi.mock('@/composables/useVersionRealtime', () => ({
   useVersionRealtime: (_id, refresh) => { realtimeHarness.refresh = refresh; return {} }
 }))
@@ -50,6 +55,7 @@ vi.mock('@/api/shot-grid/projects', () => ({
 vi.mock('@/api/shot-grid/reviews', () => ({
   addVersionIssueDraft: vi.fn(),
   appendVersionIssue: vi.fn(),
+  updatePublishedVersionIssue: vi.fn(),
   createManualReviewList: vi.fn(),
   createReviewAction: vi.fn(),
   getReviewActions: vi.fn(),
@@ -152,7 +158,7 @@ function installSession(permissions) {
 }
 
 async function mountList() {
-  const pinia = installSession(['shotgrid:project:list', 'shotgrid:reviewList:list'])
+  const pinia = installSession(['shotgrid:project:list', 'shotgrid:reviewList:list', 'shotgrid:task:query'])
   const router = createRouter({
     history: createMemoryHistory(),
     routes: [
@@ -220,7 +226,7 @@ describe('版本审核页面', () => {
   it('复核与本轮意见可切换并保留输入，未填写仍存在原因不能提交', async () => {
     getVersionReviewContext.mockResolvedValue({ data: {
       currentVersion: version, candidates: version.candidates, currentVersionIssues: [], currentVersionDrafts: [],
-      carriedIssues: [{ issueId: 801, originVersionId: 32, originVersionNumber: 'V002', originCandidateNumber: 'V002_02', content: '调整灯光', currentVersionResponse: { responseText: '已处理' } }]
+      carriedIssues: [{ issueId: 801, originVersionId: 32, originVersionNumber: 'V002', originCandidateId: 3202, originCandidateNumber: 'V002_02', content: '调整灯光', currentVersionResponse: { responseText: '已处理' } }]
     } })
     const { wrapper } = await mountDetail(['shotgrid:reviewList:query', 'shotgrid:version:query', 'shotgrid:version:review', 'shotgrid:note:list', 'shotgrid:note:add'])
     expect(wrapper.get('#tab-carried').attributes('aria-selected')).toBe('true')
@@ -284,20 +290,24 @@ describe('版本审核页面', () => {
   it('按项目加载自动审核单并进入真实详情路由', async () => {
     const { wrapper, router } = await mountList()
 
-    expect(getReviewListPage).toHaveBeenCalledWith('8', expect.objectContaining({ reviewStatus: undefined }), expect.objectContaining({ signal: expect.any(AbortSignal) }))
-    expect(wrapper.text()).toContain('动力舱合成 V003 审核')
-    const tags = wrapper.find('.review-card').findAllComponents(ElTag)
-    expect(tags.map(tag => tag.text())).toEqual(['待审核', '待审核'])
-    expect(tags.map(tag => tag.props('type'))).toEqual(['warning', 'warning'])
-    expect(tags[0].props()).toMatchObject({ effect: 'dark', size: 'small', round: true })
-    expect(tags[1].props()).toMatchObject({ effect: 'light', size: 'small', round: true })
-    await wrapper.find('.review-card').trigger('click')
+    expect(getReviewListPage).toHaveBeenCalledWith('8', expect.objectContaining({ reviewStatus: undefined, orderByColumn: 'shotNo', isAsc: 'ascending' }), expect.objectContaining({ signal: expect.any(AbortSignal) }))
+    expect(getReviewListPage.mock.lastCall[1].groupByTask).toBe(true)
+    expect(wrapper.text()).toContain('任务 #21')
+    expect(wrapper.text()).toContain('1 个匹配版本')
+    await wrapper.find('.el-table__expand-icon').trigger('click')
+    expect(wrapper.text()).toContain('V003')
+    expect(wrapper.text()).not.toContain('点击左侧箭头展开版本记录')
+    await wrapper.findAll('button').find(item => item.text() === '查看任务').trigger('click')
+    expect(openTaskDrawer).toHaveBeenCalledWith('/tasks/21')
+    expect(router.currentRoute.value.fullPath).toBe('/reviews')
+    await wrapper.findAll('button').find(item => item.text() === '去审核').trigger('click')
     await flushPromises()
     expect(router.currentRoute.value.fullPath).toBe('/reviews/101')
     wrapper.unmount()
   })
 
   it('加载版本、意见和动作历史，并使用版本锁提交通过决定', async () => {
+    const successDialog = vi.spyOn(ElMessageBox, 'alert').mockResolvedValue('confirm')
     const { wrapper } = await mountDetail()
 
     expect(getReviewListDetail).toHaveBeenCalledWith(101, expect.objectContaining({ signal: expect.any(AbortSignal) }))
@@ -337,6 +347,8 @@ describe('版本审核页面', () => {
       lockVersion: 2,
       issueVerifications: []
     }, expect.stringMatching(/^review-action:/))
+    expect(successDialog).toHaveBeenCalledWith(expect.stringContaining('制作任务已完成'), '审核通过', expect.objectContaining({ confirmButtonText: '知道了' }))
+    successDialog.mockRestore()
     wrapper.unmount()
   })
 
@@ -367,6 +379,31 @@ describe('版本审核页面', () => {
     expect(saved.text()).toContain('文件意见2')
     expect(saved.text()).not.toContain('文件意见1')
     expect(addVersionIssueDraft).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('整体反馈使用卡片页签，不绑定候选，并保护未保存内容', async () => {
+    const { wrapper } = await mountDetail(['shotgrid:reviewList:query', 'shotgrid:version:query', 'shotgrid:version:review', 'shotgrid:note:list', 'shotgrid:note:add'])
+    const tabs = wrapper.get('.issue-scope-tabs')
+    expect(tabs.classes()).toContain('el-tabs--border-card')
+    await tabs.findAll('[role="tab"]')[0].trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.saved-issues-section').findAll('[role="tab"]').map(tab => tab.text())).toEqual(['整体反馈'])
+    await wrapper.get('.issue-compose textarea').setValue('本版整体节奏需要更紧凑')
+    await tabs.findAll('[role="tab"]')[1].trigger('click')
+    await flushPromises()
+    expect(tabs.findAll('[role="tab"]')[0].attributes('aria-selected')).toBe('true')
+    expect(wrapper.get('.issue-compose textarea').element.value).toBe('本版整体节奏需要更紧凑')
+    await wrapper.findAllComponents(ElButton).find(button => button.text() === '保存问题草稿').trigger('click')
+    await flushPromises()
+    expect(addVersionIssueDraft).toHaveBeenCalledWith(33, {
+      issueScope: 'version', candidateId: null, content: '本版整体节奏需要更紧凑',
+      mediaTimeMs: null, annotations: null, referenceFileIds: []
+    })
+    expect(selectVersionCandidate).not.toHaveBeenCalled()
+    await tabs.findAll('[role="tab"]')[1].trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.saved-issues-section').findAll('[role="tab"]').map(tab => tab.text())).toEqual(['V003_01'])
     wrapper.unmount()
   })
 
@@ -542,6 +579,7 @@ describe('版本审核页面', () => {
 
     expect(addVersionIssueDraft).toHaveBeenCalledWith(33, {
       candidateId: 3301,
+      issueScope: 'candidate',
       content: '这里需要降低高光',
       mediaTimeMs: 3250,
       annotations,
@@ -576,6 +614,7 @@ describe('版本审核页面', () => {
     }))
     expect(addVersionIssueDraft).toHaveBeenCalledWith(33, {
       candidateId: 3301,
+      issueScope: 'candidate',
       content: '请参考附件调整灯光层次',
       mediaTimeMs: null,
       annotations: null,
@@ -640,6 +679,7 @@ describe('版本审核页面', () => {
 
     expect(updateVersionIssueDraft).toHaveBeenCalledWith(33, 502, {
       candidateId: 3301,
+      issueScope: 'candidate',
       content: '画面主体仍然偏暗',
       mediaTimeMs: 3250,
       annotations,
@@ -713,6 +753,34 @@ describe('版本审核页面', () => {
     await wrapper.findAll('button').find(button => button.text().includes('查看制作任务')).trigger('click')
     await flushPromises()
     expect(router.currentRoute.value.fullPath).toBe('/tasks/21#version-workspace')
+    wrapper.unmount()
+  })
+
+  it('追加窗口允许编辑本人已发布意见并使用进入编辑时的版本锁', async () => {
+    const rejected = { ...version, versionStatus: 'rejected' }
+    const issue = { issueId: 701, originVersionId: 33, originCandidateId: 3301, reviewerUserId: 1, status: 'open', content: '原始意见' }
+    getReviewListDetail.mockResolvedValue({ data: { ...review, reviewStatus: 'completed', version: rejected } })
+    getVersionDetail.mockResolvedValue({ data: rejected })
+    getVersionReviewContext.mockResolvedValue({ data: { currentVersion: rejected, canAppendIssues: true, candidates: rejected.candidates, carriedIssues: [], currentVersionDrafts: [], currentVersionIssues: [issue, { ...issue, issueId: 702, reviewerUserId: 2 }] } })
+    const { wrapper } = await mountDetail(['shotgrid:reviewList:query', 'shotgrid:version:query', 'shotgrid:version:review', 'shotgrid:note:list', 'shotgrid:note:add'])
+    const edits = wrapper.findAllComponents(ElButton).filter(button => button.text() === '编辑')
+    expect(edits).toHaveLength(1)
+    await edits[0].trigger('click')
+    await flushPromises()
+    expect(wrapper.get('.issue-compose textarea').element.value).toBe('原始意见')
+    await wrapper.get('.issue-compose textarea').setValue('调整后的意见')
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm')
+    await wrapper.findAllComponents(ElButton).find(button => button.text() === '保存并同步修改').trigger('click')
+    await flushPromises()
+    expect(updatePublishedVersionIssue).toHaveBeenCalledWith(33, 701, expect.objectContaining({ content: '调整后的意见', candidateId: 3301, lockVersion: rejected.lockVersion }))
+    expect(appendVersionIssue).not.toHaveBeenCalled()
+    const deletes = wrapper.findAllComponents(ElButton).filter(button => button.text() === '删除')
+    expect(deletes).toHaveLength(0)
+    getVersionReviewContext.mockResolvedValue({ data: { currentVersion: rejected, canAppendIssues: false } })
+    await realtimeHarness.refresh(33)
+    await flushPromises()
+    expect(wrapper.findAllComponents(ElButton).some(button => ['编辑', '删除', '追加并发送问题'].includes(button.text()))).toBe(false)
+    confirm.mockRestore()
     wrapper.unmount()
   })
 
@@ -853,8 +921,13 @@ describe('版本审核页面', () => {
     const rejected = { ...version, versionStatus: 'rejected' }
     getReviewListDetail.mockResolvedValue({ data: { ...review, reviewStatus: 'completed', version: rejected } })
     getVersionDetail.mockResolvedValue({ data: rejected })
-    getVersionReviewContext.mockResolvedValue({ data: { currentVersion: rejected, candidates: version.candidates, canAppendIssues: false, carriedIssues: [], currentVersionIssues: [], currentVersionDrafts: [] } })
+    const context = { currentVersion: rejected, candidates: version.candidates, canAppendIssues: true, carriedIssues: [], currentVersionIssues: [], currentVersionDrafts: [] }
+    getVersionReviewContext.mockResolvedValue({ data: context })
     const { wrapper } = await mountDetail(['shotgrid:reviewList:query', 'shotgrid:version:query', 'shotgrid:version:review', 'shotgrid:note:add'])
+    expect(wrapper.text()).toContain('追加并发送问题')
+    getVersionReviewContext.mockResolvedValue({ data: { ...context, canAppendIssues: false } })
+    await realtimeHarness.refresh(33)
+    await flushPromises()
     expect(wrapper.find('.issue-compose').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('追加并发送问题')
     wrapper.unmount()

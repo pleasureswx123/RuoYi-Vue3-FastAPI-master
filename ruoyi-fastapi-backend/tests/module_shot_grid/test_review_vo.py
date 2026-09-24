@@ -213,3 +213,14 @@ def test_revision_transfer_only_on_reject_and_reason_required() -> None:
             )
     with pytest.raises(ValidationError):
         ShotGridRevisionTransferCommand(assigneeUserId=2, reason='  ', lockVersion=0, taskLockVersion=0)
+
+
+def test_version_feedback_requires_text_and_cannot_bind_candidate_or_media() -> None:
+    note = ShotGridNoteCreateModel(issueScope='version', content='  整体节奏需要加快  ')
+    assert note.candidate_id is None
+    assert note.content == '整体节奏需要加快'
+    for payload in ({'candidateId': 9}, {'mediaTimeMs': 0}, {'annotations': {'items': []}}):
+        with pytest.raises(ValidationError):
+            ShotGridNoteCreateModel(issueScope='version', content='整体节奏', **payload)
+    with pytest.raises(ValidationError):
+        ShotGridNoteCreateModel(issueScope='version', content='  ')

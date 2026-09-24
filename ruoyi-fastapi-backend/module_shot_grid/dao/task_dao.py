@@ -271,6 +271,14 @@ class ShotGridTaskDao:
             'updateTime': ShotGridTask.update_time,
         }
         direction = asc if query.is_asc == 'ascending' else desc
+        if query.order_by_column == 'shotNo':
+            return statement.order_by(
+                ShotGridTask.project_id.asc(),
+                direction(ShotGridEpisode.episode_no).nulls_last(),
+                direction(ShotGridScene.scene_no).nulls_last(),
+                direction(ShotGridShot.shot_no).nulls_last(),
+                ShotGridTask.task_id.asc(),
+            )
         primary_order = direction(order_columns[query.order_by_column])
         if query.order_by_column == 'dueDate':
             primary_order = primary_order.nulls_last()

@@ -154,6 +154,13 @@ export function appendVersionIssue(versionId, data, options = {}) {
   })
 }
 
+export function updatePublishedVersionIssue(versionId, issueId, data) {
+  return request({
+    url: `/shot-grid/versions/${assertPositiveId(versionId, '版本')}/additional-issues/${assertPositiveId(issueId, '问题')}`,
+    method: 'put', data, silentError: true
+  })
+}
+
 export function addVersionIssueDraft(versionId, data, options = {}) {
   return request({
     url: `/shot-grid/versions/${assertPositiveId(versionId, '版本')}/issues`,
@@ -217,5 +224,12 @@ export function retryFinalDelivery(versionId, options = {}) {
     method: 'post',
     signal: options.signal,
     silentError: true
+  })
+}
+
+export function rejectBatchWithOverallFeedback(projectId, data) {
+  return request({
+    url: `/shot-grid/projects/${assertPositiveId(projectId, '项目')}/review-overall-feedback/batch-reject`,
+    method: 'post', data, silentError: true
   })
 }

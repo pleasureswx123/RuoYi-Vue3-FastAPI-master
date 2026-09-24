@@ -339,6 +339,7 @@ class ShotGridShotListItemModel(ShotGridApiModel):
     expected_end_time: datetime | None = None
     allowed_actions: list[str] = Field(default_factory=list)
     assignee: ShotGridShotAssigneeModel | None = None
+    previous_assignee_names: list[str] = Field(default_factory=list)
     thumbnail: ShotGridShotThumbnailModel | None = None
     proxy_media: ShotGridShotProxyMediaModel | None = None
     latest_version: ShotGridShotLatestVersionModel | None = None

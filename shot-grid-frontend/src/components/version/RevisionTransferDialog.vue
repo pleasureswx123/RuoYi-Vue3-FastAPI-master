@@ -120,7 +120,7 @@ defineExpose({ open })
       </el-form-item>
       <template v-if="Number(form.assigneeUserId) !== Number(version.assigneeUserId)">
         <el-form-item label="转交原因" prop="reason"><el-input v-model="form.reason" type="textarea" :maxlength="1000" show-word-limit /></el-form-item>
-        <el-form-item label="交接说明 / 源工程位置（选填）" prop="handoffNote"><el-input v-model="form.handoffNote" type="textarea" :maxlength="2000" show-word-limit /></el-form-item>
+        <el-form-item v-show="false" label="交接说明 / 源工程位置（选填）" prop="handoffNote"><el-input v-model="form.handoffNote" type="textarea" :maxlength="2000" show-word-limit /></el-form-item>
       </template>
     </el-form>
     <template #footer><el-button :disabled="busy" @click="visible = false">取消</el-button><el-button type="primary" :loading="busy" :disabled="loading || !version" @click="submit">{{ rejecting ? '确认退回并发送' : '确认转交' }}</el-button></template>

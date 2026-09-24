@@ -28,6 +28,8 @@ import { buttonLabel, completeTaskStartForm, expectedTaskTimes, setElSelectValue
 import ShotDetailView from '@/views/shot/ShotDetailView.vue'
 import { shotFeatures } from '@/views/shot/shotFeatures'
 import ShotListView from '@/views/shot/ShotListView.vue'
+import { getVersionDetail } from '@/api/shot-grid/versions'
+vi.mock('@/api/shot-grid/versions', async importOriginal => ({ ...await importOriginal(), getVersionDetail: vi.fn() }))
 import ShotAssignDialog from '@/views/shot/components/ShotAssignDialog.vue'
 import EpisodeSceneCreateDialog from '@/views/shot/components/EpisodeSceneCreateDialog.vue'
 import ShotFormDialog from '@/views/shot/components/ShotFormDialog.vue'
@@ -36,6 +38,8 @@ import ShotImportDialog from '@/views/shot/components/ShotImportDialog.vue'
 vi.mock('@/views/shot/shotFeatures', () => ({ shotFeatures: { manualSortEnabled: false } }))
 
 const sortableCreate = vi.hoisted(() => vi.fn(() => ({ destroy: vi.fn() })))
+const openWorkDrawer = vi.fn(() => true)
+const workDrawerStub = { setup: (_, { expose }) => { expose({ open: openWorkDrawer }); return {} }, template: '<div />' }
 
 vi.mock('sortablejs', () => ({ default: { create: sortableCreate } }))
 vi.mock('@/views/schedule/ScheduleBoard.vue', () => ({
@@ -146,7 +150,7 @@ async function mountView(permissions = ['shotgrid:shot:list', 'shotgrid:shot:add
   await router.push('/shots?projectId=8')
   await router.isReady()
   const wrapper = mount(ShotListView, {
-    global: { plugins: [pinia, router], stubs: { ScheduleBoard: scheduleBoardStub }, components: { ...formComponents, ElCard, ElDialog, ElDrawer, ElPagination, ElRadioButton, ElRadioGroup, ElTable, ElTableColumn, ElTag } }
+    global: { plugins: [pinia, router], stubs: { ScheduleBoard: scheduleBoardStub, RelatedDetailDrawer: workDrawerStub }, components: { ...formComponents, ElCard, ElDialog, ElDrawer, ElPagination, ElRadioButton, ElRadioGroup, ElTable, ElTableColumn, ElTag } }
   })
   await flushPromises()
   await flushPromises()
@@ -241,6 +245,49 @@ describe('镜头管理真实列表页', () => {
     createEpisode.mockResolvedValue({ data: { episodeId: 22, episodeNo: 2, episodeCode: 'EP002' } })
     createScene.mockResolvedValue({ data: { sceneId: 32, episodeId: 21, sceneNo: 2, sceneCode: '002' } })
     reorderShot.mockResolvedValue({ data: { shotId: 41, sequencePosition: 1, lockVersion: 1 } })
+  })
+
+  it.each([['in_progress', '去做任务'], ['revision', '去修改'], ['reviewing', '追加审核文件']])('本人任务入口 %s 在抽屉打开并保留路由', async (status, label) => {
+    getShotPage.mockResolvedValue({ rows: [{ ...shotRow, taskId: 69, status, allowedActions: ['task.work'] }], total: 1 })
+    const { wrapper, router } = await mountView(['shotgrid:shot:list', 'shotgrid:task:query'])
+    openWorkDrawer.mockClear()
+    const button = wrapper.findAll('button').find(item => item.text() === label)
+    expect(button).toBeTruthy()
+    await button.trigger('click')
+    expect(openWorkDrawer).toHaveBeenCalledWith('/tasks/69')
+    expect(router.currentRoute.value.fullPath).toBe('/shots?projectId=8')
+    wrapper.unmount()
+  })
+
+  it.each([
+    ['completed', 69, true, true],
+    ['revision', 69, true, true],
+    ['unassigned', null, true, false],
+    ['completed', 69, false, false]
+  ])('任务入口按查询权限和任务存在性显示：%s / %s / %s', async (status, taskId, permitted, visible) => {
+    getShotPage.mockResolvedValue({ rows: [{ ...shotRow, status, taskId, allowedActions: [] }], total: 1 })
+    const { wrapper, router } = await mountView(['shotgrid:shot:list', ...(permitted ? ['shotgrid:task:query'] : [])])
+    openWorkDrawer.mockClear()
+    const button = wrapper.findAll('button').find(item => item.text() === '查看任务')
+    expect(Boolean(button)).toBe(visible)
+    if (visible) {
+      await button.trigger('click')
+      expect(openWorkDrawer).toHaveBeenCalledWith('/tasks/69')
+      expect(router.currentRoute.value.fullPath).toBe('/shots?projectId=8')
+    }
+    wrapper.unmount()
+  })
+
+  it.each([['reviewing', 'task.review', '审核任务'], ['revision', 'task.appendIssue', '追加发送问题']])('审核入口 %s 使用真实审核单编号在抽屉打开', async (status, action, label) => {
+    getShotPage.mockResolvedValue({ rows: [{ ...shotRow, taskId: 69, status, latestVersion: { versionId: 31 }, allowedActions: [action] }], total: 1 })
+    getVersionDetail.mockResolvedValue({ data: { versionId: 31, taskId: 69, autoReviewList: { reviewListId: 87 } } })
+    const { wrapper, router } = await mountView(['shotgrid:shot:list', 'shotgrid:reviewList:query', 'shotgrid:version:query', 'shotgrid:note:add'])
+    openWorkDrawer.mockClear()
+    await wrapper.findAll('button').find(item => item.text() === label).trigger('click')
+    await flushPromises()
+    expect(openWorkDrawer).toHaveBeenCalledWith('/reviews/87')
+    expect(router.currentRoute.value.fullPath).toBe('/shots?projectId=8')
+    wrapper.unmount()
   })
 
   it('镜头表格向只读制作人显示双时间与独立时间状态，空时间不伪造', async () => {
@@ -345,6 +392,20 @@ describe('镜头管理真实列表页', () => {
       expect(signal.aborted).toBe(true)
       expect(wrapper.findComponent(ShotAssignDialog).exists()).toBe(false)
     } finally { wrapper.unmount() }
+  })
+
+  it('只有可审核镜头能进入批量整体反馈，并展示退回确认表单', async () => {
+    getShotPage.mockResolvedValue({ rows: [
+      { ...shotRow, status: 'reviewing', allowedActions: ['task.review'], latestVersion: { versionId: 31, versionNumber: 'V001', status: 'pending_review' } },
+      { ...shotRow, shotId: 42, status: 'completed', allowedActions: [] }
+    ], total: 2 })
+    const { wrapper } = await mountView(['shotgrid:shot:list', 'shotgrid:note:add', 'shotgrid:version:review'])
+    expect(shotRowCheckboxes(wrapper).map(item => item.element.disabled)).toEqual([false, true])
+    await setShotHeaderSelection(wrapper, true)
+    await wrapper.findAll('button').find(button => button.text() === '批量整体反馈（1）').trigger('click')
+    await flushPromises()
+    expect(document.body.textContent).toContain('发送意见并退回修改')
+    wrapper.unmount()
   })
 
   it('原生表格选择同步批量操作，表头全选跳过不能操作的镜头', async () => {
@@ -1245,14 +1306,14 @@ describe('镜头管理真实列表页', () => {
     wrapper.unmount()
   })
 
-  it('点击详情在当前列表右侧打开可销毁的镜头详情抽屉', async () => {
+  it('点击制作履历在当前列表右侧打开可销毁的镜头详情抽屉', async () => {
     const { wrapper, router } = await mountView(['shotgrid:shot:list'])
 
-    await wrapper.findAll('button').find(button => buttonLabel(button) === '详情').trigger('click')
+    await wrapper.findAll('button').find(button => buttonLabel(button) === '制作履历').trigger('click')
     await flushPromises()
 
     expect(router.currentRoute.value.path).toBe('/shots')
-    expect(document.body.textContent).toContain('镜头详情 · 0001')
+    expect(document.body.textContent).toContain('制作履历 · 0001')
     expect(document.body.textContent).toContain('制作信息')
     const productionSection = document.body.querySelector('.shot-overview .shot-overview__production')
     expect(productionSection).not.toBeNull()
@@ -1811,25 +1872,15 @@ describe('镜头详情跨项目请求隔离', () => {
     listShotAssignees.mockResolvedValue({ rows: [{ userId: 7, userName: '杨景锋', nickName: 'YJF', projectRole: 'creator', producerCode: 'YJF' }], total: 1, hasNext: false })
   })
 
-  it.each([
-    [{ expectedStartTime: '2099-09-01T09:30:00', expectedEndTime: '2099-09-04T18:00:00', dueDate: '2099-09-04' }, ['2099/09/01 09:30', '2099/09/04 18:00', '时间：正常']],
-    [{ dueDate: '2000-09-04' }, ['原截止日期：2000-09-04', '时间：已延期']],
-    [{}, ['时间：未设置时间']]
-  ])('镜头详情显示预期时间范围并兼容历史日期 %#', async (timeFields, expectedTexts) => {
-    getShotDetail.mockResolvedValueOnce({ data: {
-      ...shotDetail(8, 41, '0001', '动力舱推进镜头'),
-      task: { assignee: { userId: 7, userName: '杨景锋' }, taskStatus: 'in_progress', priority: 'normal', ...timeFields }
-    } })
+  it('任务与版本摘要合入履历后不再重复展示独立卡片', async () => {
+    getShotDetail.mockResolvedValueOnce({ data: shotDetail(8, 41, '0001', '动力舱推进镜头') })
     const { wrapper } = await mountDetailView()
-    try {
-      expect(wrapper.text()).toContain('预期制作时间')
-      const reminder = wrapper.find('[aria-label="时间提醒"]')
-      for (const text of expectedTexts) expect(reminder.text()).toContain(text)
-      expect(reminder.find('.task-time-reminder__range').exists()).toBe(Boolean(timeFields.expectedStartTime))
-    } finally { wrapper.unmount() }
+    expect(wrapper.find('.task-person').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('最新版本与反馈')
+    expect(wrapper.text()).not.toContain('审计摘要')
+    wrapper.unmount()
   })
-
-  it('镜头详情的状态、目录、优先级、版本和关联资产使用 ElTag 动态类型', async () => {
+  it('镜头详情状态与保留的关联资产使用 ElTag 动态类型', async () => {
     getShotDetail.mockResolvedValueOnce({ data: {
       ...shotDetail(8, 41, '0001', '动力舱推进镜头'),
       status: 'revision',
@@ -1852,13 +1903,9 @@ describe('镜头详情跨项目请求隔离', () => {
     const { wrapper } = await mountDetailView()
     expect(findTag(wrapper, '修改中').props()).toMatchObject({ type: 'danger', effect: 'light', round: true })
     expect(findTag(wrapper, '目录处理异常').props()).toMatchObject({ type: 'danger', effect: 'plain', round: true })
-    expect(findTag(wrapper, '待审核').props()).toMatchObject({ type: 'warning', effect: 'light', round: true })
-    expect(findTag(wrapper, '紧急').props()).toMatchObject({ type: 'danger', effect: 'plain', round: true })
-    expect(findTag(wrapper, '已退回').props()).toMatchObject({ type: 'danger', effect: 'light', round: true })
     expect(findTag(wrapper, '场景 · 动力舱').props()).toMatchObject({ type: 'primary', effect: 'plain', round: true })
     expect(findTag(wrapper, '角色 · 女主').props()).toMatchObject({ type: 'warning', effect: 'plain', round: true })
     expect(findTag(wrapper, '道具 · 手电筒').props()).toMatchObject({ type: 'success', effect: 'plain', round: true })
-    expect(wrapper.find('.task-person').text()).toContain('杨景锋')
     expect(wrapper.find('.status-chip').exists()).toBe(false)
     wrapper.unmount()
   })

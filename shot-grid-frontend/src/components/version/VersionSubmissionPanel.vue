@@ -733,7 +733,7 @@ function refreshSubmissionStatus() {
 }
 
 watch(
-  () => [props.taskId, props.operationGeneration, props.canQuery, props.hasUncommittedSubmission, props.taskStatus, props.latestVersionNo],
+  () => [props.taskId, props.operationGeneration, props.canQuery, props.hasUncommittedSubmission, props.latestVersionNo],
   () => {
     resetContext()
     recoverCurrentSubmission()

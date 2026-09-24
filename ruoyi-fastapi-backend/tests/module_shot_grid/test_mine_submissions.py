@@ -7,7 +7,7 @@ from pydantic import ValidationError
 from sqlalchemy.dialects import postgresql
 
 from module_shot_grid.dao.review_dao import ShotGridReviewDao
-from module_shot_grid.entity.vo.review_vo import ShotGridMineVersionQueryModel
+from module_shot_grid.entity.vo.review_vo import ShotGridMineVersionQueryModel, ShotGridReviewListQueryModel
 from module_shot_grid.service.review_service import ShotGridReviewService
 
 PAGE_NUMBER = 2
@@ -94,3 +94,51 @@ def test_submission_row_preserves_project_task_and_actual_review_id() -> None:
     assert item['taskName'] == '镜头视频制作'
     assert item['versionNumber'] == 'V001'
     assert item['candidateCount'] == FILE_COUNT
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('mine', [True, False])
+@pytest.mark.parametrize('shot_order', [False, True])
+async def test_task_group_paging_keeps_scope_and_returns_unpaged_children(mine: bool, shot_order: bool) -> None:
+    db = SimpleNamespace(
+        execute=AsyncMock(
+            side_effect=[
+                SimpleNamespace(scalar_one=Mock(return_value=2)),
+                SimpleNamespace(mappings=Mock(return_value=[])),
+            ]
+        )
+    )
+    order = {'orderByColumn': 'shotNo', 'isAsc': 'ascending'} if shot_order else {}
+    if mine:
+        await ShotGridReviewDao.get_recent_mine_versions(
+            db,
+            USER_ID,
+            ShotGridMineVersionQueryModel(groupByTask=True, pageNum=2, pageSize=10, versionStatus='rejected', **order),
+        )
+    else:
+        await ShotGridReviewDao.get_review_lists(
+            db, 13, ShotGridReviewListQueryModel(groupByTask=True, pageNum=2, pageSize=10, reviewStatus='active', **order)
+        )
+    count, page = [call.args[0] for call in db.execute.await_args_list]
+    count_sql, page_sql = [
+        str(stmt.compile(dialect=postgresql.dialect(), compile_kwargs={'literal_binds': True}))
+        for stmt in (count, page)
+    ]
+    assert 'GROUP BY' in count_sql
+    assert 'LIMIT' not in count_sql
+    if shot_order:
+        assert (
+            'sg_episode.episode_no ASC NULLS LAST, sg_scene.scene_no ASC NULLS LAST, sg_shot.shot_no ASC NULLS LAST'
+            in page_sql
+        )
+        assert 'min(anon_1.shot_order_1) ASC NULLS LAST' in page_sql
+    assert page._limit_clause is None
+    assert 'LIMIT 10 OFFSET 10' in page_sql
+    if mine:
+        assert 'sg_version.submitted_by = 7' in count_sql and 'sg_version.submitted_by = 7' in page_sql
+        assert 'sg_project_member.member_status' in page_sql
+        assert "sg_version.version_status = 'rejected'" in count_sql
+    else:
+        assert 'sg_review_list.project_id = 13' in count_sql and 'sg_review_list.project_id = 13' in page_sql
+        assert "sg_review_list.review_status = 'active'" in count_sql
+        assert 'coalesce' in count_sql and '.review_list_id)' in count_sql

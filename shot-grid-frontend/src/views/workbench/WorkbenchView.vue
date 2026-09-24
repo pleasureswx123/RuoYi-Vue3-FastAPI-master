@@ -42,9 +42,9 @@ const query = reactive({
   dueDateRange: [],
   pageNum: 1,
   pageSize: 20,
-  orderByColumn: 'updateTime',
-  isAsc: 'descending',
-  orderValue: 'updateTime:descending'
+  orderByColumn: 'shotNo',
+  isAsc: 'ascending',
+  orderValue: 'shotNo:ascending'
 })
 const taskFilterRules = {
   dueDateRange: [{
@@ -204,9 +204,9 @@ function resetFilters() {
   Object.assign(query, {
     pageNum: 1,
     pageSize: 20,
-    orderByColumn: 'updateTime',
-    isAsc: 'descending',
-    orderValue: 'updateTime:descending'
+    orderByColumn: 'shotNo',
+    isAsc: 'ascending',
+    orderValue: 'shotNo:ascending'
   })
   loadTasks()
 }
@@ -309,7 +309,7 @@ onBeforeUnmount(() => {
           />
         </el-form-item>
         <el-form-item class="task-filter-item" label="排序" prop="orderValue">
-          <el-select v-model="query.orderValue" class="sg-select" aria-label="任务排序" @change="applyOrder"><el-option label="最近更新" value="updateTime:descending" /><el-option label="截止日期由近到远" value="dueDate:ascending" /><el-option label="优先级由高到低" value="priority:ascending" /><el-option label="最近创建" value="createTime:descending" /></el-select>
+          <el-select v-model="query.orderValue" class="sg-select" aria-label="任务排序" @change="applyOrder"><el-option label="镜头号由小到大" value="shotNo:ascending" /><el-option label="最近更新" value="updateTime:descending" /><el-option label="截止日期由近到远" value="dueDate:ascending" /><el-option label="优先级由高到低" value="priority:ascending" /><el-option label="最近创建" value="createTime:descending" /></el-select>
         </el-form-item>
         <el-form-item class="task-filter-actions"><el-button type="primary" :loading="loading" @click="submitFilters">查询</el-button><el-button :disabled="loading" @click="resetFilters">重置</el-button></el-form-item>
       </el-form>

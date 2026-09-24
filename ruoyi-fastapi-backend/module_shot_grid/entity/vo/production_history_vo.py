@@ -162,6 +162,10 @@ class ShotGridProductionHistoryTaskModel(ShotGridApiModel):
     task_status: Literal['not_started', 'preparing', 'in_progress', 'pending_review', 'revision', 'completed']
     priority: Literal['low', 'normal', 'high', 'urgent']
     due_date: date | None = None
+    expected_start_time: datetime | None = None
+    expected_end_time: datetime | None = None
+    baseline_start_time: datetime | None = None
+    baseline_end_time: datetime | None = None
     assignee: ShotGridProductionHistoryActorModel
     create_time: datetime
     update_time: datetime

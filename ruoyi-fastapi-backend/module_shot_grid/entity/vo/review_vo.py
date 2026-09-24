@@ -132,6 +132,8 @@ class ShotGridMineVersionQueryModel(ShotGridVersionListQueryModel):
 
     project_keyword: str | None = Field(default=None, max_length=200)
     task_keyword: str | None = Field(default=None, max_length=240)
+    order_by_column: Literal['versionNo', 'submittedTime', 'shotNo'] = 'submittedTime'
+    group_by_task: bool = False
     submitted_from: date | None = None
     submitted_to: date | None = None
 
@@ -274,10 +276,11 @@ class ShotGridReviewListQueryModel(ShotGridPageQueryModel):
     """项目审核单分页查询。"""
 
     review_status: ReviewListStatus | None = Field(default=None)
+    group_by_task: bool = False
     review_mode: ReviewListMode | None = Field(default=None)
     task_id: int | None = Field(default=None, gt=0, le=SQL_BIGINT_MAX)
     version_id: int | None = Field(default=None, gt=0, le=SQL_BIGINT_MAX)
-    order_by_column: Literal['createTime', 'reviewDate'] = Field(default='createTime')
+    order_by_column: Literal['createTime', 'reviewDate', 'shotNo'] = Field(default='createTime')
 
 
 class ShotGridReviewListItemModel(ShotGridApiModel):
@@ -294,6 +297,7 @@ class ShotGridReviewListItemModel(ShotGridApiModel):
     review_status: ReviewListStatus
     auto_version_id: int | None = None
     task_id: int | None = None
+    task_name: str | None = None
     version_no: int | None = None
     version_number: str | None = None
     version_status: VersionStatus | None = None
@@ -391,6 +395,7 @@ class ShotGridNoteCreateModel(ShotGridApiModel):
 
     model_config = ConfigDict(extra='forbid')
 
+    issue_scope: Literal['candidate', 'version'] = 'candidate'
     candidate_id: int | None = Field(default=None, gt=0, le=SQL_BIGINT_MAX)
 
     content: str | None = Field(default=None, max_length=10_000)
@@ -420,9 +425,36 @@ class ShotGridNoteCreateModel(ShotGridApiModel):
 
     @model_validator(mode='after')
     def require_content_or_annotations(self) -> 'ShotGridNoteCreateModel':
+        if self.issue_scope == 'version':
+            if self.candidate_id is not None or self.media_time_ms is not None or self.annotations is not None:
+                raise ValueError('整体反馈不能绑定候选、时间点或画面标注')
+            if not self.content:
+                raise ValueError('整体反馈必须填写文字内容')
         if self.content or (self.annotations is not None and self.annotations.items):
             return self
         raise ValueError('修改问题必须填写文字内容或至少添加一项画面标注')
+
+
+class ShotGridBatchOverallRejectModel(ShotGridApiModel):
+    """同一项目多个待审核版本的整体反馈及退回。"""
+
+    model_config = ConfigDict(extra='forbid')
+    version_ids: list[int] = Field(min_length=1, max_length=100)
+    content: str = Field(min_length=1, max_length=10_000)
+
+    @field_validator('content')
+    @classmethod
+    def validate_content(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError('请填写整体反馈意见')
+        return value.strip()
+
+    @field_validator('version_ids')
+    @classmethod
+    def validate_version_ids(cls, value: list[int]) -> list[int]:
+        if len(set(value)) != len(value) or any(item <= 0 or item > SQL_BIGINT_MAX for item in value):
+            raise ValueError('版本ID必须有效且不能重复')
+        return value
 
 
 class ShotGridIssueAppendModel(ShotGridNoteCreateModel):
@@ -454,7 +486,7 @@ class ShotGridIssueDraftModel(ShotGridApiModel):
     project_id: int
     review_list_id: int
     version_id: int
-    candidate_id: int
+    candidate_id: int | None
     reviewer_user_id: int
     reviewer_name: str | None = None
     content: str | None = None
@@ -472,7 +504,7 @@ class ShotGridNoteModel(ShotGridApiModel):
     note_id: int
     project_id: int
     version_id: int
-    origin_candidate_id: int
+    origin_candidate_id: int | None
     origin_version_number: str
     reviewer_user_id: int
     reviewer_name: str | None = None
@@ -520,7 +552,7 @@ class ShotGridIssueDetailModel(ShotGridApiModel):
     issue_id: int
     project_id: int
     origin_version_id: int
-    origin_candidate_id: int
+    origin_candidate_id: int | None
     origin_version_number: str
     origin_candidate_number: str | None = None
     reviewer_user_id: int

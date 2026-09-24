@@ -1,6 +1,7 @@
 import hashlib
 import json
 import unicodedata
+import uuid
 from datetime import datetime
 from pathlib import PureWindowsPath
 from typing import Any
@@ -39,6 +40,7 @@ from module_shot_grid.entity.vo.access_vo import ShotGridProjectAccessModel
 from module_shot_grid.entity.vo.common_vo import ShotGridLockVersionModel
 from module_shot_grid.entity.vo.review_vo import (
     ShotGridAutoReviewListSummaryModel,
+    ShotGridBatchOverallRejectModel,
     ShotGridCandidatePromptUpdateModel,
     ShotGridCarriedIssueModel,
     ShotGridFinalDeliveryModel,
@@ -895,12 +897,86 @@ class ShotGridReviewService:
             raise
 
     @classmethod
+    async def reject_batch_with_overall_feedback(
+        cls,
+        db: AsyncSession,
+        project_id: int,
+        command: ShotGridBatchOverallRejectModel,
+        current_user: CurrentUserModel,
+    ) -> list[ShotGridReviewActionResultModel]:
+        try:
+            contexts = []
+            for version_id in command.version_ids:
+                context, access = await cls._resolve_version_access(db, version_id, current_user)
+                cls._require_director(access)
+                if int(context['project_id']) != project_id:
+                    raise shot_grid_error(403, 'SG_PROJECT_SCOPE_DENIED', '批量反馈只能包含当前项目的版本')
+                contexts.append((context, access))
+            results = []
+            # 固定项目、任务顺序加锁；整体反馈、退回结论及其审计在最后统一提交。
+            for context, access in sorted(contexts, key=lambda item: int(item[0]['task_id'])):
+                _, task, version, _ = await cls._lock_version_graph(db, context, current_user, access)
+                if await ShotGridReviewDao.get_latest_version_no(db, task.task_id) != version.version_no:
+                    raise cls._invalid_transition('所选任务已有新版本，请刷新列表后重新选择')
+                if await ShotGridVersionSubmissionDao.has_unresolved_submission(db, task.task_id):
+                    raise cls._invalid_transition('所选任务正在提交文件，请稍后刷新重试')
+                review_list = await ShotGridReviewDao.get_auto_review_list_for_update(
+                    db, project_id, version.version_id
+                )
+                if review_list is None:
+                    raise cls._auto_review_integrity_error()
+                existing_drafts = await ShotGridReviewDao.get_issue_drafts_for_update(
+                    db,
+                    project_id=project_id,
+                    review_list_id=review_list.review_list_id,
+                    version_id=version.version_id,
+                )
+                if existing_drafts:
+                    raise cls._invalid_transition(f'版本 #{version.version_id} 已有意见草稿，请进入任务审核后再操作')
+                # 不替审核人确认历史问题；既有单版本门禁仍会逐项校验。
+                carried = await ShotGridReviewDao.get_carried_issues_for_update(
+                    db,
+                    project_id=project_id,
+                    task_id=task.task_id,
+                    version_id=version.version_id,
+                    submission_id=version.submission_id,
+                )
+                if carried:
+                    raise cls._invalid_transition(f'版本 #{version.version_id} 有上轮问题待复核，请逐个审核')
+                await cls.add_issue_draft(
+                    db,
+                    int(version.version_id),
+                    ShotGridNoteCreateModel(issueScope='version', content=command.content),
+                    current_user,
+                    commit=False,
+                )
+                results.append(
+                    await cls.create_review_action(
+                        db,
+                        int(version.version_id),
+                        ShotGridReviewActionCreateModel(actionType='reject', lockVersion=version.lock_version),
+                        str(uuid.uuid4()),
+                        current_user,
+                        commit=False,
+                    )
+                )
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            raise
+        for result in results:
+            await publish_version_changed(result.version_id, 'review.reject')
+        return results
+
+    @classmethod
     async def add_issue_draft(
         cls,
         db: AsyncSession,
         version_id: int,
         command: ShotGridNoteCreateModel,
         current_user: CurrentUserModel,
+        *,
+        commit: bool = True,
     ) -> ShotGridIssueDraftModel:
         user_id, actor_name, _, dept_name = cls._actor(current_user)
         context, access = await cls._resolve_version_access(db, version_id, current_user)
@@ -909,8 +985,11 @@ class ShotGridReviewService:
             cls._require_director(access)
             if version.version_status != 'pending_review' or task.task_status != 'pending_review':
                 raise cls._invalid_transition('只有当前待审核版本可以记录问题草稿')
-            candidate_id = command.candidate_id or version.selected_candidate_id
-            await cls._require_review_candidate(db, project_id, version_id, candidate_id)
+            candidate_id = (
+                None if command.issue_scope == 'version' else command.candidate_id or version.selected_candidate_id
+            )
+            if command.issue_scope != 'version':
+                await cls._require_review_candidate(db, project_id, version_id, candidate_id)
             review_list = await ShotGridReviewDao.get_auto_review_list_for_update(db, project_id, version_id)
             if review_list is None or review_list.review_status != 'active':
                 raise cls._auto_review_integrity_error()
@@ -983,7 +1062,8 @@ class ShotGridReviewService:
                 },
                 result={'draftId': draft.draft_id},
             )
-            await db.commit()
+            if commit:
+                await db.commit()
             return result
         except ShotGridDomainException:
             await db.rollback()
@@ -999,23 +1079,21 @@ class ShotGridReviewService:
         version_id: int,
         command: ShotGridIssueAppendModel,
         current_user: CurrentUserModel,
+        *,
+        issue_id: int | None = None,
     ) -> ShotGridIssueDetailModel:
-        """在下一版提交受理前，为最新退回版本追加不可变的正式问题。"""
+        """在下一版提交受理前，为最新退回版本追加或修改本人正式问题。"""
         user_id, actor_name, _, dept_name = cls._actor(current_user)
         context, access = await cls._resolve_version_access(db, version_id, current_user)
         try:
-            project_id, task, version, access = await cls._lock_version_graph(db, context, current_user, access)
-            cls._require_director(access)
-            if version.version_status != 'rejected' or task.task_status != 'revision':
-                raise cls._invalid_transition('只有待修改任务的退回版本可以追加问题')
-            cls._ensure_lock_version(version.lock_version, command.lock_version)
-            if await ShotGridReviewDao.get_latest_version_no(db, task.task_id) != version.version_no:
-                raise cls._invalid_transition('已有新版本，不能向旧版追加问题')
-            # 与版本提交持有相同的项目、任务锁，覆盖已受理但尚未发布的下一版。
-            if await ShotGridVersionSubmissionDao.get_unresolved_submission_for_update(db, task.task_id):
-                raise cls._invalid_transition('制作人已提交下一版，不能再追加问题，请等待新版本审核')
-            candidate_id = command.candidate_id or version.selected_candidate_id
-            await cls._require_review_candidate(db, project_id, version_id, candidate_id)
+            project_id, _task, version, access = await cls._lock_rejected_issue_window(
+                db, context, current_user, access, command.lock_version
+            )
+            candidate_id = (
+                None if command.issue_scope == 'version' else command.candidate_id or version.selected_candidate_id
+            )
+            if command.issue_scope != 'version':
+                await cls._require_review_candidate(db, project_id, version_id, candidate_id)
             review_list = await ShotGridReviewDao.get_auto_review_list_for_update(db, project_id, version_id)
             if review_list is None or review_list.review_status != 'completed':
                 raise cls._auto_review_integrity_error()
@@ -1024,25 +1102,52 @@ class ShotGridReviewService:
             if locked_context is None:
                 raise shot_grid_error(404, 'SG_VERSION_NOT_FOUND', '版本不存在或不可见')
             cls._validate_note_media(locked_context, command)
+            before = None
+            note = None
+            if issue_id is not None:
+                note = await ShotGridReviewDao.get_note_for_update(db, project_id, version_id, issue_id)
+                if note is None:
+                    raise shot_grid_error(404, 'SG_NOTE_NOT_FOUND', '问题不存在或不属于当前版本')
+                if note.reviewer_user_id != user_id:
+                    raise shot_grid_error(403, 'SG_NOTE_EDIT_FORBIDDEN', '只能修改本人提出的问题')
+                if note.note_status != 'open' or note.origin_candidate_id != candidate_id:
+                    raise cls._invalid_transition('不能修改已解决的问题或变更问题所属文件')
+                reference_rows = await ShotGridReviewDao.get_issue_reference_files(
+                    db, business_type=REVIEW_ISSUE_REFERENCE_TYPE, business_ids=[issue_id]
+                )
+                before = {
+                    'content': note.content,
+                    'mediaTimeMs': note.media_time_ms,
+                    'annotations': note.annotations,
+                    'referenceFileIds': [str(row['file_id']) for row in reference_rows],
+                }
             now = datetime.now()
-            note = await ShotGridReviewDao.add_note(
-                db,
-                ShotGridNote(
-                    project_id=project_id,
-                    version_id=version_id,
-                    origin_candidate_id=candidate_id,
-                    reviewer_user_id=user_id,
-                    content=command.content,
-                    media_time_ms=command.media_time_ms,
-                    annotations=command.annotations.model_dump(mode='json', by_alias=True)
-                    if command.annotations
-                    else None,
-                    note_status='open',
-                    resolved_in_version_id=None,
-                    create_time=now,
-                    update_time=now,
-                ),
-            )
+            if note is None:
+                note = await ShotGridReviewDao.add_note(
+                    db,
+                    ShotGridNote(
+                        project_id=project_id,
+                        version_id=version_id,
+                        origin_candidate_id=candidate_id,
+                        reviewer_user_id=user_id,
+                        content=command.content,
+                        media_time_ms=command.media_time_ms,
+                        annotations=command.annotations.model_dump(mode='json', by_alias=True)
+                        if command.annotations
+                        else None,
+                        note_status='open',
+                        resolved_in_version_id=None,
+                        create_time=now,
+                        update_time=now,
+                    ),
+                )
+            else:
+                note.content = command.content
+                note.media_time_ms = command.media_time_ms
+                note.annotations = (
+                    command.annotations.model_dump(mode='json', by_alias=True) if command.annotations else None
+                )
+                note.update_time = now
             references = (
                 await cls._replace_issue_reference_files(
                     db,
@@ -1052,7 +1157,7 @@ class ShotGridReviewService:
                     user_id=user_id,
                     actor_name=actor_name,
                 )
-                if command.reference_file_ids
+                if command.reference_file_ids or issue_id is not None
                 else []
             )
             version.lock_version += 1
@@ -1072,24 +1177,71 @@ class ShotGridReviewService:
                 status='open',
                 pendingVersionId=version_id,
                 pendingVersionNumber=f'V{int(version.version_no):03d}',
-                createTime=now,
+                createTime=note.create_time,
                 updateTime=now,
             )
             await cls._audit(
                 db,
                 actor_name=actor_name,
                 dept_name=dept_name,
-                business_type=BusinessType.INSERT.value,
-                method='append_rejected_issue',
+                business_type=BusinessType.UPDATE.value if issue_id is not None else BusinessType.INSERT.value,
+                method='update_rejected_issue' if issue_id is not None else 'append_rejected_issue',
                 oper_url=f'/shot-grid/versions/{version_id}/additional-issues',
                 payload={'versionId': version_id, 'lockVersion': command.lock_version},
-                result={'issueId': note.note_id, 'lockVersion': version.lock_version},
+                result={
+                    'issueId': note.note_id,
+                    'lockVersion': version.lock_version,
+                    'before': before,
+                    'after': {
+                        'content': command.content,
+                        'mediaTimeMs': command.media_time_ms,
+                        'annotations': note.annotations,
+                        'referenceFileIds': command.reference_file_ids,
+                    },
+                },
             )
             await db.commit()
-            return result
         except Exception:
             await db.rollback()
             raise
+
+        await publish_version_changed(version_id, 'issue.updated' if issue_id is not None else 'issue.appended')
+        return result
+
+    @classmethod
+    async def _lock_rejected_issue_window(
+        cls,
+        db: AsyncSession,
+        context: dict[str, Any],
+        current_user: CurrentUserModel,
+        access: ShotGridProjectAccessModel,
+        lock_version: int,
+    ) -> tuple[int, Any, Any, ShotGridProjectAccessModel]:
+        project_id, task, version, access = await cls._lock_version_graph(db, context, current_user, access)
+        cls._require_director(access)
+        if version.version_status != 'rejected' or task.task_status != 'revision':
+            raise cls._invalid_transition('只有待修改任务的退回版本可以追加问题')
+        cls._ensure_lock_version(version.lock_version, lock_version)
+        if await ShotGridReviewDao.get_latest_version_no(db, task.task_id) != version.version_no:
+            raise cls._invalid_transition('已有新版本，不能向旧版追加、编辑或删除问题')
+        # 与版本提交持有相同的项目、任务锁，覆盖已受理但尚未发布的下一版。
+        if await ShotGridVersionSubmissionDao.get_unresolved_submission_for_update(db, task.task_id):
+            raise cls._invalid_transition('制作人已提交下一版，不能再追加、编辑或删除旧问题，请等待新版本审核')
+        return project_id, task, version, access
+
+    @classmethod
+    async def delete_rejected_issue(
+        cls,
+        db: AsyncSession,
+        version_id: int,
+        issue_id: int,
+        command: ShotGridLockVersionModel,
+        current_user: CurrentUserModel,
+    ) -> None:
+        # 保留旧接口的明确拒绝，避免旧页面继续删除已发送给制作人的问题。
+        _, access = await cls._resolve_version_access(db, version_id, current_user)
+        cls._require_director(access)
+        raise shot_grid_error(409, 'SG_PUBLISHED_ISSUE_DELETE_FORBIDDEN', '已发布的问题不允许删除，请编辑问题内容')
 
     @classmethod
     async def update_issue_draft(
@@ -1119,7 +1271,9 @@ class ShotGridReviewService:
             )
             if draft is None:
                 raise shot_grid_error(404, 'SG_REVIEW_ISSUE_DRAFT_NOT_FOUND', '问题草稿不存在或已发布')
-            if command.candidate_id is not None and command.candidate_id != draft.candidate_id:
+            if (command.issue_scope == 'version') != (draft.candidate_id is None) or (
+                command.candidate_id is not None and command.candidate_id != draft.candidate_id
+            ):
                 raise shot_grid_error(409, 'SG_REVIEW_CANDIDATE_CONFLICT', '不能更改问题草稿所属文件')
             cls._ensure_lock_version(draft.lock_version, command.lock_version)
             locked_context = await ShotGridReviewDao.get_version_context(db, version_id)
@@ -1340,6 +1494,8 @@ class ShotGridReviewService:
         command: ShotGridReviewActionCreateModel,
         idempotency_key: str | None,
         current_user: CurrentUserModel,
+        *,
+        commit: bool = True,
     ) -> ShotGridReviewActionResultModel:
         user_id, actor_name, _, dept_name = cls._actor(current_user)
         stable_key = cls._normalize_idempotency_key(idempotency_key)
@@ -1465,11 +1621,13 @@ class ShotGridReviewService:
                     'finalDeliveryId': final_delivery.final_delivery_id if final_delivery is not None else None,
                 },
             )
-            await db.commit()
-            return result
+            if commit:
+                await db.commit()
         except IntegrityError as exc:
             constraint = ShotGridProjectService._constraint_name(exc)
             await db.rollback()
+            if not commit:
+                raise
             if constraint == 'uk_sg_review_action_idempotency':
                 existing = await ShotGridReviewDao.find_review_action_by_idempotency(
                     db,
@@ -1492,6 +1650,10 @@ class ShotGridReviewService:
         except Exception:
             await db.rollback()
             raise
+
+        if commit:
+            await publish_version_changed(version_id, f'review.{command.action_type}')
+        return result
 
     @classmethod
     async def _publish_review_drafts_if_rejected(
@@ -2283,6 +2445,24 @@ class ShotGridReviewService:
         payload: dict[str, Any],
         result: dict[str, Any],
     ) -> None:
+        if method in {'update_rejected_issue', 'delete_rejected_issue'}:
+            snapshot = json.dumps(result, ensure_ascii=False, separators=(',', ':'))
+            audit_id = str(uuid.uuid4())
+            parts = [snapshot[index : index + 600] for index in range(0, len(snapshot), 600)]
+            for index, part in enumerate(parts):
+                await ShotGridProjectAuditDao.add_success_log(
+                    db,
+                    title='Shot Grid 已发布意见变更',
+                    business_type=business_type,
+                    method=f'module_shot_grid.service.review_service.ShotGridReviewService.{method}()',
+                    request_method='DELETE' if method == 'delete_rejected_issue' else 'PUT',
+                    oper_name=actor_name,
+                    dept_name=dept_name,
+                    oper_url=oper_url,
+                    oper_param=payload,
+                    result={'auditId': audit_id, 'part': index + 1, 'parts': len(parts), 'snapshot': part},
+                )
+            return
         await ShotGridProjectAuditDao.add_success_log(
             db,
             title='Shot Grid 版本审核',

@@ -1,11 +1,12 @@
 <script setup>
 import RevisionTransferDialog from '@/components/version/RevisionTransferDialog.vue'
+import { showWorkflowSuccess } from '@/utils/workflowSuccess'
 import { useVersionRealtime } from '@/composables/useVersionRealtime'
 import CandidateGenerationPrompt from '@/components/version/CandidateGenerationPrompt.vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useDetailNavigation } from '@/composables/useDetailNavigation'
-import { ArrowLeft, Delete, Document, Refresh, UploadFilled } from '@element-plus/icons-vue'
+import { ArrowLeft, ArrowRight, Delete, Document, Refresh, UploadFilled } from '@element-plus/icons-vue'
 import { ElAffix, ElTabs, ElTabPane, ElMessage, ElMessageBox, ElRadio, ElRadioGroup } from 'element-plus'
 import 'element-plus/es/components/tabs/style/css'
 import 'element-plus/es/components/tab-pane/style/css'
@@ -13,6 +14,7 @@ import 'element-plus/es/components/tab-pane/style/css'
 import {
   addVersionIssueDraft,
   appendVersionIssue,
+  updatePublishedVersionIssue,
   createReviewAction,
   deleteVersionIssueDraft,
   getReviewActions,
@@ -48,6 +50,7 @@ import {
 const props = defineProps({ targetReviewListId: { type: [Number, String], default: null }, embedded: { type: Boolean, default: false } })
 const route = useRoute()
 const navigate = useDetailNavigation()
+const emit = defineEmits(['completed'])
 const sessionStore = useSessionStore()
 const transferDialog = ref(null)
 const review = ref(null)
@@ -74,15 +77,22 @@ const assistantTab = ref('current')
 const issueContentInput = ref(null)
 const issueDraftPulse = ref(false)
 const editingDraftId = ref(null)
+const editingPublishedId = ref(null)
+const editingPublishedLockVersion = ref(null)
 const editingDraftLockVersion = ref(null)
 const assistantAffixed = ref(false)
+const reviewPage = ref(null)
+const drawerSidebarHeight = ref('calc(100dvh - 96px)')
+let drawerResizeObserver
 const decisionReason = ref('')
+const issueScope = ref('candidate')
 const issueDraft = reactive({ content: '', mediaSeconds: null, annotations: null })
 const referenceAttachments = ref([])
 const referenceUploadRef = ref(null)
 const verificationDraft = reactive({})
 let pageController = null
 let pageGeneration = 0
+let disposed = false
 let actionIdempotency = createIdempotencyState('review-action')
 let issueDraftPulseTimer = null
 let candidatePreviewPulseTimer = null
@@ -134,7 +144,7 @@ const reviewVersion = computed(() => activeCandidate.value
   ? { ...version.value, candidateId: activeCandidate.value.candidateId, files: activeCandidate.value.files || [], mediaDerivationStatus: activeCandidate.value.mediaDerivationStatus }
   : version.value)
 const canAppendIssue = computed(() => canReview.value && hasPermission('shotgrid:note:add') && Boolean(reviewContext.value?.canAppendIssues))
-const canAddIssue = computed(() => hasPermission('shotgrid:note:add') && (canSubmitDecision.value || canAppendIssue.value) && Boolean(activeCandidate.value))
+const canAddIssue = computed(() => hasPermission('shotgrid:note:add') && (canSubmitDecision.value || canAppendIssue.value) && (issueScope.value === 'version' || Boolean(activeCandidate.value)))
 const canReview = computed(() => hasPermission('shotgrid:version:review'))
 const canRetryFinalDelivery = computed(() => hasPermission('shotgrid:version:retry'))
 const canActivateManual = computed(() => hasPermission('shotgrid:reviewList:activate'))
@@ -148,7 +158,7 @@ const carriedFilePanes = computed(() => {
     const name = `${issue.originVersionId}:${issue.originCandidateId ?? 'unknown'}`
     if (!groups.has(name)) groups.set(name, {
       name,
-      label: issue.originCandidateNumber || `${issue.originVersionNumber} · 文件待确认`,
+      label: issue.originCandidateId == null ? `${issue.originVersionNumber} · 整体反馈` : issue.originCandidateNumber || `${issue.originVersionNumber} · 文件待确认`,
       issues: []
     })
     groups.get(name).issues.push(issue)
@@ -169,20 +179,34 @@ function carriedFileProgress(pane) {
 const currentVersionIssues = computed(() => reviewContext.value?.currentVersionIssues || [])
 const currentVersionDrafts = computed(() => reviewContext.value?.currentVersionDrafts || [])
 const currentIssueCount = computed(() => currentVersionDrafts.value.length + currentVersionIssues.value.length)
-const savedIssuePanes = computed(() => candidates.value.map(candidate => ({
+const savedIssuePanes = computed(() => [...candidates.value.map(candidate => ({
   name: String(candidate.candidateId),
   label: candidate.candidateNumber,
   drafts: currentVersionDrafts.value.filter(item => Number(item.candidateId) === Number(candidate.candidateId)),
   issues: currentVersionIssues.value.filter(item => Number(item.originCandidateId) === Number(candidate.candidateId))
-})))
+})), { name: 'overall', label: '整体反馈', drafts: currentVersionDrafts.value.filter(item => item.candidateId == null), issues: currentVersionIssues.value.filter(item => item.originCandidateId == null) }].filter(pane => !canAddIssue.value || (issueScope.value === 'version' ? pane.name === 'overall' : pane.name !== 'overall')))
 
 const savedIssuesTab = ref('')
 watch(() => activeCandidate.value?.candidateId, candidateId => {
-  savedIssuesTab.value = String(candidateId ?? '')
+  if (issueScope.value === 'candidate') savedIssuesTab.value = String(candidateId ?? '')
 }, { immediate: true })
 
+function canChangeIssueScope(scope) {
+  if (scope !== issueScope.value && (hasUnsavedIssueDraft.value || editingDraftId.value || editingPublishedId.value || issueBusy.value || actionBusy.value)) {
+    ElMessage.warning('请先保存或清空当前意见再切换反馈范围')
+    return false
+  }
+  return true
+}
+
+function changeIssueScope(scope) {
+  if (!canChangeIssueScope(scope)) return
+  issueScope.value = scope
+  savedIssuesTab.value = scope === 'version' ? 'overall' : String(activeCandidate.value?.candidateId ?? '')
+}
+
 function canLeaveSavedIssueTab(candidateId) {
-  if (String(activeCandidate.value?.candidateId) !== String(candidateId) && hasUnsavedIssueDraft.value) {
+  if (savedIssuesTab.value !== String(candidateId) && hasUnsavedIssueDraft.value) {
     ElMessage.warning('请先保存或清空当前问题草稿，再切换候选预览')
     return false
   }
@@ -190,6 +214,8 @@ function canLeaveSavedIssueTab(candidateId) {
 }
 
 async function switchSavedIssueCandidate(candidateId) {
+  if (candidateId === 'overall') { changeIssueScope('version'); return }
+  changeIssueScope('candidate')
   if (String(activeCandidate.value?.candidateId) === String(candidateId)) return
   const candidate = candidates.value.find(item => String(item.candidateId) === String(candidateId))
   if (candidate) await previewCandidate(candidate)
@@ -320,10 +346,21 @@ const { connectionStatus } = useVersionRealtime(computed(() => version.value?.ve
   if (loading.value || actionBusy.value || issueBusy.value || draftActionBusyId.value) return
   const expectedGeneration = pageGeneration
   const before = new Set(candidates.value.map(item => item.candidateId))
-  const response = await getVersionDetail(versionId)
+  const [response, appendContext] = await Promise.all([
+    getVersionDetail(versionId),
+    canReview.value && version.value?.versionStatus === 'rejected'
+      ? getVersionReviewContext(versionId) : Promise.resolve(null)
+  ])
   if (expectedGeneration !== pageGeneration || version.value?.versionId !== versionId
     || loading.value || actionBusy.value || issueBusy.value || draftActionBusyId.value) return
   const latest = response.data
+  if (appendContext && reviewContext.value) {
+    const wasAllowed = reviewContext.value.canAppendIssues
+    reviewContext.value = { ...reviewContext.value, canAppendIssues: appendContext.data.canAppendIssues }
+    if (wasAllowed && !appendContext.data.canAppendIssues) {
+      ElMessage.info('上一版追加入口已关闭，请返回列表查看最新任务状态。')
+    }
+  }
   if (Number(latest.lockVersion) < Number(version.value.lockVersion)) return
   if (latest.versionStatus !== version.value.versionStatus
     || latest.selectedCandidateId !== selectedCandidateId.value) {
@@ -520,6 +557,8 @@ async function uploadPendingReferenceFiles() {
 
 function clearIssueDraft() {
   editingDraftId.value = null
+  editingPublishedId.value = null
+  editingPublishedLockVersion.value = null
   editingDraftLockVersion.value = null
   Object.assign(issueDraft, { content: '', mediaSeconds: null, annotations: null })
   resetReferenceAttachments()
@@ -569,7 +608,8 @@ async function submitIssue() {
       return
     }
     const payload = {
-      candidateId: activeCandidate.value.candidateId,
+      issueScope: issueScope.value,
+      candidateId: issueScope.value === 'version' ? null : activeCandidate.value.candidateId,
       content,
       mediaTimeMs: seconds === null ? null : Math.round(seconds * 1000),
       annotations: issueDraft.annotations,
@@ -578,9 +618,9 @@ async function submitIssue() {
     if (isAppending) {
       try {
         await ElMessageBox.confirm(
-          '追加问题将立即发送给制作人，发送后不可修改或删除。确认追加吗？',
-          '确认追加问题',
-          { type: 'warning', confirmButtonText: '追加并发送', cancelButtonText: '继续补充' }
+          editingPublishedId.value ? '修改将立即同步给制作人，并保留修改记录。确认保存吗？' : '追加问题将立即发送给制作人，制作人提交下一版前可编辑本人意见。确认追加吗？',
+          editingPublishedId.value ? '修改已发布意见' : '确认追加问题',
+          { type: 'warning', confirmButtonText: editingPublishedId.value ? '保存并同步' : '追加并发送', cancelButtonText: '继续补充' }
         )
       } catch {
         return
@@ -588,7 +628,11 @@ async function submitIssue() {
     }
     await uploadPendingReferenceFiles()
     payload.referenceFileIds = referenceAttachments.value.map(file => file.fileId)
-    if (isAppending) {
+    if (editingPublishedId.value) {
+      await updatePublishedVersionIssue(version.value.versionId, editingPublishedId.value, {
+        ...payload, lockVersion: editingPublishedLockVersion.value
+      })
+    } else if (isAppending) {
       await appendVersionIssue(version.value.versionId, {
         ...payload,
         lockVersion: reviewContext.value?.currentVersion?.lockVersion ?? version.value.lockVersion
@@ -601,9 +645,12 @@ async function submitIssue() {
     } else {
       await addVersionIssueDraft(version.value.versionId, payload)
     }
+    const wasPublishedEditing = Boolean(editingPublishedId.value)
     const wasEditing = Boolean(editingDraftId.value)
     clearIssueDraft()
-    ElMessage.success(isAppending ? '补充问题已发送给制作人' : wasEditing ? '问题草稿已更新，制作人仍不可见' : '问题已保存为草稿，点击“退回并发送问题”后才会发送给制作人')
+    if (wasPublishedEditing) ElMessage.success('修改已保存并同步给制作人')
+    else if (isAppending) showWorkflowSuccess('issueAppended')
+    else ElMessage.success(wasEditing ? '问题草稿已更新，制作人仍不可见' : '问题已保存为草稿，点击“退回并发送问题”后才会发送给制作人')
     await loadReview()
   } catch (error) {
     ElMessage.error(reviewErrorState(error, isAppending ? '追加问题失败' : editingDraftId.value ? '更新问题草稿失败' : '保存问题草稿失败').message)
@@ -614,8 +661,10 @@ async function submitIssue() {
 
 async function editIssueDraft(draft) {
   if (hasUnsavedIssueDraft.value) return ElMessage.warning('请先保存或清空当前草稿')
-  if (!candidates.value.some(item => Number(item.candidateId) === Number(draft.candidateId))) return ElMessage.warning('问题所属文件不可用')
-  previewCandidateId.value = draft.candidateId
+  if (draft.candidateId != null && !candidates.value.some(item => Number(item.candidateId) === Number(draft.candidateId))) return ElMessage.warning('问题所属文件不可用')
+  issueScope.value = draft.candidateId == null ? 'version' : 'candidate'
+  if (draft.candidateId != null) previewCandidateId.value = draft.candidateId
+  savedIssuesTab.value = draft.candidateId == null ? 'overall' : String(draft.candidateId)
   await nextTick()
   editingDraftId.value = draft.draftId
   editingDraftLockVersion.value = draft.lockVersion
@@ -631,6 +680,19 @@ async function editIssueDraft(draft) {
   await nextTick()
   mediaWorkspace.value?.loadDraft(draft.annotations, draft.mediaTimeMs)
   await focusIssueDraft()
+}
+
+function canEditPublishedIssue(issue) {
+  return !realtimeConflict.value && canAddIssue.value && canAppendIssue.value && issue.status === 'open'
+    && Number(issue.reviewerUserId) === Number(sessionStore.user?.userId)
+}
+
+async function editPublishedIssue(issue) {
+  if (!canEditPublishedIssue(issue) || issueBusy.value || hasUnsavedIssueDraft.value) return
+  await editIssueDraft({ ...issue, candidateId: issue.originCandidateId, versionId: issue.originVersionId, draftId: null })
+  editingPublishedId.value = issue.issueId
+  editingPublishedLockVersion.value = reviewContext.value?.currentVersion?.lockVersion ?? version.value.lockVersion
+  selectedIssueId.value = issue.issueId
 }
 
 async function removeIssueDraft(draft) {
@@ -659,11 +721,13 @@ async function removeIssueDraft(draft) {
 }
 
 function captureMediaTime(milliseconds) {
+  if (issueScope.value === 'version') return ElMessage.info('整体反馈不绑定视频时间点，请切换到当前文件反馈')
   issueDraft.mediaSeconds = Number((Number(milliseconds) / 1000).toFixed(3))
   focusIssueDraft()
 }
 
 function updateAnnotations(annotations) {
+  if (issueScope.value === 'version') return
   issueDraft.annotations = annotations
   if (draftAnnotationCount.value) {
     issueFormRef.value?.clearValidate('content')
@@ -805,12 +869,17 @@ async function submitDecision(actionType, revisionTransfer = null, confirmed = f
     const response = await createReviewAction(version.value.versionId, payload, actionIdempotency.forPayload(context))
     actionIdempotency.reset()
     approvalVisible.value = false
+    let successPrompt
     if (actionType === 'approve' && response.data?.finalDelivery) {
       finalDeliveryPollCount = 0
-      ElMessage.success('审核已通过，最终版本正在发布到 NAS')
+      successPrompt = showWorkflowSuccess('approvedPublishing')
     } else {
-      ElMessage.success(`${reviewActionMeta(actionType).label}已提交`)
+      successPrompt = showWorkflowSuccess({ approve: 'approved', reject: 'rejected', defer: 'deferred' }[actionType])
     }
+    successPrompt.then(confirmed => {
+      if (confirmed && !disposed && props.embedded && ['approve', 'reject'].includes(actionType) &&
+          reviewListId.value === context.reviewListId) emit('completed')
+    })
     await loadReview()
     return true
   } catch (error) {
@@ -843,10 +912,22 @@ function updateAssistantMode() {
 
 onMounted(() => {
   updateAssistantMode()
+  const drawerBody = props.embedded && reviewPage.value?.closest('.el-drawer__body')
+  if (drawerBody) {
+    // 抽屉独立滚动，两侧高度以抽屉可视区域为准。
+    const updateDrawerHeight = () => {
+      drawerSidebarHeight.value = `${Math.max(0, drawerBody.clientHeight - 24)}px`
+    }
+    updateDrawerHeight()
+    drawerResizeObserver = new ResizeObserver(updateDrawerHeight)
+    drawerResizeObserver.observe(drawerBody)
+  }
   window.addEventListener('resize', updateAssistantMode)
   loadReview()
 })
 onBeforeUnmount(() => {
+  disposed = true
+  drawerResizeObserver?.disconnect()
   pageGeneration += 1
   pageController?.abort()
   if (issueDraftPulseTimer) clearTimeout(issueDraftPulseTimer)
@@ -858,7 +939,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <section class="sg-page review-detail-page">
+  <section ref="reviewPage" class="sg-page review-detail-page" :class="{ 'review-detail-page--embedded': embedded }" :style="embedded ? { '--drawer-sidebar-height': drawerSidebarHeight } : undefined">
     <RevisionTransferDialog ref="transferDialog" />
     <header class="sg-page-heading">
       <div class="review-detail-heading">
@@ -903,9 +984,9 @@ onBeforeUnmount(() => {
               <el-card v-for="candidate in candidates" :key="candidate.candidateId" class="candidate-choice" :class="{ 'is-previewing': Number(activeCandidate?.candidateId) === Number(candidate.candidateId), 'is-selected': version.versionStatus === 'final' && Number(selectedCandidateId) === Number(candidate.candidateId) }" shadow="never">
                 <ElRadio class="candidate-choice__preview" :value="candidate.candidateId" @click="previewCandidate(candidate)">
                   <ReviewCandidateThumbnail :version-id="version.versionId" :candidate="candidate" :active="Number(activeCandidate?.candidateId) === Number(candidate.candidateId)" :can-preview="canDownload" />
-                  <span class="candidate-choice__meta"><span><strong>{{ candidate.candidateNumber }}</strong><el-tag v-if="version.versionStatus === 'final' && Number(selectedCandidateId) === Number(candidate.candidateId)" size="small" type="success" effect="plain" round>最终交付</el-tag><el-tag v-if="Number(activeCandidate?.candidateId) === Number(candidate.candidateId)" size="small" type="primary" effect="light" round>正在预览</el-tag></span><small>{{ candidate.candidateNote || '未填写候选说明' }}</small><small class="candidate-choice__file">{{ candidateMediaName(candidate) }}</small></span>
+                  <span class="candidate-choice__meta"><span><strong>{{ candidate.candidateNumber }}</strong><el-tag v-if="version.versionStatus === 'final' && Number(selectedCandidateId) === Number(candidate.candidateId)" size="small" type="success" effect="plain" round>最终交付</el-tag></span><small v-if="candidate.candidateNote?.trim()">{{ candidate.candidateNote }}</small><small class="candidate-choice__file">{{ candidateMediaName(candidate) }}</small></span>
                 </ElRadio>
-                <div class="candidate-choice__actions"><span>{{ candidateIssueCount(candidate) }} 条问题</span><el-tag v-if="Number(activeCandidate?.candidateId) === Number(candidate.candidateId)" size="small">正在审阅</el-tag></div>
+                <div class="candidate-choice__actions"><el-tag class="candidate-choice__issue-count" :class="{ 'has-issues': candidateIssueCount(candidate) > 0 }" :type="candidateIssueCount(candidate) > 0 ? 'warning' : 'info'" :effect="candidateIssueCount(candidate) > 0 ? 'dark' : 'plain'" size="small" round>{{ candidateIssueCount(candidate) }} 条问题</el-tag><el-tag v-if="Number(activeCandidate?.candidateId) === Number(candidate.candidateId)" size="small">正在审阅</el-tag></div>
               </el-card>
             </ElRadioGroup>
             </el-scrollbar>
@@ -923,7 +1004,7 @@ onBeforeUnmount(() => {
               :selected-note="selectedIssue"
               :can-download="canDownload"
               :can-compare="canListVersions"
-              :can-annotate="canAddIssue"
+              :can-annotate="canAddIssue && issueScope === 'candidate'"
               :draft-media-time-ms="issueDraftMediaTimeMs"
               :draft-annotation-count="draftAnnotationCount"
               @capture-time="captureMediaTime"
@@ -949,21 +1030,24 @@ onBeforeUnmount(() => {
 
             <ElTabs v-model="assistantTab" class="assistant-work-tabs" stretch aria-label="审核工作区">
               <ElTabPane v-if="carriedIssues.length" name="carried" :label="`上轮复核 ${completedVerificationCount}/${carriedIssues.length}`">
-                  <el-alert class="verification-guidance" :type="verificationComplete ? 'success' : 'warning'" :closable="false" show-icon :title="verificationComplete ? '上轮问题已全部确认' : `待确认 ${carriedIssues.length - completedVerificationCount} 条 · 未修复须说明原因`" />
+                  <el-alert class="verification-guidance" :type="verificationComplete ? 'success' : 'warning'" :closable="false" show-icon :title="verificationComplete ? '上轮问题已全部确认' : `请逐条复核，还剩 ${carriedIssues.length - completedVerificationCount} 条`" />
                 <el-scrollbar class="assistant-body">
                 <section class="assistant-section carried-panel">
                   <ElTabs v-model="carriedFileTab" type="border-card" class="carried-file-tabs" aria-label="按来源文件复核问题">
                     <ElTabPane v-for="pane in carriedFilePanes" :key="pane.name" :name="pane.name" :label="`${pane.label} ${carriedFileProgress(pane)}`">
                   <div class="issue-list carried-list">
                     <el-card v-for="issue in pane.issues" :key="issue.issueId" class="issue-card" :class="{ 'is-selected': selectedIssueId === issue.issueId }" shadow="never">
-                      <header><span>{{ issue.originCandidateNumber || `${issue.originVersionNumber} · 来源文件待确认` }} 问题</span><el-button size="small" class="carried-annotation-button" type="primary" @click="focusIssue(issue)">{{ issue.annotations?.items?.length ? `查看标注 ${issue.annotations.items.length} 处` : '定位原版意见' }}</el-button></header>
+                      <header><span>{{ issue.originCandidateId == null ? `${issue.originVersionNumber} · 整体反馈` : issue.originCandidateNumber || `${issue.originVersionNumber} · 来源文件待确认` }} 问题</span><el-button v-if="issue.originCandidateId != null" size="small" class="carried-annotation-button" type="primary" @click="focusIssue(issue)">{{ issue.annotations?.items?.length ? `查看标注 ${issue.annotations.items.length} 处` : '定位原版意见' }}</el-button></header>
                       <p>{{ issue.content || '该问题仅包含画面标注' }}</p>
                       <ReviewReferenceFiles :files="issue.referenceFiles || []" compact />
                       <div class="maker-response"><span>制作人对 {{ version.versionNumber }} 的处理说明</span><strong>{{ issue.currentVersionResponse.responseText }}</strong></div>
-                      <el-radio-group v-model="verificationDraft[issue.issueId].result" class="verification-options" size="small">
-                        <el-radio-button value="resolved">已修复</el-radio-button>
-                        <el-radio-button value="still_present">仍然存在</el-radio-button>
-                      </el-radio-group>
+                      <div class="verification-choice" :class="{ 'is-pending': !verificationDraft[issue.issueId].result }">
+                        <p class="verification-choice__prompt">{{ verificationDraft[issue.issueId].result ? '已选择复核结果，可点击更改' : '请点击选择：这个问题修好了吗？' }}</p>
+                        <el-radio-group v-model="verificationDraft[issue.issueId].result" class="verification-options" aria-label="选择本条问题的复核结果">
+                          <el-radio-button value="resolved">{{ verificationDraft[issue.issueId].result === 'resolved' ? '✓ 已确认修复' : '确认已修复' }}</el-radio-button>
+                          <el-radio-button value="still_present">{{ verificationDraft[issue.issueId].result === 'still_present' ? '✓ 问题仍存在' : '问题仍存在' }}</el-radio-button>
+                        </el-radio-group>
+                      </div>
                       <label v-if="verificationDraft[issue.issueId].result === 'still_present'" class="verification-comment">
                         <span>说明仍然存在的问题 <em>*</em></span>
                         <el-input v-model="verificationDraft[issue.issueId].comment" type="textarea" :rows="2" maxlength="1000" show-word-limit placeholder="请具体说明哪里仍未达到要求，方便制作人下一轮准确修改。" />
@@ -979,13 +1063,18 @@ onBeforeUnmount(() => {
               <ElTabPane name="current" :label="`本轮意见 ${currentIssueCount}`">
                 <el-scrollbar class="assistant-body">
                 <section ref="issueComposer" class="assistant-section current-panel" :class="{ 'is-draft-focus': issueDraftPulse }">
-                  <header class="assistant-section-heading"><span class="step-number">2</span><div><div class="issue-compose-heading"><h3>{{ canReview ? '填写修改意见' : '已发送的修改意见' }}</h3><el-tag v-if="activeCandidate" size="small" effect="plain" :aria-label="`当前文件：${activeCandidate.candidateNumber}`">{{ activeCandidate.candidateNumber }}</el-tag></div><p>{{ !canReview ? '查看已正式发送的意见、画面标注和处理记录。' : canAppendIssue ? '制作人提交下一版前可追加问题；确认发送后制作人立即可见。' : isReviewDecisionOpen ? '先保存草稿，退回时统一发送给制作人。' : '本轮已结束。仅在任务待修改且制作人尚未提交下一版时可以追加问题。' }}</p></div></header>
-                  <el-form v-if="canAddIssue" ref="issueFormRef" :disabled="issueBusy || Boolean(actionBusy)" :model="issueDraft" :rules="issueRules" class="issue-compose" label-position="top" aria-label="记录当前版新问题">
-                    <el-form-item label="修改意见" prop="content"><el-input ref="issueContentInput" v-model="issueDraft.content" type="textarea" :rows="4" maxlength="10000" show-word-limit placeholder="请说明需要修改的内容，例如：降低眼睛红色饱和度，并保持肤色不变。" /></el-form-item>
+                  <header class="assistant-section-heading"><span class="step-number">2</span><div><div class="issue-compose-heading"><h3>{{ canReview ? '填写修改意见' : '已发送的修改意见' }}</h3></div><p>{{ !canReview ? '查看已正式发送的意见、画面标注和处理记录。' : canAppendIssue ? '制作人提交下一版前可追加问题；确认发送后制作人立即可见。' : isReviewDecisionOpen ? '先保存草稿，退回时统一发送给制作人。' : '本轮已结束。仅在任务待修改且制作人尚未提交下一版时可以追加问题。' }}</p></div></header>
+                  <ElTabs v-if="canAddIssue" :model-value="issueScope" type="border-card" :before-leave="canChangeIssueScope" @update:model-value="changeIssueScope" class="issue-scope-tabs" aria-label="选择反馈范围">
+                    <ElTabPane v-for="scope in [{ name: 'version', label: '整体反馈意见' }, { name: 'candidate', label: '填写修改意见' }]" :key="scope.name" :name="scope.name" :label="scope.label">
+                      <template #label>
+                        <span class="issue-scope-label">{{ scope.label }}<el-tag v-if="scope.name === 'candidate' && activeCandidate" class="issue-candidate-tag" size="small" effect="dark" round :aria-label="`当前文件：${activeCandidate.candidateNumber}`">{{ activeCandidate.candidateNumber }}</el-tag></span>
+                      </template>
+                  <el-form v-if="issueScope === scope.name" :ref="el => { if (el) issueFormRef = el }" :disabled="issueBusy || Boolean(actionBusy)" :model="issueDraft" :rules="issueRules" class="issue-compose" label-position="top" aria-label="记录当前版新问题">
+                    <el-form-item label="修改意见" prop="content"><el-input :ref="el => { if (el) issueContentInput = el }" v-model="issueDraft.content" type="textarea" :rows="4" maxlength="10000" show-word-limit placeholder="请说明需要修改的内容，例如：降低眼睛红色饱和度，并保持肤色不变。" /></el-form-item>
                     <el-form-item label="参考内容（可选）">
                       <div class="issue-reference-compose">
                         <div class="issue-reference-compose__heading">
-                          <el-upload ref="referenceUploadRef" :auto-upload="false" :show-file-list="false" :multiple="true" :accept="REFERENCE_ACCEPT" :disabled="issueBusy || referenceAttachments.length >= MAX_REFERENCE_FILES" :on-change="addReferenceFile">
+                          <el-upload :ref="el => { if (el) referenceUploadRef = el }" :auto-upload="false" :show-file-list="false" :multiple="true" :accept="REFERENCE_ACCEPT" :disabled="issueBusy || referenceAttachments.length >= MAX_REFERENCE_FILES" :on-change="addReferenceFile">
                             <el-button :icon="UploadFilled" :disabled="issueBusy || referenceAttachments.length >= MAX_REFERENCE_FILES">添加图片或参考资料</el-button>
                           </el-upload>
                           <span>最多 {{ MAX_REFERENCE_FILES }} 个，每个不超过 20 MiB</span>
@@ -1011,19 +1100,21 @@ onBeforeUnmount(() => {
                         <el-button link type="danger" @click="clearIssueDraft">清除定位</el-button>
                       </div>
                     </el-form-item>
-                    <el-form-item class="issue-compose__actions"><el-button v-if="hasUnsavedIssueDraft" :disabled="issueBusy" @click="clearIssueDraft">{{ editingDraftId ? '取消编辑' : canAppendIssue ? '清空内容' : '清空草稿' }}</el-button><el-button type="primary" :loading="issueBusy" @click="submitIssue">{{ canAppendIssue ? '追加并发送问题' : editingDraftId ? '更新问题草稿' : '保存问题草稿' }}</el-button></el-form-item>
+                    <el-form-item class="issue-compose__actions"><el-button v-if="hasUnsavedIssueDraft" :disabled="issueBusy" @click="clearIssueDraft">{{ editingDraftId || editingPublishedId ? '取消编辑' : canAppendIssue ? '清空内容' : '清空草稿' }}</el-button><el-button type="primary" :loading="issueBusy" @click="submitIssue">{{ editingPublishedId ? '保存并同步修改' : canAppendIssue ? '追加并发送问题' : editingDraftId ? '更新问题草稿' : '保存问题草稿' }}</el-button></el-form-item>
                   </el-form>
+                    </ElTabPane>
+                  </ElTabs>
                   <section class="saved-issues-section" aria-label="已记录修改意见">
-                  <ElTabs v-model="savedIssuesTab" :before-leave="canLeaveSavedIssueTab" @tab-change="switchSavedIssueCandidate" class="saved-issues-tabs" aria-label="按文件查看修改意见">
+                  <ElTabs v-model="savedIssuesTab" type="border-card" :before-leave="canLeaveSavedIssueTab" @tab-click="pane => switchSavedIssueCandidate(pane.paneName)" class="saved-issues-tabs" aria-label="按文件查看修改意见">
                     <ElTabPane v-for="pane in savedIssuePanes" :key="pane.name" :name="pane.name" :label="pane.label">
-                      <template v-if="String(activeCandidate?.candidateId) === pane.name">
+                      <template v-if="savedIssuesTab === pane.name">
                         <el-empty v-if="!pane.drafts.length && !pane.issues.length" :image-size="32" :description="`${pane.label} 暂无意见`" />
                   <div v-if="pane.drafts.length" class="issue-list current-list">
                     <el-card v-for="draft in pane.drafts" :key="draft.draftId" class="issue-card issue-draft-card" :class="{ 'is-selected': selectedIssueId === `draft-${draft.draftId}` }" shadow="never">
                       <header>
                         <span>待提交草稿 #{{ currentVersionDrafts.indexOf(draft) + 1 }}</span>
                         <div class="issue-card-actions">
-                          <el-button link type="primary" @click="focusIssue({ ...draft, issueId: `draft-${draft.draftId}`, originVersionId: draft.versionId })">{{ draft.annotations?.items?.length ? `查看标注 ${draft.annotations.items.length} 处` : '查看对应作品' }}</el-button>
+                          <el-button v-if="draft.candidateId != null" link type="primary" @click="focusIssue({ ...draft, issueId: `draft-${draft.draftId}`, originVersionId: draft.versionId })">{{ draft.annotations?.items?.length ? `查看标注 ${draft.annotations.items.length} 处` : '查看对应作品' }}</el-button>
                           <el-button link type="warning" :disabled="Boolean(draftActionBusyId)" @click="editIssueDraft(draft)">编辑</el-button>
                           <el-button link type="danger" :loading="draftActionBusyId === draft.draftId" :disabled="Boolean(draftActionBusyId)" @click="removeIssueDraft(draft)">删除</el-button>
                         </div>
@@ -1037,7 +1128,7 @@ onBeforeUnmount(() => {
                     <el-card v-for="(issue, index) in pane.issues" :key="issue.issueId" class="issue-card" :class="{ 'is-selected': selectedIssueId === issue.issueId }" shadow="never">
                       <header>
                         <span>已发布修改要求 #{{ index + 1 }}</span>
-                        <el-button link type="primary" @click="focusIssue(issue)">查看对应作品</el-button>
+                        <div class="issue-card-actions"><el-button v-if="issue.originCandidateId != null" link type="primary" @click="focusIssue(issue)">查看对应作品</el-button><el-button v-if="canEditPublishedIssue(issue)" link type="warning" :disabled="issueBusy" @click="editPublishedIssue(issue)">编辑</el-button></div>
                       </header>
                       <p>{{ issue.content || '该问题仅包含画面标注' }}</p>
                       <ReviewReferenceFiles :files="issue.referenceFiles || []" compact />
@@ -1081,8 +1172,11 @@ onBeforeUnmount(() => {
                   <span v-else>本轮审核已经结束</span>
                 </template>
               </div>
-              <el-input v-model="decisionReason" type="textarea" :rows="2" maxlength="1000" placeholder="本轮审核整体说明（可选）" />
-              <el-button v-if="isReviewDecisionOpen && !verificationComplete" class="decision-warning" type="warning" plain @click="assistantTab = 'carried'">还有 {{ carriedIssues.length - completedVerificationCount }} 条上轮问题待确认 · 去复核</el-button>
+              <el-input v-show="false" v-model="decisionReason" type="textarea" :rows="2" maxlength="1000" placeholder="本轮审核整体说明（可选）" />
+              <el-button v-if="isReviewDecisionOpen && !verificationComplete" class="decision-review-cta" type="primary" size="large" @click="assistantTab = 'carried'">
+                <span>去复核上轮问题（{{ carriedIssues.length - completedVerificationCount }} 条待确认）</span>
+                <el-icon><ArrowRight /></el-icon>
+              </el-button>
               <div class="decision-actions">
                 <el-button type="success" :loading="actionBusy === 'approve'" :disabled="!canApprove || Boolean(actionBusy)" @click="openApproval">全部符合，确认通过</el-button>
                 <el-button type="danger" plain :loading="actionBusy === 'reject'" :disabled="!canReject || Boolean(actionBusy)" @click="submitDecision('reject')">退回并发送问题{{ currentVersionDrafts.length ? `（${currentVersionDrafts.length}）` : '' }}</el-button>
@@ -1110,6 +1204,8 @@ onBeforeUnmount(() => {
 
 <style scoped>
 :global(.app-content:has(.review-detail-page)){overflow:visible}
+.review-detail-page.review-detail-page--embedded { padding: 0; }
+.review-detail-page--embedded > .sg-page-heading { margin-bottom: 0; }
 .review-detail-page{display:grid;gap:18px}.review-detail-heading,.heading-actions{display:flex;gap:13px;align-items:center}.review-detail-heading h2{margin:3px 0}.review-detail-heading p{margin:0;color:var(--sg-text-muted);font-size:11px}.review-detail-loading{display:grid;min-height:320px;color:var(--sg-text-muted);background:var(--sg-surface);border:1px dashed var(--sg-border-strong);border-radius:var(--sg-radius-lg);place-items:center}
 .review-context-strip{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.review-context-strip>div{display:grid;gap:6px;padding:13px 15px;background:var(--sg-surface);border:1px solid var(--sg-border);border-radius:10px}.review-context-strip span{color:var(--sg-text-muted);font-size:10px}.review-context-strip strong{font-size:13px}.danger{color:var(--sg-danger)!important}.success{color:var(--sg-success)!important}
 .manual-strip{display:grid;gap:14px;padding:18px;background:var(--sg-surface);border:1px solid var(--sg-border);border-radius:var(--sg-radius-md)}.manual-strip>header{display:flex;gap:14px;align-items:center;justify-content:space-between}.manual-strip h3{margin:3px 0 0;font-size:16px}.manual-strip>header>div:last-child,.manual-version-list{display:flex;gap:8px;flex-wrap:wrap}
@@ -1211,6 +1307,19 @@ onBeforeUnmount(() => {
   height: calc(100dvh - 112px);
 }
 .candidate-navigation .candidate-selector { height: 100%; box-sizing: border-box; }
+@media (min-width: 1101px) {
+  .review-detail-page--embedded .candidate-navigation,
+  .review-detail-page--embedded .review-assistant-affix {
+    position: sticky;
+    top: 12px;
+    align-self: start;
+  }
+  .review-detail-page--embedded .candidate-navigation,
+  .review-detail-page--embedded .review-assistant {
+    height: var(--drawer-sidebar-height);
+    max-height: none;
+  }
+}
 .candidate-navigation .candidate-selector :deep(> .el-card__body) {
   display: flex;
   flex-direction: column;
@@ -1225,8 +1334,10 @@ onBeforeUnmount(() => {
 .candidate-navigation__scroll { flex: 1; min-height: 0; }
 .candidate-navigation .candidate-selector__list { box-sizing: border-box; padding: 4px; gap: 8px; }
 .candidate-navigation .candidate-choice :deep(.el-card__body) { padding: 6px; gap: 6px; }
-.candidate-navigation .candidate-choice__actions { flex-direction: column; align-items: stretch; gap: 6px; }
+.candidate-navigation .candidate-choice__actions { flex-direction: row; align-items: center; justify-content: space-between; gap: 6px; }
 .candidate-navigation .candidate-choice__actions .el-button { width: 100%; }
+.candidate-choice__actions > .candidate-choice__issue-count { align-self: flex-start; font-size: 10px; font-weight: 600; }
+.candidate-choice__actions > .candidate-choice__issue-count.has-issues { color: var(--el-color-white); }
 .candidate-navigation .candidate-choice__meta > span { flex-wrap: wrap; gap: 4px; }
 .candidate-navigation .candidate-choice__file { overflow-wrap: anywhere; }
 .current-panel > .assistant-section-heading { padding: 10px 10px 0; }
@@ -1252,7 +1363,7 @@ onBeforeUnmount(() => {
 .current-panel > .assistant-section-heading { grid-template-columns: auto minmax(0, 1fr); gap: 8px; }
 .current-panel .assistant-section-heading p { line-height: 1.5; }
 .issue-compose-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
-.issue-compose-heading :deep(.el-tag) { flex-shrink: 0; }
+
 .current-panel .issue-compose { padding-top: 4px; padding-bottom: 4px; gap: 10px; }
 .current-panel .issue-reference-compose__heading { flex-wrap: wrap; gap: 6px; }
 .current-panel .issue-reference-compose__heading > span { line-height: 1.5; }
@@ -1281,8 +1392,9 @@ onBeforeUnmount(() => {
 .current-panel .saved-issues-section .issue-card :deep(.el-card__body > header > span) { color: var(--sg-text-muted); font-weight: 400; }
 .current-panel .saved-issues-section .issue-card :deep(.el-card__body > p) { color: var(--sg-text-primary, var(--sg-text-secondary)); }
 .current-panel .saved-issues-empty { margin: 0; padding: 0 10px 12px; color: var(--sg-text-muted); }
-.current-panel .issue-card :deep(.el-card__body > header) { flex-wrap: wrap; gap: 6px; }
-.current-panel .issue-card-actions { gap: 10px; }
+.current-panel .issue-card :deep(.el-card__body > header) { display: flex; align-items: center; justify-content: space-between; flex-wrap: nowrap; gap: 6px; }
+.current-panel .issue-card :deep(.el-card__body > header > span) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.current-panel .issue-card-actions { flex: 0 0 auto; flex-wrap: nowrap; gap: 6px; margin-left: auto; }
 .current-panel .issue-card :deep(.el-card__body > p) { line-height: 1.6; overflow-wrap: anywhere; }
 .current-panel .issue-card :deep(.el-card__body > small) { line-height: 1.5; }
 @media (max-width: 760px) {
@@ -1302,6 +1414,10 @@ onBeforeUnmount(() => {
 .assistant-work-tabs :deep(> .el-tabs__content) { flex: 1; min-height: 0; }
 .assistant-work-tabs :deep(> .el-tabs__content > .el-tab-pane) { height: 100%; }
 .assistant-work-tabs .assistant-body { height: 100%; }
+.assistant-work-tabs :deep(#pane-current .el-scrollbar__view) { min-height: 100%; display: flex; flex-direction: column; }
+.assistant-work-tabs .current-panel { flex: 1; display: flex; flex-direction: column; }
+.assistant-work-tabs .current-panel .saved-issues-section { flex: 1; margin-bottom: 0; }
+.review-assistant .decision-panel { background: var(--sg-surface); box-shadow: none; }
 .assistant-work-tabs :deep(#pane-carried) { display: flex; flex-direction: column; }
 .verification-guidance { flex: none; width: auto; margin: 8px 12px; padding: 7px 8px; }
 .verification-guidance.el-alert--warning { background: var(--el-color-warning-light-8); border: 1px solid var(--el-color-warning-light-5); color: var(--el-color-warning-dark-2); }
@@ -1324,6 +1440,25 @@ onBeforeUnmount(() => {
 .carried-panel .maker-response strong { line-height: 1.4; overflow-wrap: anywhere; }
 .carried-panel .verification-comment { gap: 4px; }
 .carried-panel .verification-comment :deep(.el-textarea__inner) { font-size: 12px; }
-.decision-panel > .decision-warning { width: 100%; margin-left: 0; white-space: normal; height: auto; min-height: 32px; line-height: 1.5; }
+.decision-panel > .decision-review-cta { width: 100%; margin: 0; padding: 12px; white-space: normal; height: auto; min-height: 46px; line-height: 1.5; font-size: 14px; font-weight: 700; }
+.decision-review-cta :deep(> span) { display: flex; justify-content: center; gap: 8px; white-space: normal; }
+.decision-review-cta .el-icon { flex-shrink: 0; font-size: 16px; }
+.verification-choice { padding: 6px; border: 1px solid var(--sg-border); border-radius: 6px; }
+.verification-choice.is-pending { border-color: var(--el-color-primary); background: var(--el-color-primary-light-9); }
+.verification-choice__prompt { margin: 0 0 5px; color: var(--sg-text-secondary); font-size: 10px; line-height: 1.4; }
+.is-pending > .verification-choice__prompt { color: var(--el-color-primary); font-weight: 700; }
+.verification-choice .verification-options { display: flex; gap: 6px; }
+.verification-choice .verification-options :deep(.el-radio-button) { flex: 1; width: auto; min-width: 0; }
+.verification-choice .verification-options :deep(.el-radio-button__inner) { display: flex; align-items: center; justify-content: center; min-height: 28px; padding: 4px; border: 1px solid var(--el-color-primary); border-radius: 4px; font-size: 11px; font-weight: 600; white-space: normal; line-height: 1.4; box-shadow: none; }
+.verification-choice .verification-options :deep(.el-radio-button:not(.is-active) .el-radio-button__inner) { color: var(--el-color-primary); background: var(--el-bg-color); }
 @media (max-width: 1100px) { .assistant-work-tabs { flex: none; } .assistant-work-tabs .assistant-body { max-height: 560px; } }
+</style>
+
+<style scoped>
+.issue-scope-tabs { margin: 0 10px; box-shadow: none; }
+.issue-scope-tabs :deep(.el-tabs__content) { padding: 8px; }
+.issue-scope-tabs :deep(.el-tabs__item) { padding: 0 12px; font-size: 12px; }
+.issue-scope-tabs .issue-compose { padding: 0; }
+.issue-scope-label { display: inline-flex; align-items: center; gap: 4px; }
+.issue-candidate-tag { height: 16px; padding: 0 5px; font-size: 10px; line-height: 14px; transform: scale(.8); transform-origin: left center; margin-right: -10px; }
 </style>

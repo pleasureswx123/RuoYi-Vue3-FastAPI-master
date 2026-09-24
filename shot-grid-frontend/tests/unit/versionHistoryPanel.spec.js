@@ -19,6 +19,10 @@ vi.mock('@/api/shot-grid/reviews', () => ({
 }))
 
 const mountOptions = { global: { components: { ElButton, ElDialog, ElIcon, ElImage, ElTag } } }
+const realtimeRefresh = vi.hoisted(() => ({ callback: null }))
+vi.mock('@/composables/useVersionRealtime', () => ({
+  useVersionRealtime: (_id, callback) => { realtimeRefresh.callback = callback }
+}))
 
 function listItem(versionId, taskId = 31, overrides = {}) {
   return {
@@ -84,6 +88,36 @@ describe('版本历史面板', () => {
     wrapper.unmount()
   })
 
+  it('整体反馈独立展示，不占用候选缩略图或来源文件计数', async () => {
+    getVersionDetail.mockImplementation(id => Promise.resolve(detail(id, 31, { candidates: [1, 2, 3].map(n => ({ candidateId: id * 100 + n, candidateNumber: `V00${id}_0${n}`, files: [] })) })))
+    getTaskIssues.mockResolvedValue({ data: [
+      { issueId: 60, originVersionId: 2, originCandidateId: null, status: 'open', pendingVersionId: 2, content: '全版节奏需要加快', reviewerName: '卢清华', reviewerUserId: 7, createTime: '2026-09-24T16:20:00' },
+      { issueId: 61, originVersionId: 2, originCandidateId: 201, status: 'open', pendingVersionId: 2, content: '第一个文件调亮', reviewerName: '审核人乙', reviewerUserId: 8, createTime: '2026-09-24T16:22:00' }
+    ] })
+    const wrapper = mount(VersionHistoryPanel, { ...mountOptions, props: { taskId: 31, canList: true, canQuery: true, canListNotes: true } })
+    await flushPromises()
+    expect(wrapper.findAll('.feedback-file')).toHaveLength(3)
+    expect(wrapper.get('.feedback-file-nav').text()).not.toContain('整体反馈')
+    expect(wrapper.get('.feedback-category-tabs').classes()).toContain('el-tabs--left')
+    await wrapper.get('#tab-overall-feedback').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('.overall-feedback').isVisible()).toBe(true)
+    expect(wrapper.get('#tab-files').attributes('aria-selected')).toBe('false')
+    expect(wrapper.get('.overall-feedback').text()).toContain('全版节奏需要加快')
+    expect(wrapper.get('.overall-feedback').text()).toContain('待处理 1 条')
+    expect(wrapper.get('.overall-feedback .feedback-author').text()).toBe('卢清华 · 2026/09/24 16:20 提出')
+    expect(wrapper.get('.feedback-summary').text()).toContain('涉及 1 个来源文件')
+    await wrapper.get('#tab-files').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('#tab-overall-feedback').attributes('aria-selected')).toBe('false')
+    expect(wrapper.get('.feedback-file-nav').isVisible()).toBe(true)
+    expect(wrapper.get('.feedback-list').text()).toContain('第一个文件调亮')
+    expect(wrapper.get('.feedback-list .feedback-author').text()).toBe('审核人乙 · 2026/09/24 16:22 提出')
+    expect(wrapper.get('.opinion-tabs > .el-tabs__header #tab-current').text()).toBe('本轮问题 1')
+    expect(wrapper.get('.feedback-summary').text()).toContain('2 条待处理问题')
+    wrapper.unmount()
+  })
+
   it('退回修改使用业务状态卡而不是错误警报', async () => {
     getReviewActions.mockResolvedValueOnce({
       rows: [{
@@ -98,8 +132,8 @@ describe('版本历史面板', () => {
     })
     getTaskIssues.mockResolvedValueOnce({
       data: [
-        { issueId: 51, originCandidateId: 201, originVersionId: 2, pendingVersionId: 2, status: 'open', content: '主体亮度偏低', responses: [], verifications: [] },
-        { issueId: 52, originCandidateId: 202, originVersionId: 2, pendingVersionId: 2, status: 'open', content: '运动节奏过快', responses: [], verifications: [] }
+        { issueId: 51, originVersionId: 2, originCandidateId: 201, pendingVersionId: 2, status: 'open', content: '主体亮度偏低', responses: [], verifications: [] },
+        { issueId: 52, originVersionId: 2, originCandidateId: 202, pendingVersionId: 2, status: 'open', content: '运动节奏过快', responses: [], verifications: [] }
       ]
     })
     getVersionDetail.mockResolvedValueOnce(detail(2, 31, { candidates: [{ candidateId: 201, candidateNumber: 'V002_01', files: [{ fileId: 'first' }] }, { candidateId: 202, candidateNumber: 'V002_02', files: [{ fileId: 'second' }] }] }))
@@ -122,6 +156,13 @@ describe('版本历史面板', () => {
     await flushPromises()
     expect(media.props('version')).toMatchObject({ candidateId: 202, files: [{ fileId: 'second' }] })
     expect(wrapper.text()).toContain('来源文件 V002_02')
+    getTaskIssues.mockResolvedValueOnce({ data: [
+      { issueId: 53, originVersionId: 2, originCandidateId: 202, pendingVersionId: 2, status: 'open', content: '实时追加的修改意见', responses: [], verifications: [] }
+    ] })
+    await realtimeRefresh.callback(2)
+    await flushPromises()
+    expect(wrapper.text()).toContain('实时追加的修改意见')
+    expect(media.props('version')).toMatchObject({ candidateId: 202, files: [{ fileId: 'second' }] })
     wrapper.unmount()
   })
 
@@ -132,8 +173,8 @@ describe('版本历史面板', () => {
     ]
     getTaskIssues.mockResolvedValueOnce({
       data: [
-        { issueId: 50, originVersionId: 2, originVersionNumber: 'V002', pendingVersionId: 2, status: 'open', content: '另一条待处理问题', referenceFiles: [], responses: [], verifications: [] },
-        { issueId: 51, originVersionId: 2, originVersionNumber: 'V002', pendingVersionId: 2, status: 'open', content: '请参考附件调整灯光', referenceFiles: files, responses: [], verifications: [] }
+        { issueId: 50, originVersionId: 2, originCandidateId: 201, originVersionNumber: 'V002', pendingVersionId: 2, status: 'open', content: '另一条待处理问题', referenceFiles: [], responses: [], verifications: [] },
+        { issueId: 51, originVersionId: 2, originCandidateId: 201, originVersionNumber: 'V002', pendingVersionId: 2, status: 'open', content: '请参考附件调整灯光', referenceFiles: files, responses: [], verifications: [] }
       ]
     })
     downloadReviewReferenceFile.mockImplementation(file => Promise.resolve(new Blob(['参考文件'], { type: file.contentType })))
@@ -178,12 +219,14 @@ describe('版本历史面板', () => {
       { candidateId: 202, candidateNumber: 'V002_02', files: [] }
     ] }))
     getTaskIssues.mockResolvedValueOnce({ data: [
-      { issueId: 51, originCandidateId: 202, originVersionId: 2, pendingVersionId: 2, status: 'open', content: '需要调整灯光' },
-      { issueId: 52, originCandidateId: 202, originVersionId: 2, status: 'resolved', content: '已修复构图' }
+      { issueId: 51, originVersionId: 2, originCandidateId: 202, pendingVersionId: 2, status: 'open', content: '需要调整灯光' },
+      { issueId: 52, originVersionId: 2, originCandidateId: 202, status: 'resolved', content: '已修复构图' }
     ] })
     const wrapper = mount(VersionHistoryPanel, { ...mountOptions, props: { taskId: 31, canList: true, canQuery: true, canListNotes: true } })
     await flushPromises()
     expect(wrapper.get('.feedback-file.active').text()).toContain('V002_02')
+    expect(wrapper.find('#tab-overall-feedback').exists()).toBe(false)
+    expect(wrapper.get('.feedback-category-tabs').classes()).toContain('is-file-only')
     expect(wrapper.get('.version-feedback-panel__heading').text()).toContain('1 条待处理问题 = 本轮新增 1 条 + 上轮未修复 0 条')
     expect(wrapper.get('.feedback-list').text()).toContain('需要调整灯光')
     expect(wrapper.get('.feedback-list').text()).not.toContain('已修复构图')
@@ -199,7 +242,7 @@ describe('版本历史面板', () => {
     getVersionDetail.mockImplementation(id => Promise.resolve(detail(id, 31, { candidates: [
       { candidateId: id * 100 + 1, candidateNumber: `V00${id}_01`, files: [{ fileId: `file-${id}` }] }
     ] })))
-    getTaskIssues.mockResolvedValueOnce({ data: [{ issueId: 51, originCandidateId: 101, originVersionId: 1, originVersionNumber: 'V001', pendingVersionId: 2, status: 'open', content: '遗留问题' }] })
+    getTaskIssues.mockResolvedValueOnce({ data: [{ issueId: 51, originVersionId: 1, originCandidateId: 101, originVersionNumber: 'V001', pendingVersionId: 2, status: 'open', content: '遗留问题' }] })
     const wrapper = mount(VersionHistoryPanel, { ...mountOptions, props: { taskId: 31, canList: true, canQuery: true, canListNotes: true } })
     await flushPromises()
     expect(wrapper.get('.version-tabs > .el-tabs__header .is-active').text()).toContain('V002')
@@ -225,7 +268,7 @@ describe('版本历史面板', () => {
     getVersionDetail.mockImplementation(id => id === 1
       ? new Promise(resolve => { resolveSource = resolve })
       : Promise.resolve(detail(2, 31, { candidates: [{ candidateId: 201, candidateNumber: 'V002_01', files: [] }] })))
-    getTaskIssues.mockResolvedValueOnce({ data: [{ issueId: 51, originCandidateId: 101, originVersionId: 1, originVersionNumber: 'V001', pendingVersionId: 2, status: 'open', content: '遗留问题' }] })
+    getTaskIssues.mockResolvedValueOnce({ data: [{ issueId: 51, originVersionId: 1, originCandidateId: 101, originVersionNumber: 'V001', pendingVersionId: 2, status: 'open', content: '遗留问题' }] })
     const wrapper = mount(VersionHistoryPanel, { ...mountOptions, props: { taskId: 31, canList: true, canQuery: true, canListNotes: true } })
     await flushPromises()
     await wrapper.get('.previous-issues .feedback-item__select').trigger('click')
@@ -245,7 +288,7 @@ describe('版本历史面板', () => {
     [[{ checkedVersionId: 2, result: 'still_present' }], '仍需修改'],
     [[{ checkedVersionId: 2, result: 'resolved' }], '已修复']
   ])('返修响应按本轮实际审核记录显示状态 %j', async (verifications, expected) => {
-    getTaskIssues.mockResolvedValueOnce({ data: [{ issueId: 51, originVersionId: 1, originVersionNumber: 'V001', pendingVersionId: 1, pendingVersionNumber: 'V001', status: 'open', content: '调整亮度', responses: [{ versionId: 2, versionNumber: 'V002', responseText: '已处理' }], verifications }] })
+    getTaskIssues.mockResolvedValueOnce({ data: [{ issueId: 51, originVersionId: 1, originCandidateId: 101, originVersionNumber: 'V001', pendingVersionId: 1, pendingVersionNumber: 'V001', status: 'open', content: '调整亮度', responses: [{ versionId: 2, versionNumber: 'V002', responseText: '已处理' }], verifications }] })
     const wrapper = mount(VersionHistoryPanel, { ...mountOptions, props: { taskId: 31, canList: true, canQuery: true, canListNotes: true } })
     await flushPromises()
     expect(wrapper.get('.feedback-item__heading').text()).toContain(expected)

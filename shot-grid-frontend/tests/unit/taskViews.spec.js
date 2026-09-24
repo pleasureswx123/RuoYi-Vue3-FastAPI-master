@@ -13,6 +13,7 @@ import {
   ElIcon,
   ElInput,
   ElMessage,
+  ElMessageBox,
   ElOption,
   ElPagination,
   ElSelect,
@@ -360,7 +361,7 @@ describe('真实任务工作台', () => {
       taskStatus: '',
       priority: '',
       dueDateRange: [],
-      orderValue: 'updateTime:descending'
+      orderValue: 'shotNo:ascending'
     })
     expect(filterForm.props('rules')).toMatchObject({
       dueDateRange: [expect.objectContaining({ trigger: 'change' })]
@@ -391,8 +392,8 @@ describe('真实任务工作台', () => {
       taskStatus: 'revision',
       priority: 'urgent',
       pageNum: 1,
-      orderByColumn: 'updateTime',
-      isAsc: 'descending'
+      orderByColumn: 'shotNo',
+      isAsc: 'ascending'
     }), expect.anything())
 
     await wrapper.find('.task-row').trigger('click')
@@ -496,7 +497,7 @@ describe('真实任务工作台', () => {
       taskStatus: '',
       priority: '',
       dueDateRange: [],
-      orderValue: 'updateTime:descending',
+      orderValue: 'shotNo:ascending',
       pageNum: 1
     })
     expect(getMineTaskPage).toHaveBeenLastCalledWith(expect.objectContaining({
@@ -505,8 +506,8 @@ describe('真实任务工作台', () => {
       priority: undefined,
       dueDateFrom: undefined,
       dueDateTo: undefined,
-      orderByColumn: 'updateTime',
-      isAsc: 'descending',
+      orderByColumn: 'shotNo',
+      isAsc: 'ascending',
       pageNum: 1
     }), expect.anything())
     wrapper.unmount()
@@ -826,6 +827,22 @@ describe('任务详情、状态动作与异步上下文', () => {
       vi.useRealTimers()
       messageSpy.mockRestore()
     }
+  })
+
+  it.each(['confirm', 'close'])('提交成功提示 %s 时仅确认按钮关闭任务抽屉', async action => {
+    let acknowledge
+    const alert = vi.spyOn(ElMessageBox, 'alert').mockImplementation(() => new Promise(resolve => { acknowledge = resolve }))
+    const { wrapper } = await mountDetail()
+    await wrapper.setProps({ embedded: true })
+    const workspace = wrapper.findComponent('[data-testid="version-workspace"]')
+    workspace.vm.$emit('committed', 'pending_review', { taskId: 31, operationGeneration: workspace.props('operationGeneration') })
+    await flushPromises()
+    expect(wrapper.emitted('completed')).toBeUndefined()
+    acknowledge(action)
+    await flushPromises()
+    expect(wrapper.emitted('completed')?.length || 0).toBe(action === 'confirm' ? 1 : 0)
+    alert.mockRestore()
+    wrapper.unmount()
   })
 
   it('任务详情的状态、优先级、类型、生命周期和版本标记使用 ElTag', async () => {

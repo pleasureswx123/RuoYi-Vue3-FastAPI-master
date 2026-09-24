@@ -32,7 +32,7 @@ class ShotGridTaskFilterModel(ShotGridPageQueryModel):
     due_date_from: date | None = Field(default=None, description='截止日期下界')
     due_date_to: date | None = Field(default=None, description='截止日期上界')
     priority: TaskPriority | None = Field(default=None, description='任务优先级')
-    order_by_column: Literal['taskId', 'dueDate', 'priority', 'createTime', 'updateTime'] = Field(
+    order_by_column: Literal['taskId', 'dueDate', 'priority', 'createTime', 'updateTime', 'shotNo'] = Field(
         default='updateTime',
         description='排序字段',
     )

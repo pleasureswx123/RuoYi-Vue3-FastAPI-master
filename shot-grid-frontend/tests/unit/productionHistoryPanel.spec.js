@@ -27,6 +27,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { getProductionHistory } from '@/api/shot-grid/productionHistory'
 import ProductionHistoryPanel from '@/components/production-history/ProductionHistoryPanel.vue'
+import { currentProductionHandoff, expandProductionTimeline } from '@/components/production-history/productionHistoryPresentation'
 
 vi.mock('@/api/shot-grid/productionHistory', () => ({ getProductionHistory: vi.fn() }))
 
@@ -335,6 +336,34 @@ function deferred() {
 }
 
 describe('制作履历面板', () => {
+  it('提交与每次审核按真实时间拆分，未审核不生成审核节点', () => {
+    const cycle = versionCycle()
+    const source = { eventId: 'version:91', versionCycle: cycle }
+    cycle.reviewActions.push({ actionId: 72, actionType: 'defer', createTime: '2026-08-14T09:30:00' })
+    const events = expandProductionTimeline([source])
+    expect(events.map(event => event.occurredAt)).toEqual(['2026-08-14T10:00:00', '2026-08-14T09:30:00', '2026-08-14T09:00:00'])
+    expect(new Set(events.map(event => event.eventId)).size).toBe(3)
+    cycle.reviewActions = []
+    expect(expandProductionTimeline([source]).map(event => event.eventType)).toEqual(['version_submitted'])
+  })
+
+  it('当前处理方按任务状态区分制作人、审核人员、管理人员和系统', () => {
+    const lane = shotHistory().lanes[0]
+    lane.task.assignee.userName = '接手制作人'
+    expect(currentProductionHandoff(lane).owner).toBe('制作人：接手制作人')
+    lane.task.taskStatus = 'pending_review'
+    expect(currentProductionHandoff(lane).owner).toBe('项目审核人员')
+    lane.task.taskStatus = 'not_started'
+    expect(currentProductionHandoff(lane).owner).toBe('项目管理人员')
+    lane.task.taskStatus = 'preparing'
+    expect(currentProductionHandoff(lane).owner).toBe('系统正在准备')
+    lane.task.taskStatus = 'completed'
+    expect(currentProductionHandoff(lane).owner).toBe('本任务无待处理环节')
+    lane.lifecycleStatus = 'archived'
+    expect(currentProductionHandoff(lane).stage).toBe('已归档')
+    expect(currentProductionHandoff(null)).toBeNull()
+  })
+
   beforeEach(() => {
     getProductionHistory.mockReset()
     getProductionHistory.mockResolvedValue({ data: shotHistory() })
@@ -354,11 +383,23 @@ describe('制作履历面板', () => {
     expect(timelineItems.every(item => !item.props('hollow'))).toBe(true)
     expect(wrapper.text()).toContain('没有独立审计证据的动作不会被补写')
     expect(wrapper.text()).toContain('返修中')
-    expect(wrapper.text()).toContain('当前负责人：杨景锋')
+    expect(wrapper.text()).toContain('制作负责人：杨景锋')
+    expect(wrapper.text()).toContain('任务创建人')
+    expect(wrapper.text()).toContain('当前制作人')
+    expect(wrapper.text()).not.toContain('首次排期')
+    expect(wrapper.text()).toContain('当前计划制作时间')
+    expect(wrapper.get('.history-handoff').text()).toContain('制作人：杨景锋')
+    expect(wrapper.get('.history-handoff').text()).toContain('返修中')
+    expect(wrapper.get('.review-action').text()).toContain('审核人：项目管理人')
+    expect(wrapper.get('.review-action').text()).not.toContain('提交人：')
+    expect(timelineItems[0].props('timestamp')).toContain('10:00')
+    expect(timelineItems[1].props('timestamp')).toContain('09:00')
+    expect(timelineItems[1].text()).toContain('V002 提交')
+    expect(timelineItems[1].text()).not.toContain('审核人：')
     expect(wrapper.text()).toContain('按现有记录推断')
     expect(wrapper.text()).toContain('V002')
     expect(wrapper.find('.version-cycle__details').exists()).toBe(false)
-    expect(wrapper.text()).toContain('提出 1 条修改意见')
+    expect(wrapper.text()).toContain('本版累计 1 条修改意见')
     expect(wrapper.text()).toContain('已提交 1 条处理说明')
     expect(wrapper.text()).not.toContain('包含 2 个画面标注。')
     expect(wrapper.findAllComponents(ElButton).some(button => button.text() === '查看镜头')).toBe(false)

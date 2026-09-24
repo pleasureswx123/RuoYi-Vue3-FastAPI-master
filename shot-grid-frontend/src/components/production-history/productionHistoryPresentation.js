@@ -130,6 +130,26 @@ export function assigneeDisplayName(assignee) {
   return assignee ? actorDisplayName(assignee) : '未分配'
 }
 
+export function currentProductionHandoff(lane) {
+  if (!lane) return null
+  if (lane.lifecycleStatus === 'archived') {
+    return { stage: '已归档', owner: '暂无待办', next: '当前对象已归档，以下保留历史制作记录。', type: 'info' }
+  }
+  const producer = `制作人：${assigneeDisplayName(lane.task?.assignee)}`
+  // 当前处理方由任务状态确定，不使用历史审核人推断本轮待办归属。
+  const states = {
+    not_started: { stage: '待确认开工', owner: '项目管理人员', next: `由管理人员确认开工；受派${producer}。`, type: 'warning' },
+    preparing: { stage: '目录准备中', owner: '系统正在准备', next: `等待制作目录就绪，再由${producer}开始制作。`, type: 'info' },
+    in_progress: { stage: '制作中', owner: producer, next: '完成制作并提交版本，交由项目审核人员审核。', type: 'warning' },
+    pending_review: { stage: '待审核', owner: '项目审核人员', next: '由具备审核权限的项目人员审阅本轮文件并给出结论。', type: 'warning' },
+    revision: { stage: '返修中', owner: producer, next: '按修改意见返修，逐条填写处理说明后提交新版本。', type: 'error' },
+    completed: { stage: '已完成', owner: '本任务无待处理环节', next: '最终版本已确认，交付状态请查看版本详情。', type: 'success' }
+  }
+  return states[lane.task?.taskStatus] || {
+    stage: '待委派', owner: '项目管理人员', next: '分配制作人并确认开工后进入制作。', type: 'info'
+  }
+}
+
 export function formatHistoryDateTime(value) {
   if (!value) return '—'
   const date = new Date(value)
@@ -196,5 +216,27 @@ export function eventsForLane(events, laneId) {
   return (Array.isArray(events) ? events : []).filter(event => {
     const laneIds = Array.isArray(event?.laneIds) ? event.laneIds : []
     return laneIds.length === 0 || laneIds.some(id => String(id) === normalizedLaneId)
+  })
+}
+
+export function expandProductionTimeline(events) {
+  return events.flatMap(event => {
+    const cycle = event.versionCycle
+    if (!cycle) return [event]
+    return [
+      { ...event, eventId: `${event.eventId}:submitted`, occurredAt: cycle.submittedTime, eventType: 'version_submitted' },
+      ...(cycle.reviewActions || []).map(action => ({
+        ...event,
+        eventId: `${event.eventId}:review:${action.actionId}`,
+        eventType: 'review_action',
+        occurredAt: action.createTime,
+        reviewAction: action
+      }))
+    ]
+  }).sort((a, b) => {
+    const timeDifference = (Date.parse(b.occurredAt) || 0) - (Date.parse(a.occurredAt) || 0)
+    if (timeDifference) return timeDifference
+    // 同时刻先展示审核，再展示提交；保持倒序时间线的阅读方向。
+    return Number(Boolean(b.reviewAction)) - Number(Boolean(a.reviewAction))
   })
 }

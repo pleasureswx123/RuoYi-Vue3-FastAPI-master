@@ -84,7 +84,13 @@ class ShotGridShotCrudService:
                 row,
                 asset_map.get(row['shot_id'], []),
                 projection_map.get(row['shot_id']),
-            ).model_copy(update={'allowed_actions': cls._allowed_actions(row, current_user, access)})
+            ).model_copy(
+                update={
+                    'allowed_actions': cls._allowed_actions(
+                        {**row, **(projection_map.get(row['shot_id']) or {})}, current_user, access
+                    )
+                }
+            )
             for row in rows
         ]
         return PageModel[ShotGridShotListItemModel](
@@ -1234,6 +1240,7 @@ class ShotGridShotCrudService:
             'environment_assets': [asset for asset in assets if asset.asset_type == 'Environment'],
             'character_assets': [asset for asset in assets if asset.asset_type == 'Character'],
             'assignee': assignee,
+            'previous_assignee_names': cls._previous_assignee_names(row),
             'thumbnail': cls._thumbnail(projection),
             'proxy_media': cls._proxy_media(projection),
             'latest_version': cls._latest_version(projection),
@@ -1283,7 +1290,7 @@ class ShotGridShotCrudService:
                 'scene': scene,
                 'assets': assets,
                 'task': task,
-                'allowed_actions': cls._allowed_actions(row, current_user, access),
+                'allowed_actions': cls._allowed_actions({**row, **(projection or {})}, current_user, access),
                 'create_by': row['create_by'],
                 'create_time': row['create_time'],
                 'update_by': row['update_by'],
@@ -1360,6 +1367,19 @@ class ShotGridShotCrudService:
         )
 
     @staticmethod
+    def _previous_assignee_names(row: dict[str, Any]) -> list[str]:
+        # 仅使用真实转交快照，按最近转交优先展示并按人员去重。
+        names = []
+        seen = set()
+        for event in reversed(row.get('revision_transfers') or []):
+            user_id = event.get('fromUserId')
+            if user_id is None or user_id in seen:
+                continue
+            seen.add(user_id)
+            names.append(event.get('fromName') or f'用户 #{user_id}')
+        return names
+
+    @staticmethod
     def _assignee(row: dict[str, Any]) -> ShotGridShotAssigneeModel | None:
         if row.get('assignee_user_id') is None:
             return None
@@ -1377,8 +1397,6 @@ class ShotGridShotCrudService:
         current_user: CurrentUserModel,
         access: ShotGridProjectAccessModel,
     ) -> list[str]:
-        if not (access.has_all_scope or access.project_role == 'director'):
-            return []
         if (
             row['lifecycle_status'] != 'active'
             or row.get('project_status') in {'completed', 'archived'}
@@ -1386,6 +1404,34 @@ class ShotGridShotCrudService:
         ):
             return []
         candidates = []
+        if (
+            row.get('task_id') is not None
+            and row.get('task_status') in {'in_progress', 'revision', 'pending_review'}
+            and access.project_role == 'creator'
+            and current_user.user is not None
+            and row.get('assignee_user_id') == current_user.user.user_id
+            and cls._has_permission(current_user, 'shotgrid:version:add')
+        ):
+            candidates.append(('task.work', 'shotgrid:task:query'))
+        if not (access.has_all_scope or access.project_role == 'director'):
+            return [action for action, permission in candidates if cls._has_permission(current_user, permission)]
+        if (
+            row.get('task_id') is not None
+            and row.get('task_status') == 'pending_review'
+            and cls._has_permission(current_user, 'shotgrid:version:review')
+            and cls._has_permission(current_user, 'shotgrid:version:query')
+        ):
+            candidates.append(('task.review', 'shotgrid:reviewList:query'))
+        if (
+            row.get('task_id') is not None
+            and row.get('task_status') == 'revision'
+            and row.get('latest_version_status') == 'rejected'
+            and not row['has_uncommitted_submission']
+            and cls._has_permission(current_user, 'shotgrid:version:review')
+            and cls._has_permission(current_user, 'shotgrid:version:query')
+            and cls._has_permission(current_user, 'shotgrid:note:add')
+        ):
+            candidates.append(('task.appendIssue', 'shotgrid:reviewList:query'))
         if row.get('task_id') is not None and row.get('task_status') == 'not_started':
             candidates.append(('task.start', 'shotgrid:task:start'))
         if (

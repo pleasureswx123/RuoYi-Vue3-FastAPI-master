@@ -450,6 +450,10 @@ class ShotGridProductionHistoryService:
             taskStatus=row['task_status'],
             priority=row['priority'],
             dueDate=row.get('due_date'),
+            expectedStartTime=row.get('expected_start_time'),
+            expectedEndTime=row.get('expected_end_time'),
+            baselineStartTime=row.get('baseline_start_time'),
+            baselineEndTime=row.get('baseline_end_time'),
             assignee=ShotGridProductionHistoryService._actor(
                 row.get('assignee_user_id'),
                 row.get('assignee_user_name'),

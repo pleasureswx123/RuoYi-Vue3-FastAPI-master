@@ -412,7 +412,15 @@ class ShotGridVersionSubmissionService:
                 },
             )
             result = cls._accepted(submission, submission_files, task.task_status, replayed=False)
+            previous_version = (
+                await ShotGridVersionSubmissionDao.get_latest_version(db, task_id)
+                if task.task_status == 'revision'
+                else None
+            )
+            previous_version_id = previous_version.version_id if previous_version else None
             await db.commit()
+            if previous_version_id is not None:
+                await publish_version_changed(previous_version_id, 'submission.accepted')
             return result
         except IntegrityError as exc:
             await db.rollback()
@@ -685,7 +693,10 @@ class ShotGridVersionSubmissionService:
                 cls._require_formal_source_file(source_files[submission_file.source_file_id], submission_file)
             actor_name = await cls._get_submitter_name(db, submission.submitted_by)
             now = cls._now()
+            previous_version_id = None
             if not is_append:
+                previous_version = await ShotGridVersionSubmissionDao.get_latest_version(db, task.task_id)
+                previous_version_id = previous_version.version_id if previous_version else None
                 version = await ShotGridVersionSubmissionDao.add_version(
                     db,
                     ShotGridVersion(
@@ -831,6 +842,9 @@ class ShotGridVersionSubmissionService:
             result_ids = (version.version_id, review_list.review_list_id)
             await db.commit()
             await publish_version_changed(result_ids[0], 'candidates.appended' if is_append else 'version.created')
+            # 列表仍订阅上一轮版本，通知其回源后切换到新版本订阅。
+            if previous_version_id is not None:
+                await publish_version_changed(previous_version_id, 'version.superseded')
             return result_ids
         except Exception:
             await db.rollback()

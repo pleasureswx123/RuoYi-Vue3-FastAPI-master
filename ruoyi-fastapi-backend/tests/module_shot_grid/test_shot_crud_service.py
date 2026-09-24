@@ -22,6 +22,26 @@ from module_shot_grid.service.shot_crud_service import ShotGridShotCrudService
 from module_shot_grid.service.shot_task_rules import require_shot_assignment_fields
 
 PROJECT_ID = 1001
+
+
+def test_previous_assignees_use_transfer_snapshots() -> None:
+    assert ShotGridShotCrudService._previous_assignee_names({}) == []
+    assert ShotGridShotCrudService._previous_assignee_names({'revision_transfers': None}) == []
+    row = {
+        'revision_transfers': [
+            {'fromUserId': 2, 'fromName': '原制作人'},
+            {'fromUserId': 3, 'fromName': '中间制作人'},
+            {'fromUserId': 2, 'fromName': '原制作人新名称'},
+            {'fromUserId': 4},
+        ]
+    }
+    assert ShotGridShotCrudService._previous_assignee_names(row) == [
+        '用户 #4',
+        '原制作人新名称',
+        '中间制作人',
+    ]
+
+
 SHOT_ID = 3001
 SECOND_SHOT_ID = 3002
 THIRD_SHOT_ID = 3003
@@ -50,6 +70,49 @@ def _current_user() -> CurrentUserModel:
 
 def _access() -> ShotGridProjectAccessModel:
     return ShotGridProjectAccessModel(projectId=PROJECT_ID, userId=1, projectRole='director')
+
+
+@pytest.mark.parametrize(
+    ('role', 'status', 'owner', 'archived', 'permissions', 'expected'),
+    [
+        ('creator', 'in_progress', 1, False, ['shotgrid:task:query', 'shotgrid:version:add'], ['task.work']),
+        ('creator', 'revision', 1, False, ['shotgrid:task:query', 'shotgrid:version:add'], ['task.work']),
+        ('creator', 'pending_review', 1, False, ['shotgrid:task:query', 'shotgrid:version:add'], ['task.work']),
+        ('creator', 'pending_review', 2, False, ['shotgrid:task:query', 'shotgrid:version:add'], []),
+        ('creator', 'pending_review', 1, False, ['shotgrid:task:query'], []),
+        ('creator', 'in_progress', 2, False, ['shotgrid:task:query', 'shotgrid:version:add'], []),
+        ('creator', 'revision', 1, True, ['shotgrid:task:query', 'shotgrid:version:add'], []),
+        ('creator', 'revision', 1, False, ['shotgrid:task:query'], []),
+        (
+            'director',
+            'pending_review',
+            2,
+            False,
+            ['shotgrid:version:review', 'shotgrid:version:query', 'shotgrid:reviewList:query'],
+            ['task.review'],
+        ),
+        (
+            'creator',
+            'pending_review',
+            1,
+            False,
+            ['shotgrid:version:review', 'shotgrid:version:query', 'shotgrid:reviewList:query'],
+            [],
+        ),
+        ('director', 'pending_review', 2, False, ['shotgrid:version:query', 'shotgrid:reviewList:query'], []),
+        ('director', 'completed', 2, False, ['*:*:*'], []),
+    ],
+)
+def test_shot_work_entry_permissions(
+    role: str, status: str, owner: int, archived: bool, permissions: list[str], expected: list[str]
+) -> None:
+    row = _shot_projection_row()
+    row.update(
+        task_id=69, task_status=status, assignee_user_id=owner + 10, project_status='archived' if archived else 'active'
+    )
+    user = CurrentUserModel(permissions=permissions, roles=[], user=UserInfoModel(userId=11, userName='member'))
+    access = _access().model_copy(update={'project_role': role, 'user_id': 11})
+    assert ShotGridShotCrudService._allowed_actions(row, user, access) == expected
 
 
 def _project_storage(status: str = 'ready') -> tuple[SimpleNamespace, SimpleNamespace]:
@@ -1174,3 +1237,63 @@ def test_assignment_allows_empty_optional_production_fields(value: str | None) -
     user.permissions.append('shotgrid:task:assign')
     assert 'task.assign' in ShotGridShotCrudService._allowed_actions(row, user, _access())
     require_shot_assignment_fields(row)
+
+
+@pytest.mark.parametrize(
+    ('role', 'status', 'version_status', 'uncommitted', 'missing_permission', 'allowed'),
+    [
+        ('director', 'revision', 'rejected', False, None, True),
+        ('creator', 'revision', 'rejected', False, None, False),
+        ('director', 'revision', 'rejected', True, None, False),
+        ('director', 'revision', 'pending_review', False, None, False),
+        ('director', 'completed', 'rejected', False, None, False),
+        ('director', 'revision', 'rejected', False, 'shotgrid:note:add', False),
+        ('director', 'revision', 'rejected', False, 'shotgrid:version:review', False),
+        ('director', 'revision', 'rejected', False, 'shotgrid:reviewList:query', False),
+        ('director', 'revision', 'rejected', False, 'shotgrid:version:query', False),
+    ],
+)
+def test_append_issue_entry_permissions(
+    role: str,
+    status: str,
+    version_status: str,
+    uncommitted: bool,
+    missing_permission: str | None,
+    allowed: bool,
+) -> None:
+    row = _shot_projection_row()
+    row.update(
+        task_id=69, task_status=status, latest_version_status=version_status, has_uncommitted_submission=uncommitted
+    )
+    permissions = [
+        'shotgrid:note:add',
+        'shotgrid:version:review',
+        'shotgrid:reviewList:query',
+        'shotgrid:version:query',
+    ]
+    user = CurrentUserModel(
+        permissions=[item for item in permissions if item != missing_permission],
+        roles=[],
+        user=UserInfoModel(userId=11, userName='member'),
+    )
+    access = _access().model_copy(update={'project_role': role, 'user_id': 11})
+    assert ('task.appendIssue' in ShotGridShotCrudService._allowed_actions(row, user, access)) is allowed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('uncommitted', [False, True])
+async def test_append_entry_uses_separate_version_projection(
+    monkeypatch: pytest.MonkeyPatch, uncommitted: bool
+) -> None:
+    row = {**_shot_projection_row(), 'task_status': 'revision', 'has_uncommitted_submission': uncommitted}
+    projection = {**_latest_read_projection(), 'latest_version_status': 'rejected'}
+    assert 'latest_version_status' not in row
+    monkeypatch.setattr(ShotGridShotCrudDao, 'get_shot_page', AsyncMock(return_value=([row], 1)))
+    monkeypatch.setattr(ShotGridShotCrudDao, 'list_assets_for_shots', AsyncMock(return_value=[]))
+    monkeypatch.setattr(ShotGridShotCrudDao, 'list_read_projections_for_shots', AsyncMock(return_value=[projection]))
+    page = await ShotGridShotCrudService.get_shot_page(
+        AsyncMock(), PROJECT_ID, ShotGridShotListQueryModel(), _current_user(), _access()
+    )
+    detail = ShotGridShotCrudService._build_detail(row, [], projection, _current_user(), _access())
+    assert ('task.appendIssue' in page.rows[0].allowed_actions) is (not uncommitted)
+    assert ('task.appendIssue' in detail.allowed_actions) is (not uncommitted)

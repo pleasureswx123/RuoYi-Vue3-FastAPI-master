@@ -15,6 +15,7 @@ from module_shot_grid.dependencies.project_access import ProjectAccessDependency
 from module_shot_grid.entity.vo.access_vo import ShotGridProjectAccessModel
 from module_shot_grid.entity.vo.common_vo import ShotGridLockVersionModel
 from module_shot_grid.entity.vo.review_vo import (
+    ShotGridBatchOverallRejectModel,
     ShotGridCandidatePromptUpdateModel,
     ShotGridFinalDeliveryModel,
     ShotGridIssueAppendModel,
@@ -381,6 +382,22 @@ async def select_shot_grid_version_candidate(
 
 
 @review_controller.post(
+    '/projects/{projectId}/review-overall-feedback/batch-reject',
+    summary='批量发送整体反馈并退回修改',
+    response_model=DataResponseModel[list[ShotGridReviewActionResultModel]],
+    dependencies=[UserInterfaceAuthDependency(['shotgrid:note:add', 'shotgrid:version:review'], is_strict=True)],
+)
+async def reject_batch_with_overall_feedback(
+    project_id: Annotated[int, Path(alias='projectId', gt=0, le=SQL_BIGINT_MAX)],
+    command: ShotGridBatchOverallRejectModel,
+    query_db: Annotated[AsyncSession, DBSessionDependency()],
+    current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
+) -> Response:
+    result = await ShotGridReviewService.reject_batch_with_overall_feedback(query_db, project_id, command, current_user)
+    return ResponseUtil.success(data=result)
+
+
+@review_controller.post(
     '/versions/{versionId}/issues',
     summary='保存绑定当前版本的审核问题草稿',
     response_model=DataResponseModel[ShotGridIssueDraftModel],
@@ -412,6 +429,43 @@ async def append_shot_grid_version_issue(
 ) -> Response:
     result = await ShotGridReviewService.append_rejected_issue(query_db, version_id, command, current_user)
     return ResponseUtil.success(data=result)
+
+
+@review_controller.put(
+    '/versions/{versionId}/additional-issues/{issueId}',
+    summary='修改退回版本中本人已发布的问题',
+    response_model=DataResponseModel[ShotGridIssueDetailModel],
+    dependencies=[UserInterfaceAuthDependency('shotgrid:note:add')],
+)
+async def update_shot_grid_published_issue(
+    request: Request,
+    version_id: Annotated[int, Path(alias='versionId', gt=0, le=SQL_BIGINT_MAX)],
+    issue_id: Annotated[int, Path(alias='issueId', gt=0, le=SQL_BIGINT_MAX)],
+    command: ShotGridIssueAppendModel,
+    query_db: Annotated[AsyncSession, DBSessionDependency()],
+    current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
+) -> Response:
+    result = await ShotGridReviewService.append_rejected_issue(
+        query_db, version_id, command, current_user, issue_id=issue_id
+    )
+    return ResponseUtil.success(data=result)
+
+
+@review_controller.delete(
+    '/versions/{versionId}/additional-issues/{issueId}',
+    summary='删除退回版本中本人已发布的问题',
+    dependencies=[UserInterfaceAuthDependency('shotgrid:note:add')],
+)
+async def delete_shot_grid_published_issue(
+    request: Request,
+    version_id: Annotated[int, Path(alias='versionId', gt=0, le=SQL_BIGINT_MAX)],
+    issue_id: Annotated[int, Path(alias='issueId', gt=0, le=SQL_BIGINT_MAX)],
+    command: ShotGridLockVersionModel,
+    query_db: Annotated[AsyncSession, DBSessionDependency()],
+    current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
+) -> Response:
+    await ShotGridReviewService.delete_rejected_issue(query_db, version_id, issue_id, command, current_user)
+    return ResponseUtil.success()
 
 
 @review_controller.put(

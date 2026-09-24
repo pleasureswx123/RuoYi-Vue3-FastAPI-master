@@ -6,7 +6,6 @@ import { ArrowLeft, Edit, Lock, Refresh, UserFilled } from '@element-plus/icons-
 
 import { archiveShot, getEpisodePage, getShotDetail, listShotAssignees } from '@/api/shot-grid/shots'
 import { assertPositiveId } from '@/api/shot-grid/projects'
-import { useCurrentTime } from '@/composables/useCurrentTime'
 import { tagTypeFromTone } from '@/utils/tag'
 import RelatedDetailDrawer from '@/components/RelatedDetailDrawer.vue'
 import { detailNavigationKey } from '@/composables/useDetailNavigation'
@@ -16,9 +15,7 @@ import ProtectedThumbnail from '@/views/shot/components/ProtectedThumbnail.vue'
 import ShotAssignDialog from '@/views/shot/components/ShotAssignDialog.vue'
 import ShotFormDialog from '@/views/shot/components/ShotFormDialog.vue'
 import ShotProductionInfo from '@/views/shot/components/ShotProductionInfo.vue'
-import { directoryStatusMeta, formatShotDateTime, formatShotDuration, shotAssigneeName, shotErrorState, shotStatusMeta, shotStatusTagClass } from '@/views/shot/shotPresentation'
-import { taskPriorityMeta, taskStatusMeta, taskVersionStatusMeta } from '@/views/task/taskPresentation'
-import TaskTimeReminder from '@/views/task/components/TaskTimeReminder.vue'
+import { directoryStatusMeta, formatShotDuration, shotErrorState, shotStatusMeta, shotStatusTagClass } from '@/views/shot/shotPresentation'
 
 const props = defineProps({
   targetProjectId: { type: [Number, String], default: null },
@@ -32,7 +29,7 @@ const emit = defineEmits(['changed', 'deleted'])
 const route = useRoute()
 const router = useRouter()
 const shot = ref(null)
-const currentTime = useCurrentTime()
+
 const episodes = ref([])
 const members = ref([])
 const loading = ref(false)
@@ -186,6 +183,13 @@ async function confirmArchive() {
   } finally { archiving.value = false }
 }
 
+async function handleRelatedClosed() {
+  if (disposed) return
+  const context = { projectId: projectId.value, shotId: shotId.value }
+  await loadDetail()
+  if (!disposed && context.projectId === projectId.value && context.shotId === shotId.value) emit('changed', context)
+}
+
 async function handleSaved(_result, operationContext) {
   if (disposed) return
   if (!isActiveOperation(editContext.value, operationContext)) { notifyDetachedOperation(); return }
@@ -242,31 +246,18 @@ onBeforeUnmount(() => { disposed = true; loadGeneration += 1; controller?.abort(
         :refresh-key="historyRefreshKey"
       />
 
-      <section class="detail-grid">
-        <el-card class="detail-card" shadow="never">
-          <p class="sg-eyebrow">TASK</p><h3>镜头视频任务</h3>
-          <template v-if="shot.task">
-            <div class="task-person"><strong>{{ shotAssigneeName(shot.task.assignee, members) }}</strong></div>
-            <el-descriptions class="compact-fields" :column="2" border>
-              <el-descriptions-item label="任务状态"><el-tag :type="tagTypeFromTone(taskStatusMeta(shot.task.taskStatus, 'shot_video').tone)" size="small" effect="light" round>{{ taskStatusMeta(shot.task.taskStatus, 'shot_video').label }}</el-tag></el-descriptions-item>
-              <el-descriptions-item label="优先级"><el-tag :type="tagTypeFromTone(taskPriorityMeta(shot.task.priority).tone)" size="small" effect="plain" round>{{ taskPriorityMeta(shot.task.priority).label }}</el-tag></el-descriptions-item>
-              <el-descriptions-item label="预期制作时间" :span="2"><TaskTimeReminder :task="shot.task" :now="currentTime" compact /></el-descriptions-item>
-            </el-descriptions>
-          </template>
-          <el-empty v-else class="detail-empty" :image-size="48" description="尚未分配主制作人" />
-        </el-card>
+      <!-- 关联资产暂不展示，保留结构和数据绑定以便后续恢复。 -->
+      <section class="detail-grid related-assets-hidden">
 
-        <el-card class="detail-card" shadow="never"><p class="sg-eyebrow">VERSION</p><h3>最新版本与反馈</h3><template v-if="shot.latestVersion"><strong class="version-number">{{ shot.latestVersion.versionNumber }}</strong><p>{{ shot.latestVersion.businessFileName }}</p><el-tag :type="tagTypeFromTone(taskVersionStatusMeta(shot.latestVersion.status).tone)" size="small" effect="light" round>{{ taskVersionStatusMeta(shot.latestVersion.status).label }}</el-tag></template><el-empty v-else class="detail-empty" :image-size="48" description="尚未提交正式版本" /><blockquote v-if="shot.latestFeedback">{{ shot.latestFeedback.content }}<small>{{ formatShotDateTime(shot.latestFeedback.createTime) }}</small></blockquote></el-card>
 
         <el-card class="detail-card detail-card--wide" shadow="never"><p class="sg-eyebrow">ASSETS</p><h3>关联资产</h3><div v-if="shot.assets.length" class="asset-tags"><el-tag v-for="asset in shot.assets" :key="asset.assetId" :type="tagTypeFromTone(String(asset.assetType || '').toLowerCase())" size="small" effect="plain" round>{{ asset.assetType === 'Environment' ? '场景' : asset.assetType === 'Character' ? '角色' : '道具' }} · {{ asset.assetName }}</el-tag></div><el-empty v-else class="detail-empty" :image-size="48" description="尚未关联正式资产；未知场景会保留为待匹配需求" /></el-card>
 
-        <el-card class="detail-card detail-card--wide" shadow="never"><p class="sg-eyebrow">AUDIT</p><h3>审计摘要</h3><el-descriptions class="compact-fields" :column="4" border><el-descriptions-item label="创建人">{{ shot.createBy }}</el-descriptions-item><el-descriptions-item label="创建时间">{{ formatShotDateTime(shot.createTime) }}</el-descriptions-item><el-descriptions-item label="更新人">{{ shot.updateBy }}</el-descriptions-item><el-descriptions-item label="更新时间">{{ formatShotDateTime(shot.updateTime) }}</el-descriptions-item></el-descriptions></el-card>
       </section>
 
       <ShotFormDialog v-if="showEdit && editContext" :project-id="editContext.projectId" :operation-generation="editContext.operationGeneration" :episodes="episodes" :shot="shot" @close="closeEditDialog" @saved="handleSaved" @refresh="loadDetail" />
       <ShotAssignDialog v-if="showAssign && assignContext" :project-id="assignContext.projectId" :operation-generation="assignContext.operationGeneration" :shot="shot" :members="members" @close="closeAssignDialog" @assigned="handleAssigned" @refresh="loadDetail" />
     </template>
-    <RelatedDetailDrawer v-if="embedded" :key="`${projectId}:${shotId}`" ref="relatedDrawer" />
+    <RelatedDetailDrawer v-if="embedded" :key="`${projectId}:${shotId}`" ref="relatedDrawer" @closed="handleRelatedClosed" />
   </section>
 </template>
 
@@ -411,8 +402,12 @@ onBeforeUnmount(() => { disposed = true; loadGeneration += 1; controller?.abort(
 
 .detail-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 14px;
+}
+
+.related-assets-hidden {
+  display: none;
 }
 
 .detail-card.el-card {
@@ -446,52 +441,6 @@ onBeforeUnmount(() => { disposed = true; loadGeneration += 1; controller?.abort(
   font-size: 17px;
 }
 
-.compact-fields.el-descriptions {
-  display: block;
-  margin: 0;
-  overflow: hidden;
-  background: transparent;
-}
-
-.compact-fields.el-descriptions {
-  border-radius: 9px;
-}
-
-.compact-fields:deep(.el-descriptions__body),
-.compact-fields:deep(.el-descriptions__table) {
-  background: transparent;
-}
-
-.compact-fields:deep(.el-descriptions__cell) {
-  padding: 13px !important;
-  background: var(--sg-surface-raised) !important;
-  border-color: var(--sg-border) !important;
-}
-
-.compact-fields:deep(.el-descriptions__label) {
-  color: var(--sg-text-muted) !important;
-  font-size: 10px;
-}
-
-.compact-fields:deep(.el-descriptions__content) {
-  color: var(--sg-text-secondary) !important;
-  font-size: 12px;
-  line-height: 1.6;
-  overflow-wrap: anywhere;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.task-person {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 12px;
-  padding: 12px;
-  background: var(--sg-accent-soft);
-  border-radius: 9px;
-}
-
 .detail-empty.el-empty {
   min-height: 138px;
   padding: 10px;
@@ -499,34 +448,6 @@ onBeforeUnmount(() => { disposed = true; loadGeneration += 1; controller?.abort(
   background: var(--sg-fill-subtle);
   border: 1px dashed var(--sg-border);
   border-radius: 10px;
-}
-
-.version-number {
-  display: block;
-  color: var(--sg-accent);
-  font-size: 24px;
-}
-
-.detail-card:deep(.el-card__body) > .version-number + p {
-  margin: 8px 0;
-  overflow-wrap: anywhere;
-  color: var(--sg-text-secondary);
-  font-size: 11px;
-}
-
-.detail-card blockquote {
-  margin: 16px 0 0;
-  padding: 12px;
-  color: var(--sg-text-secondary);
-  font-size: 12px;
-  background: var(--sg-fill-subtle);
-  border-left: 2px solid var(--sg-accent);
-}
-
-blockquote small {
-  display: block;
-  margin-top: 7px;
-  color: var(--sg-text-muted);
 }
 
 .asset-tags {

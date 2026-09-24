@@ -34,7 +34,7 @@ class ShotGridReviewIssueDraft(Base):
     project_id = Column(BigInteger, nullable=False, comment='项目ID')
     review_list_id = Column(BigInteger, nullable=False, comment='所属自动审核单ID')
     version_id = Column(BigInteger, nullable=False, comment='当前审核版本ID')
-    candidate_id = Column(BigInteger, nullable=False, comment='草稿绑定的版本候选ID')
+    candidate_id = Column(BigInteger, nullable=True, comment='候选ID，空表示本版整体反馈')
     reviewer_user_id = Column(
         BigInteger,
         ForeignKey('sys_user.user_id', ondelete='RESTRICT'),
@@ -106,7 +106,7 @@ class ShotGridNote(Base):
     note_id = Column(BigInteger, primary_key=True, nullable=False, autoincrement=True, comment='审核意见ID')
     project_id = Column(BigInteger, nullable=False, comment='项目ID')
     version_id = Column(BigInteger, nullable=False, comment='版本ID')
-    origin_candidate_id = Column(BigInteger, nullable=False, comment='首次提出问题的候选ID')
+    origin_candidate_id = Column(BigInteger, nullable=True, comment='来源候选ID，空表示本版整体反馈')
     reviewer_user_id = Column(
         BigInteger,
         ForeignKey('sys_user.user_id', ondelete='RESTRICT'),

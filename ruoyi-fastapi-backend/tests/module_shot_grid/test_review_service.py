@@ -1,3 +1,4 @@
+import json
 from datetime import datetime
 from types import SimpleNamespace
 from typing import Any
@@ -10,6 +11,7 @@ from module_admin.entity.vo.user_vo import CurrentUserModel, UserInfoModel
 from module_shot_grid.entity.do.review_do import ShotGridNote, ShotGridReviewAction
 from module_shot_grid.entity.vo.access_vo import ShotGridProjectAccessModel
 from module_shot_grid.entity.vo.review_vo import (
+    ShotGridBatchOverallRejectModel,
     ShotGridIssueDraftUpdateModel,
     ShotGridNoteCreateModel,
     ShotGridReviewActionCreateModel,
@@ -17,6 +19,7 @@ from module_shot_grid.entity.vo.review_vo import (
     ShotGridVersionCandidateSelectModel,
 )
 from module_shot_grid.exceptions import ShotGridDomainException
+from module_shot_grid.service import review_service
 from module_shot_grid.service.review_service import ShotGridReviewService
 
 PROJECT_ID = 1001
@@ -637,6 +640,7 @@ async def test_reject_publishes_private_drafts_before_committing_review_action(
     assert task.task_status == 'revision'
     assert review_list.review_status == 'completed'
     assert events == ['publish', 'action', 'audit', 'commit']
+    review_service.publish_version_changed.assert_awaited_once_with(VERSION_ID, 'review.reject')
     replace_references.assert_awaited_once()
     assert replace_references.await_args.args[1:4] == (
         'shot_grid_review_issue',
@@ -998,8 +1002,10 @@ def test_note_media_time_uses_submitted_media_timeline_and_rejects_asset_timepoi
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('issue_scope', ['candidate', 'version'])
 async def test_add_issue_draft_does_not_use_planned_shot_duration_as_media_bound(
     monkeypatch: pytest.MonkeyPatch,
+    issue_scope: str,
 ) -> None:
     db = AsyncMock()
     task, version, _ = _locked_graph()
@@ -1022,10 +1028,10 @@ async def test_add_issue_draft_does_not_use_planned_shot_duration_as_media_bound
         project_id=PROJECT_ID,
         review_list_id=REVIEW_LIST_ID,
         version_id=VERSION_ID,
-        candidate_id=CANDIDATE_ID,
+        candidate_id=CANDIDATE_ID if issue_scope == 'candidate' else None,
         reviewer_user_id=DIRECTOR_ID,
         content='实际成片中的问题',
-        media_time_ms=ACTUAL_MEDIA_TIME_MS,
+        media_time_ms=ACTUAL_MEDIA_TIME_MS if issue_scope == 'candidate' else None,
         annotations=None,
         lock_version=0,
         create_time=datetime(2026, 8, 11, 10, 0, 0),
@@ -1054,12 +1060,17 @@ async def test_add_issue_draft_does_not_use_planned_shot_duration_as_media_bound
     result = await ShotGridReviewService.add_issue_draft(
         db,
         VERSION_ID,
-        ShotGridNoteCreateModel(content='实际成片中的问题', mediaTimeMs=ACTUAL_MEDIA_TIME_MS),
+        ShotGridNoteCreateModel(
+            issueScope=issue_scope,
+            content='实际成片中的问题',
+            mediaTimeMs=ACTUAL_MEDIA_TIME_MS if issue_scope == 'candidate' else None,
+        ),
         _current_user(),
     )
 
     assert result.draft_id == ISSUE_ID
-    assert result.media_time_ms == ACTUAL_MEDIA_TIME_MS
+    assert result.media_time_ms == (ACTUAL_MEDIA_TIME_MS if issue_scope == 'candidate' else None)
+    assert add_draft.await_args.args[1].candidate_id == (CANDIDATE_ID if issue_scope == 'candidate' else None)
     assert result.reviewer_name == 'director'
     context_query.assert_awaited_once_with(db, VERSION_ID)
     add_draft.assert_awaited_once()
@@ -1320,13 +1331,36 @@ async def test_auto_review_list_relation_must_contain_only_auto_version(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    'blocked', [None, 'submitted', 'new_version', 'completed', 'stale', 'creator', 'reference_failed']
+    'blocked',
+    [
+        None,
+        'submitted',
+        'new_version',
+        'completed',
+        'stale',
+        'creator',
+        'reference_failed',
+        'other_author',
+        'resolved',
+        'missing',
+        'scope',
+    ],
 )
-async def test_append_rejected_issue_only_before_next_submission(
+@pytest.mark.parametrize('issue_scope', ['candidate', 'version'])
+@pytest.mark.parametrize('editing', [False, True, 'delete'])
+async def test_append_rejected_issue_only_before_next_submission(  # noqa: PLR0915
     monkeypatch: pytest.MonkeyPatch,
     blocked: str | None,
+    issue_scope: str,
+    editing: bool | str,
 ) -> None:
+    if not editing and blocked in {'other_author', 'resolved', 'missing', 'scope'}:
+        pytest.skip('编辑专用门禁')
+    if editing == 'delete' and blocked in {'scope', 'reference_failed'}:
+        pytest.skip('删除不改变范围或上传附件')
     db = AsyncMock()
+    publisher = AsyncMock()
+    monkeypatch.setattr('module_shot_grid.service.review_service.publish_version_changed', publisher)
     task, version, review_list = _locked_graph()
     task.task_status = 'completed' if blocked == 'completed' else 'revision'
     version.version_status = 'rejected'
@@ -1364,7 +1398,27 @@ async def test_append_rejected_issue_only_before_next_submission(
         return note
 
     monkeypatch.setattr('module_shot_grid.dao.review_dao.ShotGridReviewDao.add_note', add_note)
-    monkeypatch.setattr(ShotGridReviewService, '_audit', AsyncMock())
+    audit = AsyncMock()
+    monkeypatch.setattr(ShotGridReviewService, '_audit', audit)
+    existing = ShotGridNote(
+        note_id=ISSUE_ID,
+        project_id=PROJECT_ID,
+        version_id=VERSION_ID,
+        origin_candidate_id=(CANDIDATE_ID if issue_scope == 'candidate' else None) if blocked != 'scope' else 999,
+        reviewer_user_id=DIRECTOR_ID if blocked != 'other_author' else DIRECTOR_ID + 1,
+        content='原始意见',
+        note_status='resolved' if blocked == 'resolved' else 'open',
+        create_time=datetime(2026, 8, 11),
+        update_time=datetime(2026, 8, 11),
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.dao.review_dao.ShotGridReviewDao.get_note_for_update',
+        AsyncMock(return_value=None if blocked == 'missing' else existing),
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.dao.review_dao.ShotGridReviewDao.get_issue_reference_files', AsyncMock(return_value=[])
+    )
+    monkeypatch.setattr(ShotGridReviewService, '_replace_issue_reference_files', AsyncMock(return_value=[]))
     if blocked == 'reference_failed':
         monkeypatch.setattr(
             ShotGridReviewService,
@@ -1372,28 +1426,55 @@ async def test_append_rejected_issue_only_before_next_submission(
             AsyncMock(side_effect=ShotGridReviewService._invalid_transition('参考文件不可用')),
         )
     command = SimpleNamespace(
-        candidate_id=CANDIDATE_ID,
+        issue_scope=issue_scope,
+        candidate_id=CANDIDATE_ID if issue_scope == 'candidate' else None,
         content='补充：修复边缘穿帮',
         media_time_ms=None,
         annotations=None,
         reference_file_ids=['11111111-1111-4111-8111-111111111111'] if blocked == 'reference_failed' else [],
         lock_version=99 if blocked == 'stale' else version.lock_version,
     )
+    deleted = AsyncMock()
+    monkeypatch.setattr('module_shot_grid.dao.review_dao.ShotGridReviewDao.delete_note', deleted)
+    monkeypatch.setattr(
+        'module_shot_grid.service.review_service.FileReferenceService.remove_business_file_references_services',
+        AsyncMock(),
+    )
+    if editing == 'delete':
+        with pytest.raises(ShotGridDomainException):
+            await ShotGridReviewService.delete_rejected_issue(db, VERSION_ID, ISSUE_ID, command, _current_user())
+        deleted.assert_not_awaited()
+        db.commit.assert_not_awaited()
+        publisher.assert_not_awaited()
+        return
     if blocked:
         with pytest.raises(ShotGridDomainException):
-            await ShotGridReviewService.append_rejected_issue(db, VERSION_ID, command, _current_user())
-        assert len(notes) == (1 if blocked == 'reference_failed' else 0)
+            await ShotGridReviewService.append_rejected_issue(
+                db, VERSION_ID, command, _current_user(), issue_id=ISSUE_ID if editing else None
+            )
+        assert len(notes) == (1 if blocked == 'reference_failed' and not editing else 0)
         db.commit.assert_not_awaited()
+        publisher.assert_not_awaited()
         db.rollback.assert_awaited_once()
         return
 
     initial_version_lock = version.lock_version
-    result = await ShotGridReviewService.append_rejected_issue(db, VERSION_ID, command, _current_user())
+    result = await ShotGridReviewService.append_rejected_issue(
+        db, VERSION_ID, command, _current_user(), issue_id=ISSUE_ID if editing else None
+    )
     assert result.issue_id == ISSUE_ID
     assert result.content == '补充：修复边缘穿帮'
+    publisher.assert_awaited_once_with(VERSION_ID, 'issue.updated' if editing else 'issue.appended')
+    if editing:
+        assert not notes
+        assert result.create_time == datetime(2026, 8, 11)
+        assert audit.await_args.kwargs['result']['before']['content'] == '原始意见'
+        assert audit.await_args.kwargs['result']['after']['content'] == command.content
     assert result.status == 'open'
     assert result.pending_version_id == VERSION_ID
-    assert notes[0].origin_candidate_id == CANDIDATE_ID
+    assert (existing if editing else notes[0]).origin_candidate_id == (
+        CANDIDATE_ID if issue_scope == 'candidate' else None
+    )
     assert task.task_status == 'revision'
     assert version.version_status == 'rejected'
     assert review_list.review_status == 'completed'
@@ -1464,10 +1545,139 @@ async def test_issue_origin_candidate_number(
             AsyncMock(return_value=[]),
         )
     now = datetime.now()
-    issues = await ShotGridReviewService._hydrate_issues(AsyncMock(), [{
-        'issue_id': ISSUE_ID, 'project_id': PROJECT_ID, 'origin_version_id': VERSION_ID,
-        'origin_candidate_id': SECOND_CANDIDATE_ID, 'origin_version_no': 1,
-        'origin_candidate_no': candidate_no, 'reviewer_user_id': DIRECTOR_ID,
-        'status': 'open', 'create_time': now, 'update_time': now,
-    }])
+    issues = await ShotGridReviewService._hydrate_issues(
+        AsyncMock(),
+        [
+            {
+                'issue_id': ISSUE_ID,
+                'project_id': PROJECT_ID,
+                'origin_version_id': VERSION_ID,
+                'origin_candidate_id': SECOND_CANDIDATE_ID,
+                'origin_version_no': 1,
+                'origin_candidate_no': candidate_no,
+                'reviewer_user_id': DIRECTOR_ID,
+                'status': 'open',
+                'create_time': now,
+                'update_time': now,
+            }
+        ],
+    )
     assert issues[0].model_dump(by_alias=True)['originCandidateNumber'] == expected
+
+
+@pytest.mark.asyncio
+async def test_published_issue_audit_preserves_long_snapshot(monkeypatch: pytest.MonkeyPatch) -> None:
+    logger = AsyncMock()
+    monkeypatch.setattr('module_shot_grid.service.review_service.ShotGridProjectAuditDao.add_success_log', logger)
+    snapshot = {'before': {'content': '长意见"' * 3000}, 'deleted': True}
+    await ShotGridReviewService._audit(
+        AsyncMock(),
+        actor_name='审核人',
+        dept_name=None,
+        business_type=3,
+        method='delete_rejected_issue',
+        oper_url='/issues/1',
+        payload={'issueId': 1},
+        result=snapshot,
+    )
+    audit_field_limit = 2000
+    chunks = [call.kwargs['result'] for call in logger.await_args_list]
+    assert all(len(json.dumps(item, ensure_ascii=False, separators=(',', ':'))) <= audit_field_limit for item in chunks)
+    assert json.loads(''.join(item['snapshot'] for item in chunks)) == snapshot
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('blocked', [None, 'project', 'new_version', 'submission', 'second_write', 'drafts', 'carried', 'creator'])
+async def test_batch_overall_drafts_atomic_boundary(monkeypatch: pytest.MonkeyPatch, blocked: str | None) -> None:
+
+    db = AsyncMock()
+    contexts = [
+        ({'project_id': PROJECT_ID, 'task_id': 2}, _access('creator' if blocked == 'creator' else 'director')),
+        ({'project_id': PROJECT_ID + (1 if blocked == 'project' else 0), 'task_id': 1}, _access()),
+    ]
+    monkeypatch.setattr(ShotGridReviewService, '_resolve_version_access', AsyncMock(side_effect=contexts))
+    lock = AsyncMock(
+        side_effect=[
+            (
+                PROJECT_ID,
+                SimpleNamespace(task_id=i),
+                SimpleNamespace(version_id=i, version_no=1, lock_version=0, submission_id=i),
+                _access(),
+            )
+            for i in [1, 2]
+        ]
+    )
+    monkeypatch.setattr(ShotGridReviewService, '_lock_version_graph', lock)
+    monkeypatch.setattr(
+        'module_shot_grid.service.review_service.ShotGridReviewDao.get_latest_version_no',
+        AsyncMock(return_value=2 if blocked == 'new_version' else 1),
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.review_service.ShotGridVersionSubmissionDao.has_unresolved_submission',
+        AsyncMock(return_value=blocked == 'submission'),
+    )
+    writer = AsyncMock(
+        side_effect=[SimpleNamespace(draft_id=1), RuntimeError('写入失败')] if blocked == 'second_write' else None
+    )
+    monkeypatch.setattr(ShotGridReviewService, 'add_issue_draft', writer)
+    monkeypatch.setattr(
+        'module_shot_grid.service.review_service.ShotGridReviewDao.get_auto_review_list_for_update',
+        AsyncMock(return_value=SimpleNamespace(review_list_id=1)),
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.review_service.ShotGridReviewDao.get_issue_drafts_for_update',
+        AsyncMock(return_value=[1] if blocked == 'drafts' else []),
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.review_service.ShotGridReviewDao.get_carried_issues_for_update',
+        AsyncMock(return_value=[1] if blocked == 'carried' else []),
+    )
+    actions = AsyncMock(side_effect=[SimpleNamespace(version_id=1), SimpleNamespace(version_id=2)])
+    monkeypatch.setattr(ShotGridReviewService, 'create_review_action', actions)
+    publisher = AsyncMock()
+    monkeypatch.setattr(review_service, 'publish_version_changed', publisher)
+    command = ShotGridBatchOverallRejectModel(versionIds=[2, 1], content='统一整体反馈')
+    if blocked:
+        with pytest.raises((ShotGridDomainException, RuntimeError)):
+            await ShotGridReviewService.reject_batch_with_overall_feedback(db, PROJECT_ID, command, _current_user())
+        db.commit.assert_not_awaited()
+        publisher.assert_not_awaited()
+        db.rollback.assert_awaited_once()
+    else:
+        results = await ShotGridReviewService.reject_batch_with_overall_feedback(
+            db, PROJECT_ID, command, _current_user()
+        )
+        assert len(results) == len(command.version_ids)
+        assert [call.args[1] for call in writer.await_args_list] == [1, 2]
+        assert all(call.kwargs == {'commit': False} for call in writer.await_args_list)
+        assert all(
+            call.args[2].issue_scope == 'version' and call.args[2].candidate_id is None
+            for call in writer.await_args_list
+        )
+        db.commit.assert_awaited_once()
+        assert all(call.kwargs == {'commit': False} for call in actions.await_args_list)
+        assert publisher.await_count == len(command.version_ids)
+
+
+@pytest.mark.asyncio
+async def test_batch_reject_internal_action_defers_commit_and_notification(monkeypatch: pytest.MonkeyPatch) -> None:
+    db, task, _version, review_list, events = await _patch_review_action_graph(
+        monkeypatch,
+        current_version_issues=[SimpleNamespace(note_id=ISSUE_ID)],
+    )
+    publisher = AsyncMock()
+    monkeypatch.setattr(review_service, 'publish_version_changed', publisher)
+    result = await ShotGridReviewService.create_review_action(
+        db,
+        VERSION_ID,
+        ShotGridReviewActionCreateModel(actionType='reject', lockVersion=0),
+        'batch-reject',
+        _current_user(),
+        commit=False,
+    )
+    assert result.to_status == 'rejected'
+    assert task.task_status == 'revision'
+    assert review_list.review_status == 'completed'
+    assert events == ['action', 'audit']
+    db.commit.assert_not_awaited()
+    publisher.assert_not_awaited()

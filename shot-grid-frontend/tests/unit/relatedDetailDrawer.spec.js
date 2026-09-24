@@ -6,11 +6,11 @@ import { detailResource } from '@/composables/useDetailNavigation'
 import { useSessionStore } from '@/store/modules/session'
 
 vi.mock('@/views/version/VersionDetailView.vue', () => ({ default: { props: { targetVersionId: Number, embedded: Boolean }, template: '<p>版本 {{ targetVersionId }} {{ embedded }}</p>' } }))
-vi.mock('@/views/review/ReviewDetailView.vue', () => ({ default: { props: { targetReviewListId: Number, embedded: Boolean }, template: '<p>审核 {{ targetReviewListId }} {{ embedded }}</p>' } }))
+vi.mock('@/views/review/ReviewDetailView.vue', () => ({ default: { props: { targetReviewListId: Number, embedded: Boolean }, emits: ['completed'], template: '<p>审核 {{ targetReviewListId }} {{ embedded }}<button class="acknowledge" @click="$emit(\'completed\')">知道了</button></p>' } }))
 vi.mock('@/views/task/TaskDetailView.vue', () => ({ default: { props: { targetTaskId: Number, embedded: Boolean }, template: '<p>任务 {{ targetTaskId }} {{ embedded }}</p>' } }))
 function render() {
   return mount(RelatedDetailDrawer, { global: { stubs: {
-    ElDrawer: { props: ['modelValue'], emits: ['update:modelValue', 'closed'], template: '<section v-if="modelValue"><slot name="header" /><slot /><button class="close" @click="$emit(\'update:modelValue\', false); $emit(\'closed\')">关闭</button></section>' },
+    ElDrawer: { name: 'ElDrawer', props: ['modelValue'], emits: ['update:modelValue', 'closed'], template: '<section v-if="modelValue"><slot name="header" /><slot /><button class="close" @click="$emit(\'update:modelValue\', false); $emit(\'closed\')">关闭</button></section>' },
     ElButton: { template: '<button><slot /></button>' },
     ElAlert: { props: ['title'], template: '<p>{{ title }}</p>' }
   } } })
@@ -20,6 +20,18 @@ beforeEach(() => {
   useSessionStore().permissions = ['*:*:*']
 })
 describe('镜头关联详情抽屉', () => {
+  it('审核完成确认后关闭抽屉，并在关闭完成时通知外层刷新', async () => {
+    const wrapper = render()
+    wrapper.vm.open('/reviews/87')
+    await flushPromises()
+    await wrapper.get('.acknowledge').trigger('click')
+    expect(wrapper.findComponent({ name: 'ElDrawer' }).exists()).toBe(true)
+    expect(wrapper.find('.acknowledge').exists()).toBe(false)
+    // 模拟 Element Plus 关闭动画结束。
+    wrapper.findComponent({ name: 'ElDrawer' }).vm.$emit('closed')
+    expect(wrapper.emitted('closed')).toHaveLength(1)
+    wrapper.unmount()
+  })
   it('仅接管合法的任务、版本、审核详情导航', () => {
     expect(detailResource({ name: 'version-detail', params: { versionId: 29 } })).toEqual({ type: 'version', id: 29 })
     expect(detailResource('/reviews/87')).toEqual({ type: 'review', id: 87 })
