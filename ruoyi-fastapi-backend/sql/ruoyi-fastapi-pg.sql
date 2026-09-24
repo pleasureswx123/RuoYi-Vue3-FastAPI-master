@@ -2427,6 +2427,7 @@ CREATE TABLE sg_version_submission (
 	task_id BIGINT NOT NULL,
 	source_file_id VARCHAR(36) NOT NULL,
 	reserved_version_no INTEGER NOT NULL,
+	submission_mode VARCHAR(20) DEFAULT 'new_round' NOT NULL,
 	generated_at_ms BIGINT NOT NULL,
 	business_file_name VARCHAR(255) NOT NULL,
 	target_relative_path VARCHAR(1200) NOT NULL,
@@ -2449,7 +2450,7 @@ CREATE TABLE sg_version_submission (
 	PRIMARY KEY (submission_id),
 	CONSTRAINT fk_sg_submission_task_project FOREIGN KEY(task_id, project_id) REFERENCES sg_task (task_id, project_id) ON DELETE RESTRICT,
 	CONSTRAINT uk_sg_submission_id_project_task UNIQUE (submission_id, project_id, task_id),
-	CONSTRAINT uk_sg_submission_task_version UNIQUE (task_id, reserved_version_no),
+	CONSTRAINT ck_sg_submission_mode CHECK (submission_mode IN ('new_round', 'append')),
 	CONSTRAINT uk_sg_submission_task_user_idempotency UNIQUE (task_id, submitted_by, idempotency_key),
 	CONSTRAINT ck_sg_submission_version_no CHECK (reserved_version_no > 0),
 	CONSTRAINT ck_sg_submission_generated_at CHECK (generated_at_ms > 0),
@@ -2470,6 +2471,8 @@ CREATE TABLE sg_version_submission (
 	FOREIGN KEY(submitted_by) REFERENCES sys_user (user_id) ON DELETE RESTRICT
 );
 CREATE INDEX idx_sg_submission_status_lease_update ON sg_version_submission (submission_status, lease_until, update_time);
+CREATE UNIQUE INDEX uk_sg_submission_task_version ON sg_version_submission (task_id, reserved_version_no) WHERE submission_mode = 'new_round';
+COMMENT ON COLUMN sg_version_submission.submission_mode IS '新轮次或追加候选';
 CREATE UNIQUE INDEX uk_sg_version_submission_source_file ON sg_version_submission (source_file_id);
 CREATE UNIQUE INDEX uk_sg_version_submission_active ON sg_version_submission (task_id) WHERE submission_status IN ('pending', 'publishing', 'published', 'committing', 'failed');
 COMMENT ON TABLE sg_version_submission IS 'Shot Grid版本暂存与NAS发布编排表';
@@ -2511,6 +2514,7 @@ CREATE TABLE sg_version_submission_file (
 	source_sha256 CHAR(64) NOT NULL,
 	source_file_size BIGINT NOT NULL,
 	candidate_note VARCHAR(500),
+	generation_prompt TEXT,
 	sort_order INTEGER NOT NULL,
 	publish_status VARCHAR(20) DEFAULT 'pending' NOT NULL,
 	published_time TIMESTAMP(0) WITHOUT TIME ZONE,
@@ -2597,6 +2601,7 @@ CREATE TABLE sg_version_candidate (
 	submission_file_id BIGINT NOT NULL,
 	candidate_no INTEGER NOT NULL,
 	candidate_note VARCHAR(500),
+	generation_prompt TEXT,
 	sort_order INTEGER NOT NULL,
 	create_by VARCHAR(64) DEFAULT '' NOT NULL,
 	create_time TIMESTAMP(0) WITHOUT TIME ZONE NOT NULL,
@@ -2725,7 +2730,7 @@ CREATE TABLE sg_issue_verification (
 	project_id BIGINT NOT NULL,
 	note_id BIGINT NOT NULL,
 	checked_version_id BIGINT NOT NULL,
-	checked_candidate_id BIGINT NOT NULL,
+	checked_candidate_id BIGINT,
 	result VARCHAR(20) NOT NULL,
 	comment VARCHAR(1000),
 	reviewer_user_id BIGINT NOT NULL,
@@ -2747,7 +2752,7 @@ CREATE TABLE sg_review_action (
 	action_id BIGSERIAL NOT NULL,
 	project_id BIGINT NOT NULL,
 	version_id BIGINT NOT NULL,
-	selected_candidate_id BIGINT NOT NULL,
+	selected_candidate_id BIGINT,
 	reviewer_user_id BIGINT NOT NULL,
 	action_type VARCHAR(20) NOT NULL,
 	from_status VARCHAR(20) NOT NULL,
@@ -3352,3 +3357,6 @@ RETURN pg_catalog.array_to_string(tokens[indexnum:length], $2);
 END IF;
 END;
 $$ IMMUTABLE STRICT LANGUAGE PLPGSQL;
+
+-- 退回修改交接历史（仅追加，随任务保留）
+ALTER TABLE sg_task ADD COLUMN IF NOT EXISTS revision_transfers JSONB NOT NULL DEFAULT '[]'::jsonb;

@@ -1,0 +1,50 @@
+import { mount, flushPromises } from '@vue/test-utils'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { ElButton, ElInput, ElSelect } from 'element-plus'
+import RevisionTransferDialog from '@/components/version/RevisionTransferDialog.vue'
+import { getVersionDetail, getRevisionAssignees, transferRevision } from '@/api/shot-grid/versions'
+vi.mock('@/api/shot-grid/versions', () => ({ getVersionDetail: vi.fn(), getRevisionAssignees: vi.fn(), transferRevision: vi.fn() }))
+beforeEach(() => {
+  vi.clearAllMocks()
+  getVersionDetail.mockResolvedValue({ data: { versionId: 29, projectId: 13, taskLockVersion: 8, lockVersion: 4, assigneeUserId: 1, assigneeName: '制作人甲', submitterName: '制作人甲' } })
+  getRevisionAssignees.mockResolvedValue({ rows: [{ userId: 2, userName: '制作人乙', producerCode: 'YI' }], total: 1 })
+  transferRevision.mockResolvedValue({ data: {} })
+})
+const button = (wrapper, text) => wrapper.findAllComponents(ElButton).find(item => item.text() === text)
+describe('退回修改交接', () => {
+  it('按钮经过 ElForm 校验，选择负责人和填写原因后才提交，并携带双重版本锁', async () => {
+    const wrapper = mount(RevisionTransferDialog)
+    await wrapper.vm.open(29)
+    await flushPromises()
+    await button(wrapper, '确认转交').trigger('click')
+    await flushPromises()
+    expect(transferRevision).not.toHaveBeenCalled()
+    wrapper.findComponent(ElSelect).vm.$emit('update:modelValue', 2)
+    await flushPromises()
+    await button(wrapper, '确认转交').trigger('click')
+    await flushPromises()
+    expect(transferRevision).not.toHaveBeenCalled()
+    wrapper.findAllComponents(ElInput).find(item => item.props('type') === 'textarea').vm.$emit('update:modelValue', '原负责人请假')
+    await flushPromises()
+    await button(wrapper, '确认转交').trigger('click')
+    await flushPromises()
+    expect(transferRevision).toHaveBeenCalledWith(29, expect.objectContaining({ assigneeUserId: 2, reason: '原负责人请假', lockVersion: 4, taskLockVersion: 8 }))
+    expect(wrapper.emitted('saved')).toHaveLength(1)
+    wrapper.unmount()
+  })
+  it('退回默认原负责人，不创建转交；失败保留弹窗供重试', async () => {
+    const wrapper = mount(RevisionTransferDialog)
+    const handler = vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true)
+    await wrapper.vm.open(29, handler)
+    await flushPromises()
+    await button(wrapper, '确认退回并发送').trigger('click')
+    await flushPromises()
+    expect(handler).toHaveBeenCalledWith(null)
+    expect(wrapper.emitted('saved')).toBeUndefined()
+    await button(wrapper, '确认退回并发送').trigger('click')
+    await flushPromises()
+    expect(wrapper.emitted('saved')).toHaveLength(1)
+    expect(transferRevision).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+})

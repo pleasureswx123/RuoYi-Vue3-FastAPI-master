@@ -42,6 +42,50 @@ describe('审核媒体工作区', () => {
     getVersionDetail.mockResolvedValue({ data: { ...version, versionId: 32, versionNumber: 'V002' } })
   })
 
+  it('同轮不同文件不叠加其他文件批注，历史对比加载问题原文件', async () => {
+    const annotations = { schemaVersion: 1, sourceWidth: 100, sourceHeight: 100,
+      items: [{ id: 'file-point', type: 'point', color: '#ff0000', strokeWidth: 0.004, points: [{ x: 0.3, y: 0.4 }] }] }
+    const note = { noteId: 9, originVersionId: 33, originCandidateId: 3302, annotations }
+    const wrapper = mount(ReviewMediaWorkspace, { props: { version: { ...version, candidateId: 3301 }, selectedNote: note, canDownload: true }, global: { components } })
+    await flushPromises()
+    expect(wrapper.findAll('.annotation-point')).toHaveLength(0)
+    await wrapper.setProps({ version: { ...version, candidateId: 3302 } })
+    await flushPromises()
+    expect(wrapper.findAll('.annotation-point')).toHaveLength(1)
+    const historicalFile = { ...file, fileId: 'history-file-2', candidateId: 3202 }
+    getVersionDetail.mockResolvedValue({ data: { ...version, versionId: 32, candidates: [{ candidateId: 3202, candidateNumber: 'V002_02', files: [historicalFile] }] } })
+    await wrapper.setProps({ canCompare: true, selectedNote: { ...note, noteId: 10, originVersionId: 32, originCandidateId: 3202 } })
+    await flushPromises()
+    expect(downloadProtectedVersionFile).toHaveBeenCalledWith(32, 'history-file-2', { signal: expect.any(AbortSignal) })
+    expect(wrapper.text()).toContain('历史版 · V002_02')
+    wrapper.unmount()
+  })
+
+  it('离开复核仅关闭自动对比，保留主动对比和当前播放器', async () => {
+    const wrapper = mount(ReviewMediaWorkspace, {
+      props: { version, canDownload: true, canCompare: true }, global: { components }
+    })
+    await flushPromises()
+    const currentImage = wrapper.get('img').element
+    await wrapper.setProps({ selectedNote: { noteId: 1, originVersionId: 32 } })
+    await flushPromises()
+    expect(wrapper.find('.has-comparison').exists()).toBe(true)
+    wrapper.vm.exitAutomaticComparison()
+    await wrapper.setProps({ selectedNote: null })
+    await flushPromises()
+    expect(wrapper.find('.has-comparison').exists()).toBe(false)
+    expect(wrapper.get('img').element).toBe(currentImage)
+    await wrapper.findAll('button').find(button => button.text().includes('与上一版对比')).trigger('click')
+    await wrapper.setProps({ selectedNote: { noteId: 2, originVersionId: 32 } })
+    await flushPromises()
+    wrapper.vm.exitAutomaticComparison()
+    await wrapper.setProps({ selectedNote: null })
+    await flushPromises()
+    expect(wrapper.find('.has-comparison').exists()).toBe(true)
+    expect(wrapper.get('img').element).toBe(currentImage)
+    wrapper.unmount()
+  })
+
   it('鉴权加载主审核图片并生成归一化点批注', async () => {
     const wrapper = mount(ReviewMediaWorkspace, {
       props: { version, canDownload: true, canCompare: true, canAnnotate: true },

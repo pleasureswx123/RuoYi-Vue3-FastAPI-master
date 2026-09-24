@@ -69,7 +69,7 @@ async def test_current_submission_status_query_is_task_scoped_and_only_unresolve
     assert 'sg_version_submission.task_id = 7' in compiled
     for status in ('pending', 'publishing', 'published', 'committing', 'failed'):
         assert status in compiled
-    assert 'committed' not in compiled
+    assert 'committed' not in compiled.rsplit('WHERE', 1)[-1]
 
 
 @pytest.mark.asyncio

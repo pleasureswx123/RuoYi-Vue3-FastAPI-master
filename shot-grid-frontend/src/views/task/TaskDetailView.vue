@@ -1,4 +1,5 @@
 <script setup>
+import RevisionTransferDialog from '@/components/version/RevisionTransferDialog.vue'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
@@ -21,8 +22,7 @@ import {
   taskErrorState,
   taskKindMeta,
   taskPriorityMeta,
-  taskStatusMeta,
-  taskVersionStatusMeta
+  taskStatusMeta
 } from '@/views/task/taskPresentation'
 
 const WAITING_START_POLL_INTERVAL_MS = 5000
@@ -30,6 +30,7 @@ const STATUS_POLL_MAX_FAILURES = 3
 const PREPARATION_POLL_INTERVAL_MS = 1500
 const PREPARATION_POLL_MAX_ATTEMPTS = 80
 
+const props = defineProps({ targetTaskId: { type: [Number, String], default: null }, embedded: { type: Boolean, default: false } })
 const route = useRoute()
 const router = useRouter()
 const sessionStore = useSessionStore()
@@ -52,13 +53,14 @@ let disposed = false
 
 const taskId = computed(() => {
   try {
-    return assertPositiveId(route.params.taskId, '任务')
+    return assertPositiveId(props.targetTaskId ?? route.params.taskId, '任务')
   } catch {
     return null
   }
 })
 const wildcard = computed(() => sessionStore.permissions.includes('*:*:*'))
 const hasPermission = permission => wildcard.value || sessionStore.permissions.includes(permission)
+const transferDialog = ref(null)
 const allowedActions = computed(() => new Set(task.value?.allowedActions || []))
 const canEdit = computed(() => (
   task.value?.taskStatus === 'not_started' &&
@@ -303,12 +305,14 @@ async function handleVersionCommitted(_status, operationContext) {
     ElMessage.success('版本已发布，请返回原任务查看最新结果。')
     return
   }
-  ElMessage.success('新版本已发布并创建自动审核单')
+  ElMessage.success(task.value?.taskStatus === 'pending_review'
+    ? '候选已追加到当前审核轮次'
+    : '新版本已发布并创建自动审核单')
   await loadDetail()
 }
 
 onMounted(loadDetail)
-watch(() => route.params.taskId, loadDetail)
+watch(taskId, loadDetail)
 onBeforeUnmount(() => {
   disposed = true
   loadGeneration += 1
@@ -321,7 +325,8 @@ onBeforeUnmount(() => {
 
 <template>
   <section class="sg-page task-detail-page">
-    <el-button class="back-link" link :icon="ArrowLeft" @click="router.push('/workbench')">返回任务工作台</el-button>
+    <RevisionTransferDialog ref="transferDialog" @saved="loadDetail" />
+    <el-button v-if="!embedded" class="back-link" link :icon="ArrowLeft" @click="router.push('/workbench')">返回任务工作台</el-button>
 
     <ProjectStatePanel
       v-if="errorState"
@@ -347,10 +352,17 @@ onBeforeUnmount(() => {
           <small>更新于 {{ formatTaskDateTime(task.updateTime) }}</small>
         </div>
         <div class="task-hero__actions">
+          <el-button v-if="allowedActions.has('task.transfer')" type="primary" :disabled="loading" @click="transferDialog.open(task.latestVersion.versionId)">转交修改</el-button>
           <el-button :icon="Refresh" :loading="loading" @click="loadDetail">刷新</el-button>
           <el-button v-if="canEdit" :icon="Edit" :disabled="loading" @click="openEditDialog">编辑任务</el-button>
         </div>
       </header>
+
+      <el-alert v-if="task.latestHandoff" :title="`${task.latestHandoff.fromName} → ${task.latestHandoff.toName} · 修改交接`" type="info" :closable="false">
+        <p>{{ task.latestHandoff.operatorName }}于 {{ formatTaskDateTime(task.latestHandoff.occurredAt) }} 转交 · {{ task.latestHandoff.versionNumber }} 退回后</p>
+        <p>原因：{{ task.latestHandoff.reason }}</p>
+        <p v-if="task.latestHandoff.handoffNote">交接说明：{{ task.latestHandoff.handoffNote }}</p>
+      </el-alert>
 
       <ProjectStatePanel
         v-if="actionError"
@@ -381,7 +393,7 @@ onBeforeUnmount(() => {
 
       <section class="task-detail-grid">
         <el-card class="task-card task-card--wide" shadow="never">
-          <header><div><p class="sg-eyebrow">BRIEF</p><h3>制作要求</h3></div><el-tag :type="tagTypeFromTone(taskPriorityMeta(task.priority).tone)" size="small" effect="plain" round>{{ taskPriorityMeta(task.priority).label }}优先级</el-tag></header>
+          <header><div><p class="sg-eyebrow">BRIEF</p><h3>制作要求</h3></div><div class="brief-actions"><el-button v-if="targetRoute && !embedded" link type="primary" @click="router.push(targetRoute)">查看{{ taskKindMeta(task.taskKind).shortLabel }}详情</el-button><el-tag :type="tagTypeFromTone(taskPriorityMeta(task.priority).tone)" size="small" effect="plain" round>{{ taskPriorityMeta(task.priority).label }}优先级</el-tag></div></header>
           <template v-if="isShotTask">
             <ShotProductionInfo v-if="shotProduction" :shot="shotProduction" />
             <p v-else class="task-requirements">{{ task.requirements || task.target.targetDescription || '暂无镜头制作信息。' }}</p>
@@ -398,30 +410,6 @@ onBeforeUnmount(() => {
           </el-descriptions>
         </el-card>
 
-        <el-card class="task-card" shadow="never">
-          <p class="sg-eyebrow">TARGET</p>
-          <h3>生产对象</h3>
-          <strong>{{ task.target.targetName }}</strong>
-          <p v-if="!isShotTask">{{ task.target.targetDescription || '暂无对象说明' }}</p>
-          <el-descriptions class="task-fields" :column="2" border>
-            <el-descriptions-item label="类型"><el-tag :type="tagTypeFromTone(taskKindMeta(task.taskKind).tone)" size="small" effect="plain" round>{{ taskKindMeta(task.taskKind).label }}</el-tag></el-descriptions-item>
-            <el-descriptions-item label="对象状态"><el-tag :type="tagTypeFromTone(task.target.lifecycleStatus === 'active' ? 'success' : 'muted')" size="small" effect="plain" round>{{ task.target.lifecycleStatus === 'active' ? '活动' : '已归档' }}</el-tag></el-descriptions-item>
-          </el-descriptions>
-          <el-button v-if="targetRoute" class="text-action" link type="primary" @click="router.push(targetRoute)">查看{{ taskKindMeta(task.taskKind).shortLabel }}详情</el-button>
-        </el-card>
-
-        <el-card class="task-card" shadow="never">
-          <p class="sg-eyebrow">VERSION</p>
-          <h3>版本摘要</h3>
-          <template v-if="task.latestVersion">
-            <strong class="version-number">{{ task.latestVersion.versionNumber }}</strong>
-            <el-tag :type="tagTypeFromTone(taskVersionStatusMeta(task.latestVersion.versionStatus).tone)" size="small" effect="light" round>{{ taskVersionStatusMeta(task.latestVersion.versionStatus).label }}</el-tag>
-            <p>提交于 {{ formatTaskDateTime(task.latestVersion.submittedTime) }}</p>
-          </template>
-          <el-empty v-else class="task-empty" :image-size="50" description="尚未生成正式版本" />
-          <el-tag v-if="task.finalVersion" class="final-version-tag" type="success" size="small" effect="plain" round>最终版本：{{ task.finalVersion.versionNumber }}</el-tag>
-        </el-card>
-
         <el-card id="version-workspace" class="task-card task-card--wide version-workspace-anchor" shadow="never" data-testid="version-workspace-anchor">
           <p class="sg-eyebrow">DELIVERY</p>
           <h3>版本提交与历史</h3>
@@ -430,6 +418,7 @@ onBeforeUnmount(() => {
             :task-kind="task.taskKind"
             :task-status="task.taskStatus"
             :version-count="Number(task.versionCount || 0)"
+            :latest-version-no="Number(task.latestVersion?.versionNo || 0)"
             :production-description="versionProductionDescription"
             :open-issues="openIssues"
             :allowed-actions="task.allowedActions"
@@ -465,9 +454,10 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.brief-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
 .task-detail-page{display:grid;gap:18px}.back-link{display:inline-flex;width:max-content;gap:7px;align-items:center;padding:0;color:var(--sg-text-muted);cursor:pointer;background:transparent;border:0}.back-link:hover{color:var(--sg-text)}.task-detail-loading{display:grid;min-height:360px;color:var(--sg-text-muted);background:var(--sg-surface);border:1px solid var(--sg-border);border-radius:var(--sg-radius-lg);place-items:center}.task-hero{display:flex;gap:24px;align-items:center;justify-content:space-between;padding:26px;background:linear-gradient(135deg,rgba(255,182,87,.075),transparent 42%),var(--sg-surface);border:1px solid var(--sg-border);border-radius:var(--sg-radius-lg)}.task-hero__main{min-width:0}.task-hero__title{display:flex;gap:12px;align-items:center}.task-hero h2,.task-hero p{margin:0}.task-hero h2{font-size:clamp(23px,3vw,31px);letter-spacing:-.025em}.task-hero__main>p:not(.sg-eyebrow){margin-top:9px;color:var(--sg-text-secondary);font-size:13px}.task-hero small{display:block;margin-top:8px;color:var(--sg-text-muted)}.task-hero__actions{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap}.task-detail-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.task-card{padding:21px;background:var(--sg-surface);border:1px solid var(--sg-border);border-radius:var(--sg-radius-md)}.task-card--wide{grid-column:1/-1}.task-card header{display:flex;gap:12px;align-items:flex-start;justify-content:space-between}.task-card h3,.task-card p{margin:0}.task-card h3{margin-bottom:16px;font-size:17px}.task-card>strong{display:block;font-size:16px}.task-card>strong+p{margin-top:7px;color:var(--sg-text-secondary);font-size:12px;line-height:1.7}.task-requirements,.task-remark,.version-workspace-anchor>p:not(.sg-eyebrow){color:var(--sg-text-secondary);font-size:13px;line-height:1.8;white-space:pre-wrap}.task-additional-requirements{display:grid;gap:6px;margin-top:12px;padding:12px 14px;background:var(--sg-accent-soft);border-radius:9px}.task-additional-requirements strong{color:var(--sg-accent);font-size:11px}.task-additional-requirements p{color:var(--sg-text-secondary);font-size:12px;line-height:1.7;white-space:pre-wrap}.version-workspace-anchor{background:linear-gradient(135deg,rgba(93,176,255,.055),transparent 46%),var(--sg-surface)}.version-workspace-anchor code{color:var(--sg-accent)}.task-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1px;margin:16px 0 0;overflow:hidden;background:var(--sg-border);border-radius:9px}.task-fields--four{grid-template-columns:repeat(4,minmax(0,1fr))}.task-fields div{padding:13px;background:rgba(13,16,21,.92)}dt{color:var(--sg-text-muted);font-size:10px}dd{margin:5px 0 0;color:var(--sg-text-secondary);font-size:12px;overflow-wrap:anywhere}.text-action{margin-top:15px;padding:0;color:var(--sg-accent);cursor:pointer;background:transparent;border:0}.version-number{display:inline!important;margin-right:9px;color:var(--sg-accent);font-size:25px!important}.task-empty{padding:20px;color:var(--sg-text-muted);font-size:12px;text-align:center;background:rgba(255,255,255,.02);border:1px dashed var(--sg-border);border-radius:9px}.final-version-tag{margin-top:14px}@media(max-width:820px){.task-hero{align-items:flex-start;flex-direction:column}.task-hero__actions{justify-content:flex-start}.task-fields--four{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:620px){.task-detail-grid{grid-template-columns:1fr}.task-card--wide{grid-column:auto}.task-fields,.task-fields--four{grid-template-columns:1fr}.task-hero__title{align-items:flex-start;flex-direction:column}}
 .task-card.el-card{padding:0;overflow:visible;background:var(--sg-surface);border-color:var(--sg-border)}
-.task-card:deep(.el-card__body){padding:21px}
+.task-card > :deep(.el-card__body){padding:16px}
 .version-workspace-anchor > :deep(.el-card__body) { overflow: visible; }
 .task-card:deep(.el-card__body)>strong{display:block;font-size:16px}
 .task-card:deep(.el-card__body)>strong+p{margin-top:7px;color:var(--sg-text-secondary);font-size:12px;line-height:1.7}

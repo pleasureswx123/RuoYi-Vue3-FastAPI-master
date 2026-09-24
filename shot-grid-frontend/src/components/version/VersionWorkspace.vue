@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 
 import { useSessionStore } from '@/store/modules/session'
 import VersionHistoryPanel from './VersionHistoryPanel.vue'
@@ -10,6 +10,7 @@ const props = defineProps({
   taskKind: { type: String, required: true },
   taskStatus: { type: String, required: true },
   versionCount: { type: Number, default: 0 },
+  latestVersionNo: { type: Number, default: 0 },
   productionDescription: { type: String, default: '' },
   openIssues: { type: Array, default: () => [] },
   allowedActions: { type: Array, default: () => [] },
@@ -21,9 +22,16 @@ const emit = defineEmits(['committed', 'submission-change', 'version-selected'])
 const sessionStore = useSessionStore()
 const historyRefreshKey = ref(0)
 const historyPanel = ref(null)
+const selectedVersion = ref(null)
+const submissionVisible = computed(() => props.taskStatus !== 'pending_review' || (
+  Number(props.latestVersionNo) > 0 &&
+  Number(selectedVersion.value?.versionNo) === Number(props.latestVersionNo) &&
+  selectedVersion.value?.versionStatus === 'pending_review'
+))
+watch(() => [props.taskId, props.operationGeneration, props.latestVersionNo], () => { selectedVersion.value = null })
 const wildcard = computed(() => sessionStore.permissions.includes('*:*:*'))
 const hasPermission = permission => wildcard.value || sessionStore.permissions.includes(permission)
-const canUseSubmissionPanel = computed(() => ['in_progress', 'revision'].includes(props.taskStatus))
+const canUseSubmissionPanel = computed(() => ['in_progress', 'revision', 'pending_review'].includes(props.taskStatus))
 const canAdd = computed(() => (
   canUseSubmissionPanel.value &&
   props.allowedActions.includes('version.add') &&
@@ -57,6 +65,7 @@ function handleSubmissionChange(status, context) {
 
 function handleVersionSelected(version, context) {
   if (!contextMatches(context)) return
+  selectedVersion.value = version
   emit('version-selected', version, context)
 }
 
@@ -77,13 +86,16 @@ function focusIssue(issue) {
       :can-download="canDownload"
       :can-list-notes="canListNotes"
       @version-selected="handleVersionSelected"
+      @selection-loading="selectedVersion = null"
     />
     <VersionSubmissionPanel
       v-if="shouldShowSubmission"
+      v-show="submissionVisible"
       :task-id="taskId"
       :task-kind="taskKind"
       :task-status="taskStatus"
       :version-count="versionCount"
+      :latest-version-no="latestVersionNo"
       :production-description="productionDescription"
       :open-issues="openIssues"
       :allowed-actions="allowedActions"

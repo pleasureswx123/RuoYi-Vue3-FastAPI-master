@@ -14,6 +14,7 @@ ProductionHistoryEventType = Literal[
     'subject_imported',
     'lane_created',
     'task_created',
+    'task_transferred',
     'version_cycle',
 ]
 ProductionHistoryResourceType = Literal[
@@ -119,6 +120,7 @@ class ShotGridProductionHistoryVersionCycleModel(ShotGridApiModel):
     changelog: str
     submitted_time: datetime
     submitter: ShotGridProductionHistoryActorModel
+    files: list[ShotGridProductionHistoryFileModel] = Field(default_factory=list)
     primary_file: ShotGridProductionHistoryFileModel | None = None
     thumbnail_file: ShotGridProductionHistoryFileModel | None = None
     auto_review_list: ShotGridProductionHistoryReviewListModel | None = None

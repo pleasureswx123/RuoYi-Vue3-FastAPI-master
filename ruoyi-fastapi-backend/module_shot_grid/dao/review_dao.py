@@ -1,7 +1,7 @@
-from datetime import datetime
+from datetime import datetime, time
 from typing import Any
 
-from sqlalchemy import String, asc, delete, desc, exists, func, select, update
+from sqlalchemy import String, and_, asc, delete, desc, exists, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -28,6 +28,7 @@ from module_shot_grid.entity.do.version_do import (
     ShotGridVersionSubmission,
 )
 from module_shot_grid.entity.vo.review_vo import (
+    ShotGridMineVersionQueryModel,
     ShotGridReviewActionQueryModel,
     ShotGridReviewListQueryModel,
     ShotGridVersionListQueryModel,
@@ -157,7 +158,7 @@ class ShotGridReviewDao:
 
     @classmethod
     async def get_recent_mine_versions(
-        cls, db: AsyncSession, user_id: int, query: ShotGridVersionListQueryModel
+        cls, db: AsyncSession, user_id: int, query: ShotGridMineVersionQueryModel
     ) -> tuple[list[dict[str, Any]], int]:
         candidate_count = cls._candidate_count_projection()
         statement = (
@@ -165,6 +166,10 @@ class ShotGridReviewDao:
                 ShotGridVersion.version_id,
                 ShotGridVersion.project_id,
                 ShotGridVersion.task_id,
+                ShotGridTask.task_name,
+                ShotGridProject.project_name,
+                ShotGridProject.project_code,
+                ShotGridReviewList.review_list_id.label('auto_review_list_id'),
                 ShotGridVersion.version_no,
                 ShotGridVersion.version_status,
                 ShotGridVersion.changelog,
@@ -175,6 +180,12 @@ class ShotGridReviewDao:
                 candidate_count.label('candidate_count'),
                 ShotGridVersion.selected_candidate_id,
                 ShotGridVersion.lock_version,
+            )
+            .join(ShotGridTask, ShotGridTask.task_id == ShotGridVersion.task_id)
+            .outerjoin(
+                ShotGridReviewList,
+                (ShotGridReviewList.auto_version_id == ShotGridVersion.version_id)
+                & (ShotGridReviewList.del_flag == '0'),
             )
             .join(ShotGridProject, ShotGridProject.project_id == ShotGridVersion.project_id)
             .join(
@@ -187,9 +198,24 @@ class ShotGridReviewDao:
             .where(
                 ShotGridVersion.submitted_by == user_id,
                 ShotGridProject.del_flag == '0',
-                ShotGridProject.project_status != 'archived',
+                ShotGridTask.del_flag == '0',
             )
         )
+        if query.project_keyword and query.project_keyword.strip():
+            keyword = f'%{query.project_keyword.strip()}%'
+            statement = statement.where(
+                ShotGridProject.project_name.ilike(keyword) | ShotGridProject.project_code.ilike(keyword)
+            )
+        if query.task_keyword and query.task_keyword.strip():
+            statement = statement.where(ShotGridTask.task_name.ilike(f'%{query.task_keyword.strip()}%'))
+        if query.submitted_from:
+            statement = statement.where(
+                ShotGridVersion.submitted_time >= datetime.combine(query.submitted_from, time.min)
+            )
+        if query.submitted_to:
+            statement = statement.where(
+                ShotGridVersion.submitted_time <= datetime.combine(query.submitted_to, time.max)
+            )
         if query.version_status:
             statement = statement.where(ShotGridVersion.version_status == query.version_status)
         statement = statement.order_by(ShotGridVersion.submitted_time.desc(), ShotGridVersion.version_id.desc())
@@ -208,6 +234,7 @@ class ShotGridReviewDao:
                 await db.execute(
                     select(
                         ShotGridVersion.version_id,
+                        ShotGridProject.project_status,
                         ShotGridVersion.project_id,
                         ShotGridVersion.task_id,
                         ShotGridVersion.submission_id,
@@ -223,6 +250,7 @@ class ShotGridReviewDao:
                         ShotGridShot.duration_ms.label('shot_duration_ms'),
                     )
                     .join(ShotGridTask, ShotGridTask.task_id == ShotGridVersion.task_id)
+                    .join(ShotGridProject, ShotGridProject.project_id == ShotGridVersion.project_id)
                     .outerjoin(ShotGridShot, ShotGridShot.shot_id == ShotGridTask.shot_id)
                     .where(ShotGridVersion.version_id == version_id, ShotGridTask.del_flag == '0')
                 )
@@ -363,6 +391,15 @@ class ShotGridReviewDao:
                         ShotGridVersion.selected_candidate_id,
                         candidate_count.label('candidate_count'),
                         ShotGridVersion.lock_version,
+                        ShotGridTask.task_name,
+                        ShotGridTask.assignee_user_id,
+                        ShotGridTask.lock_version.label('task_lock_version'),
+                        ShotGridTask.task_status,
+                        select(SysUser.user_name)
+                        .where(SysUser.user_id == ShotGridTask.assignee_user_id)
+                        .correlate(ShotGridTask)
+                        .scalar_subquery()
+                        .label('assignee_name'),
                         ShotGridTask.task_kind,
                         ShotGridTask.requirements.label('task_requirements'),
                         ShotGridShot.duration_ms.label('shot_duration_ms'),
@@ -434,6 +471,7 @@ class ShotGridReviewDao:
                     ShotGridVersionCandidate.version_id,
                     ShotGridVersionCandidate.candidate_no,
                     ShotGridVersionCandidate.candidate_note,
+                    ShotGridVersionCandidate.generation_prompt,
                     ShotGridVersionCandidate.sort_order,
                     ShotGridMediaDerivation.derivation_status.label('media_derivation_status'),
                 )
@@ -808,6 +846,7 @@ class ShotGridReviewDao:
                 ShotGridNote.version_id.label('origin_version_id'),
                 ShotGridNote.origin_candidate_id,
                 origin_version.version_no.label('origin_version_no'),
+                ShotGridVersionCandidate.candidate_no.label('origin_candidate_no'),
                 ShotGridNote.reviewer_user_id,
                 SysUser.user_name.label('reviewer_name'),
                 ShotGridNote.content,
@@ -820,6 +859,13 @@ class ShotGridReviewDao:
                 ShotGridNote.update_time,
             )
             .join(origin_version, origin_version.version_id == ShotGridNote.version_id)
+            .outerjoin(
+                ShotGridVersionCandidate,
+                and_(
+                    ShotGridVersionCandidate.candidate_id == ShotGridNote.origin_candidate_id,
+                    ShotGridVersionCandidate.version_id == origin_version.version_id,
+                ),
+            )
             .outerjoin(resolved_version, resolved_version.version_id == ShotGridNote.resolved_in_version_id)
             .outerjoin(SysUser, SysUser.user_id == ShotGridNote.reviewer_user_id)
             .where(

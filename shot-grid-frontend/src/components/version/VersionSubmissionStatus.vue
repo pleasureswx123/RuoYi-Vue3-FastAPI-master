@@ -7,10 +7,23 @@ import { submissionStatusMeta, submissionStatusOrder } from './versionPresentati
 
 const props = defineProps({
   submission: { type: Object, required: true },
+  append: { type: Boolean, default: false },
   pollError: { type: Object, default: null }
 })
 
-const meta = computed(() => submissionStatusMeta(props.submission?.submissionStatus))
+function statusMeta(status) {
+  const base = submissionStatusMeta(status)
+  if (!props.append) return base
+  const copy = {
+    pending: { description: '追加已受理，等待文件发布；完成前请勿重复提交。' },
+    published: { description: '文件已保存，正在追加到当前审核轮次。' },
+    committing: { label: '正在追加候选', description: '正在更新当前轮次，保留已有文件和审核记录。' },
+    committed: { label: '候选已追加', description: '追加已完成，可以继续提交文件或等待审核结论。' },
+    failed: { description: '本次候选尚未追加，已有文件保留；请重试当前提交。' }
+  }
+  return { ...base, ...copy[status] }
+}
+const meta = computed(() => statusMeta(props.submission?.submissionStatus))
 const activeStep = computed(() => Math.max(0, submissionStatusOrder.indexOf(props.submission?.submissionStatus)))
 const isFailed = computed(() => props.submission?.submissionStatus === 'failed')
 const isCommitted = computed(() => props.submission?.submissionStatus === 'committed')
@@ -45,7 +58,7 @@ const stepsActive = computed(() => isCommitted.value ? submissionStatusOrder.len
       <el-step
         v-for="(status, index) in submissionStatusOrder"
         :key="status"
-        :title="submissionStatusMeta(status).label"
+        :title="statusMeta(status).label"
         :description="index === activeStep && !isCommitted ? '当前阶段' : ''"
       />
     </el-steps>
@@ -69,7 +82,7 @@ const stepsActive = computed(() => isCommitted.value ? submissionStatusOrder.len
       v-if="submission.submissionStatus === 'pending'"
       class="worker-boundary"
       title="仍在等待处理"
-      description="若长时间没有进展，请刷新状态或联系管理员；正式版本生成前请勿重复提交。"
+      description="若长时间没有进展，请刷新状态或联系管理员；本次发布完成前请勿重复提交。"
       type="warning"
       :closable="false"
       show-icon
@@ -83,7 +96,7 @@ const stepsActive = computed(() => isCommitted.value ? submissionStatusOrder.len
       :closable="false"
       show-icon
     />
-    <el-alert v-if="isFailed" class="failure-detail" title="版本发布失败" :description="submission.lastErrorMessage || '尚未生成正式版本，请重试或联系项目管理人。'" type="error" :closable="false" show-icon />
+    <el-alert v-if="isFailed" class="failure-detail" title="版本发布失败" :description="submission.lastErrorMessage || meta.description" type="error" :closable="false" show-icon />
     <el-alert v-if="pollError" class="poll-error" :title="pollError.title" :description="pollError.message" type="error" :closable="false" show-icon />
   </el-card>
 </template>

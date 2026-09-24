@@ -1303,7 +1303,7 @@ onBeforeUnmount(() => { disposed = true; closeSingleAssign(); destroyRowSortable
       </el-form>
       <template #footer><el-button :disabled="assigning" @click="closeBatchAssignDialog()">取消</el-button><el-button type="primary" :loading="assigning" :disabled="assigning" @click="confirmBatchAssign">确认{{ hasAssignedSelection ? '重新分配' : '分配' }}</el-button></template>
     </el-dialog>
-    <el-drawer v-model="showDetail" class="sg-detail-drawer shot-detail-drawer" modal-class="sg-detail-drawer-mask" header-class="sg-detail-drawer__header" body-class="sg-detail-drawer__body" :title="detailDrawerTitle" direction="rtl" size="72%" resizable append-to-body destroy-on-close @closed="clearDetailDrawer">
+    <el-drawer v-model="showDetail" class="sg-detail-drawer shot-detail-drawer" modal-class="sg-detail-drawer-mask" header-class="sg-detail-drawer__header" body-class="sg-detail-drawer__body" :title="detailDrawerTitle" direction="rtl" size="85%" resizable append-to-body destroy-on-close @closed="clearDetailDrawer">
       <ShotDetailView v-if="detailShotId && currentProjectId" embedded :target-project-id="currentProjectId" :target-shot-id="detailShotId" @changed="handleDetailChanged" @deleted="handleDetailDeleted" />
     </el-drawer>
   </section>

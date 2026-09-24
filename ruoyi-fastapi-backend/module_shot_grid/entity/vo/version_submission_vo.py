@@ -15,6 +15,19 @@ VersionSubmissionStatus = Literal['pending', 'publishing', 'published', 'committ
 VersionSubmissionTaskKind = Literal['shot_video', 'asset_image']
 VersionSubmissionFileExtension = Literal['mp4', 'mov', 'jpg', 'png']
 MAX_CLIENT_FILE_KEY_LENGTH = 100
+MAX_GENERATION_PROMPT_LENGTH = 10_000
+
+
+def _normalize_generation_prompt(value: Any) -> str | None:
+    """统一换行，保留提示词排版；文本不参与执行。"""
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError('generationPrompt 必须是字符串')
+    normalized = value.replace('\r\n', '\n').replace('\r', '\n').strip()
+    if any(unicodedata.category(char) == 'Cc' and char not in '\n\t' for char in normalized):
+        raise ValueError('AI 生成提示词不能包含换行和制表符以外的控制字符')
+    return normalized or None
 
 
 def _normalize_client_file_key(value: Any) -> str:
@@ -58,6 +71,8 @@ class ShotGridVersionSubmissionPreflightCandidateModel(ShotGridApiModel):
     file_size: int = Field(gt=0, le=SHOT_GRID_VERSION_SUBMISSION_CONFIG.max_file_size_bytes)
     sort_order: int = Field(ge=0)
     candidate_note: str | None = Field(default=None, max_length=500)
+    generation_prompt: str | None = Field(default=None, max_length=MAX_GENERATION_PROMPT_LENGTH)
+    _normalize_prompt = field_validator('generation_prompt', mode='before')(_normalize_generation_prompt)
 
     @field_validator('client_file_key', mode='before')
     @classmethod
@@ -89,6 +104,8 @@ class ShotGridVersionSubmissionCandidateCreateModel(ShotGridApiModel):
     file_id: str = Field(description='平台受保护源文件ID')
     sort_order: int = Field(ge=0)
     candidate_note: str | None = Field(default=None, max_length=500)
+    generation_prompt: str | None = Field(default=None, max_length=MAX_GENERATION_PROMPT_LENGTH)
+    _normalize_prompt = field_validator('generation_prompt', mode='before')(_normalize_generation_prompt)
 
     @field_validator('client_file_key', mode='before')
     @classmethod
@@ -142,6 +159,7 @@ class ShotGridVersionSubmissionMetadataModel(ShotGridApiModel):
     )
 
     changelog: str = Field(min_length=1, max_length=5000, description='本轮修改说明')
+    target_version_no: int | None = Field(default=None, gt=0, description='追加目标轮次；省略则创建新轮次')
     ai_params: dict[str, Any] | list[Any] | None = Field(default=None, description='可选AI生成参数快照')
     issue_responses: list[ShotGridIssueResponseInputModel] = Field(default_factory=list, max_length=200)
 
@@ -221,7 +239,7 @@ class ShotGridVersionSubmissionPreflightResultModel(ShotGridApiModel):
     ready: Literal[True] = True
     task_id: int
     task_kind: VersionSubmissionTaskKind
-    task_status: Literal['in_progress', 'revision']
+    task_status: Literal['in_progress', 'revision', 'pending_review']
     candidates: list[ShotGridVersionSubmissionPreflightCandidateResultModel]
     max_candidates: int = Field(gt=0)
     max_file_size_bytes: int = Field(gt=0)
@@ -239,6 +257,7 @@ class ShotGridVersionSubmissionCandidateStatusModel(ShotGridApiModel):
     source_file_id: str
     business_file_name: str
     candidate_note: str | None = None
+    generation_prompt: str | None = None
     sort_order: int = Field(ge=0)
     publish_status: Literal['pending', 'publishing', 'published', 'failed']
     last_error_key: str | None = None

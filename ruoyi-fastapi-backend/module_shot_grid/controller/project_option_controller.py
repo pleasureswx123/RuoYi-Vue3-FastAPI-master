@@ -26,6 +26,7 @@ from module_shot_grid.entity.vo.project_option_vo import (
     ShotGridStorageRootOptionModel,
 )
 from module_shot_grid.service.project_option_service import ShotGridProjectOptionService
+from module_shot_grid.service.review_service import ShotGridReviewService
 from utils.response_util import ResponseUtil
 
 SQL_BIGINT_MAX = 9_223_372_036_854_775_807
@@ -176,6 +177,28 @@ async def get_shot_grid_asset_assignee_options(
     access: Annotated[ShotGridProjectAccessModel, ProjectAccessDependency()],
 ) -> Response:
     result = await ShotGridProjectOptionService.get_asset_assignee_option_page(
+        query_db,
+        access.project_id,
+        option_query,
+    )
+    return ResponseUtil.success(msg='查询成功', model_content=result)
+
+
+@project_option_controller.get(
+    '/projects/{projectId}/revision-assignee-options',
+    summary='分页查询项目内可分配的修改接手制作人',
+    response_model=PageResponseModel[ShotGridShotAssigneeOptionModel],
+    dependencies=[UserInterfaceAuthDependency('shotgrid:task:assign')],
+)
+async def get_shot_grid_revision_assignee_options(
+    request: Request,
+    project_id: Annotated[int, Path(alias='projectId', gt=0, le=SQL_BIGINT_MAX)],
+    option_query: Annotated[ShotGridShotAssigneeOptionQueryModel, Query()],
+    query_db: Annotated[AsyncSession, DBSessionDependency()],
+    access: Annotated[ShotGridProjectAccessModel, ProjectAccessDependency()],
+) -> Response:
+    ShotGridReviewService._require_director(access)
+    result = await ShotGridProjectOptionService.get_shot_assignee_option_page(
         query_db,
         access.project_id,
         option_query,

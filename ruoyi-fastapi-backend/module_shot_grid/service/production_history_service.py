@@ -342,6 +342,26 @@ class ShotGridProductionHistoryService:
                 )
             )
 
+        for lane_row in lane_rows:
+            for transfer in lane_row.get('revision_transfers') or []:
+                events.append(  # noqa: PERF401 - 构建完整的交接事件快照
+                    ShotGridProductionHistoryEventModel(
+                        eventId=f'task:{lane_row["task_id"]}:transfer:{transfer["transferId"]}',
+                        eventType='task_transferred',
+                        occurredAt=transfer['occurredAt'],
+                        evidenceLevel='confirmed',
+                        title=f'{transfer["fromName"]} → {transfer["toName"]} · 转交修改',
+                        description=f'{transfer["versionNumber"]} 退回后交接：{transfer["reason"]}'
+                        + (f'；交接说明：{transfer["handoffNote"]}' if transfer.get('handoffNote') else ''),
+                        laneIds=[int(lane_row['lane_id'])],
+                        actor=cls._actor(transfer['operatorId'], transfer['operatorName'], None),
+                        resourceRef=ShotGridProductionHistoryResourceRefModel(
+                            resourceType='task',
+                            resourceId=lane_row['task_id'],
+                        ),
+                    )
+                )
+
         for version_row in version_rows:
             version_id = int(version_row['version_id'])
             events.append(
@@ -408,6 +428,7 @@ class ShotGridProductionHistoryService:
                     version.get('submitter_user_name'),
                     version.get('submitter_nick_name'),
                 ),
+                files=[cls._build_file(file) for file in files if file['file_role'] == 'review_media'],
                 primaryFile=cls._build_file(primary_file_row),
                 thumbnailFile=cls._build_file(thumbnail_file_row),
                 autoReviewList=cls._build_review_list(review_list_row),

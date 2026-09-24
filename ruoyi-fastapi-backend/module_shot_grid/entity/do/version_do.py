@@ -36,6 +36,7 @@ class ShotGridVersionSubmission(Base):
         comment='平台源文件ID',
     )
     reserved_version_no = Column(Integer, nullable=False, comment='保留版本号')
+    submission_mode = Column(String(20), nullable=False, server_default='new_round', comment='新轮次或追加候选')
     generated_at_ms = Column(BigInteger, nullable=False, comment='业务文件名服务端时间戳')
     business_file_name = Column(String(255), nullable=False, comment='不可变业务文件名')
     target_relative_path = Column(String(1200), nullable=False, comment='NAS目标相对路径')
@@ -75,7 +76,14 @@ class ShotGridVersionSubmission(Base):
             ondelete='RESTRICT',
         ),
         UniqueConstraint('submission_id', 'project_id', 'task_id', name='uk_sg_submission_id_project_task'),
-        UniqueConstraint('task_id', 'reserved_version_no', name='uk_sg_submission_task_version'),
+        Index(
+            'uk_sg_submission_task_version',
+            'task_id',
+            'reserved_version_no',
+            unique=True,
+            postgresql_where=text("submission_mode = 'new_round'"),
+        ),
+        CheckConstraint("submission_mode in ('new_round', 'append')", name='ck_sg_submission_mode'),
         UniqueConstraint(
             'task_id',
             'submitted_by',
@@ -159,6 +167,7 @@ class ShotGridVersionSubmissionFile(Base):
     source_sha256 = Column(CHAR(64), nullable=False, comment='源文件SHA-256摘要')
     source_file_size = Column(BigInteger, nullable=False, comment='源文件大小')
     candidate_note = Column(String(500), nullable=True, comment='制作人候选说明')
+    generation_prompt = Column(Text, nullable=True, comment='该文件的AI生成提示词')
     sort_order = Column(Integer, nullable=False, comment='候选展示顺序')
     publish_status = Column(String(20), nullable=False, server_default='pending', comment='候选文件发布状态')
     published_time = Column(SHOT_GRID_DATETIME, nullable=True, comment='NAS发布时间')
@@ -299,6 +308,7 @@ class ShotGridVersionCandidate(ShotGridCreateAuditMixin, Base):
     submission_file_id = Column(BigInteger, nullable=False, comment='来源提交文件ID')
     candidate_no = Column(Integer, nullable=False, comment='本轮候选小编号')
     candidate_note = Column(String(500), nullable=True, comment='制作人候选说明')
+    generation_prompt = Column(Text, nullable=True, comment='该文件的AI生成提示词')
     sort_order = Column(Integer, nullable=False, comment='展示顺序')
 
     __table_args__ = (

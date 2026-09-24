@@ -295,6 +295,23 @@ class ShotGridTaskShotProductionModel(ShotGridApiModel):
     remark: str | None = None
 
 
+class ShotGridTaskHandoffModel(ShotGridApiModel):
+    """任务最近一次修改交接的不可变摘要。"""
+
+    transfer_id: int
+    version_id: int
+    version_number: str
+    from_user_id: int
+    from_name: str
+    to_user_id: int
+    to_name: str
+    operator_id: int
+    operator_name: str
+    occurred_at: datetime
+    reason: str
+    handoff_note: str | None = None
+
+
 class ShotGridTaskDetailModel(ShotGridTaskListItemModel):
     """任务详情；完整版本和意见继续走独立分页接口。"""
 
@@ -302,5 +319,6 @@ class ShotGridTaskDetailModel(ShotGridTaskListItemModel):
     remark: str | None = None
     create_by: str
     update_by: str
+    latest_handoff: ShotGridTaskHandoffModel | None = None
     has_uncommitted_submission: bool = False
     allowed_actions: list[str] = Field(default_factory=list)

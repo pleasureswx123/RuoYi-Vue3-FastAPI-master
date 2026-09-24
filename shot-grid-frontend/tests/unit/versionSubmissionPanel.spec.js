@@ -104,6 +104,35 @@ async function clickSubmissionButton(wrapper) {
 }
 
 describe('版本上传与发布面板', () => {
+  it('待审核时经表单校验向实际最新轮次追加，不能根据版本数量猜测轮次', async () => {
+    const wrapper = mount(VersionSubmissionPanel, {
+      ...mountOptions,
+      props: { taskId: 31, taskKind: 'shot_video', taskStatus: 'pending_review', versionCount: 1,
+        latestVersionNo: 3, allowedActions: ['version.add'], hasAddPermission: true, canQuery: true }
+    })
+    await flushPromises()
+    expect(wrapper.text()).toContain('继续向 V003 追加')
+    expect(wrapper.text()).toContain('追加候选并送审')
+    await clickSubmissionButton(wrapper)
+    await flushPromises()
+    expect(preflightVersionSubmission).not.toHaveBeenCalled()
+    await chooseValidFileAndSubmit(wrapper)
+    expect(preflightVersionSubmission.mock.calls[0][1].targetVersionNo).toBe(3)
+    expect(createVersionSubmission.mock.calls[0][1]).toMatchObject({ targetVersionNo: 3, issueResponses: [] })
+    getVersionSubmissionStatus.mockResolvedValueOnce(status('committed', { reservedVersionNumber: 'V003' }))
+    await vi.advanceTimersByTimeAsync(2000)
+    await flushPromises()
+    expect(wrapper.emitted('committed')).toHaveLength(1)
+    expect(wrapper.text()).toContain('候选已追加')
+    await wrapper.setProps({ operationGeneration: 1 })
+    await flushPromises()
+    expect(wrapper.find('.submission-form').exists()).toBe(true)
+    await chooseValidFileAndSubmit(wrapper)
+    expect(createVersionSubmission).toHaveBeenCalledTimes(2)
+    expect(createVersionSubmission.mock.calls[1][1].targetVersionNo).toBe(3)
+    wrapper.unmount()
+  })
+
   beforeEach(() => {
     vi.useFakeTimers()
     let previewIndex = 0
@@ -174,7 +203,8 @@ describe('版本上传与发布面板', () => {
     expect(wrapper.get('.panel-heading').text()).toContain('将生成 V002 并重新进入审核')
     expect(wrapper.get('.submission-form').attributes('aria-label')).toBe('提交修改成果')
     expect(wrapper.text()).toContain('选择修改后的候选成果')
-    expect(wrapper.text()).toContain('逐条说明修改情况')
+    expect(wrapper.text()).toContain('修改情况 · 1 条意见')
+    expect(wrapper.findComponent({ name: 'ElCollapse' }).props('modelValue')).toEqual([])
     expect(wrapper.find('.review-reference-files').exists()).toBe(false)
     await wrapper.get('.issue-source-link').trigger('click')
     expect(wrapper.emitted('focus-issue').at(-1)).toEqual([revisionIssue])
@@ -273,6 +303,10 @@ describe('版本上传与发布面板', () => {
     ]
     Object.defineProperty(input.element, 'files', { configurable: true, value: files })
     await input.trigger('change')
+    const promptFields = wrapper.findAll('.candidate-prompt-field textarea')
+    expect(promptFields).toHaveLength(2)
+    await promptFields[0].setValue('山水画面\n缓慢推进\n负向：模糊')
+    await promptFields[1].setValue('宇宙飞船\n冷色光线')
     await wrapper.find('.changelog-field textarea').setValue('同时提交两个备选效果')
     await clickSubmissionButton(wrapper)
     await flushPromises()
@@ -285,8 +319,8 @@ describe('版本上传与发布面板', () => {
     ])
     expect(preflightCandidates[0].clientFileKey).not.toBe(preflightCandidates[1].clientFileKey)
     expect(createVersionSubmission.mock.calls[0][1].candidates).toEqual([
-      { clientFileKey: preflightCandidates[0].clientFileKey, fileId, sortOrder: 0, candidateNote: null },
-      { clientFileKey: preflightCandidates[1].clientFileKey, fileId: secondFileId, sortOrder: 1, candidateNote: null }
+      { clientFileKey: preflightCandidates[0].clientFileKey, fileId, sortOrder: 0, candidateNote: null, generationPrompt: '山水画面\n缓慢推进\n负向：模糊' },
+      { clientFileKey: preflightCandidates[1].clientFileKey, fileId: secondFileId, sortOrder: 1, candidateNote: null, generationPrompt: '宇宙飞船\n冷色光线' }
     ])
     expect(wrapper.text()).toContain('候选文件2 个')
     wrapper.unmount()
@@ -308,7 +342,8 @@ describe('版本上传与发布面板', () => {
           fileName: '结果.mov',
           fileSize: file.size,
           sortOrder: 0,
-          candidateNote: null
+          candidateNote: null,
+          generationPrompt: null
         }],
         changelog: '调整镜头节奏',
         issueResponses: []
@@ -323,7 +358,8 @@ describe('版本上传与发布面板', () => {
           clientFileKey: expect.any(String),
           fileId,
           sortOrder: 0,
-          candidateNote: null
+          candidateNote: null,
+          generationPrompt: null
         }],
         changelog: '调整镜头节奏',
         openIssueSnapshotHash: 'a'.repeat(64),
@@ -402,6 +438,7 @@ describe('版本上传与发布面板', () => {
     const file = await chooseValidFileAndSubmit(wrapper)
     expect(preflightVersionSubmission).not.toHaveBeenCalled()
     expect(wrapper.text()).toContain('请说明该问题本轮未处理的原因')
+    expect(wrapper.findComponent({ name: 'ElCollapse' }).props('modelValue')).toEqual(['issues'])
 
     await wrapper.find('.issue-unhandled-reason textarea').setValue('等待外部素材确认后再修改')
     await clickSubmissionButton(wrapper)

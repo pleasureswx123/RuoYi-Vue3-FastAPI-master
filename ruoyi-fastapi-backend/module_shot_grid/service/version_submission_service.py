@@ -21,6 +21,7 @@ from module_admin.entity.do.user_do import SysUser
 from module_admin.entity.vo.user_vo import CurrentUserModel
 from module_admin.service.common_service import CommonService
 from module_admin.service.file_business_service import FileReferenceService
+from module_realtime.service.realtime_publisher import publish_version_changed
 from module_shot_grid.config import SHOT_GRID_PLAYBACK_CONFIG, SHOT_GRID_VERSION_SUBMISSION_CONFIG
 from module_shot_grid.dao.media_derivation_dao import ShotGridMediaDerivationDao
 from module_shot_grid.dao.project_audit_dao import ShotGridProjectAuditDao
@@ -112,9 +113,11 @@ class ShotGridVersionSubmissionService:
                 '任务已有正在处理或待处理失败的版本提交',
             )
 
-        version_no = await ShotGridVersionSubmissionDao.next_reserved_version_no(db, task_id)
+        _, version_no, first_candidate_no = await cls._submission_target(
+            db, task_id, task_context['task_status'], command.target_version_no, len(command.candidates)
+        )
         candidate_results: list[ShotGridVersionSubmissionPreflightCandidateResultModel] = []
-        for candidate_no, candidate in enumerate(command.candidates, start=1):
+        for candidate_no, candidate in enumerate(command.candidates, start=first_candidate_no):
             extension = cls._preflight_file_extension(task_context['task_kind'], candidate.file_name)
             business_file_name = cls.build_business_file_name(
                 task_context,
@@ -281,11 +284,13 @@ class ShotGridVersionSubmissionService:
                 if await ShotGridVersionSubmissionDao.source_file_is_bound(db, file_id):
                     raise shot_grid_error(409, 'SG_VERSION_FILE_ALREADY_BOUND', '文件已经绑定到其他版本提交')
 
-            version_no = await ShotGridVersionSubmissionDao.next_reserved_version_no(db, task_id)
+            _, version_no, first_candidate_no = await cls._submission_target(
+                db, task_id, task.task_status, command.target_version_no, len(command.candidates), for_update=True
+            )
             # 批次生成时间仅作为元数据保存，不拼入业务文件名。
             generated_at_ms = int(time.time_ns() // 1_000_000)
             candidate_specs: list[dict[str, Any]] = []
-            for candidate_no, candidate in enumerate(command.candidates, start=1):
+            for candidate_no, candidate in enumerate(command.candidates, start=first_candidate_no):
                 inspection = source_snapshots[candidate.file_id]['inspection']
                 if inspection.file_size > SHOT_GRID_VERSION_SUBMISSION_CONFIG.max_file_size_bytes:
                     raise shot_grid_error(422, 'SG_VERSION_FILE_TOO_LARGE', '候选文件超过单文件大小上限')
@@ -318,6 +323,7 @@ class ShotGridVersionSubmissionService:
                     task_id=task_id,
                     source_file_id=primary_spec['candidate'].file_id,
                     reserved_version_no=version_no,
+                    submission_mode='append' if command.target_version_no is not None else 'new_round',
                     generated_at_ms=generated_at_ms,
                     business_file_name=primary_spec['business_file_name'],
                     target_relative_path=primary_spec['target_relative_path'],
@@ -353,6 +359,7 @@ class ShotGridVersionSubmissionService:
                         source_sha256=spec['inspection'].sha256,
                         source_file_size=spec['inspection'].file_size,
                         candidate_note=spec['candidate'].candidate_note,
+                        generation_prompt=spec['candidate'].generation_prompt,
                         sort_order=spec['candidate'].sort_order,
                         publish_status='pending',
                         published_time=None,
@@ -399,6 +406,7 @@ class ShotGridVersionSubmissionService:
                 payload={'taskId': task_id, 'candidateCount': len(command.candidates)},
                 result={
                     'submissionId': submission.submission_id,
+                    'submissionMode': submission.submission_mode,
                     'reservedVersionNo': version_no,
                     'submissionStatus': 'pending',
                 },
@@ -465,7 +473,7 @@ class ShotGridVersionSubmissionService:
         return cls._status_model(row, submission_files)
 
     @classmethod
-    async def retry_submission(  # noqa: PLR0915
+    async def retry_submission(  # noqa: PLR0912, PLR0915 - 重试校验与租约恢复须保持同一事务
         cls,
         db: AsyncSession,
         submission_id: int,
@@ -524,6 +532,12 @@ class ShotGridVersionSubmissionService:
                 raise shot_grid_error(404, 'SG_VERSION_SUBMISSION_NOT_FOUND', '版本提交不存在或不可见')
             if submission.submission_status != 'failed':
                 raise shot_grid_error(409, 'SG_VERSION_SUBMISSION_NOT_RETRYABLE', '当前版本提交状态不可重试')
+            if getattr(submission, 'submission_mode', 'new_round') == 'append':
+                await cls._submission_target(
+                    db, task.task_id, task.task_status, submission.reserved_version_no, 0, for_update=True
+                )
+            elif task.task_status not in {'in_progress', 'revision'}:
+                raise shot_grid_error(409, 'SG_INVALID_STATE_TRANSITION', '任务当前状态不能重试新轮次')
             task_context = await cls._require_task_context(db, row['task_id'])
             cls._require_context_ready(task_context)
             submission_files = await ShotGridVersionSubmissionDao.get_submission_files(
@@ -592,7 +606,7 @@ class ShotGridVersionSubmissionService:
             raise
 
     @classmethod
-    async def commit_published_submission(  # noqa: PLR0915
+    async def commit_published_submission(  # noqa: PLR0912, PLR0915 - 轮次和追加的正式入库保持原子事务
         cls,
         db: AsyncSession,
         *,
@@ -628,7 +642,17 @@ class ShotGridVersionSubmissionService:
                 or submission.attempt_count != attempt_count
             ):
                 raise shot_grid_error(409, 'SG_VERSION_PUBLISH_LEASE_LOST', '版本发布租约已经失效')
-            if task.task_status not in {'in_progress', 'revision'}:
+            is_append = getattr(submission, 'submission_mode', 'new_round') == 'append'
+            if is_append:
+                version, _, _ = await cls._submission_target(
+                    db,
+                    task.task_id,
+                    task.task_status,
+                    submission.reserved_version_no,
+                    0,
+                    for_update=True,
+                )
+            elif task.task_status not in {'in_progress', 'revision'}:
                 raise shot_grid_error(409, 'SG_INVALID_STATE_TRANSITION', '任务当前状态不能提交新版本')
             task_context = await cls._require_task_context(db, submission.task_id)
             cls._require_context_ready(task_context)
@@ -661,25 +685,26 @@ class ShotGridVersionSubmissionService:
                 cls._require_formal_source_file(source_files[submission_file.source_file_id], submission_file)
             actor_name = await cls._get_submitter_name(db, submission.submitted_by)
             now = cls._now()
-            version = await ShotGridVersionSubmissionDao.add_version(
-                db,
-                ShotGridVersion(
-                    project_id=submission.project_id,
-                    task_id=submission.task_id,
-                    submission_id=submission.submission_id,
-                    version_no=submission.reserved_version_no,
-                    version_status='pending_review',
-                    changelog=submission.changelog,
-                    ai_params=submission.ai_params,
-                    submitted_by=submission.submitted_by,
-                    submitted_time=now,
-                    generated_at_ms=submission.generated_at_ms,
-                    selected_candidate_id=None,
-                    selected_by=None,
-                    selected_time=None,
-                    lock_version=0,
-                ),
-            )
+            if not is_append:
+                version = await ShotGridVersionSubmissionDao.add_version(
+                    db,
+                    ShotGridVersion(
+                        project_id=submission.project_id,
+                        task_id=submission.task_id,
+                        submission_id=submission.submission_id,
+                        version_no=submission.reserved_version_no,
+                        version_status='pending_review',
+                        changelog=submission.changelog,
+                        ai_params=submission.ai_params,
+                        submitted_by=submission.submitted_by,
+                        submitted_time=now,
+                        generated_at_ms=submission.generated_at_ms,
+                        selected_candidate_id=None,
+                        selected_by=None,
+                        selected_time=None,
+                        lock_version=0,
+                    ),
+                )
             candidates = await ShotGridVersionSubmissionDao.add_version_candidates(
                 db,
                 [
@@ -689,14 +714,21 @@ class ShotGridVersionSubmissionService:
                         submission_file_id=submission_file.submission_file_id,
                         candidate_no=submission_file.candidate_no,
                         candidate_note=submission_file.candidate_note,
-                        sort_order=submission_file.sort_order,
+                        generation_prompt=submission_file.generation_prompt,
+                        sort_order=submission_file.candidate_no - 1,
                         create_by=actor_name,
                         create_time=now,
                     )
                     for submission_file in submission_files
                 ],
             )
-            selected_candidate_id = cls._initialize_single_candidate_selection(version, candidates)
+            selected_candidate_id = (
+                version.selected_candidate_id
+                if is_append
+                else cls._initialize_single_candidate_selection(version, candidates)
+            )
+            if is_append:
+                version.lock_version += 1
             media_kind = {'shot_video': 'video', 'asset_image': 'image'}.get(str(task_context['task_kind']))
             for candidate, submission_file in zip(candidates, submission_files, strict=True):
                 await ShotGridVersionSubmissionDao.add_version_file(
@@ -712,7 +744,7 @@ class ShotGridVersionSubmissionService:
                         nas_file_size=submission_file.source_file_size,
                         published_time=now,
                         is_primary='1' if candidate.candidate_id == selected_candidate_id else '0',
-                        sort_order=submission_file.sort_order,
+                        sort_order=submission_file.candidate_no - 1,
                         create_by=actor_name,
                         create_time=now,
                     ),
@@ -730,7 +762,11 @@ class ShotGridVersionSubmissionService:
                 db,
                 cls.VERSION_REFERENCE_TYPE,
                 str(version.version_id),
-                [submission_file.source_file_id for submission_file in submission_files],
+                (
+                    await ShotGridVersionSubmissionDao.get_version_file_ids(db, version.version_id)
+                    if is_append
+                    else [submission_file.source_file_id for submission_file in submission_files]
+                ),
                 actor_name,
                 true(),
                 business_name=f'V{submission.reserved_version_no:03d} 候选文件',
@@ -741,31 +777,40 @@ class ShotGridVersionSubmissionService:
                 str(submission.submission_id),
             )
 
-            review_list = await ShotGridReviewDao.add_auto_review_list(
-                db,
-                ShotGridReviewList(
-                    project_id=submission.project_id,
-                    auto_version_id=version.version_id,
-                    review_list_name=cls._review_list_name(task.task_name, submission.reserved_version_no),
-                    description=None,
-                    review_date=None,
-                    review_mode='auto_single',
-                    review_status='active',
-                    create_by=actor_name,
-                    create_time=now,
-                    update_by=actor_name,
-                    update_time=now,
-                    remark=None,
-                    lock_version=0,
-                    del_flag='0',
-                ),
-                ShotGridReviewListVersion(
-                    version_id=version.version_id,
-                    sort_order=0,
-                    create_by=actor_name,
-                    create_time=now,
-                ),
-            )
+            if is_append:
+                review_list = await ShotGridReviewDao.get_auto_review_list_for_update(
+                    db, submission.project_id, version.version_id
+                )
+                if review_list is None or review_list.review_status != 'active':
+                    raise shot_grid_error(409, 'SG_VERSION_APPEND_CLOSED', '当前轮次审核单已关闭')
+                review_list.lock_version += 1
+                review_list.update_time = now
+            else:
+                review_list = await ShotGridReviewDao.add_auto_review_list(
+                    db,
+                    ShotGridReviewList(
+                        project_id=submission.project_id,
+                        auto_version_id=version.version_id,
+                        review_list_name=cls._review_list_name(task.task_name, submission.reserved_version_no),
+                        description=None,
+                        review_date=None,
+                        review_mode='auto_single',
+                        review_status='active',
+                        create_by=actor_name,
+                        create_time=now,
+                        update_by=actor_name,
+                        update_time=now,
+                        remark=None,
+                        lock_version=0,
+                        del_flag='0',
+                    ),
+                    ShotGridReviewListVersion(
+                        version_id=version.version_id,
+                        sort_order=0,
+                        create_by=actor_name,
+                        create_time=now,
+                    ),
+                )
             task.task_status = 'pending_review'
             task.update_by = actor_name
             task.update_time = now
@@ -785,6 +830,7 @@ class ShotGridVersionSubmissionService:
             )
             result_ids = (version.version_id, review_list.review_list_id)
             await db.commit()
+            await publish_version_changed(result_ids[0], 'candidates.appended' if is_append else 'version.created')
             return result_ids
         except Exception:
             await db.rollback()
@@ -967,7 +1013,7 @@ class ShotGridVersionSubmissionService:
     def _require_context_ready(cls, context: dict[str, Any]) -> None:
         if context['project_status'] in {'completed', 'archived'}:
             raise shot_grid_error(409, 'SG_INVALID_STATE_TRANSITION', '已完成或归档项目不能提交版本')
-        if context['task_status'] not in {'in_progress', 'revision'}:
+        if context['task_status'] not in {'in_progress', 'revision', 'pending_review'}:
             raise shot_grid_error(409, 'SG_INVALID_STATE_TRANSITION', '任务当前状态不能提交版本')
         if context['storage_status'] != 'ready' or context['directory_operation_status'] != 'succeeded':
             raise shot_grid_error(409, 'SG_PROJECT_NOT_READY', '项目或任务目标 NAS 目录尚未就绪')
@@ -1005,8 +1051,37 @@ class ShotGridVersionSubmissionService:
             raise shot_grid_error(404, 'SG_TASK_NOT_FOUND', '任务不存在或不可见')
         if project.project_status in {'completed', 'archived'}:
             raise shot_grid_error(409, 'SG_INVALID_STATE_TRANSITION', '已完成或归档项目不能提交版本')
-        if task.task_status not in {'in_progress', 'revision'}:
+        if task.task_status not in {'in_progress', 'revision', 'pending_review'}:
             raise shot_grid_error(409, 'SG_INVALID_STATE_TRANSITION', '任务当前状态不能提交版本')
+
+    @classmethod
+    async def _submission_target(
+        cls,
+        db: AsyncSession,
+        task_id: int,
+        task_status: str,
+        target_version_no: int | None,
+        candidate_count: int,
+        *,
+        for_update: bool = False,
+    ) -> tuple[Any, int, int]:
+        """明确区分新轮次与追加，禁止过期追加请求转换成返修提交。"""
+        if target_version_no is None:
+            if task_status not in {'in_progress', 'revision'}:
+                raise shot_grid_error(409, 'SG_VERSION_APPEND_TARGET_REQUIRED', '待审核任务请明确指定追加轮次')
+            return None, await ShotGridVersionSubmissionDao.next_reserved_version_no(db, task_id), 1
+        version = await ShotGridVersionSubmissionDao.get_latest_version(db, task_id, for_update=for_update)
+        if (
+            task_status != 'pending_review'
+            or version is None
+            or version.version_no != target_version_no
+            or version.version_status != 'pending_review'
+        ):
+            raise shot_grid_error(409, 'SG_VERSION_APPEND_CLOSED', '该轮次已不能追加候选，请刷新任务')
+        last_no = await ShotGridVersionSubmissionDao.get_last_candidate_no(db, version.version_id)
+        if last_no + candidate_count > MAX_CANDIDATE_NUMBER:
+            raise shot_grid_error(422, 'SG_VERSION_CANDIDATE_LIMIT', '单轮候选总数不能超过99个')
+        return version, target_version_no, last_no + 1
 
     @staticmethod
     def _require_submit_access(
@@ -1172,6 +1247,7 @@ class ShotGridVersionSubmissionService:
                 'file_id': item.source_file_id,
                 'sort_order': item.sort_order,
                 'candidate_note': item.candidate_note,
+                'generation_prompt': item.generation_prompt,
             }
             for item in stored_files
         ]
@@ -1181,6 +1257,7 @@ class ShotGridVersionSubmissionService:
                 'file_id': item.file_id,
                 'sort_order': item.sort_order,
                 'candidate_note': item.candidate_note,
+                'generation_prompt': item.generation_prompt,
             }
             for item in command.candidates
         ]
@@ -1190,6 +1267,9 @@ class ShotGridVersionSubmissionService:
         )
         if (
             stored_candidates != requested_candidates
+            or (getattr(submission, 'submission_mode', 'new_round') == 'append')
+            != (command.target_version_no is not None)
+            or (command.target_version_no is not None and submission.reserved_version_no != command.target_version_no)
             or submission.changelog != command.changelog
             or submission.ai_params != command.ai_params
             or submission.open_issue_snapshot_hash != command.open_issue_snapshot_hash
@@ -1226,6 +1306,9 @@ class ShotGridVersionSubmissionService:
         if task_status == 'in_progress':
             if expected_ids or provided_ids:
                 raise shot_grid_error(422, 'SG_ISSUE_RESPONSES_NOT_ALLOWED', '首次制作版本不能携带问题处理说明')
+        elif task_status == 'pending_review':
+            if provided_ids:
+                raise shot_grid_error(422, 'SG_ISSUE_RESPONSES_NOT_ALLOWED', '追加候选沿用本轮已有问题处理说明')
         elif task_status == 'revision':
             if not expected_ids:
                 raise shot_grid_error(409, 'SG_REVISION_ISSUES_REQUIRED', '修订任务没有待处理问题，请刷新任务状态')
@@ -1312,6 +1395,7 @@ class ShotGridVersionSubmissionService:
             sourceFileId=submission_file.source_file_id,
             businessFileName=submission_file.business_file_name,
             candidateNote=submission_file.candidate_note,
+            generationPrompt=submission_file.generation_prompt,
             sortOrder=submission_file.sort_order,
             publishStatus=submission_file.publish_status,
             lastErrorKey=submission_file.last_error_key,
@@ -1399,6 +1483,7 @@ class ShotGridVersionSubmissionService:
             oper_param={'submissionId': submission.submission_id},
             result={
                 'versionId': version_id,
+                'submissionMode': getattr(submission, 'submission_mode', None) or 'new_round',
                 'reviewListId': review_list_id,
                 'taskStatus': 'pending_review',
                 'submissionStatus': 'committed',

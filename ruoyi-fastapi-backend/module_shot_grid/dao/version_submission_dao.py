@@ -37,6 +37,41 @@ UNRESOLVED_SUBMISSION_STATUSES = ('pending', 'publishing', 'published', 'committ
 class ShotGridVersionSubmissionDao:
     """版本暂存、NAS 发布和正式提交的数据访问层；所有方法均不提交事务。"""
 
+    @staticmethod
+    async def get_latest_version(db: AsyncSession, task_id: int, *, for_update: bool = False) -> ShotGridVersion | None:
+        statement = (
+            select(ShotGridVersion)
+            .where(ShotGridVersion.task_id == task_id)
+            .order_by(ShotGridVersion.version_no.desc())
+            .limit(1)
+        )
+        if for_update:
+            statement = statement.with_for_update().execution_options(populate_existing=True)
+        return (await db.execute(statement)).scalars().first()
+
+    @staticmethod
+    async def get_last_candidate_no(db: AsyncSession, version_id: int) -> int:
+        return int(
+            (
+                await db.execute(
+                    select(func.max(ShotGridVersionCandidate.candidate_no)).where(
+                        ShotGridVersionCandidate.version_id == version_id
+                    )
+                )
+            ).scalar()
+            or 0
+        )
+
+    @staticmethod
+    async def get_version_file_ids(db: AsyncSession, version_id: int) -> list[str]:
+        return list(
+            (
+                await db.execute(
+                    select(ShotGridVersionFile.file_id).where(ShotGridVersionFile.version_id == version_id)
+                )
+            ).scalars()
+        )
+
     @classmethod
     async def get_task_project_id(cls, db: AsyncSession, task_id: int) -> int | None:
         return await db.scalar(
@@ -387,6 +422,7 @@ class ShotGridVersionSubmissionDao:
                     ShotGridVersionSubmissionFile.source_file_id,
                     ShotGridVersionSubmissionFile.business_file_name,
                     ShotGridVersionSubmissionFile.candidate_note,
+                    ShotGridVersionSubmissionFile.generation_prompt,
                     ShotGridVersionSubmissionFile.sort_order,
                     ShotGridVersionSubmissionFile.publish_status,
                     ShotGridVersionSubmissionFile.last_error_key,
@@ -422,7 +458,14 @@ class ShotGridVersionSubmissionDao:
                 ShotGridReviewList.review_list_id,
             )
             .join(ShotGridTask, ShotGridTask.task_id == ShotGridVersionSubmission.task_id)
-            .outerjoin(ShotGridVersion, ShotGridVersion.submission_id == ShotGridVersionSubmission.submission_id)
+            .outerjoin(
+                ShotGridVersion,
+                and_(
+                    ShotGridVersion.task_id == ShotGridVersionSubmission.task_id,
+                    ShotGridVersion.version_no == ShotGridVersionSubmission.reserved_version_no,
+                    ShotGridVersionSubmission.submission_status == 'committed',
+                ),
+            )
             .outerjoin(
                 ShotGridReviewList,
                 and_(

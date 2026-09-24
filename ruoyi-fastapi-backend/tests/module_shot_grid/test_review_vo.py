@@ -10,6 +10,7 @@ from module_shot_grid.entity.vo.review_vo import (
     ShotGridNoteCreateModel,
     ShotGridReviewActionCreateModel,
     ShotGridReviewListQueryModel,
+    ShotGridRevisionTransferCommand,
 )
 
 
@@ -188,3 +189,27 @@ def test_review_query_rejects_bigint_overflow() -> None:
     assert ShotGridReviewListQueryModel(taskId=SQL_BIGINT_MAX).task_id == SQL_BIGINT_MAX
     with pytest.raises(ValidationError):
         ShotGridReviewListQueryModel(taskId=SQL_BIGINT_MAX + 1)
+
+
+@pytest.mark.parametrize('action_type', ['reject', 'defer'])
+def test_round_actions_do_not_require_delivery_candidate(action_type: str) -> None:
+    assert ShotGridReviewActionCreateModel(actionType=action_type, lockVersion=0).selected_candidate_id is None
+
+
+def test_approval_requires_explicit_delivery_candidate() -> None:
+    with pytest.raises(ValidationError, match='最终交付文件'):
+        ShotGridReviewActionCreateModel(actionType='approve', lockVersion=0)
+
+
+def test_revision_transfer_only_on_reject_and_reason_required() -> None:
+
+    for action in ('defer', 'approve'):
+        with pytest.raises(ValidationError):
+            ShotGridReviewActionCreateModel(
+                actionType=action,
+                lockVersion=0,
+                selectedCandidateId=1,
+                revisionTransfer={'assigneeUserId': 2, 'reason': '交接'},
+            )
+    with pytest.raises(ValidationError):
+        ShotGridRevisionTransferCommand(assigneeUserId=2, reason='  ', lockVersion=0, taskLockVersion=0)

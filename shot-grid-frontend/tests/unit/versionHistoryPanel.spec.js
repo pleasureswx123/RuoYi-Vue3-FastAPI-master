@@ -59,6 +59,31 @@ describe('版本历史面板', () => {
     getTaskIssues.mockResolvedValue({ data: [] })
   })
 
+  it('拆分新增与遗留数量，并从旧版直达后续版本的未修复问题', async () => {
+    getVersionDetail.mockImplementation(id => Promise.resolve(detail(id, 31, { candidates: [{ candidateId: id * 100 + 1, candidateNumber: `V00${id}_01`, files: [] }] })))
+    getTaskIssues.mockResolvedValue({ data: [
+      { issueId: 51, originVersionId: 1, originCandidateId: 101, originVersionNumber: 'V001', pendingVersionId: 2, pendingVersionNumber: 'V002', status: 'open', content: '旧问题仍存在', verifications: [{ checkedVersionId: 2, result: 'still_present', comment: '亮度不足' }] },
+      { issueId: 52, originVersionId: 2, originCandidateId: 201, pendingVersionId: 2, status: 'open', content: '新增问题' },
+      { issueId: 53, originVersionId: 1, originCandidateId: 101, originVersionNumber: 'V001', status: 'resolved', verifications: [{ checkedVersionId: 2, result: 'resolved' }] }
+    ] })
+    const wrapper = mount(VersionHistoryPanel, { ...mountOptions, props: { taskId: 31, canList: true, canQuery: true, canListNotes: true } })
+    await flushPromises()
+    expect(wrapper.get('.feedback-summary').text()).toContain('2 条待处理问题 = 本轮新增 1 条 + 上轮未修复 1 条')
+    await wrapper.get('.previous-pending-entry').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('.opinion-tabs > .el-tabs__header .is-active').text()).toContain('上轮未修复 1')
+    expect(wrapper.get('.opinion-tabs > .el-tabs__header').text()).toContain('已修复 1')
+    const firstTab = wrapper.findAll('.version-tabs > .el-tabs__header [role="tab"]').find(tab => tab.text().includes('V001'))
+    await firstTab.trigger('click')
+    await flushPromises()
+    expect(wrapper.get('.transferred-hint').text()).toContain('1 条未解决')
+    await wrapper.get('.transferred-hint button').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('.version-tabs > .el-tabs__header .is-active').text()).toContain('V002')
+    expect(wrapper.get('.opinion-tabs > .el-tabs__header .is-active').text()).toContain('上轮未修复 1')
+    wrapper.unmount()
+  })
+
   it('退回修改使用业务状态卡而不是错误警报', async () => {
     getReviewActions.mockResolvedValueOnce({
       rows: [{
@@ -73,10 +98,11 @@ describe('版本历史面板', () => {
     })
     getTaskIssues.mockResolvedValueOnce({
       data: [
-        { issueId: 51, originVersionId: 2, pendingVersionId: 2, status: 'open', content: '主体亮度偏低', responses: [], verifications: [] },
-        { issueId: 52, originVersionId: 2, pendingVersionId: 2, status: 'open', content: '运动节奏过快', responses: [], verifications: [] }
+        { issueId: 51, originCandidateId: 201, originVersionId: 2, pendingVersionId: 2, status: 'open', content: '主体亮度偏低', responses: [], verifications: [] },
+        { issueId: 52, originCandidateId: 202, originVersionId: 2, pendingVersionId: 2, status: 'open', content: '运动节奏过快', responses: [], verifications: [] }
       ]
     })
+    getVersionDetail.mockResolvedValueOnce(detail(2, 31, { candidates: [{ candidateId: 201, candidateNumber: 'V002_01', files: [{ fileId: 'first' }] }, { candidateId: 202, candidateNumber: 'V002_02', files: [{ fileId: 'second' }] }] }))
     const wrapper = mount(VersionHistoryPanel, {
       ...mountOptions,
       props: { taskId: 31, canList: true, canQuery: true, canListNotes: true }
@@ -86,11 +112,16 @@ describe('版本历史面板', () => {
     const decision = wrapper.get('.feedback-decision')
     expect(decision.classes()).toContain('is-reject')
     expect(decision.text()).toContain('已退回修改')
-    expect(decision.text()).toContain('需要继续修改')
-    expect(decision.text()).toContain('请根据下方 2 条待处理问题逐项修改')
+    expect(decision.text()).toContain('2 条待处理问题 = 本轮新增 2 条 + 上轮未修复 0 条')
     expect(decision.text()).toContain('审核人 刘远辉')
     expect(decision.attributes('role')).not.toBe('alert')
     expect(wrapper.find('.feedback-decision.el-alert').exists()).toBe(false)
+    const media = wrapper.findComponent({ name: 'ReviewMediaWorkspace' })
+    expect(media.props('version')).toMatchObject({ candidateId: 201, files: [{ fileId: 'first' }] })
+    await wrapper.findAll('.feedback-file')[1].trigger('click')
+    await flushPromises()
+    expect(media.props('version')).toMatchObject({ candidateId: 202, files: [{ fileId: 'second' }] })
+    expect(wrapper.text()).toContain('来源文件 V002_02')
     wrapper.unmount()
   })
 
@@ -141,130 +172,88 @@ describe('版本历史面板', () => {
     }
   })
 
-  it('桌面端使用 Element Plus Affix 固定版本轨道与反馈列表', async () => {
-    getTaskIssues.mockResolvedValueOnce({
-      data: [{
-        issueId: 51,
-        originVersionId: 2,
-        originVersionNumber: 'V002',
-        pendingVersionId: 2,
-        pendingVersionNumber: 'V002',
-        status: 'open',
-        content: '主体亮度偏低',
-        mediaTimeMs: 1200,
-        annotations: null,
-        responses: [],
-        verifications: [],
-        createTime: '2026-08-11T12:30:00'
-      }]
-    })
-    const wrapper = mount(VersionHistoryPanel, {
-      ...mountOptions,
-      attachTo: document.body,
-      props: { taskId: 31, canList: true, canQuery: true, canListNotes: true }
-    })
+  it('默认选择有待处理意见的文件，并隔离文件与历史记录', async () => {
+    getVersionDetail.mockResolvedValueOnce(detail(2, 31, { candidates: [
+      { candidateId: 201, candidateNumber: 'V002_01', files: [] },
+      { candidateId: 202, candidateNumber: 'V002_02', files: [] }
+    ] }))
+    getTaskIssues.mockResolvedValueOnce({ data: [
+      { issueId: 51, originCandidateId: 202, originVersionId: 2, pendingVersionId: 2, status: 'open', content: '需要调整灯光' },
+      { issueId: 52, originCandidateId: 202, originVersionId: 2, status: 'resolved', content: '已修复构图' }
+    ] })
+    const wrapper = mount(VersionHistoryPanel, { ...mountOptions, props: { taskId: 31, canList: true, canQuery: true, canListNotes: true } })
     await flushPromises()
-
-    const affixes = wrapper.findAllComponents(ElAffix)
-    expect(affixes).toHaveLength(2)
-    expect(affixes[0].props()).toMatchObject({ appendTo: 'body', offset: 92, target: '#version-history-panel-31', teleported: true })
-    expect(affixes[1].props()).toMatchObject({ appendTo: 'body', offset: 92, target: '#version-feedback-panel-31', teleported: true })
-    expect(wrapper.find('.version-rail-affix .version-rail').exists()).toBe(true)
-    expect(wrapper.find('.feedback-list-affix .feedback-list').exists()).toBe(true)
+    expect(wrapper.get('.feedback-file.active').text()).toContain('V002_02')
+    expect(wrapper.get('.version-feedback-panel__heading').text()).toContain('1 条待处理问题 = 本轮新增 1 条 + 上轮未修复 0 条')
+    expect(wrapper.get('.feedback-list').text()).toContain('需要调整灯光')
+    expect(wrapper.get('.feedback-list').text()).not.toContain('已修复构图')
+    await wrapper.get('#tab-history').trigger('click')
+    expect(wrapper.get('.feedback-list').text()).toContain('已修复构图')
+    await wrapper.findAll('.feedback-file')[0].trigger('click')
+    expect(wrapper.get('.feedback-list').text()).toContain('该文件暂无历史记录')
+    expect(wrapper.get('.feedback-file.active').text()).toContain('无待修改问题')
     wrapper.unmount()
   })
 
-  it('页面滚动越过轨道后进入 Element Plus fixed 状态', async () => {
-    const wrapper = mount(VersionHistoryPanel, {
-      ...mountOptions,
-      attachTo: document.body,
-      props: { taskId: 31, canList: true, canQuery: true }
-    })
+  it('当前导航只含本轮文件，上一轮意见通过抽屉查看原始文件', async () => {
+    getVersionDetail.mockImplementation(id => Promise.resolve(detail(id, 31, { candidates: [
+      { candidateId: id * 100 + 1, candidateNumber: `V00${id}_01`, files: [{ fileId: `file-${id}` }] }
+    ] })))
+    getTaskIssues.mockResolvedValueOnce({ data: [{ issueId: 51, originCandidateId: 101, originVersionId: 1, originVersionNumber: 'V001', pendingVersionId: 2, status: 'open', content: '遗留问题' }] })
+    const wrapper = mount(VersionHistoryPanel, { ...mountOptions, props: { taskId: 31, canList: true, canQuery: true, canListNotes: true } })
     await flushPromises()
-
-    const affix = wrapper.findComponent(ElAffix)
-    const target = wrapper.find('#version-history-panel-31').element
-    affix.element.getBoundingClientRect = () => ({
-      top: 40,
-      bottom: 440,
-      left: 120,
-      right: 360,
-      width: 240,
-      height: 400,
-      x: 120,
-      y: 40,
-      toJSON: () => ({})
-    })
-    target.getBoundingClientRect = () => ({
-      top: -600,
-      bottom: 1600,
-      left: 100,
-      right: 1180,
-      width: 1080,
-      height: 2200,
-      x: 100,
-      y: -600,
-      toJSON: () => ({})
-    })
-    window.dispatchEvent(new Event('scroll'))
+    expect(wrapper.get('.version-tabs > .el-tabs__header .is-active').text()).toContain('V002')
+    expect(wrapper.findAll('.feedback-file')).toHaveLength(1)
+    expect(wrapper.get('.opinion-tabs > .el-tabs__header .is-active').text()).toContain('上轮未修复')
+    expect(wrapper.get('.previous-issues__list > .el-tabs__header .is-active').text()).toContain('V001_01（1）')
+    expect(wrapper.get('.feedback-file.active').text()).toContain('V002_01')
+    expect(wrapper.findComponent({ name: 'ReviewMediaWorkspace' }).props('version').versionId).toBe(2)
+    await wrapper.get('.previous-issues .feedback-item__select').trigger('click')
     await flushPromises()
-
-    expect(document.querySelector('.el-affix--fixed .version-rail')).not.toBeNull()
+    const drawer = wrapper.findComponent({ name: 'ElDrawer' })
+    expect(drawer.props('modelValue')).toBe(true)
+    expect(drawer.findComponent({ name: 'ReviewMediaWorkspace' }).props('version')).toMatchObject({ versionId: 1, candidateId: 101, files: [{ fileId: 'file-1' }] })
+    drawer.vm.$emit('close')
+    await flushPromises()
+    expect(wrapper.get('.feedback-file.active').text()).toContain('V002_01')
+    expect(wrapper.findComponent({ name: 'ReviewMediaWorkspace' }).props('version').versionId).toBe(2)
     wrapper.unmount()
   })
 
-  it('侧栏改变面板宽度后重新测量两块已吸顶卡片的位置和宽度', async () => {
-    const observers = []
-    vi.stubGlobal('ResizeObserver', class {
-      constructor(callback) {
-        this.callback = callback
-        this.targets = new Set()
-        observers.push(this)
-      }
-      observe(target) { this.targets.add(target) }
-      unobserve(target) { this.targets.delete(target) }
-      disconnect() { this.targets.clear() }
-    })
-    getTaskIssues.mockResolvedValueOnce({
-      data: [{ issueId: 51, originVersionId: 2, pendingVersionId: 2, status: 'open', content: '检查画面', responses: [], verifications: [] }]
-    })
-    const wrapper = mount(VersionHistoryPanel, {
-      ...mountOptions,
-      attachTo: document.body,
-      props: { taskId: 31, canList: true, canQuery: true, canListNotes: true }
-    })
-    try {
-      await flushPromises()
-      let collapsed = false
-      const rect = (left, top, width, height) => ({ left, top, width, height, right: left + width, bottom: top + height, x: left, y: top, toJSON: () => ({}) })
-      const history = wrapper.get('.version-history-affix-target').element
-      history.getBoundingClientRect = () => rect(collapsed ? 76 : 244, -600, collapsed ? 1200 : 1032, 2200)
-      wrapper.get('.version-feedback-affix-target').element.getBoundingClientRect = () => rect(650, -100, 800, 1400)
-      const affixes = wrapper.findAllComponents(ElAffix)
-      affixes[0].element.getBoundingClientRect = () => rect(collapsed ? 100 : 268, 40, collapsed ? 320 : 280, 200)
-      affixes[1].element.getBoundingClientRect = () => rect(collapsed ? 1000 : 900, 40, 300, 240)
-      window.dispatchEvent(new Event('scroll'))
-      await flushPromises()
-      const rail = document.querySelector('.version-rail').closest('.el-affix--fixed')
-      const feedback = document.querySelector('.feedback-list').closest('.el-affix--fixed')
-      expect(rail.style.left).toBe('268px')
-      expect(feedback.style.left).toBe('900px')
-
-      collapsed = true
-      // 侧栏收起只改变容器宽度，不会触发 window.resize 或 scroll。
-      observers.filter(observer => observer.targets.has(history)).forEach(observer => {
-        observer.callback([{ target: history, contentRect: history.getBoundingClientRect() }])
-      })
-      await flushPromises()
-      expect(rail.style.left).toBe('100px')
-      expect(rail.style.width).toBe('320px')
-      expect(feedback.style.left).toBe('1000px')
-      expect(feedback.style.width).toBe('300px')
-    } finally {
-      wrapper.unmount()
-      vi.unstubAllGlobals()
-    }
+  it('关闭抽屉后忽略迟到的历史来源响应', async () => {
+    let resolveSource
+    getVersionDetail.mockImplementation(id => id === 1
+      ? new Promise(resolve => { resolveSource = resolve })
+      : Promise.resolve(detail(2, 31, { candidates: [{ candidateId: 201, candidateNumber: 'V002_01', files: [] }] })))
+    getTaskIssues.mockResolvedValueOnce({ data: [{ issueId: 51, originCandidateId: 101, originVersionId: 1, originVersionNumber: 'V001', pendingVersionId: 2, status: 'open', content: '遗留问题' }] })
+    const wrapper = mount(VersionHistoryPanel, { ...mountOptions, props: { taskId: 31, canList: true, canQuery: true, canListNotes: true } })
+    await flushPromises()
+    await wrapper.get('.previous-issues .feedback-item__select').trigger('click')
+    await flushPromises()
+    wrapper.findComponent({ name: 'ElDrawer' }).vm.$emit('close')
+    await flushPromises()
+    resolveSource(detail(1, 31, { candidates: [{ candidateId: 101, candidateNumber: 'V001_01', files: [] }] }))
+    await flushPromises()
+    expect(wrapper.findComponent({ name: 'ReviewMediaWorkspace' }).props('version')).toMatchObject({ versionId: 2, candidateId: 201 })
+    expect(wrapper.get('.feedback-file.active').text()).toContain('V002_01')
+    expect(wrapper.get('.feedback-list').text()).toContain('暂无待处理意见')
+    wrapper.unmount()
   })
+
+  it.each([
+    [[], '待审核'],
+    [[{ checkedVersionId: 2, result: 'still_present' }], '仍需修改'],
+    [[{ checkedVersionId: 2, result: 'resolved' }], '已修复']
+  ])('返修响应按本轮实际审核记录显示状态 %j', async (verifications, expected) => {
+    getTaskIssues.mockResolvedValueOnce({ data: [{ issueId: 51, originVersionId: 1, originVersionNumber: 'V001', pendingVersionId: 1, pendingVersionNumber: 'V001', status: 'open', content: '调整亮度', responses: [{ versionId: 2, versionNumber: 'V002', responseText: '已处理' }], verifications }] })
+    const wrapper = mount(VersionHistoryPanel, { ...mountOptions, props: { taskId: 31, canList: true, canQuery: true, canListNotes: true } })
+    await flushPromises()
+    expect(wrapper.get('.feedback-item__heading').text()).toContain(expected)
+    expect(wrapper.get('.feedback-list').text()).not.toContain('已处理但未通过')
+    if (!verifications.length) expect(wrapper.get('.previous-issues h4').text()).toContain('1 条待审核')
+    wrapper.unmount()
+  })
+
   it('窄屏回到普通文档流，避免吸附内容遮挡详情', async () => {
     Object.defineProperty(window, 'innerWidth', { configurable: true, value: 800 })
     const wrapper = mount(VersionHistoryPanel, {
@@ -275,7 +264,7 @@ describe('版本历史面板', () => {
     await flushPromises()
 
     expect(wrapper.findAllComponents(ElAffix)).toHaveLength(0)
-    expect(wrapper.find('.version-rail').exists()).toBe(true)
+    expect(wrapper.find('.version-tabs').exists()).toBe(true)
     wrapper.unmount()
   })
 
@@ -294,15 +283,15 @@ describe('版本历史面板', () => {
     }, expect.objectContaining({ signal: expect.any(AbortSignal) }))
     expect(getVersionDetail).toHaveBeenCalledWith(2, expect.objectContaining({ signal: expect.any(AbortSignal) }))
     expect(wrapper.text()).toContain('V002')
-    expect(wrapper.find('.version-rail').text()).toContain('曲占锋')
-    expect(wrapper.find('.version-rail').text()).not.toContain('QZF')
+    expect(wrapper.find('.version-tabs').text()).toContain('曲占锋')
+    expect(wrapper.find('.version-tabs').text()).not.toContain('QZF')
     expect(wrapper.text()).toContain('自动审核 V2')
     const statusTags = wrapper.findAllComponents(ElTag).filter(tag => tag.text() === '待审核')
     expect(statusTags.length).toBeGreaterThanOrEqual(2)
     statusTags.forEach(tag => expect(tag.props('type')).toBe('warning'))
-    expect(wrapper.find('.version-rail em').exists()).toBe(false)
+    expect(wrapper.find('.version-tabs em').exists()).toBe(false)
 
-    await wrapper.findAll('.version-rail > button').find(button => button.text().includes('V001')).trigger('click')
+    await wrapper.get('.version-tabs > .el-tabs__header #tab-1').trigger('click')
     await flushPromises()
     expect(getVersionDetail).toHaveBeenLastCalledWith(1, expect.objectContaining({ signal: expect.any(AbortSignal) }))
     expect(wrapper.emitted('version-selected').at(-1)[1]).toEqual({ taskId: 31, versionId: 1, operationGeneration: 5 })

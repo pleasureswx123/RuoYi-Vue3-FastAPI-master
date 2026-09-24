@@ -15,6 +15,7 @@ const EVENT_META = Object.freeze({
   subject_created: Object.freeze({ label: '创建', tone: 'info', timelineType: 'primary' }),
   subject_imported: Object.freeze({ label: '导入', tone: 'success', timelineType: 'success' }),
   lane_created: Object.freeze({ label: '制作分项建立', tone: 'info', timelineType: 'primary' }),
+  task_transferred: Object.freeze({ label: '转交修改', tone: 'warning', timelineType: 'warning' }),
   task_created: Object.freeze({ label: '任务委派', tone: 'info', timelineType: 'primary' }),
   version_cycle: Object.freeze({ label: '版本与审核', tone: 'warning', timelineType: 'warning' })
 })

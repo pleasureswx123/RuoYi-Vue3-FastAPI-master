@@ -4,7 +4,8 @@ import { useRouter } from 'vue-router'
 import { Refresh, Right, Search } from '@element-plus/icons-vue'
 
 import { getMineTaskPage } from '@/api/shot-grid/tasks'
-import { getMineReviewListPage, getRecentMineVersions } from '@/api/shot-grid/reviews'
+import { getMineReviewListPage } from '@/api/shot-grid/reviews'
+import MySubmissionsPanel from './MySubmissionsPanel.vue'
 import { useTaskStatePolling } from '@/composables/useTaskStatePolling'
 import { useCurrentTime } from '@/composables/useCurrentTime'
 import TaskTimeReminder from '@/views/task/components/TaskTimeReminder.vue'
@@ -18,8 +19,7 @@ import {
   taskErrorState,
   taskKindMeta,
   taskPriorityMeta,
-  taskStatusMeta,
-  taskVersionStatusMeta
+  taskStatusMeta
 } from '@/views/task/taskPresentation'
 
 const router = useRouter()
@@ -32,9 +32,6 @@ const errorState = ref(null)
 const pendingReviews = ref([])
 const pendingReviewTotal = ref(0)
 const reviewActivityError = ref(false)
-const recentSubmissions = ref([])
-const recentSubmissionTotal = ref(0)
-const recentActivityError = ref(false)
 const activityLoading = ref(false)
 const taskFilterForm = ref(null)
 const query = reactive({
@@ -165,56 +162,28 @@ async function loadTasks(backgroundController = null) {
 async function loadActivity() {
   const generation = ++activityGeneration
   activityController?.abort()
-  if (!canReviewQueue.value && !canViewRecentSubmissions.value) {
-    pendingReviews.value = []
-    pendingReviewTotal.value = 0
-    reviewActivityError.value = false
-    recentSubmissions.value = []
-    recentSubmissionTotal.value = 0
-    recentActivityError.value = false
-    activityLoading.value = false
-    return
-  }
+  if (!canReviewQueue.value) return
   const requestController = new AbortController()
   activityController = requestController
   activityLoading.value = true
-  const isCurrent = () => (
-    !disposed &&
-    activityController === requestController &&
-    generation === activityGeneration &&
-    !requestController.signal.aborted
-  )
+  reviewActivityError.value = false
+  const isCurrent = () => !disposed && generation === activityGeneration && !requestController.signal.aborted
   try {
-    const [reviewResult, versionResult] = await Promise.allSettled([
-      canReviewQueue.value
-        ? getMineReviewListPage(
-            { pageNum: 1, pageSize: 6, orderByColumn: 'createTime', isAsc: 'descending' },
-            { signal: requestController.signal }
-          )
-        : Promise.resolve({ rows: [], total: 0 }),
-      canViewRecentSubmissions.value
-        ? getRecentMineVersions(
-            { pageNum: 1, pageSize: 6, orderByColumn: 'submittedTime', isAsc: 'descending' },
-            { signal: requestController.signal }
-          )
-        : Promise.resolve({ rows: [], total: 0 })
-    ])
+    const response = await getMineReviewListPage(
+      { pageNum: 1, pageSize: 6, orderByColumn: 'createTime', isAsc: 'descending' },
+      { signal: requestController.signal }
+    )
     if (!isCurrent()) return
-    pendingReviews.value = reviewResult.status === 'fulfilled' ? reviewResult.value?.rows || [] : []
-    reviewActivityError.value = canReviewQueue.value && reviewResult.status === 'rejected'
-    pendingReviewTotal.value = reviewResult.status === 'fulfilled'
-      ? Number(reviewResult.value?.total ?? pendingReviews.value.length)
-      : 0
-    recentSubmissions.value = versionResult.status === 'fulfilled' ? versionResult.value?.rows || [] : []
-    recentActivityError.value = canViewRecentSubmissions.value && versionResult.status === 'rejected'
-    recentSubmissionTotal.value = versionResult.status === 'fulfilled'
-      ? Number(versionResult.value?.total ?? recentSubmissions.value.length)
-      : 0
-  } finally {
-    if (activityController === requestController && generation === activityGeneration) {
-      activityController = null
-      activityLoading.value = false
+    pendingReviews.value = response.rows || []
+    pendingReviewTotal.value = Number(response.total || 0)
+  } catch (error) {
+    if (isCurrent() && error?.code !== 'ERR_CANCELED') {
+      pendingReviews.value = []
+      pendingReviewTotal.value = 0
+      reviewActivityError.value = true
     }
+  } finally {
+    if (isCurrent()) activityLoading.value = false
   }
 }
 
@@ -386,25 +355,7 @@ onBeforeUnmount(() => {
       <el-pagination v-if="total" class="task-pagination" background layout="prev, pager, next, total" :current-page="query.pageNum" :page-size="query.pageSize" :total="total" :disabled="loading" aria-label="任务分页" @current-change="changePage" />
     </section>
 
-    <section v-if="canViewRecentSubmissions" class="activity-section recent-submissions" aria-labelledby="recent-submissions-title" :aria-busy="activityLoading">
-      <el-card class="activity-card activity-card--compact" shadow="never">
-        <template #header>
-          <header>
-            <div><p class="sg-eyebrow">RECENT DELIVERY</p><h3 id="recent-submissions-title">最近提交</h3></div>
-            <div class="activity-card__actions">
-              <el-tag type="info" size="small" effect="plain" round>{{ recentSubmissionTotal }} 项</el-tag>
-              <el-button v-if="recentActivityError" link type="primary" @click="loadActivity">重新加载</el-button>
-            </div>
-          </header>
-        </template>
-        <el-skeleton v-if="activityLoading" animated :rows="3" />
-        <el-alert v-else-if="recentActivityError" title="最近提交加载失败，请稍后重试" type="error" show-icon :closable="false" />
-        <div v-else-if="recentSubmissions.length" class="activity-list">
-          <el-button v-for="item in recentSubmissions" :key="item.versionId" class="activity-entry" text @click="router.push(`/versions/${item.versionId}`)"><span class="activity-entry__content"><strong>{{ item.versionNumber }} · {{ item.changelog }}</strong><el-tag :type="tagTypeFromTone(taskVersionStatusMeta(item.versionStatus).tone)" size="small" effect="plain" round>{{ taskVersionStatusMeta(item.versionStatus).label }}</el-tag></span><el-icon><Right /></el-icon></el-button>
-        </div>
-        <el-alert v-else title="最近还没有提交版本" type="info" show-icon :closable="false" />
-      </el-card>
-    </section>
+    <MySubmissionsPanel v-if="canViewRecentSubmissions" />
 
   </section>
 </template>

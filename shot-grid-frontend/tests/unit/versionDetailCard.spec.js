@@ -53,6 +53,22 @@ function version(versionId = 7, overrides = {}) {
 }
 
 describe('版本详情与受保护下载', () => {
+  it('逐文件展示提示词，切换候选后更新且不执行文本中的HTML', async () => {
+    const candidates = [
+      { candidateId: 1, candidateNumber: 'V001_01', candidateNo: 1, generationPrompt: '山水\n<script>bad()</script>', files: [] },
+      { candidateId: 2, candidateNumber: 'V001_02', candidateNo: 2, generationPrompt: '宇宙飞船\n冷光', files: [] }
+    ]
+    const wrapper = mount(VersionDetailCard, { ...mountOptions, props: { version: version(1, { candidates }) } })
+    expect(wrapper.get('.candidate-generation-prompt__text').text()).toBe('山水\n<script>bad()</script>')
+    expect(wrapper.find('.candidate-generation-prompt script').exists()).toBe(false)
+    await wrapper.findAll('input[type="radio"]')[1].setValue(true)
+    await flushPromises()
+    expect(wrapper.get('.candidate-generation-prompt__text').text()).toBe('宇宙飞船\n冷光')
+    await wrapper.setProps({ version: version(1, { candidates: [{ ...candidates[1], generationPrompt: null, candidateNote: '旧说明' }] }) })
+    expect(wrapper.get('.candidate-generation-prompt__text').text()).toContain('未填写 AI 生成提示词')
+    wrapper.unmount()
+  })
+
   beforeEach(() => {
     Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: vi.fn(() => 'blob:version-file') })
     Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: vi.fn() })
@@ -67,8 +83,8 @@ describe('版本详情与受保护下载', () => {
 
     expect(downloadProtectedVersionFile).toHaveBeenCalledWith(7, fileId, expect.objectContaining({ signal: expect.any(AbortSignal) }))
     const tags = wrapper.findAllComponents(ElTag)
-    expect(tags.map(tag => tag.text())).toEqual(['待审核', '审核文件', '主审核文件'])
-    expect(tags.map(tag => tag.props('type'))).toEqual(['warning', 'info', 'warning'])
+    expect(tags.map(tag => tag.text())).toEqual(['待审核', '审核文件'])
+    expect(tags.map(tag => tag.props('type'))).toEqual(['warning', 'info'])
     expect(tags[0].props()).toMatchObject({ effect: 'light', size: 'small', round: true })
     expect(tags[1].props()).toMatchObject({ effect: 'plain', size: 'small', round: true })
     expect(URL.createObjectURL).toHaveBeenCalledWith(expect.any(Blob))
@@ -167,7 +183,7 @@ describe('版本详情与受保护下载', () => {
           files: [firstFile, secondFile],
           candidates: [
             { candidateId: 701, candidateNo: 1, candidateNumber: 'V007_01', sortOrder: 0, files: [firstFile] },
-            { candidateId: 702, candidateNo: 2, candidateNumber: 'V007_02', sortOrder: 1, files: [secondFile] }
+            { candidateId: 702, candidateNo: 2, candidateNumber: 'V007_02', sortOrder: 1, files: [secondFile], generationPrompt: '飞船\n冷色光线' }
           ]
         }),
         canDownload: true,
@@ -184,6 +200,7 @@ describe('版本详情与受保护下载', () => {
     await flushPromises()
 
     expect(wrapper.get('[data-testid="file-preview-dialog"]').text()).toContain('预览 V007_02')
+    expect(wrapper.get('[data-testid="file-preview-dialog"]').text()).toContain('飞船\n冷色光线')
     expect(wrapper.getComponent({ name: 'ProtectedVersionPreview' }).props('version').files).toEqual([secondFile])
     expect(wrapper.getComponent({ name: 'ProtectedVersionPreview' }).props('canPreview')).toBe(true)
     wrapper.unmount()

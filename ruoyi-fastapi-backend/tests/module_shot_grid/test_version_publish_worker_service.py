@@ -233,3 +233,45 @@ async def test_persistent_unknown_commit_failure_becomes_failed_at_attempt_limit
     reset.assert_not_awaited()
     assert mark_failed.await_args.kwargs['error_key'] == 'SG_VERSION_SUBMISSION_FAILED'
     assert mark_failed.await_args.kwargs['error_message'] == '版本发布或正式提交执行失败'
+
+
+@pytest.mark.asyncio
+async def test_shutdown_cancellation_drains_formal_commit(monkeypatch: pytest.MonkeyPatch) -> None:
+    db = AsyncMock()
+    claim = SimpleNamespace(
+        submission_id=SUBMISSION_ID,
+        attempt_count=ATTEMPT_COUNT,
+        lease_owner='leader:claim',
+        submission_status='committing',
+        temporary_relative_path='VIDEO/temp.part',
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.version_publish_worker_service.ShotGridVersionSubmissionDao.claim_next',
+        AsyncMock(return_value=claim),
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.version_publish_worker_service.ShotGridVersionSubmissionDao.get_publish_contexts',
+        AsyncMock(return_value=[]),
+    )
+    started = asyncio.Event()
+    finish = asyncio.Event()
+    committed = asyncio.Event()
+
+    async def commit(*args, **kwargs) -> None:
+        started.set()
+        await finish.wait()
+        committed.set()
+
+    monkeypatch.setattr(
+        'module_shot_grid.service.version_publish_worker_service.ShotGridVersionSubmissionService.commit_published_submission',
+        commit,
+    )
+    task = asyncio.create_task(ShotGridVersionPublishWorkerService.run_once(db, worker_id='leader'))
+    await asyncio.wait_for(started.wait(), timeout=2)
+    task.cancel()
+    await asyncio.sleep(0)
+    assert not task.done()
+    finish.set()
+    result = await asyncio.wait_for(task, timeout=2)
+    assert committed.is_set()
+    assert result.outcome == 'committed'

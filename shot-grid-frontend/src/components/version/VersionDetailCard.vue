@@ -6,14 +6,18 @@ import { downloadProtectedVersionFile } from '@/api/shot-grid/versions'
 import { tagTypeFromTone } from '@/utils/tag'
 import { fileRoleLabel } from '@/views/file/filePresentation'
 import ProtectedVersionPreview from './ProtectedVersionPreview.vue'
+import CandidateGenerationPrompt from './CandidateGenerationPrompt.vue'
 import { formatFileSize, formatVersionDateTime, versionErrorState, versionStatusMeta } from './versionPresentation'
 
 const props = defineProps({
   version: { type: Object, required: true },
   canDownload: { type: Boolean, default: false },
   showPreview: { type: Boolean, default: true },
+  showHeader: { type: Boolean, default: true },
   showFilePreviewAction: { type: Boolean, default: false }
 })
+
+const emit = defineEmits(['prompt-saved'])
 
 const downloadingFileId = ref(null)
 const downloadError = ref(null)
@@ -177,7 +181,7 @@ watch(
 watch(
   candidateSelectionKey,
   () => {
-    const selectedCandidateId = props.version?.selectedCandidateId
+    const selectedCandidateId = props.version?.versionStatus === 'final' ? props.version.selectedCandidateId : null
     const preferred = versionCandidates.value.find(candidate => Number(candidate.candidateId) === Number(selectedCandidateId))
       || versionCandidates.value.find(candidate => candidate.isSelected)
       || versionCandidates.value[0]
@@ -196,7 +200,7 @@ onBeforeUnmount(() => {
 
 <template>
   <el-card class="version-detail-card" shadow="never">
-    <header>
+    <header v-if="showHeader">
       <div>
         <p class="sg-eyebrow">VERSION DETAIL</p>
         <h3>{{ version.versionNumber }}</h3>
@@ -205,10 +209,12 @@ onBeforeUnmount(() => {
       <el-tag size="small" effect="light" round :type="tagTypeFromTone(statusMeta.tone)">{{ statusMeta.label }}</el-tag>
     </header>
 
+    <slot name="review-summary" />
+
     <section v-if="showPreview && versionCandidates.length > 1" class="candidate-preview-switcher" aria-label="切换版本候选预览">
       <div class="candidate-preview-switcher__heading">
         <div><strong>本轮候选</strong><span>共 {{ versionCandidates.length }} 个，可逐个切换预览</span></div>
-        <el-tag v-if="activeCandidate?.isSelected" type="success" size="small" effect="plain" round>已选最佳候选</el-tag>
+        <el-tag v-if="version.versionStatus === 'final' && activeCandidate?.isSelected" type="success" size="small" effect="plain" round>最终交付文件</el-tag>
       </div>
       <el-radio-group v-model="activeCandidateId" class="candidate-preview-options" aria-label="选择要预览的候选文件">
         <el-radio-button v-for="candidate in versionCandidates" :key="candidate.candidateId" :value="Number(candidate.candidateId)">
@@ -219,6 +225,7 @@ onBeforeUnmount(() => {
     </section>
 
     <ProtectedVersionPreview v-if="showPreview" :version="previewVersion" :can-preview="canDownload" />
+    <CandidateGenerationPrompt v-if="showPreview" :candidate="activeCandidate" :version="version" @saved="emit('prompt-saved', $event)" />
 
     <el-descriptions class="version-facts" :column="2" border size="small">
       <el-descriptions-item label="提交人">{{ version.submitterName || `用户 #${version.submittedBy}` }}</el-descriptions-item>
@@ -238,7 +245,7 @@ onBeforeUnmount(() => {
           <div class="file-tags">
             <el-tag v-if="fileCandidate(file)" size="small" effect="plain" round>{{ fileCandidate(file).candidateNumber }}</el-tag>
             <el-tag size="small" effect="plain" round type="info">{{ fileRoleLabel(file.role) }}</el-tag>
-            <el-tag v-if="file.isPrimary" size="small" effect="plain" round type="warning">主审核文件</el-tag>
+            <el-tag v-if="version.versionStatus === 'final' && file.isPrimary" size="small" effect="plain" round type="success">最终交付文件</el-tag>
           </div>
           <div class="file-actions">
             <el-button
@@ -287,6 +294,7 @@ onBeforeUnmount(() => {
       @closed="previewingFile = null"
     >
       <ProtectedVersionPreview v-if="filePreviewVisible && filePreviewVersion" :version="filePreviewVersion" :can-preview="canDownload" />
+      <CandidateGenerationPrompt v-if="filePreviewVisible" :candidate="filePreviewCandidate" :version="version" @saved="emit('prompt-saved', $event)" />
       <template #footer><el-button @click="filePreviewVisible = false">关闭</el-button></template>
     </el-dialog>
   </el-card>

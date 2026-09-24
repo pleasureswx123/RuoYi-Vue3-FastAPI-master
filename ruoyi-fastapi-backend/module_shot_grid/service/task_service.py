@@ -1109,6 +1109,7 @@ class ShotGridTaskService:
             remark=row['remark'],
             createBy=row['create_by'],
             updateBy=cls._display_actor(row['update_by']),
+            latestHandoff=(row.get('revision_transfers') or [None])[-1],
             hasUncommittedSubmission=bool(row['has_uncommitted_submission']),
             allowedActions=cls._allowed_actions(row, current_user, access),
         )
@@ -1171,6 +1172,13 @@ class ShotGridTaskService:
             }
         )
         actions: list[str] = []
+        if (
+            director
+            and row['task_status'] == 'revision'
+            and not row['has_uncommitted_submission']
+            and cls._has_permission(current_user, 'shotgrid:task:assign')
+        ):
+            actions.append('task.transfer')
         if director and row['task_status'] == 'not_started' and cls._has_permission(current_user, 'shotgrid:task:edit'):
             actions.append('task.edit')
         if (
@@ -1191,7 +1199,7 @@ class ShotGridTaskService:
         ):
             actions.append('task.start')
         if (
-            row['task_status'] in {'in_progress', 'revision'}
+            row['task_status'] in {'in_progress', 'revision', 'pending_review'}
             and target_ready
             and owner_creator
             and not row['has_uncommitted_submission']

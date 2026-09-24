@@ -40,6 +40,72 @@ EMPTY_ISSUE_SNAPSHOT_HASH = ShotGridVersionSubmissionService._issue_snapshot_has
 FIRST_CANDIDATE_ID = 401
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    'task_status, version_status, target_no',
+    [
+        ('revision', 'rejected', 1),
+        ('completed', 'final', 1),
+        ('pending_review', 'pending_review', 2),
+    ],
+)
+async def test_append_rejects_closed_or_stale_round(
+    monkeypatch: pytest.MonkeyPatch,
+    task_status: str,
+    version_status: str,
+    target_no: int,
+) -> None:
+    monkeypatch.setattr(
+        ShotGridVersionSubmissionDao,
+        'get_latest_version',
+        AsyncMock(
+            return_value=SimpleNamespace(
+                version_id=VERSION_ID,
+                version_no=1,
+                version_status=version_status,
+            )
+        ),
+    )
+    with pytest.raises(ShotGridDomainException) as error:
+        await ShotGridVersionSubmissionService._submission_target(AsyncMock(), TASK_ID, task_status, target_no, 1)
+    assert error.value.error_key == 'SG_VERSION_APPEND_CLOSED'
+
+
+@pytest.mark.asyncio
+async def test_append_continues_candidate_numbers_and_enforces_round_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        ShotGridVersionSubmissionDao,
+        'get_latest_version',
+        AsyncMock(
+            return_value=SimpleNamespace(
+                version_id=VERSION_ID,
+                version_no=3,
+                version_status='pending_review',
+            )
+        ),
+    )
+    monkeypatch.setattr(ShotGridVersionSubmissionDao, 'get_last_candidate_no', AsyncMock(return_value=98))
+    _, number, first = await ShotGridVersionSubmissionService._submission_target(
+        AsyncMock(),
+        TASK_ID,
+        'pending_review',
+        3,
+        1,
+        for_update=True,
+    )
+    assert (number, first) == (3, 99)
+    with pytest.raises(ShotGridDomainException) as error:
+        await ShotGridVersionSubmissionService._submission_target(AsyncMock(), TASK_ID, 'pending_review', 3, 2)
+    assert error.value.error_key == 'SG_VERSION_CANDIDATE_LIMIT'
+
+
+@pytest.mark.asyncio
+async def test_pending_review_cannot_implicitly_create_new_round() -> None:
+    with pytest.raises(ShotGridDomainException) as error:
+        await ShotGridVersionSubmissionService._submission_target(AsyncMock(), TASK_ID, 'pending_review', None, 1)
+    assert error.value.error_key == 'SG_VERSION_APPEND_TARGET_REQUIRED'
+
+
 def test_single_candidate_is_initialized_as_system_selected_without_reviewer_audit() -> None:
     version = SimpleNamespace(selected_candidate_id=None, selected_by=None, selected_time=None)
     candidate = SimpleNamespace(candidate_id=FIRST_CANDIDATE_ID)
@@ -180,6 +246,7 @@ def _submission_file(**overrides: object) -> SimpleNamespace:
         'source_sha256': FILE_HASH,
         'source_file_size': 123,
         'candidate_note': None,
+        'generation_prompt': None,
         'sort_order': 0,
         'publish_status': 'published',
         'last_error_key': None,
@@ -1146,8 +1213,10 @@ def test_unknown_integrity_constraint_is_not_disguised_as_version_conflict() -> 
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('append', [False, True])
 async def test_formal_commit_creates_all_candidates_and_commits_whole_review_chain(  # noqa: PLR0915
     monkeypatch: pytest.MonkeyPatch,
+    append: bool,
 ) -> None:
     db = AsyncMock()
     task = SimpleNamespace(
@@ -1298,6 +1367,33 @@ async def test_formal_commit_creates_all_candidates_and_commits_whole_review_cha
     audit = AsyncMock()
     monkeypatch.setattr(ShotGridVersionSubmissionService, '_audit_worker_commit', audit)
 
+    if append:
+        task.task_status = 'pending_review'
+        submission.submission_mode = 'append'
+        submission_file.candidate_no = 3
+        second_submission_file.candidate_no = 4
+        original = SimpleNamespace(
+            version_id=VERSION_ID,
+            version_no=3,
+            version_status='pending_review',
+            selected_candidate_id=400,
+            lock_version=7,
+            changelog='原说明',
+        )
+        monkeypatch.setattr(ShotGridVersionSubmissionDao, 'get_latest_version', AsyncMock(return_value=original))
+        monkeypatch.setattr(ShotGridVersionSubmissionDao, 'get_last_candidate_no', AsyncMock(return_value=2))
+        monkeypatch.setattr(
+            ShotGridVersionSubmissionDao,
+            'get_version_file_ids',
+            AsyncMock(return_value=['original-file', FILE_ID, SECOND_FILE_ID]),
+        )
+        monkeypatch.setattr(
+            'module_shot_grid.service.version_submission_service.ShotGridReviewDao.get_auto_review_list_for_update',
+            AsyncMock(
+                return_value=SimpleNamespace(review_list_id=REVIEW_LIST_ID, review_status='active', lock_version=0)
+            ),
+        )
+
     result = await ShotGridVersionSubmissionService.commit_published_submission(
         db,
         submission_id=SUBMISSION_ID,
@@ -1314,7 +1410,7 @@ async def test_formal_commit_creates_all_candidates_and_commits_whole_review_cha
     assert replace_reference.await_args.args[1:4] == (
         'shotgrid_version',
         str(VERSION_ID),
-        [FILE_ID, SECOND_FILE_ID],
+        ['original-file', FILE_ID, SECOND_FILE_ID] if append else [FILE_ID, SECOND_FILE_ID],
     )
     remove_reference.assert_awaited_once_with(
         db,
@@ -1325,6 +1421,12 @@ async def test_formal_commit_creates_all_candidates_and_commits_whole_review_cha
     assert add_version_file.await_count == expected_candidate_count
     assert [call.args[1].candidate_id for call in add_version_file.await_args_list] == [401, 402]
     assert [call.args[1].is_primary for call in add_version_file.await_args_list] == ['0', '0']
+    if append:
+        ShotGridVersionSubmissionDao.add_version.assert_not_awaited()
+        assert original.lock_version == 7 + 1
+        assert original.selected_candidate_id == FIRST_CANDIDATE_ID - 1
+        assert original.changelog == '原说明'
+        assert [call.args[1].sort_order for call in add_version_file.await_args_list] == [2, 3]
     assert add_media_task.await_count == expected_candidate_count
     assert [item.kwargs | {'db': item.args[0]} for item in add_media_task.await_args_list] == [
         {
@@ -1347,3 +1449,9 @@ async def test_formal_commit_creates_all_candidates_and_commits_whole_review_cha
     audit.assert_awaited_once()
     db.commit.assert_awaited_once()
     db.rollback.assert_not_awaited()
+
+
+@pytest.fixture(autouse=True)
+def mute_realtime_notifications(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr('module_shot_grid.service.version_submission_service.publish_version_changed', AsyncMock())
+    monkeypatch.setattr('module_shot_grid.service.review_service.publish_version_changed', AsyncMock())

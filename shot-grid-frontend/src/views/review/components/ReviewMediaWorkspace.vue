@@ -27,6 +27,7 @@ const currentMedia = reactive({ url: '', posterUrl: '', state: 'idle', error: nu
 const compareMedia = reactive({ url: '', posterUrl: '', state: 'idle', error: null, file: null, width: 0, height: 0 })
 const comparisonVersions = ref([])
 const comparisonVersionId = ref('')
+const manualComparison = ref(false)
 const comparisonVersion = ref(null)
 const comparisonLoading = ref(false)
 const annotationMode = ref(false)
@@ -75,13 +76,15 @@ const selectedItems = computed(() => props.selectedNote?.annotations?.items || [
 const selectedSourceVersionId = computed(() => Number(
   props.selectedNote?.originVersionId || props.selectedNote?.versionId || props.version?.versionId
 ))
-const selectedOnCurrentVersion = computed(() => selectedSourceVersionId.value === Number(props.version?.versionId))
+const noteCandidateId = computed(() => props.selectedNote?.originCandidateId ?? props.selectedNote?.candidateId)
+const matchesCandidate = mediaVersion => !noteCandidateId.value || Number(noteCandidateId.value) === Number(mediaVersion?.candidateId ?? primaryFile(mediaVersion)?.candidateId)
+const selectedOnCurrentVersion = computed(() => selectedSourceVersionId.value === Number(props.version?.versionId) && matchesCandidate(props.version))
 const visibleItems = computed(() => [
   ...(selectedOnCurrentVersion.value ? selectedItems.value : []),
   ...draftItems.value
 ])
 const comparisonSelectedItems = computed(() => (
-  !selectedOnCurrentVersion.value && selectedSourceVersionId.value === Number(comparisonVersionId.value)
+  !selectedOnCurrentVersion.value && selectedSourceVersionId.value === Number(comparisonVersionId.value) && matchesCandidate(comparisonVersion.value)
     ? selectedItems.value
     : []
 ))
@@ -202,6 +205,7 @@ async function loadCurrentMedia() {
 
 async function loadComparisonOptions() {
   historyController?.abort()
+  manualComparison.value = false
   comparisonVersions.value = []
   comparisonVersionId.value = ''
   comparisonVersion.value = null
@@ -235,8 +239,10 @@ async function loadComparison() {
   try {
     const response = await getVersionDetail(Number(comparisonVersionId.value), { signal: controller.signal })
     if (compareController !== controller || controller.signal.aborted || expectedGeneration !== generation) return
-    comparisonVersion.value = response.data
-    await loadMedia(response.data, compareMedia, controller, expectedGeneration)
+    const candidate = response.data.candidates?.find(item => Number(item.candidateId) === Number(noteCandidateId.value))
+    if (noteCandidateId.value && selectedSourceVersionId.value === Number(comparisonVersionId.value) && !candidate) throw new Error('问题对应的历史文件不可用')
+    comparisonVersion.value = candidate ? { ...response.data, candidateId: candidate.candidateId, candidateNumber: candidate.candidateNumber, files: candidate.files, mediaDerivationStatus: candidate.mediaDerivationStatus } : response.data
+    await loadMedia(comparisonVersion.value, compareMedia, controller, expectedGeneration)
   } catch (error) {
     if (error?.code !== 'ERR_CANCELED') ElMessage.error(reviewErrorState(error, '对比版本加载失败').message)
   } finally {
@@ -302,13 +308,21 @@ function toggleAnnotationMode() {
   tool.value = 'navigate'
 }
 
+function exitAutomaticComparison() {
+  if (!manualComparison.value) comparisonVersionId.value = ''
+}
+
 function toggleComparison() {
   if (comparisonVersionId.value) {
     comparisonVersionId.value = ''
+    manualComparison.value = false
     return
   }
   const previousVersion = comparisonVersions.value[0]
-  if (previousVersion) comparisonVersionId.value = String(previousVersion.versionId)
+  if (previousVersion) {
+    manualComparison.value = true
+    comparisonVersionId.value = String(previousVersion.versionId)
+  }
 }
 
 function syncComparisonPlayback(action) {
@@ -545,7 +559,7 @@ watch(currentMediaKey, async () => {
 watch(() => props.version?.versionId, async () => {
   await loadComparisonOptions()
 }, { immediate: true })
-watch(comparisonVersionId, loadComparison)
+watch([comparisonVersionId, noteCandidateId], loadComparison)
 watch(() => props.selectedNote?.noteId, seekToNote, { immediate: true })
 
 onBeforeUnmount(() => {
@@ -558,7 +572,7 @@ onBeforeUnmount(() => {
   cleanupMedia(compareMedia)
 })
 
-defineExpose({ clearDraft, loadDraft, seekToDraft, seekToNote })
+defineExpose({ exitAutomaticComparison, clearDraft, loadDraft, seekToDraft, seekToNote })
 </script>
 
 <template>
@@ -617,7 +631,7 @@ defineExpose({ clearDraft, loadDraft, seekToDraft, seekToNote })
       </article>
 
       <article v-if="comparisonVersionId" class="media-column">
-        <div class="media-label"><strong>历史版 · {{ comparisonVersion?.versionNumber || '加载中' }}</strong><span>{{ compareKind === 'video' ? '跟随当前版同步播放' : '只读对比' }}</span></div>
+        <div class="media-label"><strong>历史版 · {{ comparisonVersion?.candidateNumber || comparisonVersion?.versionNumber || '加载中' }}</strong><span>{{ compareKind === 'video' ? '跟随当前版同步播放' : '只读对比' }}</span></div>
         <div v-if="compareMedia.state === 'ready' && compareKind !== 'unsupported'" class="media-stage" :class="{ 'is-note-focus': noteFocusPulse && comparisonSelectedItems.length }" :style="{ aspectRatio: `${compareMedia.width || 1} / ${compareMedia.height || 1}` }">
           <img v-if="compareKind === 'image'" :src="compareMedia.url" alt="对比版本图片" @load="onMediaReady($event, compareMedia)" />
           <video v-else ref="compareVideo" :src="compareMedia.url" :poster="compareMedia.posterUrl || undefined" :controls="false" muted preload="metadata" @loadedmetadata="onMediaReady($event, compareMedia)" />
@@ -641,7 +655,7 @@ defineExpose({ clearDraft, loadDraft, seekToDraft, seekToNote })
         <div v-else class="record-action__summary"><strong>历史版本对比</strong><span>当前仅支持查看历史版本。</span></div>
         <div class="record-action__tools">
           <el-button v-if="canAnnotate" :type="annotationMode ? 'primary' : 'default'" plain :icon="Aim" @click="toggleAnnotationMode">{{ annotationMode ? '退出标注' : '标注此画面' }}</el-button>
-          <el-select v-if="comparisonVersionId" v-model="comparisonVersionId" aria-label="选择对比版本" placeholder="选择历史版本" :loading="comparisonLoading">
+          <el-select v-if="comparisonVersionId" v-model="comparisonVersionId" @change="manualComparison = true" aria-label="选择对比版本" placeholder="选择历史版本" :loading="comparisonLoading">
             <el-option v-for="item in comparisonVersions" :key="item.versionId" :label="`${item.versionNumber} · ${item.changelog || '未填写修改说明'}`" :value="String(item.versionId)" />
           </el-select>
           <el-button v-if="hasComparisonOptions" :type="comparisonVersionId ? 'primary' : 'default'" plain @click="toggleComparison">{{ comparisonVersionId ? '退出对比' : '与上一版对比' }}</el-button>

@@ -4,11 +4,13 @@ import { useRoute, useRouter } from 'vue-router'
 import { ArrowLeft, Refresh } from '@element-plus/icons-vue'
 
 import { getVersionDetail } from '@/api/shot-grid/versions'
+import VersionReviewSummary from '@/components/version/VersionReviewSummary.vue'
 import VersionDetailCard from '@/components/version/VersionDetailCard.vue'
 import { versionErrorState } from '@/components/version/versionPresentation'
 import { assertPositiveId } from '@/api/shot-grid/projects'
 import { useSessionStore } from '@/store/modules/session'
 
+const props = defineProps({ targetVersionId: { type: [Number, String], default: null }, embedded: { type: Boolean, default: false } })
 const route = useRoute()
 const router = useRouter()
 const sessionStore = useSessionStore()
@@ -21,7 +23,7 @@ let disposed = false
 
 const versionId = computed(() => {
   try {
-    return assertPositiveId(route.params.versionId, '版本')
+    return assertPositiveId(props.targetVersionId ?? route.params.versionId, '版本')
   } catch {
     return null
   }
@@ -77,11 +79,11 @@ onBeforeUnmount(() => {
   <section class="sg-page version-detail-view">
     <header class="view-heading">
       <div><p class="sg-eyebrow">VERSION</p><h2>版本详情</h2><p>查看版本文件、提交说明与审核信息，历史版本始终保留。</p></div>
-      <div><el-button :icon="ArrowLeft" @click="router.back()">返回</el-button><el-button :icon="Refresh" :loading="loading" @click="loadVersion">刷新</el-button></div>
+      <div><el-button v-if="!embedded" :icon="ArrowLeft" @click="router.back()">返回</el-button><el-button :icon="Refresh" :loading="loading" @click="loadVersion">刷新</el-button></div>
     </header>
     <el-skeleton v-if="loading" class="view-state" :rows="6" animated />
     <el-alert v-else-if="errorState" class="view-state is-error" :title="errorState.title" :description="errorState.message" type="error" :closable="false" show-icon />
-    <VersionDetailCard v-else-if="version" :version="version" :can-download="canDownload" />
+    <VersionDetailCard @prompt-saved="version = $event" v-else-if="version" :version="version" :can-download="canDownload"><template #review-summary><VersionReviewSummary :version="version" /></template></VersionDetailCard>
     <el-empty v-else class="view-state" description="当前没有可展示的版本详情" />
   </section>
 </template>

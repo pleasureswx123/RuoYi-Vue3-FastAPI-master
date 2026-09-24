@@ -12,6 +12,7 @@ from module_shot_grid.entity.vo.common_vo import (
     ShotGridPageQueryModel,
 )
 from module_shot_grid.entity.vo.task_vo import ShotGridTaskShotProductionModel
+from module_shot_grid.entity.vo.version_submission_vo import _normalize_generation_prompt
 
 SQL_BIGINT_MAX = 9_223_372_036_854_775_807
 SQL_INTEGER_MAX = 2_147_483_647
@@ -126,6 +127,21 @@ class ShotGridVersionListQueryModel(ShotGridPageQueryModel):
     order_by_column: Literal['versionNo', 'submittedTime'] = Field(default='versionNo')
 
 
+class ShotGridMineVersionQueryModel(ShotGridVersionListQueryModel):
+    """本人提交记录筛选，日期范围包含首尾两天。"""
+
+    project_keyword: str | None = Field(default=None, max_length=200)
+    task_keyword: str | None = Field(default=None, max_length=240)
+    submitted_from: date | None = None
+    submitted_to: date | None = None
+
+    @model_validator(mode='after')
+    def validate_submission_dates(self) -> 'ShotGridMineVersionQueryModel':
+        if self.submitted_from and self.submitted_to and self.submitted_from > self.submitted_to:
+            raise ValueError('提交日期起点不能晚于终点')
+        return self
+
+
 class ShotGridVersionFileModel(ShotGridApiModel):
     """版本文件的安全读取模型。"""
 
@@ -148,6 +164,7 @@ class ShotGridVersionCandidateModel(ShotGridApiModel):
     candidate_no: int
     candidate_number: str
     candidate_note: str | None = None
+    generation_prompt: str | None = None
     sort_order: int
     is_selected: bool = False
     files: list[ShotGridVersionFileModel] = Field(default_factory=list)
@@ -179,6 +196,10 @@ class ShotGridVersionListItemModel(ShotGridApiModel):
     generated_at_ms: int
     candidate_count: int = 0
     selected_candidate_id: int | None = None
+    project_name: str | None = None
+    project_code: str | None = None
+    task_name: str | None = None
+    auto_review_list_id: int | None = None
     lock_version: int
 
 
@@ -233,6 +254,12 @@ class ShotGridFinalDeliveryModel(ShotGridApiModel):
 
 class ShotGridVersionDetailModel(ShotGridVersionListItemModel):
     """版本详情；内部存储路径不进入响应。"""
+
+    can_edit_generation_prompt: bool = False
+    assignee_user_id: int | None = None
+    assignee_name: str | None = None
+    task_lock_version: int | None = None
+    task_status: str | None = None
 
     production_target: ShotGridVersionProductionTargetModel
     ai_params: dict[str, Any] | list[Any] | None = None
@@ -364,6 +391,8 @@ class ShotGridNoteCreateModel(ShotGridApiModel):
 
     model_config = ConfigDict(extra='forbid')
 
+    candidate_id: int | None = Field(default=None, gt=0, le=SQL_BIGINT_MAX)
+
     content: str | None = Field(default=None, max_length=10_000)
     media_time_ms: int | None = Field(default=None, ge=0, le=SQL_BIGINT_MAX)
     annotations: ShotGridAnnotationsModel | None = None
@@ -476,7 +505,7 @@ class ShotGridIssueVerificationModel(ShotGridApiModel):
 
     verification_id: int
     checked_version_id: int
-    checked_candidate_id: int
+    checked_candidate_id: int | None = None
     checked_version_number: str
     result: IssueVerificationResult
     comment: str | None = None
@@ -493,6 +522,7 @@ class ShotGridIssueDetailModel(ShotGridApiModel):
     origin_version_id: int
     origin_candidate_id: int
     origin_version_number: str
+    origin_candidate_number: str | None = None
     reviewer_user_id: int
     reviewer_name: str | None = None
     content: str | None = None
@@ -560,13 +590,33 @@ class ShotGridIssueVerificationInputModel(ShotGridApiModel):
         return self
 
 
+class ShotGridRevisionTransferModel(ShotGridApiModel):
+    """退回后交接修改，不改变历史版本归属。"""
+
+    model_config = ConfigDict(extra='forbid')
+    assignee_user_id: int = Field(gt=0, le=SQL_BIGINT_MAX)
+    reason: str = Field(min_length=1, max_length=1000)
+    handoff_note: str | None = Field(default=None, max_length=2000)
+
+    @field_validator('reason', 'handoff_note', mode='before')
+    @classmethod
+    def trim_text(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
+
+
+class ShotGridRevisionTransferCommand(ShotGridRevisionTransferModel):
+    lock_version: int = Field(ge=0)
+    task_lock_version: int = Field(ge=0)
+
+
 class ShotGridReviewActionCreateModel(ShotGridLockVersionModel):
     """提交版本审核动作。"""
 
     model_config = ConfigDict(extra='forbid')
 
     action_type: ReviewActionType
-    selected_candidate_id: int = Field(gt=0, le=SQL_BIGINT_MAX)
+    revision_transfer: ShotGridRevisionTransferModel | None = None
+    selected_candidate_id: int | None = Field(default=None, gt=0, le=SQL_BIGINT_MAX)
     reason: str | None = Field(default=None, max_length=1000)
     issue_verifications: list[ShotGridIssueVerificationInputModel] = Field(default_factory=list, max_length=200)
 
@@ -582,6 +632,10 @@ class ShotGridReviewActionCreateModel(ShotGridLockVersionModel):
 
     @model_validator(mode='after')
     def validate_issue_verifications(self) -> 'ShotGridReviewActionCreateModel':
+        if self.revision_transfer is not None and self.action_type != 'reject':
+            raise ValueError('只有退回时可以转交修改')
+        if self.action_type == 'approve' and self.selected_candidate_id is None:
+            raise ValueError('审核通过时必须选择最终交付文件')
         issue_ids = [item.issue_id for item in self.issue_verifications]
         if len(issue_ids) != len(set(issue_ids)):
             raise ValueError('issueVerifications 不能包含重复问题')
@@ -603,7 +657,7 @@ class ShotGridReviewActionModel(ShotGridApiModel):
     action_id: int
     project_id: int
     version_id: int
-    selected_candidate_id: int
+    selected_candidate_id: int | None = None
     reviewer_user_id: int
     reviewer_name: str | None = None
     action_type: ReviewActionType
@@ -631,3 +685,14 @@ class ShotGridVersionCandidateSelectModel(ShotGridLockVersionModel):
     model_config = ConfigDict(extra='forbid')
 
     candidate_id: int = Field(gt=0, le=SQL_BIGINT_MAX)
+
+
+class ShotGridCandidatePromptUpdateModel(ShotGridApiModel):
+    """提示词补录使用原值比较，避免覆盖并发修改。"""
+
+    model_config = ConfigDict(extra='forbid')
+    generation_prompt: str | None = Field(..., max_length=10_000)
+    previous_generation_prompt: str | None = Field(..., max_length=10_000)
+    _normalize_prompt = field_validator('generation_prompt', 'previous_generation_prompt', mode='before')(
+        _normalize_generation_prompt
+    )

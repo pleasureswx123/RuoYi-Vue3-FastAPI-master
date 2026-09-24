@@ -65,7 +65,7 @@ describe('版本工作区提交入口', () => {
     wrapper.unmount()
   })
 
-  it('任务待审核时即使存在提交动作或未完成标记也不显示提交入口', () => {
+  it('任务待审核时保留追加和未完成提交恢复入口', () => {
     const wrapper = mountWorkspace({
       taskStatus: 'pending_review',
       allowedActions: ['version.add'],
@@ -74,7 +74,30 @@ describe('版本工作区提交入口', () => {
     })
 
     expect(wrapper.find('[data-testid="version-history"]').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="version-submission"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="version-submission"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('追加表单仅在最新待审核版本显示，切换历史时隐藏且保留实例', async () => {
+    const wrapper = mountWorkspace({ taskStatus: 'pending_review', allowedActions: ['version.add'], permissions: ['shotgrid:version:add'] })
+    await wrapper.setProps({ latestVersionNo: 2 })
+    const history = wrapper.findComponent(historyStub)
+    const submission = wrapper.findComponent(submissionStub)
+    const context = { taskId: 31, operationGeneration: 0 }
+    expect(submission.isVisible()).toBe(false)
+    history.vm.$emit('version-selected', { versionNo: 2, versionStatus: 'pending_review' }, context)
+    await wrapper.vm.$nextTick()
+    expect(wrapper.get('[data-testid="version-submission"]').attributes('style')).not.toContain('display: none')
+    history.vm.$emit('selection-loading')
+    await wrapper.vm.$nextTick()
+    expect(submission.isVisible()).toBe(false)
+    history.vm.$emit('version-selected', { versionNo: 1, versionStatus: 'rejected' }, context)
+    await wrapper.vm.$nextTick()
+    expect(submission.isVisible()).toBe(false)
+    history.vm.$emit('version-selected', { versionNo: 2, versionStatus: 'pending_review' }, context)
+    await wrapper.vm.$nextTick()
+    expect(wrapper.findComponent(submissionStub).vm).toBe(submission.vm)
+    expect(wrapper.get('[data-testid="version-submission"]').attributes('style')).not.toContain('display: none')
     wrapper.unmount()
   })
 

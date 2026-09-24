@@ -151,3 +151,20 @@ export function resolvePlaybackUrl(playbackUrl) {
 }
 
 export { assertFileId }
+
+export function updateCandidateGenerationPrompt(versionId, candidateId, data) {
+  return request({
+    url: `/shot-grid/versions/${assertPositiveId(versionId, '版本')}/candidates/${assertPositiveId(candidateId, '候选')}/generation-prompt`,
+    method: 'put',
+    data,
+    silentError: true
+  })
+}
+
+export function transferRevision(versionId, data) {
+  return request({ url: `/shot-grid/versions/${assertPositiveId(versionId, '版本')}/transfer-revision`, method: 'post', data })
+}
+
+export function getRevisionAssignees(projectId, params, options = {}) {
+  return request({ url: `/shot-grid/projects/${assertPositiveId(projectId, '项目')}/revision-assignee-options`, method: 'get', params, ...options })
+}

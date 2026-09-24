@@ -18,6 +18,7 @@ from module_admin.entity.do.file_do import SysFileInfo
 from module_admin.entity.vo.user_vo import CurrentUserModel
 from module_admin.service.common_service import CommonService
 from module_admin.service.file_business_service import FileReferenceService
+from module_realtime.service.realtime_publisher import publish_version_changed
 from module_shot_grid.dao.final_delivery_dao import ShotGridFinalDeliveryDao
 from module_shot_grid.dao.project_audit_dao import ShotGridProjectAuditDao
 from module_shot_grid.dao.project_dao import ShotGridProjectDao
@@ -38,6 +39,7 @@ from module_shot_grid.entity.vo.access_vo import ShotGridProjectAccessModel
 from module_shot_grid.entity.vo.common_vo import ShotGridLockVersionModel
 from module_shot_grid.entity.vo.review_vo import (
     ShotGridAutoReviewListSummaryModel,
+    ShotGridCandidatePromptUpdateModel,
     ShotGridCarriedIssueModel,
     ShotGridFinalDeliveryModel,
     ShotGridIssueAppendModel,
@@ -51,6 +53,7 @@ from module_shot_grid.entity.vo.review_vo import (
     ShotGridManualReviewListOrderModel,
     ShotGridManualReviewListUpdateModel,
     ShotGridManualReviewListVersionsModel,
+    ShotGridMineVersionQueryModel,
     ShotGridNoteCreateModel,
     ShotGridReviewActionCreateModel,
     ShotGridReviewActionModel,
@@ -144,7 +147,7 @@ class ShotGridReviewService:
 
     @classmethod
     async def get_recent_mine_versions(
-        cls, db: AsyncSession, query: ShotGridVersionListQueryModel, current_user: CurrentUserModel
+        cls, db: AsyncSession, query: ShotGridMineVersionQueryModel, current_user: CurrentUserModel
     ) -> PageModel[ShotGridVersionListItemModel]:
         user_id, _, _, _ = cls._actor(current_user)
         rows, total = await ShotGridReviewDao.get_recent_mine_versions(db, user_id, query)
@@ -173,6 +176,10 @@ class ShotGridReviewService:
         summary = await ShotGridReviewDao.get_auto_review_summary(db, version_id)
         final_delivery = await ShotGridFinalDeliveryDao.get_by_version(db, version_id)
         values = cls._version_list_values(row)
+        values['can_edit_generation_prompt'] = bool(
+            context.get('project_status') != 'archived'
+            and cls._can_edit_prompt(access, context.get('assignee_user_id'), current_user)
+        )
         values['ai_params'] = (
             row.get('ai_params') if access.has_all_scope or access.project_role == 'director' else None
         )
@@ -199,6 +206,66 @@ class ShotGridReviewService:
         )
         values['final_delivery'] = cls._final_delivery_model(final_delivery)
         return ShotGridVersionDetailModel.model_validate(values)
+
+    @staticmethod
+    def _can_edit_prompt(
+        access: ShotGridProjectAccessModel, assignee_id: int | None, current_user: CurrentUserModel
+    ) -> bool:
+        permissions = current_user.permissions
+        return bool(
+            access.project_role == 'creator'
+            and access.user_id == assignee_id
+            and ('shotgrid:version:add' in permissions or '*:*:*' in permissions)
+        )
+
+    @classmethod
+    async def update_candidate_prompt(
+        cls,
+        db: AsyncSession,
+        version_id: int,
+        candidate_id: int,
+        command: ShotGridCandidatePromptUpdateModel,
+        current_user: CurrentUserModel,
+    ) -> ShotGridVersionDetailModel:
+        """只更新候选提示词，不改变轮次、审核状态或原始提交快照。"""
+        context, access = await cls._resolve_version_access(db, version_id, current_user)
+        try:
+            project_id, task, _, access = await cls._lock_version_graph(db, context, current_user, access)
+            if not cls._can_edit_prompt(access, task.assignee_user_id, current_user):
+                raise shot_grid_error(403, 'SG_PROJECT_ACCESS_DENIED', '只有当前任务制作人可以补充提示词')
+            candidate = await ShotGridReviewDao.get_candidate_for_update(
+                db, project_id=project_id, version_id=version_id, candidate_id=candidate_id
+            )
+            if candidate is None:
+                raise shot_grid_error(404, 'SG_VERSION_CANDIDATE_NOT_FOUND', '候选文件不存在或不属于当前版本')
+            previous = candidate.generation_prompt
+            if previous != command.previous_generation_prompt:
+                raise shot_grid_error(409, 'SG_PROMPT_CONFLICT', '提示词已被修改，请刷新后重新编辑')
+            candidate.generation_prompt = command.generation_prompt
+            _, actor_name, _, dept_name = cls._actor(current_user)
+            await cls._audit(
+                db,
+                actor_name=actor_name,
+                dept_name=dept_name,
+                business_type=BusinessType.UPDATE.value,
+                method='update_candidate_prompt',
+                oper_url=f'/shot-grid/versions/{version_id}/candidates/{candidate_id}/generation-prompt',
+                payload={
+                    'versionId': version_id,
+                    'candidateId': candidate_id,
+                    'previousSha256': hashlib.sha256((previous or '').encode()).hexdigest(),
+                },
+                result={
+                    'generationPromptSha256': hashlib.sha256((command.generation_prompt or '').encode()).hexdigest(),
+                    'length': len(command.generation_prompt or ''),
+                },
+            )
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            raise
+        await publish_version_changed(version_id, 'prompt.updated')
+        return await cls.get_version_detail(db, version_id, current_user)
 
     @staticmethod
     def _version_production_target(row: dict[str, Any]) -> ShotGridVersionProductionTargetModel:
@@ -655,7 +722,6 @@ class ShotGridReviewService:
         can_append = (
             context['version_status'] == 'rejected'
             and context['task_status'] == 'revision'
-            and context.get('selected_candidate_id') is not None
             and await ShotGridReviewDao.get_latest_version_no(db, int(context['task_id'])) == int(context['version_no'])
             and not await ShotGridVersionSubmissionDao.has_unresolved_submission(db, int(context['task_id']))
         )
@@ -843,8 +909,8 @@ class ShotGridReviewService:
             cls._require_director(access)
             if version.version_status != 'pending_review' or task.task_status != 'pending_review':
                 raise cls._invalid_transition('只有当前待审核版本可以记录问题草稿')
-            if version.selected_candidate_id is None:
-                raise shot_grid_error(409, 'SG_REVIEW_CANDIDATE_REQUIRED', '请先选择本轮最佳候选，再记录修改问题')
+            candidate_id = command.candidate_id or version.selected_candidate_id
+            await cls._require_review_candidate(db, project_id, version_id, candidate_id)
             review_list = await ShotGridReviewDao.get_auto_review_list_for_update(db, project_id, version_id)
             if review_list is None or review_list.review_status != 'active':
                 raise cls._auto_review_integrity_error()
@@ -863,7 +929,7 @@ class ShotGridReviewService:
                     project_id=project_id,
                     review_list_id=review_list.review_list_id,
                     version_id=version_id,
-                    candidate_id=version.selected_candidate_id,
+                    candidate_id=candidate_id,
                     reviewer_user_id=user_id,
                     content=command.content,
                     media_time_ms=command.media_time_ms,
@@ -892,7 +958,7 @@ class ShotGridReviewService:
                 projectId=project_id,
                 reviewListId=review_list.review_list_id,
                 versionId=version_id,
-                candidateId=version.selected_candidate_id,
+                candidateId=candidate_id,
                 reviewerUserId=user_id,
                 reviewerName=actor_name,
                 content=draft.content,
@@ -948,8 +1014,8 @@ class ShotGridReviewService:
             # 与版本提交持有相同的项目、任务锁，覆盖已受理但尚未发布的下一版。
             if await ShotGridVersionSubmissionDao.get_unresolved_submission_for_update(db, task.task_id):
                 raise cls._invalid_transition('制作人已提交下一版，不能再追加问题，请等待新版本审核')
-            if version.selected_candidate_id is None:
-                raise shot_grid_error(409, 'SG_REVIEW_CANDIDATE_REQUIRED', '退回版本没有选中的候选作品')
+            candidate_id = command.candidate_id or version.selected_candidate_id
+            await cls._require_review_candidate(db, project_id, version_id, candidate_id)
             review_list = await ShotGridReviewDao.get_auto_review_list_for_update(db, project_id, version_id)
             if review_list is None or review_list.review_status != 'completed':
                 raise cls._auto_review_integrity_error()
@@ -964,7 +1030,7 @@ class ShotGridReviewService:
                 ShotGridNote(
                     project_id=project_id,
                     version_id=version_id,
-                    origin_candidate_id=version.selected_candidate_id,
+                    origin_candidate_id=candidate_id,
                     reviewer_user_id=user_id,
                     content=command.content,
                     media_time_ms=command.media_time_ms,
@@ -995,7 +1061,7 @@ class ShotGridReviewService:
                 issueId=note.note_id,
                 projectId=project_id,
                 originVersionId=version_id,
-                originCandidateId=version.selected_candidate_id,
+                originCandidateId=candidate_id,
                 originVersionNumber=f'V{int(version.version_no):03d}',
                 reviewerUserId=user_id,
                 reviewerName=actor_name,
@@ -1053,8 +1119,8 @@ class ShotGridReviewService:
             )
             if draft is None:
                 raise shot_grid_error(404, 'SG_REVIEW_ISSUE_DRAFT_NOT_FOUND', '问题草稿不存在或已发布')
-            if draft.candidate_id != version.selected_candidate_id:
-                raise shot_grid_error(409, 'SG_REVIEW_CANDIDATE_CONFLICT', '问题草稿与当前选中候选不一致')
+            if command.candidate_id is not None and command.candidate_id != draft.candidate_id:
+                raise shot_grid_error(409, 'SG_REVIEW_CANDIDATE_CONFLICT', '不能更改问题草稿所属文件')
             cls._ensure_lock_version(draft.lock_version, command.lock_version)
             locked_context = await ShotGridReviewDao.get_version_context(db, version_id)
             if locked_context is None:
@@ -1141,8 +1207,6 @@ class ShotGridReviewService:
             )
             if draft is None:
                 raise shot_grid_error(404, 'SG_REVIEW_ISSUE_DRAFT_NOT_FOUND', '问题草稿不存在或已发布')
-            if draft.candidate_id != version.selected_candidate_id:
-                raise shot_grid_error(409, 'SG_REVIEW_CANDIDATE_CONFLICT', '问题草稿与当前选中候选不一致')
             cls._ensure_lock_version(draft.lock_version, command.lock_version)
             await FileReferenceService.remove_business_file_references_services(
                 db,
@@ -1269,7 +1333,7 @@ class ShotGridReviewService:
             raise
 
     @classmethod
-    async def create_review_action(  # noqa: PLR0915 - 审核、问题确认和最终交付入队必须保持同一事务
+    async def create_review_action(  # noqa: PLR0912, PLR0915 - 审核、问题确认和最终交付入队必须保持同一事务
         cls,
         db: AsyncSession,
         version_id: int,
@@ -1332,8 +1396,23 @@ class ShotGridReviewService:
                 command.action_type,
                 issue_drafts,
             )
+            if command.action_type == 'approve':
+                version.selected_candidate_id = command.selected_candidate_id
+                version.selected_by = user_id
+                version.selected_time = datetime.now()
+                await ShotGridReviewDao.set_primary_candidate_file(
+                    db, version_id=version_id, candidate_id=command.selected_candidate_id
+                )
             from_status = str(version.version_status)
             cls._apply_review_action_transition(task, version, review_list, command, to_status, actor_name)
+            if command.revision_transfer is not None:
+                from module_shot_grid.service.revision_transfer_service import (  # noqa: PLC0415 - 避免服务循环导入
+                    ShotGridRevisionTransferService,
+                )
+
+                await ShotGridRevisionTransferService.apply_locked(
+                    db, task, version, command.revision_transfer, current_user, access
+                )
             final_delivery = await cls._enqueue_final_delivery(
                 db,
                 action_type=command.action_type,
@@ -1480,10 +1559,12 @@ class ShotGridReviewService:
         cls._ensure_lock_version(version.lock_version, command.lock_version)
         if version.version_status != 'pending_review' or task.task_status != 'pending_review':
             raise cls._invalid_transition('版本或任务已不处于待审核状态')
-        if version.selected_candidate_id is None:
-            raise shot_grid_error(409, 'SG_REVIEW_CANDIDATE_REQUIRED', '请先选择本轮最佳候选')
-        if int(version.selected_candidate_id) != command.selected_candidate_id:
-            raise shot_grid_error(409, 'SG_REVIEW_CANDIDATE_CONFLICT', '审核动作绑定的候选已变化，请刷新后重试')
+        if await ShotGridVersionSubmissionDao.has_unresolved_submission(db, int(task.task_id)):
+            raise shot_grid_error(
+                409, 'SG_VERSION_SUBMISSION_ACTIVE', '制作人追加的文件尚未完成发布，请等待完成后刷新审核'
+            )
+        if command.selected_candidate_id is not None:
+            await cls._require_review_candidate(db, project_id, version_id, command.selected_candidate_id)
         latest_version_no = await ShotGridReviewDao.get_latest_version_no(db, task.task_id)
         if latest_version_no != version.version_no:
             raise cls._invalid_transition('只能审核任务的最新版本')
@@ -1509,8 +1590,6 @@ class ShotGridReviewService:
             review_list_id=int(review_list.review_list_id),
             version_id=version_id,
         )
-        if any(int(draft.candidate_id) != command.selected_candidate_id for draft in issue_drafts):
-            raise shot_grid_error(409, 'SG_REVIEW_CANDIDATE_CONFLICT', '问题草稿与当前选中候选不一致')
         expected_issue_ids = {int(issue.note_id) for issue in carried_issues}
         provided_issue_ids = {item.issue_id for item in command.issue_verifications}
         if command.action_type in {'approve', 'reject'} and provided_issue_ids != expected_issue_ids:
@@ -1785,6 +1864,18 @@ class ShotGridReviewService:
         return int(user.user_id), user.user_name, display_name, dept_name
 
     @staticmethod
+    async def _require_review_candidate(
+        db: AsyncSession, project_id: int, version_id: int, candidate_id: int | None
+    ) -> None:
+        if candidate_id is None:
+            raise shot_grid_error(422, 'SG_REVIEW_CANDIDATE_REQUIRED', '请选择要记录问题的文件')
+        candidate = await ShotGridReviewDao.get_candidate_for_update(
+            db, project_id=project_id, version_id=version_id, candidate_id=candidate_id
+        )
+        if candidate is None:
+            raise shot_grid_error(404, 'SG_VERSION_CANDIDATE_NOT_FOUND', '候选文件不存在或不属于当前版本')
+
+    @staticmethod
     def _validate_note_media(context: dict[str, Any], command: ShotGridNoteCreateModel) -> None:
         if context['task_kind'] == 'asset_image' and command.media_time_ms is not None:
             raise shot_grid_error(422, 'SG_NOTE_MEDIA_TIME_INVALID', '资产图片审核意见不能包含媒体时间点')
@@ -1812,6 +1903,7 @@ class ShotGridReviewService:
                 candidateNo=row['candidate_no'],
                 candidateNumber=f'V{version_no:03d}_{int(row["candidate_no"]):02d}',
                 candidateNote=row.get('candidate_note'),
+                generationPrompt=row.get('generation_prompt'),
                 sortOrder=row['sort_order'],
                 isSelected=int(row['candidate_id']) == selected_candidate_id,
                 files=[item for item in files if item.candidate_id == int(row['candidate_id'])],
@@ -2076,6 +2168,11 @@ class ShotGridReviewService:
                     originVersionId=row['origin_version_id'],
                     originCandidateId=row['origin_candidate_id'],
                     originVersionNumber=f'V{int(row["origin_version_no"]):03d}',
+                    originCandidateNumber=(
+                        f'V{int(row["origin_version_no"]):03d}_{int(row["origin_candidate_no"]):02d}'
+                        if row.get('origin_candidate_no') is not None
+                        else None
+                    ),
                     reviewerUserId=row['reviewer_user_id'],
                     reviewerName=row.get('reviewer_name'),
                     content=row.get('content'),
@@ -2191,7 +2288,7 @@ class ShotGridReviewService:
             title='Shot Grid 版本审核',
             business_type=business_type,
             method=f'module_shot_grid.service.review_service.ShotGridReviewService.{method}()',
-            request_method='POST',
+            request_method='PUT' if method == 'update_candidate_prompt' else 'POST',
             oper_name=actor_name,
             dept_name=dept_name,
             oper_url=oper_url,

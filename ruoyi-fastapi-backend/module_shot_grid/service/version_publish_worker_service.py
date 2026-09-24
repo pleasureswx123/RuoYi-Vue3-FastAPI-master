@@ -161,12 +161,7 @@ class ShotGridVersionPublishWorkerService:
         soft_timeout_exceeded = False
         if claimed.execution_status == 'committing':
             try:
-                await ShotGridVersionSubmissionService.commit_published_submission(
-                    db,
-                    submission_id=claimed.submission_id,
-                    worker_id=claimed.lease_owner,
-                    attempt_count=claimed.attempt_count,
-                )
+                await cls._commit_with_shutdown_guard(db, claimed)
             except Exception as exc:
                 return await cls._record_commit_failure(
                     db,
@@ -251,6 +246,25 @@ class ShotGridVersionPublishWorkerService:
             claimed=claimed,
             soft_timeout_exceeded=soft_timeout_exceeded,
         )
+
+    @staticmethod
+    async def _commit_with_shutdown_guard(db: AsyncSession, claimed: _ClaimedSubmission) -> None:
+        # 调度停机可能取消当前协程；短事务必须收敛后再关闭数据库会话，
+        # 避免已落盘提交遗留 committing，等待完整租约过期。
+        commit_task = asyncio.create_task(
+            ShotGridVersionSubmissionService.commit_published_submission(
+                db,
+                submission_id=claimed.submission_id,
+                worker_id=claimed.lease_owner,
+                attempt_count=claimed.attempt_count,
+            )
+        )
+        while not commit_task.done():
+            try:
+                await asyncio.shield(commit_task)
+            except asyncio.CancelledError:  # noqa: PERF203 - 停机必须等待短事务收敛
+                continue
+        commit_task.result()
 
     @classmethod
     async def renew_lease(

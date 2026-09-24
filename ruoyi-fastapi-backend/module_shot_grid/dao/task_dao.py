@@ -315,9 +315,13 @@ class ShotGridTaskDao:
 
     @classmethod
     async def get_task_detail(cls, db: AsyncSession, task_id: int) -> dict[str, Any] | None:
-        statement = cls.build_task_statement(
-            ShotGridMineTaskListQueryModel(pageNum=1, pageSize=1),
-        ).where(ShotGridTask.task_id == task_id)
+        statement = (
+            cls.build_task_statement(
+                ShotGridMineTaskListQueryModel(pageNum=1, pageSize=1),
+            )
+            .add_columns(ShotGridTask.revision_transfers)
+            .where(ShotGridTask.task_id == task_id)
+        )
         row = (await db.execute(statement.limit(1))).mappings().one_or_none()
         return dict(row) if row is not None else None
 
@@ -558,6 +562,7 @@ class ShotGridTaskDao:
                         ShotGridProjectMember.user_id,
                         func.upper(SysUser.nick_name).label('producer_code'),
                         SysUser.nick_name,
+                        SysUser.user_name,
                     )
                     .join(SysUser, SysUser.user_id == ShotGridProjectMember.user_id)
                     .where(

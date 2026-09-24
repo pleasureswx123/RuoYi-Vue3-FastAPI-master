@@ -135,6 +135,10 @@ async def _patch_review_action_graph(
 ) -> tuple[AsyncMock, SimpleNamespace, SimpleNamespace, SimpleNamespace, list[str]]:
     db = AsyncMock()
     task, version, review_list = _locked_graph()
+    monkeypatch.setattr(
+        'module_shot_grid.service.review_service.ShotGridVersionSubmissionDao.has_unresolved_submission',
+        AsyncMock(return_value=False),
+    )
     events: list[str] = []
     monkeypatch.setattr(
         ShotGridReviewService,
@@ -385,6 +389,30 @@ async def test_reselect_current_candidate_persists_idempotency_without_advancing
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('action_type', ['approve', 'reject'])
+async def test_review_conclusion_waits_for_append_batch(monkeypatch: pytest.MonkeyPatch, action_type: str) -> None:
+    db, task, version, review_list, _ = await _patch_review_action_graph(monkeypatch)
+    monkeypatch.setattr(
+        'module_shot_grid.service.review_service.ShotGridVersionSubmissionDao.has_unresolved_submission',
+        AsyncMock(return_value=True),
+    )
+    with pytest.raises(ShotGridDomainException) as error:
+        await ShotGridReviewService.create_review_action(
+            db,
+            VERSION_ID,
+            ShotGridReviewActionCreateModel(actionType=action_type, selectedCandidateId=CANDIDATE_ID, lockVersion=0),
+            'append-in-flight',
+            _current_user(),
+        )
+    assert error.value.error_key == 'SG_VERSION_SUBMISSION_ACTIVE'
+    assert task.task_status == 'pending_review'
+    assert version.version_status == 'pending_review'
+    assert review_list.review_status == 'active'
+    db.commit.assert_not_awaited()
+    db.rollback.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_approve_atomically_completes_version_task_and_auto_review_list(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -494,10 +522,14 @@ async def test_approve_with_current_version_issue_fails_without_partial_write(
 
 
 @pytest.mark.asyncio
-async def test_review_action_rejects_stale_selected_candidate_before_writes(
+async def test_review_action_rejects_foreign_candidate_before_writes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     db, task, version, review_list, events = await _patch_review_action_graph(monkeypatch)
+
+    monkeypatch.setattr(
+        'module_shot_grid.dao.review_dao.ShotGridReviewDao.get_candidate_for_update', AsyncMock(return_value=None)
+    )
 
     with pytest.raises(ShotGridDomainException) as exc_info:
         await ShotGridReviewService.create_review_action(
@@ -512,7 +544,7 @@ async def test_review_action_rejects_stale_selected_candidate_before_writes(
             _current_user(),
         )
 
-    assert exc_info.value.error_key == 'SG_REVIEW_CANDIDATE_CONFLICT'
+    assert exc_info.value.error_key == 'SG_VERSION_CANDIDATE_NOT_FOUND'
     assert version.version_status == 'pending_review'
     assert task.task_status == 'pending_review'
     assert review_list.review_status == 'active'
@@ -1340,6 +1372,7 @@ async def test_append_rejected_issue_only_before_next_submission(
             AsyncMock(side_effect=ShotGridReviewService._invalid_transition('参考文件不可用')),
         )
     command = SimpleNamespace(
+        candidate_id=CANDIDATE_ID,
         content='补充：修复边缘穿帮',
         media_time_ms=None,
         annotations=None,
@@ -1411,3 +1444,30 @@ async def test_review_context_exposes_append_window(
     )
     result = await ShotGridReviewService.get_review_context(AsyncMock(), VERSION_ID, _current_user())
     assert result.can_append_issues is expected
+
+
+@pytest.fixture(autouse=True)
+def mute_realtime_notifications(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr('module_shot_grid.service.version_submission_service.publish_version_changed', AsyncMock())
+    monkeypatch.setattr('module_shot_grid.service.review_service.publish_version_changed', AsyncMock())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('candidate_no, expected', [(2, 'V001_02'), (None, None)])
+async def test_issue_origin_candidate_number(
+    monkeypatch: pytest.MonkeyPatch, candidate_no: int | None, expected: str | None
+) -> None:
+    """来源文件使用真实候选序号，缺失时不能猜测。"""
+    for method in ('get_issue_responses', 'get_issue_verifications', 'get_issue_reference_files'):
+        monkeypatch.setattr(
+            f'module_shot_grid.service.review_service.ShotGridReviewDao.{method}',
+            AsyncMock(return_value=[]),
+        )
+    now = datetime.now()
+    issues = await ShotGridReviewService._hydrate_issues(AsyncMock(), [{
+        'issue_id': ISSUE_ID, 'project_id': PROJECT_ID, 'origin_version_id': VERSION_ID,
+        'origin_candidate_id': SECOND_CANDIDATE_ID, 'origin_version_no': 1,
+        'origin_candidate_no': candidate_no, 'reviewer_user_id': DIRECTOR_ID,
+        'status': 'open', 'create_time': now, 'update_time': now,
+    }])
+    assert issues[0].model_dump(by_alias=True)['originCandidateNumber'] == expected

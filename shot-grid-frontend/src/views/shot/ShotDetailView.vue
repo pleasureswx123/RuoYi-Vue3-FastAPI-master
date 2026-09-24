@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, provide, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowLeft, Edit, Lock, Refresh, UserFilled } from '@element-plus/icons-vue'
@@ -8,6 +8,8 @@ import { archiveShot, getEpisodePage, getShotDetail, listShotAssignees } from '@
 import { assertPositiveId } from '@/api/shot-grid/projects'
 import { useCurrentTime } from '@/composables/useCurrentTime'
 import { tagTypeFromTone } from '@/utils/tag'
+import RelatedDetailDrawer from '@/components/RelatedDetailDrawer.vue'
+import { detailNavigationKey } from '@/composables/useDetailNavigation'
 import ProductionHistoryPanel from '@/components/production-history/ProductionHistoryPanel.vue'
 import ProjectStatePanel from '@/views/project/components/ProjectStatePanel.vue'
 import ProtectedThumbnail from '@/views/shot/components/ProtectedThumbnail.vue'
@@ -23,6 +25,9 @@ const props = defineProps({
   targetShotId: { type: [Number, String], default: null },
   embedded: { type: Boolean, default: false }
 })
+const relatedDrawer = ref(null)
+provide(detailNavigationKey, target => props.embedded && Boolean(relatedDrawer.value?.open(target)))
+
 const emit = defineEmits(['changed', 'deleted'])
 const route = useRoute()
 const router = useRouter()
@@ -261,6 +266,7 @@ onBeforeUnmount(() => { disposed = true; loadGeneration += 1; controller?.abort(
       <ShotFormDialog v-if="showEdit && editContext" :project-id="editContext.projectId" :operation-generation="editContext.operationGeneration" :episodes="episodes" :shot="shot" @close="closeEditDialog" @saved="handleSaved" @refresh="loadDetail" />
       <ShotAssignDialog v-if="showAssign && assignContext" :project-id="assignContext.projectId" :operation-generation="assignContext.operationGeneration" :shot="shot" :members="members" @close="closeAssignDialog" @assigned="handleAssigned" @refresh="loadDetail" />
     </template>
+    <RelatedDetailDrawer v-if="embedded" :key="`${projectId}:${shotId}`" ref="relatedDrawer" />
   </section>
 </template>
 

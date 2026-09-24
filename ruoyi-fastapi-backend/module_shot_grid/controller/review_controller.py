@@ -15,6 +15,7 @@ from module_shot_grid.dependencies.project_access import ProjectAccessDependency
 from module_shot_grid.entity.vo.access_vo import ShotGridProjectAccessModel
 from module_shot_grid.entity.vo.common_vo import ShotGridLockVersionModel
 from module_shot_grid.entity.vo.review_vo import (
+    ShotGridCandidatePromptUpdateModel,
     ShotGridFinalDeliveryModel,
     ShotGridIssueAppendModel,
     ShotGridIssueDetailModel,
@@ -24,6 +25,7 @@ from module_shot_grid.entity.vo.review_vo import (
     ShotGridManualReviewListOrderModel,
     ShotGridManualReviewListUpdateModel,
     ShotGridManualReviewListVersionsModel,
+    ShotGridMineVersionQueryModel,
     ShotGridNoteCreateModel,
     ShotGridReviewActionCreateModel,
     ShotGridReviewActionModel,
@@ -33,12 +35,14 @@ from module_shot_grid.entity.vo.review_vo import (
     ShotGridReviewListDetailModel,
     ShotGridReviewListItemModel,
     ShotGridReviewListQueryModel,
+    ShotGridRevisionTransferCommand,
     ShotGridVersionCandidateSelectModel,
     ShotGridVersionDetailModel,
     ShotGridVersionListItemModel,
     ShotGridVersionListQueryModel,
 )
 from module_shot_grid.service.review_service import ShotGridReviewService
+from module_shot_grid.service.revision_transfer_service import ShotGridRevisionTransferService
 from utils.response_util import ResponseUtil
 from utils.upload_util import UploadUtil
 
@@ -86,13 +90,13 @@ async def get_shot_grid_mine_review_lists(
 
 @review_controller.get(
     '/versions/mine/recent',
-    summary='跨项目查询我的最近提交',
+    summary='分页查询本人全部提交记录',
     response_model=PageResponseModel[ShotGridVersionListItemModel],
     dependencies=[UserInterfaceAuthDependency('shotgrid:version:list')],
 )
 async def get_shot_grid_recent_mine_versions(
     request: Request,
-    version_query: Annotated[ShotGridVersionListQueryModel, Query()],
+    version_query: Annotated[ShotGridMineVersionQueryModel, Query()],
     query_db: Annotated[AsyncSession, DBSessionDependency()],
     current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
 ) -> Response:
@@ -587,3 +591,39 @@ async def retry_shot_grid_final_delivery(
 ) -> Response:
     result = await ShotGridReviewService.retry_final_delivery(query_db, version_id, current_user)
     return ResponseUtil.success(msg='最终版本已重新进入 NAS 发布队列', data=result)
+
+
+@review_controller.put(
+    '/versions/{versionId}/candidates/{candidateId}/generation-prompt',
+    summary='补充或编辑候选文件生成提示词',
+    response_model=DataResponseModel[ShotGridVersionDetailModel],
+    dependencies=[UserInterfaceAuthDependency('shotgrid:version:add')],
+)
+async def update_shot_grid_candidate_prompt(
+    request: Request,
+    version_id: Annotated[int, Path(alias='versionId', gt=0, le=SQL_BIGINT_MAX)],
+    candidate_id: Annotated[int, Path(alias='candidateId', gt=0, le=SQL_BIGINT_MAX)],
+    command: ShotGridCandidatePromptUpdateModel,
+    query_db: Annotated[AsyncSession, DBSessionDependency()],
+    current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
+) -> Response:
+    result = await ShotGridReviewService.update_candidate_prompt(
+        query_db, version_id, candidate_id, command, current_user
+    )
+    return ResponseUtil.success(data=result)
+
+
+@review_controller.post(
+    '/versions/{versionId}/transfer-revision',
+    summary='转交退回版本的后续修改',
+    dependencies=[UserInterfaceAuthDependency('shotgrid:task:assign')],
+)
+async def transfer_shot_grid_revision(
+    version_id: Annotated[int, Path(alias='versionId', gt=0, le=SQL_BIGINT_MAX)],
+    command: ShotGridRevisionTransferCommand,
+    query_db: Annotated[AsyncSession, DBSessionDependency()],
+    current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
+) -> Response:
+
+    result = await ShotGridRevisionTransferService.transfer(query_db, version_id, command, current_user)
+    return ResponseUtil.success(data=result)

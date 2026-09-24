@@ -26,6 +26,18 @@ server {
         return 308 /prod-api/;
     }
 
+    location = /prod-api/realtime/ws {
+        proxy_pass ${BACKEND_UPSTREAM}/realtime/ws;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 90s;
+        proxy_send_timeout 90s;
+        proxy_buffering off;
+    }
+
     location /prod-api/ {
         proxy_pass ${BACKEND_UPSTREAM}/;
         proxy_http_version 1.1;

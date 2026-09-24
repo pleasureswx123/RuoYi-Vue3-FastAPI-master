@@ -12,6 +12,7 @@ import {
   createReviewAction,
   deleteVersionIssueDraft,
   getReviewActions,
+  getTaskIssues,
   getReviewListDetail,
   getReviewListPage,
   getVersionReviewContext,
@@ -33,6 +34,11 @@ import ReviewDetailView from '@/views/review/ReviewDetailView.vue'
 import ReviewListView from '@/views/review/ReviewListView.vue'
 import ManualReviewDialog from '@/views/review/components/ManualReviewDialog.vue'
 
+const realtimeHarness = vi.hoisted(() => ({ refresh: null }))
+vi.mock('@/composables/useVersionRealtime', () => ({
+  useVersionRealtime: (_id, refresh) => { realtimeHarness.refresh = refresh; return {} }
+}))
+
 vi.mock('@/api/shot-grid/projects', () => ({
   assertPositiveId: value => {
     const result = Number(value)
@@ -47,6 +53,7 @@ vi.mock('@/api/shot-grid/reviews', () => ({
   createManualReviewList: vi.fn(),
   createReviewAction: vi.fn(),
   getReviewActions: vi.fn(),
+  getTaskIssues: vi.fn(),
   getReviewListDetail: vi.fn(),
   getReviewListPage: vi.fn(),
   selectVersionCandidate: vi.fn(),
@@ -192,6 +199,7 @@ describe('版本审核页面', () => {
     getReviewListPage.mockResolvedValue({ rows: [review], total: 1 })
     getReviewListDetail.mockResolvedValue({ data: { ...review, version } })
     getVersionDetail.mockResolvedValue({ data: version })
+    getTaskIssues.mockResolvedValue({ data: [] })
     getVersionReviewContext.mockResolvedValue({ data: { currentVersion: version, candidates: version.candidates, carriedIssues: [], currentVersionIssues: [], currentVersionDrafts: [] } })
     getReviewActions.mockResolvedValue({ rows: [], total: 0 })
     getTaskVersions.mockResolvedValue({ rows: [], total: 0 })
@@ -207,6 +215,70 @@ describe('版本审核页面', () => {
     retryFinalDelivery.mockResolvedValue({ data: { deliveryStatus: 'pending' } })
     uploadReviewReferenceFile.mockResolvedValue({ fileId: '11111111-1111-4111-8111-111111111111' })
     selectVersionCandidate.mockResolvedValue({ data: { selectedCandidateId: 3301, lockVersion: 3 } })
+  })
+
+  it('复核与本轮意见可切换并保留输入，未填写仍存在原因不能提交', async () => {
+    getVersionReviewContext.mockResolvedValue({ data: {
+      currentVersion: version, candidates: version.candidates, currentVersionIssues: [], currentVersionDrafts: [],
+      carriedIssues: [{ issueId: 801, originVersionId: 32, originVersionNumber: 'V002', originCandidateNumber: 'V002_02', content: '调整灯光', currentVersionResponse: { responseText: '已处理' } }]
+    } })
+    const { wrapper } = await mountDetail(['shotgrid:reviewList:query', 'shotgrid:version:query', 'shotgrid:version:review', 'shotgrid:note:list', 'shotgrid:note:add'])
+    expect(wrapper.get('#tab-carried').attributes('aria-selected')).toBe('true')
+    expect(wrapper.get('.carried-panel').text()).toContain('V002_02 问题')
+    await wrapper.findAllComponents(ElRadioGroup).find(group => group.classes().includes('verification-options')).setValue('still_present')
+    await flushPromises()
+    expect(wrapper.get('#tab-carried').text()).toContain('0/1')
+    const reject = () => wrapper.findAllComponents(ElButton).find(button => button.text().startsWith('退回并发送问题'))
+    expect(reject().props('disabled')).toBe(true)
+    await wrapper.get('.verification-comment textarea').setValue('灯光仍然偏暗')
+    expect(wrapper.get('#tab-carried').text()).toContain('1/1')
+    expect(reject().props('disabled')).toBe(false)
+    await wrapper.get('#tab-current').trigger('click')
+    await flushPromises()
+    await wrapper.get('.issue-compose textarea').setValue('新的构图问题')
+    await wrapper.get('#tab-carried').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('.verification-comment textarea').element.value).toBe('灯光仍然偏暗')
+    await wrapper.get('#tab-current').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('.issue-compose textarea').element.value).toBe('新的构图问题')
+    expect(createReviewAction).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('上轮复核按来源文件分组，切换保留确认结果且不会自动打开对比', async () => {
+    getVersionReviewContext.mockResolvedValue({ data: {
+      currentVersion: version, candidates: version.candidates, currentVersionIssues: [], currentVersionDrafts: [],
+      carriedIssues: [1, 2].map(number => ({ issueId: 800 + number, originVersionId: 32,
+        originCandidateId: 3200 + number, originVersionNumber: 'V002', originCandidateNumber: `V002_0${number}`,
+        content: `文件${number}的问题`, currentVersionResponse: { responseText: '已处理' } }))
+    } })
+    const { wrapper } = await mountDetail()
+    const tabs = () => wrapper.findAll('.carried-file-tabs [role="tab"]')
+    expect(tabs().map(tab => tab.text())).toEqual(['V002_01 0/1', 'V002_02 0/1'])
+    await wrapper.findAllComponents(ElRadioGroup).find(group => group.classes().includes('verification-options')).setValue('resolved')
+    await tabs()[1].trigger('click')
+    await flushPromises()
+    expect(tabs()[0].text()).toBe('V002_01 1/1')
+    expect(wrapper.get('#tab-carried').text()).toContain('1/2')
+    expect(wrapper.findAll('.carried-list').filter(list => list.isVisible())[0].text()).toContain('文件2的问题')
+    expect(wrapper.find('.has-comparison').exists()).toBe(false)
+    await tabs()[0].trigger('click')
+    await flushPromises()
+    expect(wrapper.findAllComponents(ElRadioGroup).find(group => group.classes().includes('verification-options')).props('modelValue')).toBe('resolved')
+    wrapper.unmount()
+  })
+
+  it('制作人只读查看已发送意见及处理记录，不调用审核草稿上下文', async () => {
+    getTaskIssues.mockResolvedValue({ data: [{ issueId: 901, originVersionId: 33, originCandidateId: 3301, content: '调整灯光亮度', status: 'open', responses: [{ versionId: 34, versionNumber: 'V004', responseText: '已调整' }], verifications: [] }] })
+    const { wrapper } = await mountDetail(['shotgrid:reviewList:query', 'shotgrid:version:query', 'shotgrid:note:list'])
+    expect(getVersionReviewContext).not.toHaveBeenCalled()
+    expect(getTaskIssues).toHaveBeenCalledWith(21, {}, expect.objectContaining({ signal: expect.any(AbortSignal) }))
+    expect(wrapper.get('.saved-issues-section').text()).toContain('调整灯光亮度')
+    expect(wrapper.get('.saved-issues-section').text()).toContain('V004 处理说明：已调整')
+    expect(wrapper.find('.issue-draft-card').exists()).toBe(false)
+    expect(wrapper.find('.decision-panel').exists()).toBe(false)
+    wrapper.unmount()
   })
 
   it('按项目加载自动审核单并进入真实详情路由', async () => {
@@ -236,7 +308,8 @@ describe('版本审核页面', () => {
     expect(wrapper.text()).toContain('手持呼吸感')
     expect(wrapper.text()).not.toContain('任务补充要求')
     expect(wrapper.findComponent({ name: 'VersionDetailCard' }).props('showPreview')).toBe(false)
-    expect(wrapper.find('.candidate-selector').exists()).toBe(false)
+    expect(wrapper.find('aside[aria-label="候选导航"] .candidate-selector').exists()).toBe(true)
+    expect(wrapper.find('.review-main .candidate-selector').exists()).toBe(false)
     expect(wrapper.text()).toContain('播放并检查 V003_01')
     expect(wrapper.text()).not.toContain('尚未选择')
     const headingTags = wrapper.find('.heading-actions').findAllComponents(ElTag)
@@ -248,6 +321,15 @@ describe('版本审核页面', () => {
     await approveButton.trigger('click')
     await flushPromises()
 
+    expect(createReviewAction).not.toHaveBeenCalled()
+    const dialog = wrapper.findAllComponents(ElDialog).find(item => item.props('title') === '选择最终交付文件并通过')
+    await dialog.findAllComponents(ElButton).find(button => button.text() === '确认通过并交付').trigger('click')
+    await flushPromises()
+    expect(createReviewAction).not.toHaveBeenCalled()
+    dialog.findComponent({ name: 'ElSelect' }).vm.$emit('update:modelValue', 3301)
+    await flushPromises()
+    await dialog.findAllComponents(ElButton).find(button => button.text() === '确认通过并交付').trigger('click')
+    await flushPromises()
     expect(createReviewAction).toHaveBeenCalledWith(33, {
       actionType: 'approve',
       selectedCandidateId: 3301,
@@ -258,52 +340,63 @@ describe('版本审核页面', () => {
     wrapper.unmount()
   })
 
-  it('多候选版本必须先选择最佳文件，选择后才开放问题与审核决定', async () => {
-    const candidates = [
-      { candidateId: 3301, candidateNo: 1, candidateNumber: 'V003_01', candidateNote: '光影更稳', sortOrder: 0, isSelected: false, files: [], mediaDerivationStatus: 'completed' },
-      { candidateId: 3302, candidateNo: 2, candidateNumber: 'V003_02', candidateNote: '动作更顺', sortOrder: 1, isSelected: false, files: [], mediaDerivationStatus: 'completed' }
-    ]
-    const unselectedVersion = { ...version, candidateCount: 2, selectedCandidateId: null, candidates }
-    const selectedVersion = {
-      ...unselectedVersion,
-      selectedCandidateId: 3302,
-      lockVersion: 3,
-      candidates: candidates.map(item => ({ ...item, isSelected: item.candidateId === 3302 }))
-    }
-    getReviewListDetail.mockResolvedValue({ data: { ...review, version: unselectedVersion } })
-    getVersionDetail
-      .mockResolvedValueOnce({ data: unselectedVersion })
-      .mockResolvedValueOnce({ data: selectedVersion })
-    getVersionReviewContext
-      .mockResolvedValueOnce({ data: { currentVersion: unselectedVersion, candidates, carriedIssues: [], currentVersionIssues: [], currentVersionDrafts: [] } })
-      .mockResolvedValueOnce({ data: { currentVersion: selectedVersion, candidates: selectedVersion.candidates, carriedIssues: [], currentVersionIssues: [], currentVersionDrafts: [] } })
-    const { wrapper } = await mountDetail([
-      'shotgrid:reviewList:query',
-      'shotgrid:version:query',
-      'shotgrid:version:review',
-      'shotgrid:note:list',
-      'shotgrid:note:add'
-    ])
-
-    expect(wrapper.text()).toContain('尚未选择')
-    expect(wrapper.find('.issue-compose').exists()).toBe(false)
-    expect(wrapper.findAllComponents(ElButton).find(button => button.text().includes('确认通过')).attributes('disabled')).toBeDefined()
-    const chooseButtons = wrapper.findAllComponents(ElButton).filter(button => button.text() === '设为本轮最佳候选')
-    await chooseButtons[1].trigger('click')
+  it('意见页签按文件编号切换并与播放器同步，保护未保存输入', async () => {
+    const candidates = [3301, 3302].map((candidateId, index) => ({ candidateId, candidateNumber: `V003_0${index + 1}`, files: [] }))
+    const data = { ...version, candidates }
+    const drafts = candidates.map((candidate, index) => ({ draftId: index + 1, candidateId: candidate.candidateId, versionId: 33, content: `文件意见${index + 1}`, lockVersion: 0 }))
+    getVersionDetail.mockResolvedValue({ data })
+    getVersionReviewContext.mockResolvedValue({ data: { currentVersion: data, candidates, currentVersionDrafts: drafts, currentVersionIssues: [], carriedIssues: [] } })
+    const { wrapper } = await mountDetail(['shotgrid:reviewList:query', 'shotgrid:version:query', 'shotgrid:version:review', 'shotgrid:note:list', 'shotgrid:note:add'])
+    const saved = wrapper.find('.saved-issues-section')
+    expect(saved.findAll('.issue-draft-card')).toHaveLength(1)
+    expect(saved.text()).toContain('文件意见1')
+    expect(saved.text()).not.toContain('文件意见2')
+    expect(saved.findAll('[role="tab"]').map(tab => tab.text())).toEqual(['V003_01', 'V003_02'])
+    await wrapper.find('.issue-compose textarea').setValue('未保存的意见')
+    await saved.findAll('[role="tab"]')[1].trigger('click')
     await flushPromises()
-
-    expect(selectVersionCandidate).toHaveBeenCalledWith(
-      33,
-      { candidateId: 3302, lockVersion: 2 },
-      expect.stringMatching(/^review-candidate:/)
-    )
-    expect(wrapper.text()).toContain('已选择最佳候选')
-    expect(wrapper.find('.issue-compose').exists()).toBe(true)
-    expect(wrapper.findAllComponents(ElButton).find(button => button.text().includes('确认通过')).attributes('disabled')).toBeUndefined()
+    expect(saved.findAll('.issue-draft-card')).toHaveLength(1)
+    expect(wrapper.find('.work-step-heading').text()).toContain('V003_01')
+    expect(wrapper.find('.issue-compose textarea').element.value).toBe('未保存的意见')
+    expect(wrapper.findAllComponents(ElButton).find(button => button.text().startsWith('退回并发送')).text()).toContain('（2）')
+    await wrapper.findAllComponents(ElButton).find(button => button.text() === '清空草稿').trigger('click')
+    await saved.findAll('[role="tab"]')[1].trigger('click')
+    await flushPromises()
+    expect(saved.findAll('.issue-draft-card')).toHaveLength(1)
+    expect(wrapper.find('.work-step-heading').text()).toContain('V003_02')
+    expect(saved.text()).toContain('文件意见2')
+    expect(saved.text()).not.toContain('文件意见1')
+    expect(addVersionIssueDraft).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 
-  it('审核退回后锁定最佳候选但保留历史候选预览', async () => {
+  it('未选择最终候选时可给不同文件保存问题，切换时保护未保存内容', async () => {
+    const candidates = [3301, 3302].map((id, index) => ({ candidateId: id, candidateNumber: `V003_0${index + 1}`, files: [] }))
+    const unselected = { ...version, candidateCount: 2, selectedCandidateId: null, candidates }
+    getReviewListDetail.mockResolvedValue({ data: { ...review, version: unselected } })
+    getVersionDetail.mockResolvedValue({ data: unselected })
+    getVersionReviewContext.mockResolvedValue({ data: { currentVersion: unselected, candidates, carriedIssues: [], currentVersionIssues: [], currentVersionDrafts: [] } })
+    const { wrapper } = await mountDetail(['shotgrid:reviewList:query', 'shotgrid:version:query', 'shotgrid:version:review', 'shotgrid:note:list', 'shotgrid:note:add'])
+    expect(wrapper.find('.issue-compose').exists()).toBe(true)
+    expect(wrapper.text()).not.toContain('设为本轮最佳')
+    await wrapper.find('.issue-compose textarea').setValue('第一个文件的问题')
+    await wrapper.findAll('.candidate-choice')[1].find('.el-radio').trigger('click')
+    expect(wrapper.find('.work-step-heading').text()).toContain('V003_01')
+    await wrapper.findAllComponents(ElButton).find(button => button.text() === '保存问题草稿').trigger('click')
+    await flushPromises()
+    expect(addVersionIssueDraft).toHaveBeenLastCalledWith(33, expect.objectContaining({ candidateId: 3301 }))
+    await wrapper.findAll('.candidate-choice')[1].find('.el-radio').trigger('click')
+    await flushPromises()
+    await wrapper.find('.issue-compose textarea').setValue('第二个文件的问题')
+    await wrapper.findAllComponents(ElButton).find(button => button.text() === '保存问题草稿').trigger('click')
+    await flushPromises()
+    expect(addVersionIssueDraft).toHaveBeenLastCalledWith(33, expect.objectContaining({ candidateId: 3302 }))
+    expect(wrapper.find('.work-step-heading').text()).toContain('V003_02')
+    expect(selectVersionCandidate).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('审核退回后保留全部文件预览，无最佳候选操作', async () => {
     const candidates = [
       { candidateId: 3301, candidateNo: 1, candidateNumber: 'V003_01', candidateNote: '光影更稳', sortOrder: 0, isSelected: false, files: [], mediaDerivationStatus: 'completed' },
       { candidateId: 3302, candidateNo: 2, candidateNumber: 'V003_02', candidateNote: '动作更顺', sortOrder: 1, isSelected: true, files: [], mediaDerivationStatus: 'completed' }
@@ -326,10 +419,8 @@ describe('版本审核页面', () => {
     const { wrapper } = await mountDetail()
     const selectionButtons = wrapper.findAllComponents(ElButton).filter(button => button.text() === '本轮最佳')
 
-    expect(selectionButtons).toHaveLength(1)
+    expect(selectionButtons).toHaveLength(0)
     expect(selectionButtons.every(button => button.attributes('disabled') !== undefined)).toBe(true)
-    expect(wrapper.text()).toContain('审核已结束，仅可预览历史候选')
-    expect(wrapper.text()).toContain('本轮审核已结束，最佳候选不可更改')
     expect(wrapper.text()).not.toContain('审核已结束，不可切换')
     expect(wrapper.text()).not.toContain('本轮最佳（已锁定）')
 
@@ -450,7 +541,8 @@ describe('版本审核页面', () => {
     await flushPromises()
 
     expect(addVersionIssueDraft).toHaveBeenCalledWith(33, {
-      content: '问题：这里需要降低高光',
+      candidateId: 3301,
+      content: '这里需要降低高光',
       mediaTimeMs: 3250,
       annotations,
       referenceFileIds: []
@@ -483,7 +575,8 @@ describe('版本审核页面', () => {
       onUploadProgress: expect.any(Function)
     }))
     expect(addVersionIssueDraft).toHaveBeenCalledWith(33, {
-      content: '问题：请参考附件调整灯光层次',
+      candidateId: 3301,
+      content: '请参考附件调整灯光层次',
       mediaTimeMs: null,
       annotations: null,
       referenceFileIds: ['11111111-1111-4111-8111-111111111111']
@@ -500,6 +593,7 @@ describe('版本审核页面', () => {
     }
     const draft = {
       draftId: 502,
+      candidateId: 3301,
       projectId: 8,
       reviewListId: 101,
       versionId: 33,
@@ -537,14 +631,16 @@ describe('版本审核页面', () => {
     await draftCard.findAllComponents(ElButton).find(button => button.text() === '编辑').trigger('click')
     await flushPromises()
     const textareas = wrapper.findAll('.issue-compose textarea')
-    expect(textareas[0].element.value).toBe('画面偏暗')
-    expect(textareas[1].element.value).toBe('提高主体亮度')
+    expect(textareas).toHaveLength(1)
+    expect(textareas[0].element.value).toBe('问题：画面偏暗\n修改目标：提高主体亮度')
+    expect(wrapper.find('.issue-compose').text()).toContain('修改意见')
     await textareas[0].setValue('画面主体仍然偏暗')
     await wrapper.findAllComponents(ElButton).find(button => button.text() === '更新问题草稿').trigger('click')
     await flushPromises()
 
     expect(updateVersionIssueDraft).toHaveBeenCalledWith(33, 502, {
-      content: '问题：画面主体仍然偏暗\n修改目标：提高主体亮度',
+      candidateId: 3301,
+      content: '画面主体仍然偏暗',
       mediaTimeMs: 3250,
       annotations,
       referenceFileIds: ['22222222-2222-4222-8222-222222222222'],
@@ -598,12 +694,14 @@ describe('版本审核页面', () => {
     })
     const { wrapper, router } = await mountDetail()
 
+    await wrapper.find('.saved-issues-section').findAll('[role="tab"]')[0].trigger('click')
+    await flushPromises()
     expect(wrapper.text()).toContain('已发布修改要求 #1')
     expect(wrapper.text()).toContain('主体边缘抖动')
     expect(wrapper.text()).toContain('本轮已发布 1 条修改要求')
     expect(wrapper.text()).not.toContain('旧版已提前发布')
-    expect(wrapper.text()).not.toContain('退回时将发送')
-    expect(wrapper.text()).toContain('播放并检查 V003_02')
+    expect(wrapper.text()).not.toContain('退回将发送')
+    expect(wrapper.text()).toContain('播放并检查 V003_01')
 
     await wrapper.findAllComponents(ElButton).find(button => button.text() === '查看对应作品').trigger('click')
     await flushPromises()
@@ -759,6 +857,38 @@ describe('版本审核页面', () => {
     const { wrapper } = await mountDetail(['shotgrid:reviewList:query', 'shotgrid:version:query', 'shotgrid:version:review', 'shotgrid:note:add'])
     expect(wrapper.find('.issue-compose').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('追加并发送问题')
+    wrapper.unmount()
+  })
+
+  it('实时新增候选保留未保存的问题和当前预览，不整页刷新', async () => {
+    const { wrapper } = await mountDetail(['shotgrid:reviewList:query', 'shotgrid:version:query', 'shotgrid:version:review', 'shotgrid:note:add'])
+    const input = wrapper.find('.issue-compose textarea')
+    await input.setValue('正在填写的审核意见')
+    const originalListCalls = getReviewListDetail.mock.calls.length
+    const originalContextCalls = getVersionReviewContext.mock.calls.length
+    getVersionDetail.mockResolvedValueOnce({ data: { ...version, lockVersion: 3, candidateCount: 2,
+      candidates: [...version.candidates, { ...version.candidates[0], candidateId: 3302, candidateNo: 2,
+        candidateNumber: 'V003_02', isSelected: false }] } })
+    await realtimeHarness.refresh(33)
+    await flushPromises()
+    expect(wrapper.text()).toContain('V003_02')
+    expect(wrapper.find('.issue-compose textarea').element.value).toBe('正在填写的审核意见')
+    expect(getReviewListDetail).toHaveBeenCalledTimes(originalListCalls)
+    expect(getVersionReviewContext).toHaveBeenCalledTimes(originalContextCalls)
+    expect(wrapper.findComponent({ name: 'ReviewMediaWorkspace' }).props('version').files).toEqual(version.candidates[0].files)
+    wrapper.unmount()
+  })
+
+  it('他人切换最佳候选时保留意见并阻止误提交', async () => {
+    const { wrapper } = await mountDetail(['shotgrid:reviewList:query', 'shotgrid:version:query', 'shotgrid:version:review', 'shotgrid:note:add'])
+    await wrapper.find('.issue-compose textarea').setValue('属于原候选的意见')
+    getVersionDetail.mockResolvedValueOnce({ data: { ...version, selectedCandidateId: 3302, lockVersion: 3 } })
+    await realtimeHarness.refresh(33)
+    await flushPromises()
+    expect(wrapper.text()).toContain('审核状态或候选文件已被其他人修改')
+    expect(wrapper.find('.issue-compose textarea').element.value).toBe('属于原候选的意见')
+    await wrapper.findAll('button').find(item => item.text().includes('确认通过')).trigger('click')
+    expect(createReviewAction).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 

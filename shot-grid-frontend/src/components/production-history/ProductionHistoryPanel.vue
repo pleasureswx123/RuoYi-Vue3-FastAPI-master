@@ -1,6 +1,6 @@
 <script setup>
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useDetailNavigation } from '@/composables/useDetailNavigation'
 import { Refresh, Right } from '@element-plus/icons-vue'
 
 import { getProductionHistory } from '@/api/shot-grid/productionHistory'
@@ -11,19 +11,14 @@ import {
   assertProductionHistoryData,
   eventsForLane,
   formatHistoryDateTime,
-  formatHistoryFileSize,
   historyEventMeta,
   historyImportBatchStatusMeta,
-  historyIssueStatusMeta,
   historyReviewActionMeta,
   historyStageMeta,
   historyTagType,
-  historyVerificationMeta,
   historyVersionStatusMeta,
-  historyWorkflowStatusLabel,
   productionHistoryActiveStep,
-  productionHistoryErrorState,
-  sourceIssueSummary
+  productionHistoryErrorState
 } from './productionHistoryPresentation'
 
 const props = defineProps({
@@ -37,7 +32,7 @@ const props = defineProps({
   refreshKey: { type: [Number, String], default: 0 }
 })
 
-const router = useRouter()
+const navigate = useDetailNavigation()
 const history = ref(null)
 const loading = ref(false)
 const errorState = ref(null)
@@ -180,21 +175,12 @@ function openResource(resourceRef) {
     return
   }
   const target = routeForResource(resourceRef)
-  if (target) void router.push(target)
+  if (target) void navigate(target)
 }
 
 function reviewListRef(cycle) {
   const reviewListId = positiveId(cycle?.autoReviewList?.reviewListId)
   return reviewListId ? { resourceType: 'reviewList', resourceId: reviewListId } : null
-}
-
-function hasVersionDetails(cycle) {
-  return Boolean(
-    cycle?.reviewActions?.length ||
-    cycle?.sourceIssues?.length ||
-    cycle?.issueResponses?.length ||
-    cycle?.issueVerifications?.length
-  )
 }
 
 function selectLane(laneId) {
@@ -214,6 +200,16 @@ onBeforeUnmount(() => {
 })
 
 defineExpose({ refresh: loadHistory })
+function cycleFiles(cycle) {
+  return cycle.files?.length ? cycle.files : cycle.primaryFile ? [cycle.primaryFile] : []
+}
+function cycleSummary(cycle) {
+  const last = [...(cycle.reviewActions || [])].sort((a, b) => String(b.createTime).localeCompare(String(a.createTime)))[0]
+  const result = last ? `${actorDisplayName(last.reviewer)} · ${historyReviewActionMeta(last.actionType).label}` : '等待审核'
+  const issues = cycle.sourceIssues?.length || 0
+  const responses = cycle.issueResponses?.length || 0
+  return `${result}${issues ? ` · 提出 ${issues} 条修改意见` : ''}${responses ? ` · 已提交 ${responses} 条处理说明` : ''}`
+}
 </script>
 
 <template>
@@ -261,9 +257,12 @@ defineExpose({ refresh: loadHistory })
 
       <section class="history-stage" :aria-busy="loading">
         <header class="history-stage__heading">
-          <div>
+          <div class="history-stage__identity">
             <strong>{{ allAssetLanesSelected ? '资产整体进度' : selectedLane?.name || history.subject.name }}</strong>
             <span v-if="selectedLane?.task">当前负责人：{{ currentAssignee }}</span>
+          </div>
+          <div class="history-metrics">
+            <el-statistic v-for="metric in metrics" :key="metric.key" :title="metric.label" :value="metric.value" />
           </div>
           <div class="history-stage__tags">
             <slot v-if="selectedLane" name="lane-actions" :lane="selectedLane" :loading="loading" />
@@ -274,9 +273,6 @@ defineExpose({ refresh: loadHistory })
         <el-steps class="history-stage__steps" :active="activeStep" align-center finish-status="success" :process-status="currentStage === 'final' ? 'success' : currentStage === 'revision' ? 'error' : 'process'" aria-label="制作阶段">
           <el-step v-for="step in PRODUCTION_HISTORY_STEPS" :key="step" :title="step" />
         </el-steps>
-        <div class="history-metrics">
-          <el-statistic v-for="metric in metrics" :key="metric.key" :title="metric.label" :value="metric.value" />
-        </div>
       </section>
 
       <section v-if="allAssetLanesSelected" class="history-lane-summary">
@@ -311,18 +307,17 @@ defineExpose({ refresh: loadHistory })
       <section v-else class="history-timeline" aria-label="制作履历时间线">
         <el-empty v-if="!selectedLane" :image-size="64" description="当前对象没有可展示的制作任务" />
         <el-empty v-else-if="!selectedEvents.length" :image-size="64" description="当前分项还没有可确认的履历记录" />
-        <el-timeline v-else>
+        <el-timeline v-else mode="start">
           <el-timeline-item
-            v-for="event in selectedEvents"
+            v-for="(event, eventIndex) in selectedEvents"
             :key="event.eventId"
             :timestamp="formatHistoryDateTime(event.occurredAt)"
-            :type="historyEventMeta(event.eventType).timelineType"
+            :type="eventIndex === 0 ? 'warning' : 'success'"
             size="large"
-            :hollow="event.evidenceLevel === 'inferred'"
             placement="top"
           >
-            <el-card class="history-event" :class="{ 'history-event--version': event.eventType === 'version_cycle' }" shadow="never">
-              <header class="history-event__heading">
+            <el-card class="history-event" :class="{ 'history-event--version': event.eventType === 'version_cycle' }" shadow="always">
+              <header v-if="!event.versionCycle" class="history-event__heading">
                 <div>
                   <span class="history-event__title-row">
                     <strong>{{ event.title }}</strong>
@@ -339,7 +334,7 @@ defineExpose({ refresh: loadHistory })
                   @click="openResource(event.resourceRef)"
                 >{{ resourceActionLabel(event.resourceRef.resourceType) }}</el-button>
               </header>
-              <p v-if="event.description" class="history-event__description">{{ event.description }}</p>
+              <p v-if="event.description && !event.versionCycle" class="history-event__description">{{ event.description }}</p>
 
               <template v-if="event.importBatch">
                 <el-descriptions class="event-import" :column="3" border>
@@ -358,69 +353,21 @@ defineExpose({ refresh: loadHistory })
                   <header class="version-cycle__heading">
                     <div>
                       <strong>{{ event.versionCycle.versionNumber }}</strong>
-                      <el-tag :type="historyTagType(historyVersionStatusMeta(event.versionCycle.versionStatus))" size="small" effect="plain" round>{{ historyVersionStatusMeta(event.versionCycle.versionStatus).label }}</el-tag>
+                      <el-tag :class="{ 'version-cycle__status--pending': event.versionCycle.versionStatus === 'pending_review' }" :type="historyTagType(historyVersionStatusMeta(event.versionCycle.versionStatus))" size="small" :effect="event.versionCycle.versionStatus === 'pending_review' ? 'dark' : 'plain'" round>{{ historyVersionStatusMeta(event.versionCycle.versionStatus).label }}</el-tag>
+                      <el-tag v-if="cycleFiles(event.versionCycle).length" type="info" size="small" effect="plain" round>{{ cycleFiles(event.versionCycle).length }} 个文件</el-tag>
                     </div>
-                    <span>{{ actorDisplayName(event.versionCycle.submitter) }} · {{ formatHistoryDateTime(event.versionCycle.submittedTime) }}</span>
+                    <div class="version-cycle__actions">
+                      <el-button size="small" plain type="primary" :icon="Right" @click="openResource({ resourceType: 'version', resourceId: event.versionCycle.versionId })">查看作品</el-button>
+                      <el-button v-if="reviewListRef(event.versionCycle)" size="small" type="primary" :icon="Right" @click="openResource(reviewListRef(event.versionCycle))">查看审核</el-button>
+                    </div>
                   </header>
+                  <div class="version-cycle__meta">
+                    <span>提交人：{{ actorDisplayName(event.versionCycle.submitter) }} · {{ formatHistoryDateTime(event.versionCycle.submittedTime) }}</span>
+                    <span class="version-cycle__summary">{{ cycleSummary(event.versionCycle) }}</span>
+                  </div>
                   <p>{{ event.versionCycle.changelog || '本版未填写整体修改说明。' }}</p>
 
-                  <div class="version-cycle__file">
-                    <div v-if="event.versionCycle.primaryFile"><strong>{{ event.versionCycle.primaryFile.businessFileName }}</strong><small>{{ event.versionCycle.primaryFile.contentType || '未知文件类型' }} · {{ formatHistoryFileSize(event.versionCycle.primaryFile.fileSize) }}</small></div>
-                    <div v-else><strong>版本成果</strong><small>未提供主文件摘要</small></div>
-                    <div class="version-cycle__actions">
-                      <el-button link type="primary" :icon="Right" @click="openResource({ resourceType: 'version', resourceId: event.versionCycle.versionId })">版本详情</el-button>
-                      <el-button v-if="reviewListRef(event.versionCycle)" link type="primary" :icon="Right" @click="openResource(reviewListRef(event.versionCycle))">审核单</el-button>
-                    </div>
-                  </div>
 
-                  <el-collapse v-if="hasVersionDetails(event.versionCycle)" class="version-cycle__details">
-                    <div class="version-cycle__detail-grid">
-                    <el-collapse-item v-if="event.versionCycle.reviewActions?.length" class="version-cycle__detail-item" name="review-actions">
-                      <template #title><span class="version-cycle__detail-title"><span>审核动作</span><el-tag size="small" type="info" effect="plain" round>{{ event.versionCycle.reviewActions.length }} 条</el-tag></span></template>
-                      <div class="history-record-list">
-                        <article v-for="action in event.versionCycle.reviewActions" :key="action.actionId" class="history-record">
-                          <header><el-tag :type="historyTagType(historyReviewActionMeta(action.actionType))" size="small" effect="plain" round>{{ historyReviewActionMeta(action.actionType).label }}</el-tag><time>{{ formatHistoryDateTime(action.createTime) }}</time></header>
-                          <p>{{ action.reason || '审核人未填写额外说明。' }}</p>
-                          <small>{{ actorDisplayName(action.reviewer) }} · {{ historyWorkflowStatusLabel(action.fromStatus) }} → {{ historyWorkflowStatusLabel(action.toStatus) }}</small>
-                        </article>
-                      </div>
-                    </el-collapse-item>
-
-                    <el-collapse-item v-if="event.versionCycle.sourceIssues?.length" class="version-cycle__detail-item" name="source-issues">
-                      <template #title><span class="version-cycle__detail-title"><span>修改问题</span><el-tag size="small" type="info" effect="plain" round>{{ event.versionCycle.sourceIssues.length }} 条</el-tag></span></template>
-                      <div class="history-record-list">
-                        <article v-for="issue in event.versionCycle.sourceIssues" :key="issue.issueId" class="history-record">
-                          <header><span><strong>#{{ issue.issueId }}</strong><el-tag :type="historyTagType(historyIssueStatusMeta(issue.status))" size="small" effect="plain" round>{{ historyIssueStatusMeta(issue.status).label }}</el-tag></span><time>{{ formatHistoryDateTime(issue.createTime) }}</time></header>
-                          <p>{{ sourceIssueSummary(issue) }}</p>
-                          <small>来源 {{ issue.originVersionNumber }} · {{ actorDisplayName(issue.reviewer) }}<template v-if="issue.resolvedInVersionNumber"> · 在 {{ issue.resolvedInVersionNumber }} 解决</template></small>
-                          <el-button v-if="reviewListRef(event.versionCycle)" link type="primary" :icon="Right" @click="openResource(reviewListRef(event.versionCycle))">查看所属审核单</el-button>
-                        </article>
-                      </div>
-                    </el-collapse-item>
-
-                    <el-collapse-item v-if="event.versionCycle.issueResponses?.length" class="version-cycle__detail-item" name="issue-responses">
-                      <template #title><span class="version-cycle__detail-title"><span>制作处理说明</span><el-tag size="small" type="info" effect="plain" round>{{ event.versionCycle.issueResponses.length }} 条</el-tag></span></template>
-                      <div class="history-record-list">
-                        <article v-for="response in event.versionCycle.issueResponses" :key="response.responseId" class="history-record">
-                          <header><strong>问题 #{{ response.issueId }}</strong><time>{{ formatHistoryDateTime(response.createTime) }}</time></header>
-                          <p>{{ response.responseText }}</p>
-                          <small>{{ actorDisplayName(response.responder) }} · 来源 {{ response.originVersionNumber }}</small>
-                        </article>
-                      </div>
-                    </el-collapse-item>
-
-                    <el-collapse-item v-if="event.versionCycle.issueVerifications?.length" class="version-cycle__detail-item" name="issue-verifications">
-                      <template #title><span class="version-cycle__detail-title"><span>审核确认</span><el-tag size="small" type="info" effect="plain" round>{{ event.versionCycle.issueVerifications.length }} 条</el-tag></span></template>
-                      <div class="history-record-list">
-                        <article v-for="verification in event.versionCycle.issueVerifications" :key="verification.verificationId" class="history-record">
-                          <header><span><strong>问题 #{{ verification.issueId }}</strong><el-tag :type="historyTagType(historyVerificationMeta(verification.result))" size="small" effect="plain" round>{{ historyVerificationMeta(verification.result).label }}</el-tag></span><time>{{ formatHistoryDateTime(verification.createTime) }}</time></header>
-                          <p v-if="verification.comment">{{ verification.comment }}</p>
-                          <small>{{ actorDisplayName(verification.reviewer) }} · 在 {{ verification.checkedVersionNumber }} 核验</small>
-                        </article>
-                      </div>
-                    </el-collapse-item>
-                    </div>
-                  </el-collapse>
                 </section>
               </template>
             </el-card>
@@ -452,8 +399,8 @@ defineExpose({ refresh: loadHistory })
 .history-lane-name,
 .history-stage__tags { display: inline-flex; align-items: center; gap: 7px; }
 .history-stage { padding: 20px; background: var(--sg-surface-raised); border: 1px solid var(--sg-border); border-radius: var(--sg-radius-md); }
-.history-stage__heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 20px; }
-.history-stage__heading > div { display: flex; min-width: 0; align-items: baseline; gap: 10px; }
+.history-stage__heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 20px; }
+.history-stage__identity { display: flex; min-width: 0; align-items: baseline; gap: 10px; }
 .history-stage__heading strong { overflow: hidden; font-size: 16px; text-overflow: ellipsis; white-space: nowrap; }
 .history-stage__heading span { color: var(--sg-text-muted); font-size: 11px; }
 .history-stage__tags { flex: 0 0 auto; }
@@ -464,72 +411,50 @@ defineExpose({ refresh: loadHistory })
 .history-stage__steps:deep(.el-step__line-inner) { border-width: 1px !important; }
 .history-stage__steps:deep(.el-step__main) { padding-top: 8px; }
 .history-stage__steps:deep(.el-step__title) { color: var(--sg-text-secondary); font-size: 12px; line-height: 1.35; }
-.history-stage__steps:deep(.el-step__title.is-process),
-.history-stage__steps:deep(.el-step__title.is-success) { color: var(--sg-text); }
-.history-stage__steps:deep(.el-step__head.is-process),
-.history-stage__steps:deep(.el-step__head.is-success) { color: var(--sg-accent); border-color: var(--sg-accent); }
-.history-metrics { display: grid; margin-top: 20px; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
-.history-metrics:deep(.el-statistic) { padding: 12px 14px; background: var(--sg-surface); border: 1px solid var(--sg-border); border-radius: 9px; }
-.history-metrics:deep(.el-statistic__head) { margin-bottom: 5px; color: var(--sg-text-muted); font-size: 10px; }
-.history-metrics:deep(.el-statistic__number) { color: var(--sg-text); font-size: 21px; }
+.history-stage__steps:deep(.el-step__title.is-process) { color: var(--sg-text); }
+.history-stage__steps:deep(.el-step__title.is-success) { color: var(--el-color-success); }
+.history-stage__steps:deep(.el-step__head.is-process) { color: var(--sg-accent); border-color: var(--sg-accent); }
+.history-stage__steps:deep(.el-step__head.is-success) { color: var(--el-color-success); border-color: var(--el-color-success); }
+.history-metrics { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 20px; margin-left: auto; }
+.history-metrics:deep(.el-statistic) { display: inline-flex; align-items: baseline; gap: 8px; }
+.history-metrics:deep(.el-statistic__head) { margin: 0; color: var(--sg-text-muted); font-size: 12px; line-height: 1.5; }
+.history-metrics:deep(.el-statistic__content) { line-height: 1.5; }
+.history-metrics:deep(.el-statistic__number) { color: var(--sg-text); font-size: 15px; font-weight: 600; }
 .history-lane-summary,
 .history-timeline { margin-top: 20px; }
 .history-lane-summary:deep(.el-table) { --el-table-bg-color: var(--sg-surface); --el-table-tr-bg-color: var(--sg-surface); --el-table-header-bg-color: var(--sg-surface-raised); --el-table-border-color: var(--sg-border); --el-table-text-color: var(--sg-text-secondary); --el-table-header-text-color: var(--sg-text-muted); }
-.history-timeline:deep(.el-timeline) { margin: 0; padding: 2px 0 0 8px; }
+.history-timeline:deep(.el-timeline) { margin: 0; padding: 2px 0 0; }
 .history-timeline:deep(.el-timeline-item) { padding-bottom: 18px; }
 .history-timeline:deep(.el-timeline-item:last-child) { padding-bottom: 0; }
-.history-timeline:deep(.el-timeline-item__tail) { left: 5px; border-left: 2px solid var(--sg-border-strong); }
-.history-timeline:deep(.el-timeline-item__node--large) { left: -1px; width: 13px; height: 13px; box-shadow: 0 0 0 4px var(--sg-surface); }
-.history-timeline:deep(.el-timeline-item__wrapper) { top: -5px; padding-left: 25px; }
+.history-timeline:deep(.el-timeline-item__tail) { border-left: 2px solid var(--sg-border-strong); }
+.history-timeline:deep(.el-timeline-item__node--large) { box-shadow: 0 0 0 4px var(--sg-surface); }
+.history-timeline:deep(.el-timeline-item__wrapper) { top: -5px; }
 .history-timeline:deep(.el-timeline-item__timestamp) { margin-bottom: 7px; color: var(--sg-text-muted); font-size: 10px; font-variant-numeric: tabular-nums; line-height: 1.4; }
-.history-event { --el-card-bg-color: var(--sg-surface-raised); --el-card-border-color: var(--sg-border); border-left: 3px solid var(--sg-border-strong); border-radius: 10px; }
+.history-event { text-align: left; --el-card-bg-color: var(--sg-surface-raised); --el-card-border-color: var(--sg-border); --el-box-shadow-light: 0 3px 12px rgba(35, 45, 57, 0.08); border-radius: 10px; }
 .history-event:deep(.el-card__body) { padding: 14px 16px; }
 .history-event--version { --el-card-border-color: color-mix(in srgb, var(--sg-accent) 32%, var(--sg-border)); }
-.history-event--version.el-card { border-left-color: var(--sg-accent); }
+.history-event--version:deep(> .el-card__body) { padding: 10px 12px; }
 .history-event__heading,
-.version-cycle__heading,
-.history-record > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.version-cycle__heading { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .history-event__title-row,
-.history-record > header > span,
 .version-cycle__heading > div { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .history-event__heading small,
-.version-cycle__heading > span,
-.history-record small,
-.history-record time { color: var(--sg-text-muted); font-size: 9px; }
+.version-cycle__heading > span { color: var(--sg-text-muted); font-size: 9px; }
 .history-event__description { margin: 10px 0 0; color: var(--sg-text-secondary); font-size: 12px; line-height: 1.6; }
 .event-import { margin-top: 13px; }
 .event-import:deep(.el-descriptions__body),
 .event-import:deep(.el-descriptions__cell) { background: var(--sg-surface) !important; border-color: var(--sg-border) !important; }
 .event-import:deep(.el-descriptions__label) { color: var(--sg-text-muted); font-size: 9px; }
 .event-import:deep(.el-descriptions__content) { color: var(--sg-text-secondary); font-size: 10px; overflow-wrap: anywhere; }
-.version-cycle { display: grid; margin-top: 13px; gap: 12px; }
+.version-cycle { display: grid; margin-top: 0; gap: 6px; }
+.version-cycle__meta { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 20px; font-size: 12px; line-height: 1.5; }
+.version-cycle__summary { color: var(--sg-text-muted); }
 .version-cycle__heading strong { font-size: 20px; }
+.version-cycle__status--pending { --el-tag-bg-color: var(--sg-accent); --el-tag-border-color: var(--sg-accent); --el-tag-text-color: #fff; color: #fff; padding: 0 10px; font-size: 12px; font-weight: 700; }
 .version-cycle > p { margin: 0; color: var(--sg-text-secondary); font-size: 12px; line-height: 1.7; }
-.version-cycle__file { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px 14px; background: var(--sg-surface); border: 1px solid var(--sg-border); border-radius: 9px; }
-.version-cycle__file > div:first-child { display: grid; min-width: 0; gap: 4px; }
-.version-cycle__file strong { overflow: hidden; color: var(--sg-text); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
-.version-cycle__file small { color: var(--sg-text-muted); font-size: 9px; }
 .version-cycle__actions { display: flex; flex: 0 0 auto; }
-.version-cycle__details { padding-top: 12px; border-top: 1px solid var(--sg-border); border-bottom: 0; }
-.version-cycle__details:deep(.el-collapse-item) { display: block; width: 100%; min-width: 0; overflow: hidden; background: var(--sg-surface); border: 1px solid var(--sg-border); border-radius: 9px; transition: border-color 160ms ease, background 160ms ease; }
-.version-cycle__detail-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr)); gap: 10px; align-items: start; }
-.version-cycle__details:deep(.el-collapse-item.is-active) { border-color: color-mix(in srgb, var(--sg-accent) 38%, var(--sg-border)); }
-.version-cycle__details:deep(.el-collapse-item__header) { display: flex; width: 100%; min-width: 0; min-height: 46px; height: 46px; padding: 0 12px 0 14px; align-items: center; color: var(--sg-text); background: transparent; border-bottom: 0; font-weight: 600; line-height: 1.35; }
-.version-cycle__details:deep(.el-collapse-item__header:hover) { background: var(--sg-surface-soft); }
-.version-cycle__details:deep(.el-collapse-item__arrow) { flex: 0 0 auto; margin: 0 0 0 10px; color: var(--sg-accent); font-size: 13px; }
-.version-cycle__details:deep(.el-collapse-item__wrap) { background: transparent; border-top: 1px solid var(--sg-border); border-bottom: 0; }
-.version-cycle__details:deep(.el-collapse-item__content) { padding: 12px; color: var(--sg-text-secondary); }
-.version-cycle__detail-title { display: grid; width: auto; height: 100%; min-width: 0; flex: 1 1 0%; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 10px; }
-.version-cycle__detail-title > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.version-cycle__detail-title:deep(.el-tag) { flex: 0 0 auto; }
-.history-record-list { display: grid; gap: 8px; }
-.history-record { display: grid; gap: 7px; padding: 11px 12px; background: var(--sg-surface); border: 1px solid var(--sg-border); border-radius: 8px; }
-.history-record p { margin: 0; color: var(--sg-text-secondary); font-size: 11px; line-height: 1.6; white-space: pre-wrap; }
-.history-record > .el-button { justify-self: start; padding-left: 0; }
 
 @media (max-width: 850px) {
-  .history-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .version-cycle__file { align-items: flex-start; flex-direction: column; }
 }
 
 @media (max-width: 620px) {
@@ -537,8 +462,7 @@ defineExpose({ refresh: loadHistory })
   .history-stage__heading,
   .history-event__heading,
   .version-cycle__heading { align-items: stretch; flex-direction: column; }
-  .history-stage__heading > div { align-items: flex-start; flex-direction: column; }
-  .history-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .history-timeline:deep(.el-timeline) { padding-left: 2px; }
+  .history-stage__identity { align-items: flex-start; flex-direction: column; }
+  .history-metrics { margin-left: 0; column-gap: 16px; }
 }
 </style>

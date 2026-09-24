@@ -206,7 +206,7 @@ class ShotGridIssueVerification(Base):
     project_id = Column(BigInteger, nullable=False, comment='项目ID')
     note_id = Column(BigInteger, nullable=False, comment='来源问题ID')
     checked_version_id = Column(BigInteger, nullable=False, comment='执行确认的版本ID')
-    checked_candidate_id = Column(BigInteger, nullable=False, comment='执行确认的候选ID')
+    checked_candidate_id = Column(BigInteger, nullable=True, comment='执行确认的候选ID')
     result = Column(String(20), nullable=False, comment='确认结果')
     comment = Column(String(1000), nullable=True, comment='本次确认补充说明')
     reviewer_user_id = Column(
@@ -255,7 +255,7 @@ class ShotGridReviewAction(Base):
     action_id = Column(BigInteger, primary_key=True, nullable=False, autoincrement=True, comment='审核动作ID')
     project_id = Column(BigInteger, nullable=False, comment='项目ID')
     version_id = Column(BigInteger, nullable=False, comment='审核版本ID')
-    selected_candidate_id = Column(BigInteger, nullable=False, comment='执行审核动作的候选ID')
+    selected_candidate_id = Column(BigInteger, nullable=True, comment='执行审核动作的候选ID')
     reviewer_user_id = Column(
         BigInteger,
         ForeignKey('sys_user.user_id', ondelete='RESTRICT'),
