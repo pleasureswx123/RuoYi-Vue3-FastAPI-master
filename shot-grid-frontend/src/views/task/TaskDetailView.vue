@@ -442,8 +442,6 @@ onBeforeUnmount(() => {
         </el-card>
 
         <el-card id="version-workspace" class="task-card task-card--wide version-workspace-anchor" shadow="never" data-testid="version-workspace-anchor">
-          <p class="sg-eyebrow">DELIVERY</p>
-          <h3>版本提交与历史</h3>
           <VersionWorkspace
             :task-id="task.taskId"
             :task-kind="task.taskKind"

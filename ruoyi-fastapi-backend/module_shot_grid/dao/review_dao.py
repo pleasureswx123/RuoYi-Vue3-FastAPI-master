@@ -25,6 +25,7 @@ from module_shot_grid.entity.do.review_do import (
     ShotGridVersionCandidateSelection,
     ShotGridVersionIssueResponse,
 )
+from module_shot_grid.entity.do.storage_do import ShotGridProjectStorage
 from module_shot_grid.entity.do.task_do import ShotGridTask
 from module_shot_grid.entity.do.version_do import (
     ShotGridMediaDerivation,
@@ -496,6 +497,8 @@ class ShotGridReviewDao:
                 select(
                     ShotGridVersionFile.candidate_id,
                     ShotGridVersionFile.file_id,
+                    ShotGridVersionFile.nas_relative_path,
+                    ShotGridProjectStorage.project_path_snapshot,
                     SysFileInfo.original_name,
                     ShotGridVersionFile.business_file_name,
                     ShotGridVersionFile.file_role.label('role'),
@@ -505,6 +508,8 @@ class ShotGridReviewDao:
                     SysFileInfo.file_size,
                 )
                 .join(SysFileInfo, SysFileInfo.file_id == ShotGridVersionFile.file_id)
+                .join(ShotGridVersion, ShotGridVersion.version_id == ShotGridVersionFile.version_id)
+                .outerjoin(ShotGridProjectStorage, ShotGridProjectStorage.project_id == ShotGridVersion.project_id)
                 .where(
                     ShotGridVersionFile.version_id == version_id,
                     SysFileInfo.status == 'active',

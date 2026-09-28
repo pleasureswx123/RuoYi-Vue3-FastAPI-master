@@ -157,6 +157,7 @@ class ShotGridVersionFileModel(ShotGridApiModel):
     content_type: str | None = None
     file_size: int
     url: str
+    nas_path: str | None = None
 
 
 class ShotGridVersionCandidateModel(ShotGridApiModel):

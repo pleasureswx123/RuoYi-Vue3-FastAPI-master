@@ -22,6 +22,7 @@ const emit = defineEmits(['committed', 'submission-change', 'version-selected'])
 const sessionStore = useSessionStore()
 const historyRefreshKey = ref(0)
 const historyPanel = ref(null)
+const submissionSection = ref(null)
 const selectedVersion = ref(null)
 const submissionVisible = computed(() => props.taskStatus !== 'pending_review' || (
   Number(props.latestVersionNo) > 0 &&
@@ -72,6 +73,14 @@ function handleVersionSelected(version, context) {
 function focusIssue(issue) {
   historyPanel.value?.focusIssue(issue)
 }
+
+function focusSubmission() {
+  if (!canAdd.value || !submissionVisible.value || props.hasUncommittedSubmission) return
+  const element = submissionSection.value?.$el
+  element?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  element?.setAttribute('tabindex', '-1')
+  element?.focus({ preventScroll: true })
+}
 </script>
 
 <template>
@@ -87,10 +96,15 @@ function focusIssue(issue) {
       :can-list-notes="canListNotes"
       @version-selected="handleVersionSelected"
       @selection-loading="selectedVersion = null"
-    />
+    >
+      <template v-if="canAdd && submissionVisible && !hasUncommittedSubmission" #actions>
+        <el-button type="primary" @click="focusSubmission">{{ taskStatus === 'pending_review' ? '追加本轮文件' : '提交新版本' }}</el-button>
+      </template>
+    </VersionHistoryPanel>
     <VersionSubmissionPanel
       v-if="shouldShowSubmission"
       v-show="submissionVisible"
+      ref="submissionSection"
       :task-id="taskId"
       :task-kind="taskKind"
       :task-status="taskStatus"

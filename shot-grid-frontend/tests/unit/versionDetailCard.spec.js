@@ -4,8 +4,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { downloadProtectedVersionFile } from '@/api/shot-grid/versions'
 import VersionDetailCard from '@/components/version/VersionDetailCard.vue'
+import { copyTextToClipboard } from '@/utils/clipboard'
 
 vi.mock('@/api/shot-grid/versions', () => ({ downloadProtectedVersionFile: vi.fn() }))
+vi.mock('@/utils/clipboard', () => ({ copyTextToClipboard: vi.fn() }))
 
 const fileId = '550e8400-e29b-41d4-a716-446655440000'
 const mountOptions = {
@@ -53,6 +55,21 @@ function version(versionId = 7, overrides = {}) {
 }
 
 describe('版本详情与受保护下载', () => {
+  it('复制当前文件完整 NAS 路径，没有路径时隐藏按钮', async () => {
+    const nasPath = '\\\\192.168.10.64\\web\\项目\\VIDEO\\EP01\\0010\\作品.mp4'
+    copyTextToClipboard.mockResolvedValue(true)
+    const wrapper = mount(VersionDetailCard, {
+      ...mountOptions,
+      props: { version: version(7, { files: [{ ...version().files[0], nasPath }] }) }
+    })
+    await wrapper.findAll('button').find(button => button.text() === '复制 NAS 路径').trigger('click')
+    await flushPromises()
+    expect(copyTextToClipboard).toHaveBeenCalledWith(nasPath)
+    await wrapper.setProps({ version: version() })
+    expect(wrapper.findAll('button').some(button => button.text() === '复制 NAS 路径')).toBe(false)
+    wrapper.unmount()
+  })
+
   it('逐文件展示提示词，切换候选后更新且不执行文本中的HTML', async () => {
     const candidates = [
       { candidateId: 1, candidateNumber: 'V001_01', candidateNo: 1, generationPrompt: '山水\n<script>bad()</script>', files: [] },

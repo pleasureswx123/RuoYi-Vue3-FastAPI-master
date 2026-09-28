@@ -269,7 +269,7 @@ onBeforeUnmount(() => {
 
 <style scoped lang="scss">
 .app-shell {
-  --app-sidebar-width: 244px;
+  --app-sidebar-width: 180px;
   --app-header-height: 76px;
   min-height: 100vh;
   transition: 180ms ease;
@@ -621,6 +621,13 @@ onBeforeUnmount(() => {
 
 .app-security-notice:deep(.el-alert__content) {
   padding: 0 clamp(12px, 2vw, 28px);
+}
+
+@media (min-width: 821px) {
+  .app-shell:not(.is-collapsed) .app-brand {
+    gap: 8px;
+    padding-inline: 12px;
+  }
 }
 
 @media (max-width: 820px) {

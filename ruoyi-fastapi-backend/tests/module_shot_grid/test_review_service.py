@@ -1251,6 +1251,8 @@ async def test_version_detail_returns_only_safe_file_fields_and_redacts_ai_param
                     'content_type': 'video/mp4',
                     'file_size': 1024,
                     'storage_key': 'must-not-leak',
+                    'project_path_snapshot': r'\\192.168.10.64\web\项目',
+                    'nas_relative_path': r'VIDEO\EP01\镜头\作品.mp4',
                 }
             ]
         ),
@@ -1288,6 +1290,9 @@ async def test_version_detail_returns_only_safe_file_fields_and_redacts_ai_param
     assert detail.production_target.shot.camera_movement == '手持呼吸感'
     assert detail.files[0].url == ('/shot-grid/versions/9001/files/5ed39e04-2f29-45ab-a58c-4f8168f5131a/download')
     assert 'storage_key' not in detail.files[0].model_dump()
+    assert detail.files[0].nas_path == r'\\192.168.10.64\web\项目\VIDEO\EP01\镜头\作品.mp4'
+    assert detail.candidates[0].files[0].nas_path == detail.files[0].nas_path
+    assert 'project_path_snapshot' not in detail.files[0].model_dump()
 
 
 def test_asset_version_production_target_contains_parent_and_item_context() -> None:
@@ -1587,7 +1592,9 @@ async def test_published_issue_audit_preserves_long_snapshot(monkeypatch: pytest
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('blocked', [None, 'project', 'new_version', 'submission', 'second_write', 'drafts', 'carried', 'creator'])
+@pytest.mark.parametrize(
+    'blocked', [None, 'project', 'new_version', 'submission', 'second_write', 'drafts', 'carried', 'creator']
+)
 async def test_batch_overall_drafts_atomic_boundary(monkeypatch: pytest.MonkeyPatch, blocked: str | None) -> None:
 
     db = AsyncMock()

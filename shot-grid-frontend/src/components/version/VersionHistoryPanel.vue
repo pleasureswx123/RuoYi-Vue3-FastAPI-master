@@ -4,7 +4,7 @@ import { ElTabs, ElTabPane, ElDrawer } from 'element-plus'
 import 'element-plus/es/components/tabs/style/css'
 import 'element-plus/es/components/drawer/style/css'
 import 'element-plus/es/components/tab-pane/style/css'
-import { Refresh } from '@element-plus/icons-vue'
+import { QuestionFilled, Refresh } from '@element-plus/icons-vue'
 
 import { getReviewActions, getTaskIssues } from '@/api/shot-grid/reviews'
 import { useVersionRealtime } from '@/composables/useVersionRealtime'
@@ -61,6 +61,10 @@ const previousSourceDetails = ref({})
 let previousSourcesController = null
 const sourceDrawerOpen = ref(false)
 const sourceNote = ref(null)
+const sourceIsOverall = computed(() => sourceNote.value?.originCandidateId == null)
+const sourceDrawerTitle = computed(() => sourceIsOverall.value
+  ? `整体反馈 · ${sourceNote.value?.originVersionNumber || feedbackSourceDetail.value?.versionNumber || '历史版本'}`
+  : '上一轮意见 · 原始画面与标注')
 const sourceMedia = ref(null)
 const feedbackSourceDetail = ref(null)
 const feedbackSourceLoading = ref(false)
@@ -634,7 +638,12 @@ defineExpose({ focusIssue })
   <div :id="historyPanelId" ref="historyPanel" class="version-history-affix-target">
     <el-card class="version-history-panel" shadow="never">
     <header class="history-heading">
-      <div><p class="sg-eyebrow">IMMUTABLE HISTORY</p><h3>版本历史</h3><p>版本按提交顺序自动编号；每次修订都会新增版本，历史文件始终保留。</p></div>
+      <div class="history-title">
+        <h3>版本记录</h3>
+        <el-tooltip content="版本按提交顺序自动编号；每次修订都会新增版本，历史文件始终保留。" placement="top">
+          <el-button text circle :icon="QuestionFilled" aria-label="版本记录说明" />
+        </el-tooltip>
+      </div>
       <el-form ref="historyFormRef" :model="historyFilters" class="history-tools" size="large" inline aria-label="版本历史筛选">
         <el-form-item prop="versionStatus">
           <el-select v-model="statusFilter" class="sg-select" placeholder="全部状态" aria-label="筛选版本状态" @change="applyStatusFilter">
@@ -645,6 +654,7 @@ defineExpose({ focusIssue })
           </el-select>
         </el-form-item>
         <el-form-item><el-button v-if="canList" :icon="Refresh" :loading="loading" @click="loadVersions()">刷新</el-button></el-form-item>
+        <el-form-item v-if="$slots.actions"><slot name="actions" /></el-form-item>
       </el-form>
     </header>
 
@@ -796,20 +806,42 @@ defineExpose({ focusIssue })
       <el-pagination v-if="total > pageSize" class="version-pagination" small background layout="prev, pager, next" :current-page="pageNum" :page-size="pageSize" :total="total" :disabled="loading" aria-label="版本历史分页" @current-change="changePage" />
     </div>
     </el-card>
-    <ElDrawer v-model="sourceDrawerOpen" :title="sourceNote?.originCandidateId == null ? '上一轮整体反馈' : '上一轮意见 · 原始画面与标注'" size="min(960px, 92vw)" append-to-body destroy-on-close @close="closeSourceNote">
+    <ElDrawer v-model="sourceDrawerOpen" :title="sourceDrawerTitle" :size="sourceIsOverall ? 'min(440px, 92vw)' : 'min(960px, 92vw)'" modal-class="feedback-source-overlay" append-to-body destroy-on-close @close="closeSourceNote">
       <el-skeleton v-if="feedbackSourceLoading" :rows="6" animated />
-      <el-alert v-else-if="feedbackSourceError" :title="feedbackSourceError.message" type="error" :closable="false"><el-button @click="loadFeedbackSource">重新加载来源文件</el-button></el-alert>
+      <el-alert v-else-if="feedbackSourceError" :title="feedbackSourceError.message" type="error" :closable="false"><el-button @click="loadFeedbackSource">重新加载</el-button></el-alert>
       <template v-else-if="sourceMediaVersion">
-        <p>来源 {{ sourceMediaVersion.versionNumber }} · 当前主区域仍为 {{ versionDetail?.versionNumber }}</p>
-        <p v-if="sourceNote?.originCandidateId == null">{{ sourceNote?.content }}</p>
+        <header class="source-feedback-meta">
+          <span>审核人：{{ feedbackAuthor(sourceNote) }}</span>
+          <time v-if="sourceNote?.createTime">{{ formatReviewDateTime(sourceNote.createTime) }}</time>
+          <div class="source-feedback-context">
+            <el-tag v-if="!sourceIsOverall" size="small" effect="plain">来源 {{ sourceMediaVersion.versionNumber }}</el-tag>
+            <span>正在对照 {{ versionDetail?.versionNumber }}</span>
+          </div>
+        </header>
+        <section v-if="sourceIsOverall" class="source-feedback-content" aria-label="反馈内容">
+          <h4>反馈内容</h4>
+          <p>{{ sourceNote?.content || '此条反馈请查看参考附件' }}</p>
+        </section>
         <ReviewMediaWorkspace v-else ref="sourceMedia" :version="sourceMediaVersion" :selected-note="sourceNote" :can-download="canDownload" feedback-mode />
-        <ReviewReferenceFiles :files="sourceNote?.referenceFiles || []" />
+        <section v-if="sourceNote?.referenceFiles?.length" class="source-feedback-attachments" aria-label="参考附件">
+          <h4>参考附件</h4>
+          <ReviewReferenceFiles :files="sourceNote.referenceFiles" />
+        </section>
       </template>
     </ElDrawer>
   </div>
 </template>
 
 <style scoped lang="scss">
+:global(.feedback-source-overlay) { background-color: rgba(0, 0, 0, 0.18); }
+.source-feedback-meta { display: flex; flex-direction: column; gap: 8px; margin-bottom: 20px; color: var(--sg-text-secondary); font-size: 13px; }
+.source-feedback-meta time { color: var(--sg-text-muted); font-size: 12px; }
+.source-feedback-context { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; color: var(--sg-text-muted); }
+.source-feedback-content { padding: 16px; border: 1px solid var(--sg-border); border-radius: var(--sg-radius-md, 8px); background: var(--sg-fill-soft); }
+.source-feedback-content h4,
+.source-feedback-attachments h4 { margin: 0 0 12px; color: var(--sg-text-secondary); font-size: 13px; }
+.source-feedback-content p { margin: 0; color: var(--sg-text); font-size: 14px; line-height: 1.8; white-space: pre-wrap; overflow-wrap: anywhere; }
+.source-feedback-attachments { margin-top: 20px; }
 .version-history-panel { --el-card-bg-color: var(--sg-surface); --el-card-border-color: var(--sg-border); overflow: visible; border-radius: var(--sg-radius-lg); }
 .version-history-panel.el-card { border: 0; border-radius: 0; background: transparent; }
 .version-history-panel:deep(> .el-card__body) { padding: 0; }
@@ -817,8 +849,8 @@ defineExpose({ focusIssue })
 .version-history-panel > :deep(.el-card__body),
 .version-feedback-panel > :deep(.el-card__body) { overflow: visible; }
 .history-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
-.history-heading h3 { margin: 3px 0 7px; font-size: 20px; }
-.history-heading p:not(.sg-eyebrow) { margin: 0; color: var(--sg-text-muted); font-size: 12px; }
+.history-title { display: flex; align-items: center; gap: 4px; }
+.history-heading h3 { margin: 0; font-size: 20px; }
 .history-tools { display: flex; gap: 9px; }
 .history-tools:deep(.el-form-item) { margin: 0; }
 .history-tools .sg-select { width: 160px; }

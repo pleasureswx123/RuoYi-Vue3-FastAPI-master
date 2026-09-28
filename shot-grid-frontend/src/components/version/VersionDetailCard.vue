@@ -1,9 +1,11 @@
 <script setup>
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import { Download, Document, VideoPlay } from '@element-plus/icons-vue'
+import { CopyDocument, Download, Document, VideoPlay } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
 
 import { downloadProtectedVersionFile } from '@/api/shot-grid/versions'
 import { tagTypeFromTone } from '@/utils/tag'
+import { copyTextToClipboard } from '@/utils/clipboard'
 import { fileRoleLabel } from '@/views/file/filePresentation'
 import ProtectedVersionPreview from './ProtectedVersionPreview.vue'
 import CandidateGenerationPrompt from './CandidateGenerationPrompt.vue'
@@ -20,6 +22,7 @@ const props = defineProps({
 const emit = defineEmits(['prompt-saved'])
 
 const downloadingFileId = ref(null)
+const copyingFileId = ref(null)
 const downloadError = ref(null)
 const activeAiSections = ref([])
 const activeCandidateId = ref(null)
@@ -123,6 +126,20 @@ function safeDownloadName(value) {
     .join('')
     .trim()
   return normalized || 'version-file'
+}
+
+async function copyNasPath(file) {
+  if (!file?.nasPath || copyingFileId.value) return
+  copyingFileId.value = file.fileId
+  const generation = versionGeneration
+  try {
+    const copied = await copyTextToClipboard(file.nasPath)
+    if (disposed || generation !== versionGeneration) return
+    if (copied) ElMessage.success('NAS 路径已复制')
+    else ElMessage.error('复制失败，请检查浏览器剪贴板权限后重试')
+  } finally {
+    copyingFileId.value = null
+  }
 }
 
 async function downloadFile(file) {
@@ -248,6 +265,14 @@ onBeforeUnmount(() => {
             <el-tag v-if="version.versionStatus === 'final' && file.isPrimary" size="small" effect="plain" round type="success">最终交付文件</el-tag>
           </div>
           <div class="file-actions">
+            <el-button
+              v-if="file.nasPath"
+              size="small"
+              :icon="CopyDocument"
+              :loading="copyingFileId === file.fileId"
+              :disabled="Boolean(copyingFileId)"
+              @click="copyNasPath(file)"
+            >复制 NAS 路径</el-button>
             <el-button
               v-if="showPreview && versionCandidates.length > 1 && fileCandidate(file)"
               size="small"

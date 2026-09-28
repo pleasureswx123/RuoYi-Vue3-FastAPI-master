@@ -192,6 +192,7 @@ class ShotGridReviewService:
                 {
                     **file,
                     'is_primary': file['is_primary'] == '1',
+                    'nas_path': cls._version_file_nas_path(file),
                     'url': f'/shot-grid/versions/{version_id}/files/{file["file_id"]}/download',
                 }
             )
@@ -209,6 +210,28 @@ class ShotGridReviewService:
         )
         values['final_delivery'] = cls._final_delivery_model(final_delivery)
         return ShotGridVersionDetailModel.model_validate(values)
+
+    @staticmethod
+    def _version_file_nas_path(file: dict) -> str | None:
+        """只投影冻结的 UNC 文件路径，不暴露本机或容器挂载路径。"""
+        project_path = file.get('project_path_snapshot')
+        relative_path = file.get('nas_relative_path')
+        if not project_path or not relative_path:
+            return None
+        project = PureWindowsPath(project_path)
+        relative = PureWindowsPath(relative_path)
+        if (
+            not project.is_absolute()
+            or not project.drive.startswith('\\\\')
+            or project.drive.startswith(('\\\\?\\', '\\\\.\\'))
+            or relative.drive
+            or relative.root
+            or '..' in (*project.parts, *relative.parts)
+            or any(char in str(relative) for char in ':*?"<>|')
+            or any(char < ' ' for char in str(project) + str(relative))
+        ):
+            return None
+        return str(project / relative)
 
     @staticmethod
     def _can_edit_prompt(
@@ -703,6 +726,7 @@ class ShotGridReviewService:
                 {
                     **file,
                     'is_primary': file['is_primary'] == '1',
+                    'nas_path': cls._version_file_nas_path(file),
                     'url': f'/shot-grid/versions/{version_id}/files/{file["file_id"]}/download',
                 }
             )

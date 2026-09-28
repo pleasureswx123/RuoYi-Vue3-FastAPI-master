@@ -1,6 +1,6 @@
 import { createPinia, setActivePinia } from 'pinia'
 import { mount } from '@vue/test-utils'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import VersionWorkspace from '@/components/version/VersionWorkspace.vue'
 import { useSessionStore } from '@/store/modules/session'
@@ -8,7 +8,7 @@ import { useSessionStore } from '@/store/modules/session'
 const historyStub = {
   name: 'VersionHistoryPanel',
   methods: { focusIssue() {} },
-  template: '<div data-testid="version-history" />'
+  template: '<div data-testid="version-history"><slot name="actions" /></div>'
 }
 
 const submissionStub = {
@@ -101,7 +101,7 @@ describe('版本工作区提交入口', () => {
     wrapper.unmount()
   })
 
-  it('后端动作与平台权限同时允许时显示提交入口', () => {
+  it('后端动作与平台权限同时允许时显示提交入口，点击定位表单', async () => {
     const wrapper = mountWorkspace({
       taskStatus: 'in_progress',
       allowedActions: ['version.add'],
@@ -109,6 +109,15 @@ describe('版本工作区提交入口', () => {
     })
 
     expect(wrapper.find('[data-testid="version-submission"]').exists()).toBe(true)
+    const section = wrapper.get('[data-testid="version-submission"]').element
+    section.scrollIntoView = vi.fn()
+    const focus = vi.spyOn(section, 'focus')
+    const button = wrapper.findAll('button').find(item => item.text() === '提交新版本')
+    await button.trigger('click')
+    expect(section.scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth', block: 'start' })
+    expect(focus).toHaveBeenCalledWith({ preventScroll: true })
+    await wrapper.setProps({ taskStatus: 'completed' })
+    expect(wrapper.findAll('button').some(item => item.text() === '提交新版本')).toBe(false)
     wrapper.unmount()
   })
 
