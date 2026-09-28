@@ -495,7 +495,7 @@ def test_migration_ddl_contains_every_named_metadata_constraint_and_index() -> N
     migration = _migration_namespace(SHOT_GRID_INITIAL_SCHEMA_REVISION)
     ddl = '\n'.join(migration['SHOT_GRID_DDL'])
     migration_source = '\n'.join(
-        path.read_text(encoding='utf-8') for path in (BACKEND_ROOT / 'alembic' / 'versions').glob('*-202608*_*.py')
+        path.read_text(encoding='utf-8') for path in (BACKEND_ROOT / 'alembic' / 'versions').glob('*-20*_*.py')
     )
     metadata_names = {
         item.name
@@ -504,7 +504,8 @@ def test_migration_ddl_contains_every_named_metadata_constraint_and_index() -> N
         if item.name is not None
     }
 
-    assert all(name in f'{ddl}\n{migration_source}' for name in metadata_names)
+    missing_names = {name for name in metadata_names if name not in f'{ddl}\n{migration_source}'}
+    assert not missing_names, f'迁移中缺少约束或索引：{sorted(missing_names)}'
     assert 'TIMESTAMP WITHOUT TIME ZONE' not in ddl
     assert 'TIMESTAMP(0) WITHOUT TIME ZONE' in ddl
 

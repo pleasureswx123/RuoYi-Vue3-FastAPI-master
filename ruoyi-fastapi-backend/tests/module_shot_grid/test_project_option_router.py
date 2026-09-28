@@ -12,6 +12,7 @@ EXPECTED_ROUTES = {
     ('GET', '/shot-grid/projects/{projectId}/member-candidates'): 'shotgrid:member:add',
     ('GET', '/shot-grid/projects/{projectId}/shot-assignee-options'): 'shotgrid:shot:list',
     ('GET', '/shot-grid/projects/{projectId}/asset-assignee-options'): 'shotgrid:asset:list',
+    ('GET', '/shot-grid/projects/{projectId}/revision-assignee-options'): 'shotgrid:task:assign',
 }
 
 

@@ -917,7 +917,7 @@ defineExpose({ focusIssue })
 .feedback-file__content small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--sg-text-muted); }
 .feedback-file.active { border-color: var(--sg-accent); background: var(--sg-accent-soft); }
 .feedback-file__content .el-tag { justify-self: start; }
-.feedback-file__content .feedback-pending-tag { --el-tag-bg-color: var(--sg-accent); --el-tag-border-color: var(--sg-accent); --el-tag-text-color: #fff; font-weight: 600; }
+.feedback-file__content .feedback-pending-tag.el-tag { --el-tag-bg-color: var(--sg-accent); --el-tag-border-color: var(--sg-accent); --el-tag-text-color: #fff; font-weight: 600; }
 .feedback-media, .feedback-list-panel { min-width: 0; }
 .feedback-list-panel { padding: 0; border-radius: 8px; }
 .opinion-tabs { overflow: hidden; border-radius: 8px; box-shadow: none; border-color: var(--sg-border); }

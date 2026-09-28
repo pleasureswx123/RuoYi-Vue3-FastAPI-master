@@ -1345,5 +1345,5 @@ onBeforeUnmount(() => {
 .issue-scope-tabs :deep(.el-tabs__item) { padding: 0 12px; font-size: 12px; }
 .issue-scope-tabs .issue-compose { padding: 0; }
 .issue-scope-label { display: inline-flex; align-items: center; gap: 4px; }
-.issue-candidate-tag { height: 16px; padding: 0 5px; font-size: 10px; line-height: 14px; transform: scale(.8); transform-origin: left center; margin-right: -10px; }
+.issue-candidate-tag.el-tag { height: 16px; padding: 0 5px; font-size: 10px; line-height: 14px; transform: scale(.8); transform-origin: left center; margin-right: -10px; }
 </style>

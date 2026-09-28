@@ -1,3 +1,5 @@
+from uuid import UUID
+
 from annotated_types import Gt, Le
 
 from module_shot_grid.controller.asset_crud_controller import asset_crud_controller
@@ -24,5 +26,8 @@ def test_crud_path_ids_stay_inside_postgresql_bigint() -> None:
 
     assert path_parameters
     for parameter in path_parameters:
+        if parameter.alias == 'fileId':
+            assert parameter.field_info.annotation is UUID
+            continue
         assert any(isinstance(bound, Gt) and bound.gt == 0 for bound in parameter.field_info.metadata)
         assert any(isinstance(bound, Le) and bound.le == SQL_BIGINT_MAX for bound in parameter.field_info.metadata)

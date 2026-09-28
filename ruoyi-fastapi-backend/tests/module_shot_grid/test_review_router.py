@@ -1,7 +1,10 @@
+import pytest
 from fastapi import FastAPI
+from pydantic import ValidationError
 
 from common.aspect.interface_auth import CheckUserInterfaceAuth
 from module_shot_grid.controller.review_controller import review_controller
+from module_shot_grid.entity.vo.review_vo import ShotGridReviewActionCreateModel
 
 REVIEW_ROUTER_ORDER = 47
 SQL_BIGINT_MAX = 9_223_372_036_854_775_807
@@ -33,6 +36,18 @@ EXPECTED_ROUTES = {
     ('GET', '/shot-grid/versions/{versionId}/review-actions'): 'shotgrid:version:query',
     ('POST', '/shot-grid/versions/{versionId}/review-actions'): 'shotgrid:version:review',
     ('POST', '/shot-grid/versions/{versionId}/final-delivery/retry'): 'shotgrid:version:retry',
+    ('POST', '/shot-grid/projects/{projectId}/review-overall-feedback/batch-reject'): [
+        'shotgrid:note:add',
+        'shotgrid:version:review',
+    ],
+    ('POST', '/shot-grid/projects/{projectId}/review-overall-feedback/batch'): [
+        'shotgrid:note:add',
+        'shotgrid:version:review',
+    ],
+    ('PUT', '/shot-grid/versions/{versionId}/additional-issues/{issueId}'): 'shotgrid:note:add',
+    ('DELETE', '/shot-grid/versions/{versionId}/additional-issues/{issueId}'): 'shotgrid:note:add',
+    ('PUT', '/shot-grid/versions/{versionId}/candidates/{candidateId}/generation-prompt'): 'shotgrid:version:add',
+    ('POST', '/shot-grid/versions/{versionId}/transfer-revision'): 'shotgrid:task:assign',
 }
 
 
@@ -45,6 +60,12 @@ def test_review_routes_match_review_contract_and_permissions() -> None:
             if isinstance(dependency.dependency, CheckUserInterfaceAuth)
         ]
         assert len(permissions) == 1
+        if route.path.endswith(('/review-overall-feedback/batch', '/review-overall-feedback/batch-reject')):
+            assert all(
+                dependency.dependency.is_strict
+                for dependency in route.dependencies
+                if isinstance(dependency.dependency, CheckUserInterfaceAuth)
+            )
         for method in route.methods:
             actual[(method, route.path)] = permissions[0]
 
@@ -64,7 +85,11 @@ def test_review_action_openapi_documents_service_required_idempotency_header_and
     request_schema = operation['requestBody']['content']['application/json']['schema']
     assert request_schema['$ref'].endswith('/ShotGridReviewActionCreateModel')
     action_schema = app.openapi()['components']['schemas']['ShotGridReviewActionCreateModel']
-    assert {'actionType', 'selectedCandidateId', 'lockVersion'} <= set(action_schema['required'])
+    assert {'actionType', 'lockVersion'} <= set(action_schema['required'])
+    assert 'selectedCandidateId' not in action_schema['required']
+    assert ShotGridReviewActionCreateModel(actionType='reject', lockVersion=0).selected_candidate_id is None
+    with pytest.raises(ValidationError, match='审核通过时必须选择最终交付文件'):
+        ShotGridReviewActionCreateModel(actionType='approve', lockVersion=0)
 
 
 def test_candidate_selection_openapi_documents_required_payload_and_idempotency_header() -> None:
