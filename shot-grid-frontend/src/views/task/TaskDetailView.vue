@@ -417,11 +417,10 @@ onBeforeUnmount(() => {
       />
 
       <section class="task-detail-grid">
-        <el-card class="task-card task-card--wide" shadow="never" data-testid="project-references">
+        <el-card v-if="task.projectReferenceDescription?.trim() || task.projectReferenceFiles?.length" class="task-card task-card--wide" shadow="never" data-testid="project-references">
           <header><div><p class="sg-eyebrow">PROJECT REFERENCES</p><h3>项目资料</h3></div></header>
           <p v-if="task.projectReferenceDescription" class="task-requirements">{{ task.projectReferenceDescription }}</p>
           <ReviewReferenceFiles v-if="task.projectReferenceFiles?.length" :files="task.projectReferenceFiles" />
-          <el-empty v-if="!task.projectReferenceDescription && !task.projectReferenceFiles?.length" description="项目暂未提供剧本或参考资料" :image-size="48" />
         </el-card>
 
         <el-card class="task-card task-card--wide" shadow="never" data-testid="task-requirements">
