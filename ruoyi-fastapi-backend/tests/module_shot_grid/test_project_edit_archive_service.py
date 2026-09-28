@@ -108,12 +108,14 @@ def _patch_dependencies(
         'has_versions': AsyncMock(return_value=has_versions),
         'update_project': AsyncMock(return_value=snapshot or _snapshot()),
         'audit': AsyncMock(),
+        'references': AsyncMock(return_value=[]),
     }
     targets = {
         'get_project': 'ShotGridProjectDao.get_project_by_id',
         'has_versions': 'ShotGridProjectDao.has_formal_versions',
         'update_project': 'ShotGridProjectDao.update_project',
         'audit': 'ShotGridProjectAuditDao.add_success_log',
+        'references': 'ShotGridProjectReferenceService.list_files',
     }
     for name, target in targets.items():
         monkeypatch.setattr(f'module_shot_grid.service.project_service.{target}', mocks[name])

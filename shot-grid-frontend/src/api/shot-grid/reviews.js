@@ -11,7 +11,7 @@ function idempotencyHeaders(idempotencyKey) {
 
 function assertReferenceDownloadUrl(value) {
   const normalized = typeof value === 'string' ? value.trim() : ''
-  if (!/^\/shot-grid\/(?:issue-drafts|issues)\/\d+\/reference-files\/[0-9a-f-]{36}\/download$/i.test(normalized)) {
+  if (!/^\/shot-grid\/(?:(?:issue-drafts|issues|projects)\/\d+|tasks\/\d+(?:\/project)?)\/reference-files\/[0-9a-f-]{36}\/download$/i.test(normalized)) {
     throw new TypeError('参考文件下载地址无效')
   }
   return normalized
@@ -230,6 +230,13 @@ export function retryFinalDelivery(versionId, options = {}) {
 export function rejectBatchWithOverallFeedback(projectId, data) {
   return request({
     url: `/shot-grid/projects/${assertPositiveId(projectId, '项目')}/review-overall-feedback/batch-reject`,
+    method: 'post', data, silentError: true
+  })
+}
+
+export function submitBatchFeedback(projectId, data) {
+  return request({
+    url: `/shot-grid/projects/${assertPositiveId(projectId, '项目')}/review-overall-feedback/batch`,
     method: 'post', data, silentError: true
   })
 }

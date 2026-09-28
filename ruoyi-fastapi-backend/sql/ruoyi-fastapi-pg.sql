@@ -1580,6 +1580,7 @@ CREATE TABLE sg_project (
 	project_name VARCHAR(200) NOT NULL,
 	project_type VARCHAR(50) DEFAULT 'ai_short_film' NOT NULL,
 	project_description TEXT,
+	reference_description TEXT,
 	aspect_ratio VARCHAR(20) DEFAULT '16:9' NOT NULL,
 	planned_duration_ms BIGINT,
 	delivery_date DATE,
@@ -1609,6 +1610,7 @@ COMMENT ON COLUMN sg_project.project_code IS '项目代号及产出文件前缀'
 COMMENT ON COLUMN sg_project.project_name IS '项目名称';
 COMMENT ON COLUMN sg_project.project_type IS '项目类型代码';
 COMMENT ON COLUMN sg_project.project_description IS '项目描述';
+COMMENT ON COLUMN sg_project.reference_description IS '项目共享资料说明';
 COMMENT ON COLUMN sg_project.aspect_ratio IS '画幅';
 COMMENT ON COLUMN sg_project.planned_duration_ms IS '计划总时长（毫秒）';
 COMMENT ON COLUMN sg_project.delivery_date IS '交付日期';
@@ -1813,7 +1815,7 @@ CREATE TABLE sg_episode (
 	del_flag CHAR(1) DEFAULT '0' NOT NULL,
 	PRIMARY KEY (episode_id),
 	CONSTRAINT uk_sg_episode_id_project UNIQUE (episode_id, project_id),
-	CONSTRAINT ck_sg_episode_no CHECK (episode_no > 0),
+	CONSTRAINT ck_sg_episode_no CHECK (episode_no >= 0),
 	CONSTRAINT ck_sg_episode_sort_order CHECK (sort_order >= 0),
 	CONSTRAINT ck_sg_episode_lifecycle CHECK (lifecycle_status in ('active', 'archived')),
 	CONSTRAINT ck_sg_episode_lock_version CHECK (lock_version >= 0),
@@ -2310,6 +2312,7 @@ CREATE TABLE sg_task (
 	baseline_start_time TIMESTAMP(0) WITHOUT TIME ZONE,
 	baseline_end_time TIMESTAMP(0) WITHOUT TIME ZONE,
 	requirements TEXT,
+	reference_description TEXT,
 	create_by VARCHAR(64) DEFAULT '' NOT NULL,
 	create_time TIMESTAMP(0) WITHOUT TIME ZONE NOT NULL,
 	update_by VARCHAR(64) DEFAULT '' NOT NULL,

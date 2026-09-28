@@ -11,6 +11,7 @@ from common.enums import BusinessType
 from common.vo import PageModel
 from module_admin.entity.vo.user_vo import CurrentUserModel
 from module_shot_grid.dao.project_audit_dao import ShotGridProjectAuditDao
+from module_shot_grid.dao.project_dao import ShotGridProjectDao
 from module_shot_grid.dao.task_dao import ShotGridTaskDao
 from module_shot_grid.entity.do.project_do import ShotGridProject
 from module_shot_grid.entity.do.storage_do import ShotGridProjectStorage, ShotGridStorageOperation
@@ -41,8 +42,10 @@ from module_shot_grid.service.asset_task_rules import (
     require_asset_production_item,
 )
 from module_shot_grid.service.project_access_service import ShotGridProjectAccessService
+from module_shot_grid.service.project_reference_service import ShotGridProjectReferenceService
 from module_shot_grid.service.project_service import ShotGridProjectService
 from module_shot_grid.service.shot_task_rules import missing_shot_assignment_fields, require_shot_assignment_fields
+from module_shot_grid.service.task_reference_service import ShotGridTaskReferenceService
 from module_shot_grid.shot_number import format_shot_code
 
 MAX_TASK_NAME_LENGTH = 240
@@ -98,7 +101,17 @@ class ShotGridTaskService:
         project_id, access = await cls._resolve_task_access(db, task_id, current_user)
         cls._require_matching_access(access, project_id, actor_user_id)
         row = await cls._require_task_detail(db, task_id)
-        return cls._build_detail(row, current_user, access)
+        detail = cls._build_detail(row, current_user, access)
+        project = await ShotGridProjectDao.get_project_by_id(db, project_id)
+        if project is None:
+            raise shot_grid_error(404, 'SG_PROJECT_NOT_FOUND', '项目不存在或不可见')
+        detail.project_reference_description = project.reference_description
+        detail.project_reference_files = await ShotGridProjectReferenceService.list_files(
+            db, project_id, task_id=task_id
+        )
+        detail.reference_description = row.get('reference_description')
+        detail.reference_files = await ShotGridTaskReferenceService.list_files(db, task_id)
+        return detail
 
     @classmethod
     async def update_task(

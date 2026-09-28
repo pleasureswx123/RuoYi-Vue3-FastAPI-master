@@ -11,6 +11,7 @@ import { showWorkflowSuccess } from '@/utils/workflowSuccess'
 import { useVersionRealtime } from '@/composables/useVersionRealtime'
 import { getTaskDetail } from '@/api/shot-grid/tasks'
 import VersionWorkspace from '@/components/version/VersionWorkspace.vue'
+import ReviewReferenceFiles from '@/components/review/ReviewReferenceFiles.vue'
 import { useSessionStore } from '@/store/modules/session'
 import { tagTypeFromTone } from '@/utils/tag'
 import ProjectStatePanel from '@/views/project/components/ProjectStatePanel.vue'
@@ -416,10 +417,17 @@ onBeforeUnmount(() => {
       />
 
       <section class="task-detail-grid">
-        <el-card class="task-card task-card--wide" shadow="never">
+        <el-card class="task-card task-card--wide" shadow="never" data-testid="project-references">
+          <header><div><p class="sg-eyebrow">PROJECT REFERENCES</p><h3>项目资料</h3></div></header>
+          <p v-if="task.projectReferenceDescription" class="task-requirements">{{ task.projectReferenceDescription }}</p>
+          <ReviewReferenceFiles v-if="task.projectReferenceFiles?.length" :files="task.projectReferenceFiles" />
+          <el-empty v-if="!task.projectReferenceDescription && !task.projectReferenceFiles?.length" description="项目暂未提供剧本或参考资料" :image-size="48" />
+        </el-card>
+
+        <el-card class="task-card task-card--wide" shadow="never" data-testid="task-requirements">
           <header><div><p class="sg-eyebrow">BRIEF</p><h3>制作要求</h3></div><div class="brief-actions"><el-button v-if="targetRoute && !embedded" link type="primary" @click="router.push(targetRoute)">查看{{ taskKindMeta(task.taskKind).shortLabel }}详情</el-button><el-tag :type="tagTypeFromTone(taskPriorityMeta(task.priority).tone)" size="small" effect="plain" round>{{ taskPriorityMeta(task.priority).label }}优先级</el-tag></div></header>
           <template v-if="isShotTask">
-            <ShotProductionInfo v-if="shotProduction" :shot="shotProduction" />
+            <ShotProductionInfo v-if="shotProduction" :shot="shotProduction" :reference-files="task.referenceFiles" :reference-description="task.referenceDescription" />
             <p v-else class="task-requirements">{{ task.requirements || task.target.targetDescription || '暂无镜头制作信息。' }}</p>
             <section v-if="hasAdditionalShotRequirements" class="task-additional-requirements" aria-label="任务补充要求">
               <strong>任务补充要求</strong>

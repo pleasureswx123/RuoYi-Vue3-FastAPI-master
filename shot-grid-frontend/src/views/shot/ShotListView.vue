@@ -1,15 +1,20 @@
 <script setup>
+import ReviewReferenceFiles from '@/components/review/ReviewReferenceFiles.vue'
 import BatchOverallFeedbackDialog from '@/components/version/BatchOverallFeedbackDialog.vue'
+import BatchAppendIssueDialog from '@/components/version/BatchAppendIssueDialog.vue'
+import ProductionAdjustmentDialog from './components/ProductionAdjustmentDialog.vue'
 import { shotFeatures } from './shotFeatures'
 import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElCheckbox, ElCheckboxGroup, ElPopover, ElMessage, ElMessageBox } from 'element-plus'
+import { shotDetailColumns, useShotTablePresentation } from './useShotTablePresentation'
 import { Calendar, Clock, Delete, Edit, Grid, List, Plus, Refresh, RefreshLeft, Search, Switch, Upload, User, VideoCamera, VideoPlay, View } from '@element-plus/icons-vue'
 import Sortable from 'sortablejs'
 
 import { getProjectDetail, getProjectPage } from '@/api/shot-grid/projects'
 import { useTaskStartDialog } from '@/views/task/useTaskStartDialog'
 import TaskStartDialog from '@/views/task/components/TaskStartDialog.vue'
+import BatchShotStartDialog from './components/BatchShotStartDialog.vue'
 import { batchAssignShotTasks, batchDeleteShots, getEpisodePage, getScenePage, getShotDetail, getShotPage, listShotAssignees, reorderShot } from '@/api/shot-grid/shots'
 import { assertPositiveId } from '@/api/shot-grid/projects'
 import { useTaskStatePolling } from '@/composables/useTaskStatePolling'
@@ -43,6 +48,8 @@ const scenes = ref([])
 const members = ref([])
 const shots = ref([])
 const batchFeedbackDialog = ref(null)
+const batchFeedbackOpen = ref(false)
+const batchIssueContext = ref(null)
 const selectedShotIds = ref(new Set())
 const total = ref(0)
 const hasNext = ref(false)
@@ -120,6 +127,8 @@ const editContext = ref(null)
 const deleting = ref(false)
 const assigning = ref(false)
 const startingOperation = ref(null)
+const batchStartContext = ref(null)
+const adjustmentContext = ref(null)
 const currentTime = useCurrentTime()
 const { startDialog, requestStartDialog, closeStartDialog, finishStartDialog, failStartDialog } = useTaskStartDialog()
 const reordering = ref(false)
@@ -145,12 +154,16 @@ const shotTableRef = ref(null)
 const shotPageRef = ref(null)
 const shotPaginationRef = ref(null)
 const shotTableHeight = ref(320)
+const tableAvailableWidth = ref(0)
+const { mode: tablePresentationMode, widths: tableColumnWidths, visibleColumns: visibleDetailColumns, setColumns: setDetailColumns, saveWidth: saveColumnWidth, resetPresentation: resetTablePresentation } = useShotTablePresentation(computed(() => sessionStore.user?.userId), tableAvailableWidth)
+const detailColumnCount = computed(() => tableAvailableWidth.value < 1000 ? 1 : 2)
 let tableHeightObserver = null
 let tableHeightFrame = null
 
 function updateTableHeight() {
   const table = shotTableRef.value?.$el
   if (!table) return
+  tableAvailableWidth.value = table.parentElement?.getBoundingClientRect().width || 0
   const pagination = shotPageRef.value?.querySelector('.shot-pagination')
   const paginationStyle = pagination ? window.getComputedStyle(pagination) : null
   const paginationHeight = pagination
@@ -210,7 +223,7 @@ const hasPermission = permission => wildcard.value || sessionStore.permissions.i
 useVersionCollectionRealtime(computed(() => hasPermission('shotgrid:version:query')
   ? shots.value.map(shot => shot.latestVersion?.versionId).filter(Boolean) : []), async () => {
   if (disposed || shotsLoading.value || assigning.value || deleting.value || reordering.value ||
-      startingOperation.value || showEdit.value || singleAssignContext.value ||
+      startingOperation.value || adjustmentContext.value || batchIssueContext.value || batchFeedbackOpen.value || showEdit.value || singleAssignContext.value ||
       appliedQuery.value !== JSON.stringify(query)) return
   await loadShots(null, true)
 })
@@ -229,7 +242,7 @@ const canSchedule = computed(() => Boolean(
   && hasPermission('shotgrid:task:schedule')
   && !['completed', 'archived'].includes(project.value.projectStatus)
 ))
-const startDisabled = computed(() => shotsLoading.value || Boolean(startingOperation.value) || assigning.value || deleting.value || reordering.value)
+const startDisabled = computed(() => shotsLoading.value || Boolean(adjustmentContext.value) || Boolean(startingOperation.value) || Boolean(batchIssueContext.value) || assigning.value || deleting.value || reordering.value)
 const canCreateEpisode = computed(() => isDirector.value && hasPermission('shotgrid:episode:add') && projectAllowsWrites.value)
 const canCreateScene = computed(() => isDirector.value && hasPermission('shotgrid:scene:add') && projectAllowsWrites.value)
 const isSceneOrderScope = computed(() => (
@@ -302,7 +315,7 @@ const { pollingError } = useTaskStatePolling({
   getDelay: () => {
     if (!projectAllowsWrites.value || shotsLoading.value || scenesLoading.value || shotsError.value ||
         showDetail.value || workDrawerProjectId.value || showCreate.value || showImport.value || showEdit.value || editingShotId.value ||
-        showHierarchyCreate.value || showBatchAssign.value || startingOperation.value || singleAssignContext.value || assigningShotId.value ||
+        showHierarchyCreate.value || showBatchAssign.value || startingOperation.value || adjustmentContext.value || batchIssueContext.value || batchFeedbackOpen.value || singleAssignContext.value || assigningShotId.value ||
         deleting.value || assigning.value || reordering.value || appliedQuery.value !== JSON.stringify(query)) return null
     if (shots.value.some(shot => shot.status === 'preparing')) return 1500
     return shots.value.some(shot => shot.status === 'not_started') ? 5000 : null
@@ -393,6 +406,24 @@ function shotTimeState(shot) {
   return taskTimeReminder({ taskStatus: shot.status, expectedEndTime: shot.expectedEndTime }, currentTime.value)
 }
 
+function canAdjustShot(shot) {
+  return isDirector.value && projectAllowsWrites.value && hasPermission('shotgrid:task:edit') && hasPermission('shotgrid:task:query') && hasPermission('shotgrid:shot:query') && shot?.status === 'in_progress' && shot.allowedActions?.includes('task.adjust')
+}
+function openProductionAdjustment(targets) {
+  if (startDisabled.value || !targets.length || targets.length > 100 || !targets.every(canAdjustShot)) return
+  const projectId = currentProjectId.value
+  const generation = projectGeneration
+  const snapshot = targets.map(shot => ({ ...shot }))
+  adjustmentContext.value = { projectId, shots: snapshot, members: [...creatorMembers.value], permissions: [...sessionStore.permissions],
+    validateContext: () => !disposed && Boolean(adjustmentContext.value) && currentProjectId.value === projectId && generation === projectGeneration
+  }
+}
+async function closeProductionAdjustment() {
+  adjustmentContext.value = null
+  clearShotSelection()
+  await loadShots()
+}
+
 function canStartShot(shot) {
   return Boolean(
     canStart.value && hasPermission('shotgrid:shot:query') && shot?.status === 'not_started' &&
@@ -406,6 +437,28 @@ function canStartShot(shot) {
 function isCurrentStart(operation) {
   return !disposed && startingOperation.value === operation &&
     currentProjectId.value === operation.projectId && projectGeneration === operation.projectGeneration
+}
+
+function openBatchStart() {
+  if (startDisabled.value || !selectedShots.value.length || !selectedShots.value.every(canStartShot)) return
+  const operation = Object.freeze({ projectId: currentProjectId.value, projectGeneration })
+  const snapshot = selectedShots.value.map(shot => ({ ...shot }))
+  startingOperation.value = operation
+  batchStartContext.value = {
+    projectId: operation.projectId, shots: snapshot, members: [...members.value],
+    validateContext: () => isCurrentStart(operation) && snapshot.every(shot => {
+      const current = shots.value.find(item => item.shotId === shot.shotId)
+      return canStartShot(current) && current.taskId === shot.taskId &&
+        current.taskLockVersion === shot.taskLockVersion && current.lockVersion === shot.lockVersion
+    })
+  }
+}
+
+async function closeBatchStart() {
+  batchStartContext.value = null
+  startingOperation.value = null
+  clearShotSelection()
+  await loadShots()
 }
 
 async function confirmStartShot(shot) {
@@ -526,21 +579,55 @@ function canAddOverallFeedback(shot) {
   return projectAllowsWrites.value && hasPermission('shotgrid:note:add') && hasPermission('shotgrid:version:review')
     && shot.allowedActions?.includes('task.review') && shot.latestVersion?.status === 'pending_review'
 }
-function openBatchFeedback() {
-  if (!selectedShots.value.length || !selectedShots.value.every(canAddOverallFeedback)) return
+function canAppendShotIssue(shot) {
+  return projectAllowsWrites.value && isDirector.value && hasPermission('shotgrid:note:add') &&
+    hasPermission('shotgrid:version:review') && hasPermission('shotgrid:version:query') &&
+    hasPermission('shotgrid:reviewList:query') && shot?.status === 'revision' &&
+    shot.allowedActions?.includes('task.appendIssue') && shot.latestVersion?.status === 'rejected' &&
+    Number.isSafeInteger(shot.latestVersion?.versionId) && shot.latestVersion.versionId > 0
+}
+function openBatchAppendIssues() {
+  if (startDisabled.value || !selectedShots.value.length || !selectedShots.value.every(canAppendShotIssue)) return
   if (selectedShots.value.length > 100) return ElMessage.warning('一次最多选择 100 个任务')
-  batchFeedbackDialog.value?.open(currentProjectId.value, selectedShots.value)
+  const projectId = currentProjectId.value
+  const generation = projectGeneration
+  const targets = selectedShots.value.map(shot => ({
+    shotId: shot.shotId, versionId: shot.latestVersion.versionId,
+    label: `${[shot.episodeCode, shot.sceneCode, shot.shotCode].join(' / ')} · ${shot.latestVersion.versionNumber}`
+  }))
+  batchIssueContext.value = {
+    projectId, targets,
+    validateContext: () => !disposed && Boolean(batchIssueContext.value) &&
+      currentProjectId.value === projectId && projectGeneration === generation && targets.every(target => {
+        const shot = shots.value.find(item => item.shotId === target.shotId)
+        return canAppendShotIssue(shot) && shot.latestVersion.versionId === target.versionId
+      })
+  }
+}
+async function closeBatchAppendIssues() {
+  batchIssueContext.value = null
+  clearShotSelection()
+  await loadShots()
+}
+function openBatchFeedback() {
+  if (startDisabled.value || batchFeedbackOpen.value || !selectedShots.value.length || !selectedShots.value.every(canAddOverallFeedback)) return
+  if (selectedShots.value.length > 100) return ElMessage.warning('一次最多选择 100 个任务')
+  const projectId = currentProjectId.value
+  const generation = projectGeneration
+  const selected = selectedShots.value.map(shot => ({ ...shot, canInspect: workAction(shot)?.type === 'review' }))
+  batchFeedbackDialog.value?.open(projectId, selected, () =>
+    !disposed && generation === projectGeneration && projectId === currentProjectId.value && selected.every(canAddOverallFeedback))
 }
 async function handleBatchFeedbackSaved(context) {
   if (currentProjectId.value === context.projectId) await loadShots()
 }
 
 function canSelectShot(shot) {
-  return canAssignShot(shot) || canDeleteShot(shot) || canAddOverallFeedback(shot)
+  return canAdjustShot(shot) || canAssignShot(shot) || canDeleteShot(shot) || canAddOverallFeedback(shot) || canStartShot(shot) || canAppendShotIssue(shot)
 }
 
 function isShotSelectable(shot) {
-  return !deleting.value && !assigning.value && canSelectShot(shot)
+  return !deleting.value && !assigning.value && !startingOperation.value && !batchIssueContext.value && !batchFeedbackOpen.value && !adjustmentContext.value && canSelectShot(shot)
 }
 
 async function fetchAllPages(loader, baseParams, signal) {
@@ -584,9 +671,13 @@ async function loadProjects(preferredId = null) {
 
 async function loadProjectContext() {
   projectGeneration += 1
+  adjustmentContext.value = null
   closeStartDialog()
+  batchStartContext.value = null
   startingOperation.value = null
   const projectId = currentProjectId.value
+  batchIssueContext.value = null
+  batchFeedbackOpen.value = false
   closeDetailDrawer()
   shotController?.abort()
   sceneController?.abort()
@@ -1231,6 +1322,9 @@ onBeforeUnmount(() => { disposed = true; closeSingleAssign(); destroyRowSortable
 
 <template>
   <TaskStartDialog v-if="startDialog" :context="startDialog" @close="closeStartDialog" @started="finishStartDialog" @failed="failStartDialog" />
+  <ProductionAdjustmentDialog v-if="adjustmentContext" :context="adjustmentContext" @close="closeProductionAdjustment" />
+  <BatchShotStartDialog v-if="batchStartContext" :context="batchStartContext" @close="closeBatchStart" />
+  <BatchAppendIssueDialog v-if="batchIssueContext" :context="batchIssueContext" @close="closeBatchAppendIssues" />
   <section ref="shotPageRef" class="sg-page shot-page" :class="{ 'shot-page--table': viewMode === 'table' }">
     <header class="sg-page-heading shot-heading">
       <h2 class="sg-page-title">镜头管理</h2>
@@ -1268,7 +1362,7 @@ onBeforeUnmount(() => { disposed = true; closeSingleAssign(); destroyRowSortable
             </el-form-item>
           </div>
           <el-form-item class="shot-filter-item" prop="shotStatus">
-            <el-select v-model="query.shotStatus" class="sg-select" placeholder="全部状态" aria-label="按状态筛选" @change="submitFilters"><el-option label="全部状态" value="" /><el-option v-for="status in ['unassigned','not_started','preparing','in_progress','reviewing','revision','completed']" :key="status" :label="shotStatusMeta(status).label" :value="status" /></el-select>
+            <el-select v-model="query.shotStatus" class="sg-select" placeholder="全部状态" aria-label="按状态筛选" @change="submitFilters"><el-option label="全部状态" value="" /><el-option v-for="status in ['unassigned','not_started','in_progress','reviewing','revision','completed']" :key="status" :label="shotStatusMeta(status).label" :value="status" /></el-select>
           </el-form-item>
           <el-form-item class="shot-filter-item" prop="assigneeUserId">
             <el-select v-model="query.assigneeUserId" class="sg-select" placeholder="全部制作人" aria-label="按制作人筛选" @change="submitFilters"><el-option label="全部制作人" value="" /><el-option v-for="member in creatorMembers" :key="member.userId" :label="shotAssigneeOptionLabel(member)" :value="String(member.userId)" /></el-select>
@@ -1280,7 +1374,15 @@ onBeforeUnmount(() => { disposed = true; closeSingleAssign(); destroyRowSortable
           </el-form-item>
         </el-form>
 
-        <div class="shot-list-toolbar"><div class="shot-list-toolbar__summary"><strong>{{ total }}</strong><span>个镜头<span v-if="shotsLoading"> · 正在刷新</span><span v-else>{{ dragSortHint }}</span></span><template v-if="viewMode === 'table' && selectedShots.length"><el-button v-if="selectedShots.every(canAddOverallFeedback)" text type="primary" :disabled="assigning || deleting || shotsLoading" @click="openBatchFeedback">批量整体反馈（{{ selectedShots.length }}）</el-button><el-button v-if="canAssign && selectedShots.every(canAssignShot)" text type="primary" :loading="assigning" :disabled="deleting" @click="openBatchAssignDialog">{{ batchAssignLabel }}（{{ selectedShots.length }}）</el-button><el-button v-if="canDelete" text type="danger" :icon="Delete" :disabled="!canDeleteSelection || deleting || assigning" :loading="deleting" :title="!canDeleteSelection ? '选中项包含已开始任务，不能批量删除' : ''" @click="confirmDeleteShots(selectedShots)">批量删除（{{ selectedShots.length }}）</el-button></template></div><el-button v-if="shotFeatures.manualSortEnabled && viewMode === 'table' && (canEdit || sceneOrderMode)" size="small" :type="sceneOrderMode ? 'primary' : 'default'" :disabled="shotsLoading || reordering || assigning || deleting || (!sceneOrderMode && (!isSceneOrderScope || total > MAX_SCENE_SORT_SHOTS))" @click="toggleSceneOrderMode">{{ sceneOrderMode ? '退出排序' : '排序模式' }}</el-button><el-radio-group v-model="viewMode" class="shot-list-toolbar__views" size="small" aria-label="镜头视图"><el-radio-button value="table"><el-icon><List /></el-icon>表格</el-radio-button><el-radio-button value="card"><el-icon><Grid /></el-icon>卡片</el-radio-button><el-radio-button value="storyboard"><el-icon><VideoCamera /></el-icon>故事板</el-radio-button><el-radio-button value="swimlane"><el-icon><Clock /></el-icon>人员泳道</el-radio-button><el-radio-button value="gantt"><el-icon><Calendar /></el-icon>任务甘特</el-radio-button></el-radio-group></div>
+        <div class="shot-list-toolbar"><div class="shot-list-toolbar__summary"><strong>{{ total }}</strong><span>个镜头<span v-if="shotsLoading"> · 正在刷新</span><span v-else>{{ dragSortHint }}</span></span><template v-if="viewMode === 'table' && selectedShots.length"><el-button v-if="selectedShots.every(canAdjustShot)" text type="primary" :disabled="startDisabled || selectedShots.length > 100" @click="openProductionAdjustment(selectedShots)">批量调整制作任务（{{ selectedShots.length }}）</el-button><el-button v-if="selectedShots.every(canAppendShotIssue)" text type="primary" :disabled="startDisabled" @click="openBatchAppendIssues">批量追加发送问题（{{ selectedShots.length }}）</el-button><el-button v-if="canStart && selectedShots.every(canStartShot)" text type="primary" :icon="VideoPlay" :disabled="startDisabled" @click="openBatchStart">批量开始任务（{{ selectedShots.length }}）</el-button><el-button v-if="selectedShots.every(canAddOverallFeedback)" text type="primary" :disabled="assigning || deleting || shotsLoading" @click="openBatchFeedback">批量反馈与复核（{{ selectedShots.length }}）</el-button><el-button v-if="canAssign && selectedShots.every(canAssignShot)" text type="primary" :loading="assigning" :disabled="deleting" @click="openBatchAssignDialog">{{ batchAssignLabel }}（{{ selectedShots.length }}）</el-button><el-button v-if="canDelete" text type="danger" :icon="Delete" :disabled="!canDeleteSelection || deleting || assigning" :loading="deleting" :title="!canDeleteSelection ? '选中项包含已开始任务，不能批量删除' : ''" @click="confirmDeleteShots(selectedShots)">批量删除（{{ selectedShots.length }}）</el-button></template></div><el-button v-if="shotFeatures.manualSortEnabled && viewMode === 'table' && (canEdit || sceneOrderMode)" size="small" :type="sceneOrderMode ? 'primary' : 'default'" :disabled="shotsLoading || reordering || assigning || deleting || (!sceneOrderMode && (!isSceneOrderScope || total > MAX_SCENE_SORT_SHOTS))" @click="toggleSceneOrderMode">{{ sceneOrderMode ? '退出排序' : '排序模式' }}</el-button><el-popover v-if="viewMode === 'table'" placement="bottom-end" :width="280" trigger="click">
+          <template #reference><el-button size="small" aria-label="表格列设置">列设置</el-button></template>
+          <el-form label-position="top" :model="{ mode: tablePresentationMode }" class="shot-column-settings">
+            <el-form-item label="显示方式" prop="mode"><el-select v-model="tablePresentationMode" aria-label="表格显示方式"><el-option label="自动适应" value="auto" /><el-option label="精简列" value="compact" /><el-option label="完整列" value="full" /><el-option label="自定义列" value="custom" /></el-select></el-form-item>
+            <el-form-item label="附加信息列"><el-checkbox-group :model-value="visibleDetailColumns" @update:model-value="setDetailColumns"><el-checkbox v-for="column in shotDetailColumns" :key="column.key" :value="column.key">{{ column.label }}</el-checkbox></el-checkbox-group></el-form-item>
+            <p>收起的信息仍可在行首展开查看。拖动表头边界可调整列宽。</p>
+            <el-button text type="primary" @click="resetTablePresentation">恢复自动布局</el-button>
+          </el-form>
+        </el-popover><el-radio-group v-model="viewMode" class="shot-list-toolbar__views" size="small" aria-label="镜头视图"><el-radio-button value="table"><el-icon><List /></el-icon>表格</el-radio-button><el-radio-button value="card"><el-icon><Grid /></el-icon>卡片</el-radio-button><el-radio-button value="storyboard"><el-icon><VideoCamera /></el-icon>故事板</el-radio-button><el-radio-button value="swimlane"><el-icon><Clock /></el-icon>人员泳道</el-radio-button><el-radio-button value="gantt"><el-icon><Calendar /></el-icon>任务甘特</el-radio-button></el-radio-group></div>
 
         <el-alert v-if="pollingError" :title="pollingError" type="warning" show-icon :closable="false" />
         <Suspense v-if="['swimlane', 'gantt'].includes(viewMode) && currentProjectId">
@@ -1292,50 +1394,38 @@ onBeforeUnmount(() => { disposed = true; closeSingleAssign(); destroyRowSortable
         <el-empty v-else-if="viewMode !== 'table' && !shots.length" class="shot-empty" description="当前筛选没有镜头"><p>可以调整集、场次、状态或制作人筛选；项目管理人也可以新建或导入镜头。</p></el-empty>
 
         <div v-else-if="viewMode === 'table'" class="shot-table-wrap">
-          <el-table ref="shotTableRef" v-loading="shotsLoading" class="shot-data-table" :data="shots" row-key="shotId" :height="shotTableHeight" empty-text="当前筛选没有镜头" @selection-change="handleShotSelectionChange">
+          <el-table ref="shotTableRef" v-loading="shotsLoading" class="shot-data-table" :data="shots" row-key="shotId" :height="shotTableHeight" empty-text="当前筛选没有镜头" @selection-change="handleShotSelectionChange" @header-dragend="saveColumnWidth">
             <template #empty><el-empty class="shot-empty" description="当前筛选没有镜头"><p>可以调整集、场次、状态或制作人筛选；项目管理人也可以新建或导入镜头。</p></el-empty></template>
-            <!-- <el-table-column v-if="canDragSort" width="38" fixed="left" align="center"><template #default="scope"><el-icon class="shot-drag-handle" :class="{ 'is-disabled': !isShotOrderMutable(scope.row) }" :title="isShotOrderMutable(scope.row) ? '拖拽调整场内顺序，镜头号将同步更新' : shotOrderLockReason(scope.row)"><Rank /></el-icon></template></el-table-column> -->
-            <el-table-column type="selection" width="48" fixed="left" align="center" :selectable="isShotSelectable" reserve-selection />
-            <el-table-column label="集 / 场 / 镜头" width="150" fixed="left">
-              <template #default="scope"><div v-if="scope?.row" class="shot-identity"><strong>{{ scope.row.episodeCode }} / {{ scope.row.sceneCode }} / {{ scope.row.shotCode }}</strong><small>本场第 {{ scope.row.shotNo }} 镜 · {{ formatShotDuration(scope.row.durationMs) }}</small></div></template>
+            <el-table-column type="selection" width="44" fixed="left" align="center" :selectable="isShotSelectable" reserve-selection />
+            <el-table-column type="expand" width="40" fixed="left">
+              <template #default="{ row }">
+                <div class="shot-expanded-details">
+                  <el-descriptions :column="detailColumnCount" size="small" border>
+                    <el-descriptions-item label="制作内容" :span="detailColumnCount"><div class="shot-detail-text">{{ row.description || '未填写' }}</div></el-descriptions-item>
+                    <el-descriptions-item label="镜头参数">{{ [row.shotSize, row.cameraPosition, row.cameraMovement, row.focalLength].filter(Boolean).join(' · ') || '未填写' }}</el-descriptions-item>
+                    <el-descriptions-item v-for="column in shotDetailColumns.filter(item => !['parameters', 'references'].includes(item.key))" :key="column.key" :label="column.label"><div class="shot-detail-text">{{ row[column.key] || '未填写' }}</div></el-descriptions-item>
+                    <el-descriptions-item label="参考内容" :span="detailColumnCount"><div class="shot-detail-text" v-if="row.referenceDescription">{{ row.referenceDescription }}</div><ReviewReferenceFiles v-if="row.referenceFiles?.length" :files="row.referenceFiles" compact /><span v-else-if="!row.referenceDescription">暂无参考内容</span></el-descriptions-item>
+                  </el-descriptions>
+                </div>
+              </template>
             </el-table-column>
-            <el-table-column label="缩略图" width="115">
-              <template #default="scope"><ProtectedThumbnail v-if="scope?.row" class="shot-thumb shot-thumb--small" :thumbnail="scope.row.thumbnail" :video="scope.row.proxyMedia" :alt="`${scope.row.shotCode} 缩略图`" /></template>
+            <el-table-column label="镜头" column-key="identity" :width="tableColumnWidths.identity || (tableAvailableWidth < 1250 ? 245 : 255)" fixed="left">
+              <template #default="{ row }"><div class="shot-identity-with-media"><ProtectedThumbnail class="shot-thumb shot-thumb--small" :thumbnail="row.thumbnail" :video="row.proxyMedia" :alt="`${row.shotCode} 缩略图`" /><div class="shot-identity"><strong>{{ row.episodeCode }} / {{ row.sceneCode }} / {{ row.shotCode }}</strong><small>本场第 {{ row.shotNo }} 镜 · {{ formatShotDuration(row.durationMs) }}</small></div></div></template>
             </el-table-column>
-            <el-table-column label="制作内容" width="300">
-              <template #default="scope"><div v-if="scope?.row" class="shot-description">{{ scope.row.description }}</div></template>
+            <el-table-column label="制作内容" column-key="description" :width="tableColumnWidths.description" :min-width="tableAvailableWidth < 1250 ? 220 : 260">
+              <template #default="{ row }"><div class="shot-description" :title="row.description || ''">{{ row.description || '未填写' }}</div><el-button class="shot-expand-content" text type="primary" size="small" @click="shotTableRef?.toggleRowExpansion(row)">展开 / 收起详情</el-button></template>
             </el-table-column>
-            <el-table-column prop="expectedStartTime" label="开始时间" width="120" class-name="task-expected-start">
-              <template #default="{ row }"><span class="task-date-cell">{{ formatTaskDateTime(row.expectedStartTime) }}</span></template>
+            <el-table-column v-for="column in shotDetailColumns.filter(item => visibleDetailColumns.includes(item.key))" :key="column.key" :column-key="column.key" :label="column.label" :width="tableColumnWidths[column.key] || column.width" show-overflow-tooltip>
+              <template #default="{ row }">
+                <span v-if="column.key === 'parameters'">{{ [row.shotSize, row.cameraPosition, row.cameraMovement, row.focalLength].filter(Boolean).join(' · ') || '未填写' }}</span>
+                <div v-else-if="column.key === 'references'"><div class="shot-detail-text">{{ row.referenceDescription }}</div><ReviewReferenceFiles v-if="row.referenceFiles?.length" :files="row.referenceFiles" compact /><span v-else-if="!row.referenceDescription">—</span></div>
+                <span v-else>{{ row[column.key] || '—' }}</span>
+              </template>
             </el-table-column>
-            <el-table-column prop="expectedEndTime" label="结束时间" width="120" class-name="task-expected-end">
-              <template #default="{ row }"><span class="task-date-cell">{{ formatTaskDateTime(row.expectedEndTime) }}</span></template>
+            <el-table-column label="计划时间" column-key="plan" :width="tableColumnWidths.plan || 175">
+              <template #default="{ row }"><div class="shot-plan"><span><small>起</small> <span class="task-date-cell task-expected-start">{{ formatTaskDateTime(row.expectedStartTime) }}</span></span><span><small>止</small> <span class="task-date-cell task-expected-end">{{ formatTaskDateTime(row.expectedEndTime) }}</span></span><div class="task-time-state"><el-tag v-if="row.status !== 'completed'" :type="tagTypeFromTone(shotTimeState(row).tone)" size="small" effect="light" round>{{ shotTimeState(row).label }}</el-tag></div></div></template>
             </el-table-column>
-            <el-table-column label="镜头参数" width="160">
-              <template #default="scope"><div v-if="scope?.row" class="shot-parameters"><span>{{ scope.row.shotSize || '—' }}</span><small>{{ [scope.row.cameraPosition, scope.row.cameraMovement, scope.row.focalLength].filter(Boolean).join(' · ') || '暂无参数' }}</small></div></template>
-            </el-table-column>
-            <el-table-column label="场景 / 角色" width="150">
-              <template #default="scope"><div v-if="scope?.row" class="shot-assets"><el-tag v-for="asset in scope.row.environmentAssets" :key="`environment-${asset.assetId}`" :type="tagTypeFromTone('environment')" size="small" effect="plain" round>场景 · {{ asset.assetName }}</el-tag><el-tag v-for="asset in scope.row.characterAssets" :key="`character-${asset.assetId}`" :type="tagTypeFromTone('character')" size="small" effect="plain" round>角色 · {{ asset.assetName }}</el-tag><span v-if="!scope.row.environmentAssets.length && !scope.row.characterAssets.length" class="shot-assets__empty">—</span></div></template>
-            </el-table-column>
-            <el-table-column label="台词 / 对白" width="150">
-              <template #default="scope"><div v-if="scope?.row" class="shot-long-text">{{ scope.row.dialogue || '—' }}</div></template>
-            </el-table-column>
-            <el-table-column label="音效" width="150">
-              <template #default="scope"><div v-if="scope?.row" class="shot-long-text">{{ scope.row.soundEffect || '—' }}</div></template>
-            </el-table-column>
-            <el-table-column label="色调参考" width="200">
-              <template #default="scope"><div v-if="scope?.row" class="shot-long-text">{{ scope.row.colorReference || '—' }}</div></template>
-            </el-table-column>
-            <el-table-column label="备注" width="220">
-              <template #default="scope"><div v-if="scope?.row" class="shot-long-text">{{ scope.row.remark || '—' }}</div></template>
-            </el-table-column>
-            <!-- <el-table-column label="最新反馈" width="120">
-              <template #default="scope"><div v-if="scope?.row" class="feedback-cell">{{ scope.row.latestFeedback?.content || '—' }}</div></template>
-            </el-table-column> -->
-            <el-table-column label="时间状态" fixed="right" width="120" class-name="task-time-state">
-              <template #default="{ row }"><el-tag :type="tagTypeFromTone(shotTimeState(row).tone)" size="small" effect="light" round>{{ shotTimeState(row).label }}</el-tag></template>
-            </el-table-column>
-            <el-table-column label="制作人" fixed="right" width="150">
+            <el-table-column label="制作人" column-key="assignee" :width="tableColumnWidths.assignee || (tableAvailableWidth < 1250 ? 120 : 130)">
               <template #default="scope">
                 <div v-if="scope?.row" class="shot-assignee-history">
                   <span class="sg-table-assignee" :class="{ 'is-unassigned': !scope.row.assignee }">{{ scope.row.previousAssigneeNames?.length ? '当前：' : '' }}{{ shotAssigneeName(scope.row.assignee, members) }}</span>
@@ -1343,7 +1433,7 @@ onBeforeUnmount(() => { disposed = true; closeSingleAssign(); destroyRowSortable
                 </div>
               </template>
             </el-table-column>
-            <el-table-column label="状态" fixed="right" width="120">
+            <el-table-column label="状态" column-key="status" :width="tableColumnWidths.status || 90">
               <template #default="scope">
                 <div v-if="scope?.row">
                   <el-tag class="shot-status-tag" :class="shotStatusTagClass(scope.row.status)"
@@ -1357,9 +1447,10 @@ onBeforeUnmount(() => { disposed = true; closeSingleAssign(); destroyRowSortable
                 </div>
               </template>
             </el-table-column>
-            <el-table-column label="操作" fixed="right" width="320">
+            <el-table-column label="操作" column-key="actions" :width="Math.max(360, tableColumnWidths.actions || 360)" fixed="right">
               <template #default="scope">
                 <div v-if="scope?.row" class="shot-row-actions">
+                  <TableActionButton v-if="canAdjustShot(scope.row)" label="调整制作任务" type="primary" :icon="Edit" :disabled="startDisabled" @click="openProductionAdjustment([scope.row])" />
                   <TableActionButton v-if="canStartShot(scope.row)" label="开始任务" type="primary" :plain="false" :icon="VideoPlay" :loading="startingOperation?.shotId === scope.row.shotId" :disabled="startDisabled" @click="confirmStartShot(scope.row)" />
                   <TableActionButton v-if="canOpenShotAssign(scope.row)" :label="scope.row.task || scope.row.taskLockVersion != null ? '改派任务' : '分配任务'" type="info" :icon="scope.row.task || scope.row.taskLockVersion != null ? Switch : User" :loading="assigningShotId === Number(scope.row.shotId)" :disabled="shotsLoading || assigning || deleting || Boolean(startingOperation) || Boolean(singleAssignContext) || Boolean(assigningShotId)" @click="openSingleAssign(scope.row)" />
                   <TableActionButton v-if="workAction(scope.row)" :label="workAction(scope.row).label" type="primary" :plain="false" :icon="VideoPlay" :loading="openingWorkShotId === scope.row.shotId" :disabled="Boolean(openingWorkShotId)" @click="openWork(scope.row)" />
@@ -1396,7 +1487,7 @@ onBeforeUnmount(() => { disposed = true; closeSingleAssign(); destroyRowSortable
     <el-drawer v-model="showDetail" class="sg-detail-drawer shot-detail-drawer" modal-class="sg-detail-drawer-mask" header-class="sg-detail-drawer__header" body-class="sg-detail-drawer__body" :title="detailDrawerTitle" direction="rtl" size="85%" resizable append-to-body destroy-on-close @closed="clearDetailDrawer">
       <ShotDetailView v-if="detailShotId && currentProjectId" embedded :target-project-id="currentProjectId" :target-shot-id="detailShotId" @changed="handleDetailChanged" @deleted="handleDetailDeleted" />
     </el-drawer>
-    <BatchOverallFeedbackDialog :key="currentProjectId" ref="batchFeedbackDialog" @saved="handleBatchFeedbackSaved" />
+    <BatchOverallFeedbackDialog :key="currentProjectId" ref="batchFeedbackDialog" @active-change="value => { batchFeedbackOpen = value }" @review="openWork" @saved="handleBatchFeedbackSaved" />
     <RelatedDetailDrawer ref="workDrawer" @closed="handleWorkDrawerClosed" />
   </section>
 </template>
@@ -1460,3 +1551,25 @@ onBeforeUnmount(() => { disposed = true; closeSingleAssign(); destroyRowSortable
 </style>
 
 <style scoped src="../../assets/styles/compact-list.css"></style>
+
+<style scoped>
+.shot-list-toolbar__summary { margin-right: auto; }
+.shot-identity-with-media { display: flex; align-items: center; gap: 12px; }
+.shot-identity-with-media .shot-thumb { flex: 0 0 80px; width: 80px; border-radius: 6px; }
+.shot-identity-with-media .shot-identity { min-width: 0; }
+.shot-identity strong { overflow-wrap: anywhere; }
+.shot-data-table :deep(.el-table__cell) { font-size: 12px; }
+.shot-description { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; line-height: 1.65; }
+.shot-expand-content { padding: 2px 0; height: auto; margin-top: 4px; font-size: 11px; }
+.shot-plan { display: grid; gap: 4px; font-size: 11px; }
+.shot-plan small { color: var(--sg-text-muted); }
+.shot-plan .task-time-state:empty { display: none; }
+.shot-expanded-details { padding: 8px 12px; max-width: 1200px; margin-inline: auto; font-size: 12px; }
+.shot-detail-text { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; }
+.shot-expanded-details :deep(.el-descriptions__table) { table-layout: fixed; }
+.shot-expanded-details :deep(.el-descriptions__cell) { padding: 4px 8px !important; font-size: 12px !important; line-height: 1.5; }
+.shot-column-settings p { color: var(--sg-text-muted); font-size: 12px; line-height: 1.6; }
+.shot-column-settings :deep(.el-checkbox-group) { display: grid; grid-template-columns: 1fr 1fr; }
+.shot-row-actions { flex-wrap: wrap; align-items: center; gap: 6px; }
+@media (max-width: 760px) { .shot-expanded-details { padding: 6px 8px; } }
+</style>

@@ -6,7 +6,7 @@ import CandidateGenerationPrompt from '@/components/version/CandidateGenerationP
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useDetailNavigation } from '@/composables/useDetailNavigation'
-import { ArrowLeft, ArrowRight, Delete, Document, Refresh, UploadFilled } from '@element-plus/icons-vue'
+import { ArrowLeft, ArrowRight, Refresh } from '@element-plus/icons-vue'
 import { ElAffix, ElTabs, ElTabPane, ElMessage, ElMessageBox, ElRadio, ElRadioGroup } from 'element-plus'
 import 'element-plus/es/components/tabs/style/css'
 import 'element-plus/es/components/tab-pane/style/css'
@@ -23,13 +23,14 @@ import {
   getVersionReviewContext,
   retryFinalDelivery,
   transitionManualReviewList,
-  uploadReviewReferenceFile,
   updateVersionIssueDraft
 } from '@/api/shot-grid/reviews'
 import { assertPositiveId } from '@/api/shot-grid/projects'
 import { getVersionDetail } from '@/api/shot-grid/versions'
 import VersionDetailCard from '@/components/version/VersionDetailCard.vue'
 import ReviewReferenceFiles from '@/components/review/ReviewReferenceFiles.vue'
+import ReviewReferenceInput from '@/components/review/ReviewReferenceInput.vue'
+import { useReviewReferenceAttachments } from '@/composables/useReviewReferenceAttachments'
 import { useSessionStore } from '@/store/modules/session'
 import { createIdempotencyState } from '@/utils/idempotency'
 import { tagTypeFromTone } from '@/utils/tag'
@@ -86,9 +87,11 @@ const drawerSidebarHeight = ref('calc(100dvh - 96px)')
 let drawerResizeObserver
 const decisionReason = ref('')
 const issueScope = ref('candidate')
-const issueDraft = reactive({ content: '', mediaSeconds: null, annotations: null })
-const referenceAttachments = ref([])
-const referenceUploadRef = ref(null)
+const { referenceAttachments, addReferenceFile, removeReferenceFile, resetReferenceAttachments, uploadPendingReferenceFiles } = useReviewReferenceAttachments({
+  canEdit: () => !issueBusy.value && !actionBusy.value,
+  isCurrent: () => !disposed
+})
+const issueDraft = reactive({ content: '', mediaSeconds: null, annotations: null, referenceFiles: referenceAttachments })
 const verificationDraft = reactive({})
 let pageController = null
 let pageGeneration = 0
@@ -98,13 +101,6 @@ let issueDraftPulseTimer = null
 let candidatePreviewPulseTimer = null
 let finalDeliveryPollTimer = null
 let finalDeliveryPollCount = 0
-let referenceUploadController = null
-
-const MAX_REFERENCE_FILES = 5
-const MAX_REFERENCE_FILE_SIZE = 20 * 1024 * 1024
-const REFERENCE_ACCEPT = '.bmp,.jpg,.jpeg,.png,.gif,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.mp4,.mov'
-const REFERENCE_EXTENSIONS = new Set(REFERENCE_ACCEPT.split(',').map(item => item.slice(1)))
-
 const reviewListId = computed(() => assertPositiveId(props.targetReviewListId ?? route.params.reviewListId, '审核单'))
 const wildcard = computed(() => sessionStore.permissions.includes('*:*:*'))
 const hasPermission = permission => wildcard.value || sessionStore.permissions.includes(permission)
@@ -233,8 +229,6 @@ const hasUnsavedIssueDraft = computed(() => Boolean(
   || draftAnnotationCount.value
   || referenceAttachments.value.length
 ))
-const savedReferenceFiles = computed(() => referenceAttachments.value.filter(file => file.downloadUrl))
-const localReferenceFiles = computed(() => referenceAttachments.value.filter(file => !file.downloadUrl))
 const assistantShell = computed(() => assistantAffixed.value ? ElAffix : 'div')
 const assistantShellProps = computed(() => assistantAffixed.value ? { offset: 92 } : {})
 const manualVersions = computed(() => review.value?.versions || [])
@@ -464,95 +458,6 @@ function validateMediaSeconds(_rule, value, callback) {
   const seconds = Number(value)
   if (Number.isFinite(seconds) && seconds >= 0) callback()
   else callback(new Error('时间点必须是大于等于 0 的秒数'))
-}
-
-function referenceFileExtension(name) {
-  const value = String(name || '')
-  return value.includes('.') ? value.split('.').pop().toLowerCase() : ''
-}
-
-function isReferenceImage(file) {
-  return String(file?.contentType || file?.raw?.type || '').startsWith('image/')
-    || /\.(?:bmp|gif|jpe?g|png)$/i.test(String(file?.originalName || ''))
-}
-
-function formatReferenceSize(bytes) {
-  const size = Number(bytes || 0)
-  return size < 1024 * 1024 ? `${(size / 1024).toFixed(1)} KiB` : `${(size / 1024 / 1024).toFixed(1)} MiB`
-}
-
-function revokeReferencePreview(file) {
-  if (file?.previewUrl) URL.revokeObjectURL(file.previewUrl)
-}
-
-function resetReferenceAttachments(files = []) {
-  referenceUploadController?.abort()
-  referenceUploadController = null
-  referenceAttachments.value.forEach(revokeReferencePreview)
-  referenceAttachments.value = files
-}
-
-function addReferenceFile(uploadFile) {
-  const file = uploadFile?.raw
-  referenceUploadRef.value?.clearFiles()
-  if (!(file instanceof File)) return
-  if (referenceAttachments.value.length >= MAX_REFERENCE_FILES) {
-    ElMessage.warning(`单条问题最多添加 ${MAX_REFERENCE_FILES} 个参考文件`)
-    return
-  }
-  const extension = referenceFileExtension(file.name)
-  if (!REFERENCE_EXTENSIONS.has(extension)) {
-    ElMessage.warning('仅支持图片、PDF、Office、文本和 MP4/MOV 参考文件')
-    return
-  }
-  if (file.size > MAX_REFERENCE_FILE_SIZE) {
-    ElMessage.warning('单个参考文件不能超过 20 MiB')
-    return
-  }
-  if (referenceAttachments.value.some(item => item.originalName === file.name && Number(item.fileSize) === file.size)) {
-    ElMessage.warning('该参考文件已经添加')
-    return
-  }
-  referenceAttachments.value.push({
-    clientKey: `${Date.now()}-${uploadFile.uid}`,
-    raw: file,
-    originalName: file.name,
-    contentType: file.type || null,
-    fileSize: file.size,
-    previewUrl: isReferenceImage({ raw: file, originalName: file.name }) ? URL.createObjectURL(file) : '',
-    uploadProgress: 0,
-    fileId: ''
-  })
-}
-
-function removeReferenceFile(file) {
-  const target = referenceAttachments.value.find(item => (
-    file.fileId ? item.fileId === file.fileId : item.clientKey === file.clientKey
-  ))
-  revokeReferencePreview(target)
-  referenceAttachments.value = referenceAttachments.value.filter(item => item !== target)
-}
-
-async function uploadPendingReferenceFiles() {
-  const pendingFiles = referenceAttachments.value.filter(file => file.raw && !file.fileId)
-  if (!pendingFiles.length) return
-  referenceUploadController?.abort()
-  const controller = new AbortController()
-  referenceUploadController = controller
-  try {
-    for (const attachment of pendingFiles) {
-      const response = await uploadReviewReferenceFile(attachment.raw, {
-        signal: controller.signal,
-        onUploadProgress: event => {
-          attachment.uploadProgress = event.total ? Math.round((event.loaded / event.total) * 100) : 0
-        }
-      })
-      attachment.fileId = response.fileId
-      attachment.uploadProgress = 100
-    }
-  } finally {
-    if (referenceUploadController === controller) referenceUploadController = null
-  }
 }
 
 function clearIssueDraft() {
@@ -1071,25 +976,8 @@ onBeforeUnmount(() => {
                       </template>
                   <el-form v-if="issueScope === scope.name" :ref="el => { if (el) issueFormRef = el }" :disabled="issueBusy || Boolean(actionBusy)" :model="issueDraft" :rules="issueRules" class="issue-compose" label-position="top" aria-label="记录当前版新问题">
                     <el-form-item label="修改意见" prop="content"><el-input :ref="el => { if (el) issueContentInput = el }" v-model="issueDraft.content" type="textarea" :rows="4" maxlength="10000" show-word-limit placeholder="请说明需要修改的内容，例如：降低眼睛红色饱和度，并保持肤色不变。" /></el-form-item>
-                    <el-form-item label="参考内容（可选）">
-                      <div class="issue-reference-compose">
-                        <div class="issue-reference-compose__heading">
-                          <el-upload :ref="el => { if (el) referenceUploadRef = el }" :auto-upload="false" :show-file-list="false" :multiple="true" :accept="REFERENCE_ACCEPT" :disabled="issueBusy || referenceAttachments.length >= MAX_REFERENCE_FILES" :on-change="addReferenceFile">
-                            <el-button :icon="UploadFilled" :disabled="issueBusy || referenceAttachments.length >= MAX_REFERENCE_FILES">添加图片或参考资料</el-button>
-                          </el-upload>
-                          <span>最多 {{ MAX_REFERENCE_FILES }} 个，每个不超过 20 MiB</span>
-                        </div>
-                        <ReviewReferenceFiles v-if="savedReferenceFiles.length" :files="savedReferenceFiles" compact removable @remove="removeReferenceFile" />
-                        <div v-if="localReferenceFiles.length" class="issue-reference-pending-list">
-                          <article v-for="file in localReferenceFiles" :key="file.clientKey" class="issue-reference-pending">
-                            <el-image v-if="file.previewUrl" class="issue-reference-pending__preview" :src="file.previewUrl" :alt="file.originalName" fit="cover" />
-                            <div v-else class="issue-reference-pending__icon" aria-hidden="true"><el-icon><Document /></el-icon></div>
-                            <div><strong :title="file.originalName">{{ file.originalName }}</strong><small>{{ formatReferenceSize(file.fileSize) }} · {{ file.fileId ? '已上传，待保存草稿' : '等待上传' }}</small><el-progress v-if="file.uploadProgress > 0 && file.uploadProgress < 100" :percentage="file.uploadProgress" :stroke-width="4" :show-text="false" /></div>
-                            <el-button text type="danger" :icon="Delete" :disabled="issueBusy" :aria-label="`移除参考文件 ${file.originalName}`" @click="removeReferenceFile(file)">移除</el-button>
-                          </article>
-                        </div>
-                        <p v-if="!referenceAttachments.length" class="issue-reference-compose__empty">支持图片、文档或短视频参考。</p>
-                      </div>
+                    <el-form-item label="参考内容（可选）" prop="referenceFiles">
+                      <ReviewReferenceInput :files="referenceAttachments" :disabled="issueBusy || Boolean(actionBusy)" @add="addReferenceFile" @remove="removeReferenceFile" />
                     </el-form-item>
                     <el-form-item v-if="issueDraftMediaTimeMs !== null || draftAnnotationCount" label="作品定位">
                       <div class="issue-compose-meta">
@@ -1214,7 +1102,6 @@ onBeforeUnmount(() => {
 .review-assistant-affix{width:100%;min-width:0}.review-assistant-affix:deep(.el-affix){width:100%}.review-assistant{display:grid;grid-template-columns:minmax(0,1fr);width:100%;height:calc(100dvh - 108px);max-height:880px;grid-template-rows:auto minmax(0,1fr) auto;overflow:hidden;background:var(--sg-surface);border:1px solid var(--sg-border-strong);border-radius:var(--sg-radius-md);box-shadow:0 16px 36px rgba(0,0,0,.16)}.assistant-heading{display:flex;gap:12px;align-items:center;justify-content:space-between;padding:15px 18px;border-bottom:1px solid var(--sg-border)}.assistant-heading h3{margin:3px 0 0;font-size:17px}.assistant-heading:deep(.el-tag){color:var(--sg-text-muted)}.assistant-body{min-height:0}.assistant-body:deep(.el-scrollbar__wrap){scrollbar-width:thin}.assistant-body__inner{display:grid}.assistant-section{display:grid;min-width:0;gap:12px;padding:15px 18px;border-top:1px solid var(--sg-border)}.assistant-body__inner>.assistant-section:first-child{border-top:0}.assistant-section-heading{display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:start}.assistant-section-heading h3{margin:1px 0 0;font-size:14px}.assistant-section-heading p{margin:3px 0 0;color:var(--sg-text-muted);font-size:9px;line-height:1.45}.assistant-section-heading>strong{color:var(--sg-text-muted);font-size:10px}.assistant-section-kicker{align-self:center;padding:4px 7px;color:var(--sg-accent);font-size:8px;font-weight:800;letter-spacing:.08em;background:var(--sg-accent-soft);border-radius:999px;white-space:nowrap}
 .issue-list{display:grid;gap:10px}.issue-card{display:grid;gap:9px;padding:12px;background:rgba(255,255,255,.025);border:1px solid var(--sg-border);border-radius:10px}.issue-card.is-selected{border-color:var(--sg-accent);box-shadow:0 0 0 1px var(--sg-accent-soft)}.issue-card>header{display:flex;gap:8px;align-items:center;justify-content:space-between}.issue-card>header span{color:var(--sg-accent);font-size:9px;font-weight:700}.issue-card>header button{padding:0;color:#68b5ff;font:inherit;font-size:9px;background:transparent;border:0;cursor:pointer}.issue-card>p{margin:0;color:var(--sg-text-secondary);font-size:10px;line-height:1.65;white-space:pre-wrap}.issue-card>small{color:var(--sg-text-muted);font-size:8px}.maker-response{display:grid;gap:5px;padding:9px;color:var(--sg-text-secondary);background:rgba(104,181,255,.07);border-radius:8px}.maker-response span{font-size:8px}.maker-response strong{font-size:10px;line-height:1.55;white-space:pre-wrap}.verification-options{width:100%}.verification-options :deep(.el-radio-button){width:50%}.verification-options :deep(.el-radio-button__inner){width:100%}.verification-comment{display:grid;gap:6px}.verification-comment>span{color:var(--sg-text-secondary);font-size:9px}.verification-comment em{color:var(--sg-danger);font-style:normal}.current-panel{min-width:0;padding:0;gap:8px;transition:background-color .2s ease,box-shadow .2s ease}.current-panel.is-draft-focus{background:var(--sg-accent-soft);box-shadow:inset 3px 0 0 var(--sg-accent)}.issue-compose{display:grid;min-width:0;gap:9px;padding:10px;background:transparent;border-radius:10px}.issue-compose :deep(.el-form-item){margin-bottom:0}.issue-compose__actions :deep(.el-form-item__content){display:flex;gap:8px;justify-content:flex-end}.issue-compose-meta{display:flex;width:100%;gap:8px;align-items:center;justify-content:space-between}.issue-context-tags{display:flex;gap:6px;flex-wrap:wrap}.issue-position-button{margin:0}.empty-block{padding:20px 8px;margin:0;color:var(--sg-text-muted);font-size:10px;text-align:center}.empty-block.compact{padding:12px 8px}
 .issue-card-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.issue-card-actions .el-button{margin:0}.issue-draft-card{border-style:dashed}.issue-draft-card>small{color:var(--sg-text-muted)}
-.issue-reference-compose{display:grid;width:100%;gap:8px}.issue-reference-compose__heading{display:flex;gap:8px;align-items:center;justify-content:space-between}.issue-reference-compose__heading>span,.issue-reference-compose__empty{margin:0;color:var(--sg-text-muted);font-size:8px;line-height:1.5}.issue-reference-pending-list{display:grid;gap:7px}.issue-reference-pending{display:grid;grid-template-columns:38px minmax(0,1fr) auto;gap:8px;align-items:center;min-width:0;padding:7px;background:var(--sg-surface);border:1px solid var(--sg-border);border-radius:8px}.issue-reference-pending__preview,.issue-reference-pending__icon{width:38px;height:38px;overflow:hidden;border-radius:6px}.issue-reference-pending__icon{display:grid;color:var(--sg-accent);font-size:18px;background:var(--sg-accent-soft);place-items:center}.issue-reference-pending>div:nth-child(2){display:grid;min-width:0;gap:3px}.issue-reference-pending strong{overflow:hidden;font-size:9px;text-overflow:ellipsis;white-space:nowrap}.issue-reference-pending small{color:var(--sg-text-muted);font-size:8px}.issue-reference-pending .el-button{margin:0}
 .decision-panel{padding:12px 10px;position:relative;z-index:1;background:color-mix(in srgb,var(--sg-surface) 94%,var(--sg-accent) 6%);box-shadow:0 -12px 28px rgba(0,0,0,.09)}.decision-summary{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));align-items:center;gap:8px;padding:10px;color:var(--sg-text-secondary);font-size:12px;background:rgba(255,255,255,.025);border-radius:8px}.decision-warning{display:flex;gap:6px;align-items:center;margin:0;color:var(--sg-danger);font-size:9px}.decision-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.decision-actions .el-button{min-width:0;height:auto;min-height:32px;margin:0;padding:8px 6px;white-space:normal}.decision-actions .el-button:last-child{grid-column:1/-1}.action-history{padding:20px;background:var(--sg-surface);border:1px solid var(--sg-border);border-radius:var(--sg-radius-md)}.action-history>header{display:flex;justify-content:space-between}.action-history h3{margin:3px 0 0;font-size:16px}.action-history>header>span{color:var(--sg-text-muted);font-size:10px}.action-list{display:grid;gap:12px;margin-top:15px}.action-list article{display:grid;grid-template-columns:auto 1fr;gap:10px}.action-dot{width:9px;height:9px;margin-top:4px;background:var(--sg-text-muted);border-radius:50%}.action-dot[data-tone=success]{background:var(--sg-success)}.action-dot[data-tone=danger]{background:var(--sg-danger)}.action-dot[data-tone=warning]{background:var(--sg-accent)}.action-list strong,.action-list p,.action-list small{display:block;margin:0}.action-list p{margin:4px 0;color:var(--sg-text-secondary);font-size:11px}.action-list small{color:var(--sg-text-muted);font-size:9px}
 .final-delivery-alert {
   align-items: flex-start;
@@ -1365,8 +1252,6 @@ onBeforeUnmount(() => {
 .issue-compose-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
 
 .current-panel .issue-compose { padding-top: 4px; padding-bottom: 4px; gap: 10px; }
-.current-panel .issue-reference-compose__heading { flex-wrap: wrap; gap: 6px; }
-.current-panel .issue-reference-compose__heading > span { line-height: 1.5; }
 .current-panel .saved-issues-section {
   --saved-issues-background: color-mix(in srgb, var(--sg-surface) 85%, var(--sg-text-muted) 15%);
   min-width: 0;

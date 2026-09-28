@@ -5,7 +5,7 @@ const TASK_STATUS = Object.freeze({
   preparing: Object.freeze({ label: '目录准备中', tone: 'warning' }),
   in_progress: Object.freeze({ label: '制作中', tone: 'info' }),
   pending_review: Object.freeze({ label: '待审核', tone: 'warning' }),
-  revision: Object.freeze({ label: '待修订', tone: 'danger' }),
+  revision: Object.freeze({ label: '待修改', tone: 'danger' }),
   completed: Object.freeze({ label: '已完成', tone: 'success' })
 })
 

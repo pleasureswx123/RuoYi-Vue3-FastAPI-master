@@ -1,9 +1,11 @@
 <script setup>
-import { reactive, ref } from 'vue'
+import { onBeforeUnmount, reactive, ref } from 'vue'
 
 import { updateProject } from '@/api/shot-grid/projects'
 import { PROJECT_PHASE_OPTIONS, projectErrorState } from '@/views/project/projectPresentation'
 import ProjectModal from './ProjectModal.vue'
+import ReviewReferenceInput from '@/components/review/ReviewReferenceInput.vue'
+import { useReviewReferenceAttachments } from '@/composables/useReviewReferenceAttachments'
 
 const props = defineProps({
   project: { type: Object, required: true }
@@ -12,7 +14,18 @@ const emit = defineEmits(['close', 'saved', 'refresh'])
 const editFormRef = ref(null)
 const busy = ref(false)
 const requestError = ref(null)
+const initialProjectId = props.project.projectId
+const initialLockVersion = props.project.lockVersion
+let active = true
+onBeforeUnmount(() => { active = false })
+const { referenceAttachments, addReferenceFile, removeReferenceFile, resetReferenceAttachments, uploadPendingReferenceFiles } = useReviewReferenceAttachments({
+  canEdit: () => !busy.value,
+  isCurrent: () => active && props.project.projectId === initialProjectId && props.project.lockVersion === initialLockVersion
+})
+resetReferenceAttachments((props.project.referenceFiles || []).map(file => ({ ...file })))
 const form = reactive({
+  referenceFileIds: referenceAttachments,
+  referenceDescription: props.project.referenceDescription || '',
   projectName: props.project.projectName || '',
   projectDescription: props.project.projectDescription || '',
   projectType: props.project.projectType || 'ai_short_film',
@@ -32,6 +45,7 @@ const editRules = {
   }],
   currentPhase: [{ required: true, type: 'enum', enum: PROJECT_PHASE_OPTIONS.map(phase => phase.value), message: '请选择有效的当前阶段', trigger: 'change' }],
   aspectRatio: [{ required: true, type: 'enum', enum: ['16:9', '21:9', '2.39:1', '9:16', '1:1'], message: '请选择有效的画幅', trigger: 'change' }],
+  referenceDescription: [{ max: 10000, message: '资料说明不能超过 10000 字', trigger: 'change' }],
   remark: [{ max: 500, message: '备注不能超过 500 个字符', trigger: 'change' }]
 }
 
@@ -39,6 +53,7 @@ function buildPayload() {
   const projectName = form.projectName.trim()
   return {
     projectName,
+    referenceDescription: form.referenceDescription.trim() || null,
     projectDescription: form.projectDescription.trim() || null,
     projectType: form.projectType,
     aspectRatio: form.aspectRatio,
@@ -46,7 +61,7 @@ function buildPayload() {
     deliveryDate: props.project.deliveryDate || null,
     currentPhase: form.currentPhase,
     remark: form.remark.trim() || null,
-    lockVersion: props.project.lockVersion
+    lockVersion: initialLockVersion
   }
 }
 
@@ -61,7 +76,9 @@ async function submit() {
     if (!isValid) return
 
     const payload = buildPayload()
-    const response = await updateProject(props.project.projectId, payload)
+    payload.referenceFileIds = await uploadPendingReferenceFiles()
+    const response = await updateProject(initialProjectId, payload)
+    if (!active || props.project.projectId !== initialProjectId) return
     emit('saved', response.data)
   } catch (error) {
     requestError.value = projectErrorState(error, '项目修改失败')
@@ -73,7 +90,7 @@ async function submit() {
 
 <template>
   <ProjectModal title="编辑项目" description="项目代号和 NAS 目录绑定创建后不可在此修改。" :busy="busy" @close="emit('close')">
-    <el-form ref="editFormRef" :model="form" :rules="editRules" class="edit-form" size="large" label-position="top">
+    <el-form ref="editFormRef" :model="form" :disabled="busy" :rules="editRules" class="edit-form" size="large" label-position="top">
       <el-form-item label="项目名称" prop="projectName" required>
         <el-input v-model="form.projectName" maxlength="200" />
       </el-form-item>
@@ -91,6 +108,12 @@ async function submit() {
       </div>
       <el-form-item label="项目描述" prop="projectDescription">
         <el-input v-model="form.projectDescription" type="textarea" :rows="4" />
+      </el-form-item>
+      <el-form-item label="项目资料说明（可选）" prop="referenceDescription">
+        <el-input v-model="form.referenceDescription" type="textarea" :rows="4" maxlength="10000" show-word-limit placeholder="可填写剧本梗概、风格要求、参考资料说明等，供本项目所有任务制作时查阅。" />
+      </el-form-item>
+      <el-form-item label="剧本与参考附件（可选）" prop="referenceFileIds">
+        <ReviewReferenceInput :files="referenceAttachments" :disabled="busy" purpose="项目" @add="addReferenceFile" @remove="removeReferenceFile" />
       </el-form-item>
       <el-form-item label="备注" prop="remark">
         <el-input v-model="form.remark" type="textarea" :rows="2" maxlength="500" show-word-limit />

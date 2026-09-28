@@ -42,6 +42,8 @@ import {
   updateProjectMember
 } from '@/api/shot-grid/projects'
 import { useSessionStore } from '@/store/modules/session'
+import { uploadReviewReferenceFile } from '@/api/shot-grid/reviews'
+import ReviewReferenceInput from '@/components/review/ReviewReferenceInput.vue'
 import { copyTextToClipboard } from '@/utils/clipboard'
 import ProjectDetailView from '@/views/project/ProjectDetailView.vue'
 import ProjectListView from '@/views/project/ProjectListView.vue'
@@ -79,6 +81,8 @@ vi.mock('@/api/shot-grid/projects', () => ({
   updateProject: vi.fn(),
   updateProjectMember: vi.fn()
 }))
+vi.mock('@/api/shot-grid/reviews', () => ({ uploadReviewReferenceFile: vi.fn(), downloadReviewReferenceFile: vi.fn() }))
+
 vi.mock('@/utils/clipboard', () => ({ copyTextToClipboard: vi.fn() }))
 
 const formComponents = {
@@ -360,13 +364,16 @@ describe('项目管理页面', () => {
     expect(createProject).not.toHaveBeenCalled()
 
     model.projectCode = 'lcfr'
+    model.referenceDescription = ' 项目剧本说明 '
+    uploadReviewReferenceFile.mockResolvedValueOnce({ fileId: '33333333-3333-4333-8333-333333333333' })
+    wrapper.findComponent(ReviewReferenceInput).vm.$emit('add', { raw: new File(['剧本'], '剧本.txt', { type: 'text/plain' }) })
     await nextTick()
     await submitButton.trigger('click')
     await flushPromises()
     await submitButton.trigger('click')
     await flushPromises()
     expect(createProject).toHaveBeenCalledWith(
-      expect.objectContaining({ projectCode: 'LCFR', projectName: '罗刹夫人', storageRootId: 7, directorUserIds: [1] }),
+      expect.objectContaining({ projectCode: 'LCFR', projectName: '罗刹夫人', storageRootId: 7, directorUserIds: [1], referenceDescription: '项目剧本说明', referenceFileIds: ['33333333-3333-4333-8333-333333333333'] }),
       expect.any(String)
     )
     expect(createProject).toHaveBeenCalledTimes(1)
@@ -424,6 +431,49 @@ describe('项目管理页面', () => {
     await flushPromises()
     expect(updateProject).toHaveBeenCalledWith(8, expect.objectContaining({ projectName: '罗刹夫人·修订', lockVersion: 1 }))
     expect(submitButton.props('nativeType')).toBe('button')
+    wrapper.unmount()
+  })
+
+  it('项目资料上传失败不保存，重试保留已成功文件，保存包含说明与完整附件列表', async () => {
+    const first = '11111111-1111-4111-8111-111111111111'
+    const second = '22222222-2222-4222-8222-222222222222'
+    uploadReviewReferenceFile.mockResolvedValueOnce({ fileId: first }).mockRejectedValueOnce(new Error('上传失败')).mockResolvedValueOnce({ fileId: second })
+    const wrapper = mount(ProjectEditDialog, {
+      props: { project: { ...projectRow, lockVersion: 1 } },
+      global: { components: formComponents, stubs: { ProjectModal: projectModalStub, ReviewReferenceInput: true } }
+    })
+    const input = wrapper.findComponent(ReviewReferenceInput)
+    input.vm.$emit('add', { raw: new File(['a'], '剧本.pdf', { type: 'application/pdf' }) })
+    input.vm.$emit('add', { raw: new File(['bb'], '风格.txt', { type: 'text/plain' }) })
+    wrapper.findComponent(ElForm).props('model').referenceDescription = ' 光线要求 '
+    await nextTick()
+    await buttonByText(wrapper, '保存修改').trigger('click')
+    await flushPromises()
+    expect(updateProject).not.toHaveBeenCalled()
+    expect(input.props('files')[0].fileId).toBe(first)
+    await buttonByText(wrapper, '保存修改').trigger('click')
+    await flushPromises()
+    expect(uploadReviewReferenceFile).toHaveBeenCalledTimes(3)
+    expect(updateProject).toHaveBeenCalledWith(8, expect.objectContaining({ referenceDescription: '光线要求', referenceFileIds: [first, second], lockVersion: 1 }))
+    wrapper.unmount()
+  })
+
+  it('编辑回显旧项目资料，移除后提交空列表，关闭重开恢复服务端值', async () => {
+    const file = { fileId: '11111111-1111-4111-8111-111111111111', originalName: '剧本.pdf', fileSize: 12, downloadUrl: '/shot-grid/projects/8/reference-files/11111111-1111-4111-8111-111111111111/download' }
+    const options = {
+      props: { project: { ...projectRow, lockVersion: 1, referenceDescription: '原剧本', referenceFiles: [file] } },
+      global: { components: formComponents, stubs: { ProjectModal: projectModalStub, ReviewReferenceInput: true } }
+    }
+    let wrapper = mount(ProjectEditDialog, options)
+    expect(wrapper.findComponent(ElForm).props('model').referenceDescription).toBe('原剧本')
+    wrapper.findComponent(ReviewReferenceInput).vm.$emit('remove', file)
+    await nextTick()
+    await buttonByText(wrapper, '保存修改').trigger('click')
+    await flushPromises()
+    expect(updateProject).toHaveBeenCalledWith(8, expect.objectContaining({ referenceFileIds: [] }))
+    wrapper.unmount()
+    wrapper = mount(ProjectEditDialog, options)
+    expect(wrapper.findComponent(ReviewReferenceInput).props('files')).toEqual([file])
     wrapper.unmount()
   })
 

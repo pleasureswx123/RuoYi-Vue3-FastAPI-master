@@ -39,6 +39,7 @@ from module_shot_grid.entity.vo.shot_crud_vo import (
 )
 from module_shot_grid.exceptions import ShotGridDomainException, shot_grid_error
 from module_shot_grid.service.shot_task_rules import missing_shot_assignment_fields
+from module_shot_grid.service.task_reference_service import ShotGridTaskReferenceService
 from module_shot_grid.shot_number import format_shot_code
 
 
@@ -93,6 +94,11 @@ class ShotGridShotCrudService:
             )
             for row in rows
         ]
+        references = await ShotGridTaskReferenceService.map_files(
+            db, [model.task_id for model in models if model.task_id]
+        )
+        for model in models:
+            model.reference_files = references.get(model.task_id, [])
         return PageModel[ShotGridShotListItemModel](
             rows=models,
             pageNum=query.page_num,
@@ -116,7 +122,10 @@ class ShotGridShotCrudService:
         assets = await ShotGridShotCrudDao.list_assets_for_shots(db, project_id, [shot_id])
         projections = await ShotGridShotCrudDao.list_read_projections_for_shots(db, project_id, [shot_id])
         projection_map = cls._projection_map(projections)
-        return cls._build_detail(row, assets, projection_map.get(shot_id), current_user, access)
+        detail = cls._build_detail(row, assets, projection_map.get(shot_id), current_user, access)
+        if detail.task_id:
+            detail.reference_files = await ShotGridTaskReferenceService.list_files(db, detail.task_id)
+        return detail
 
     @classmethod
     async def create_shot(
@@ -1058,7 +1067,10 @@ class ShotGridShotCrudService:
         assets = await ShotGridShotCrudDao.list_assets_for_shots(db, project_id, [shot_id])
         projections = await ShotGridShotCrudDao.list_read_projections_for_shots(db, project_id, [shot_id])
         projection_map = cls._projection_map(projections)
-        return cls._build_detail(row, assets, projection_map.get(shot_id), current_user, access)
+        detail = cls._build_detail(row, assets, projection_map.get(shot_id), current_user, access)
+        if detail.task_id:
+            detail.reference_files = await ShotGridTaskReferenceService.list_files(db, detail.task_id)
+        return detail
 
     @classmethod
     async def _lock_writable_project(
@@ -1432,6 +1444,12 @@ class ShotGridShotCrudService:
             and cls._has_permission(current_user, 'shotgrid:note:add')
         ):
             candidates.append(('task.appendIssue', 'shotgrid:reviewList:query'))
+        if (
+            row.get('task_id') is not None
+            and row.get('task_status') == 'in_progress'
+            and not row.get('has_uncommitted_submission')
+        ):
+            candidates.append(('task.adjust', 'shotgrid:task:edit'))
         if row.get('task_id') is not None and row.get('task_status') == 'not_started':
             candidates.append(('task.start', 'shotgrid:task:start'))
         if (

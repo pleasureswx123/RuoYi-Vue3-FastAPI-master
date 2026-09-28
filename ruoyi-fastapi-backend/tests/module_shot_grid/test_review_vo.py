@@ -7,11 +7,87 @@ from module_shot_grid.entity.vo.review_vo import (
     MAX_ANNOTATION_TOTAL_POINTS,
     SQL_BIGINT_MAX,
     ShotGridAnnotationsModel,
+    ShotGridBatchFeedbackModel,
     ShotGridNoteCreateModel,
     ShotGridReviewActionCreateModel,
     ShotGridReviewListQueryModel,
     ShotGridRevisionTransferCommand,
 )
+
+
+@pytest.mark.parametrize(
+    'override',
+    [
+        {'items': []},
+        {'items': [{'versionId': 1, 'lockVersion': 0, 'drafts': []}] * 2},
+        {'action': 'save_draft', 'content': '  '},
+        {'items': [{'versionId': 1, 'lockVersion': 0, 'drafts': [{'draftId': 1, 'lockVersion': 0}] * 2}]},
+        {
+            'items': [
+                {
+                    'versionId': 1,
+                    'lockVersion': 0,
+                    'drafts': [],
+                    'issueVerifications': [{'issueId': 1, 'result': 'resolved'}] * 2,
+                }
+            ]
+        },
+        {'items': [{'versionId': 1, 'lockVersion': 0}]},
+        {'items': [{'versionId': 1, 'lockVersion': -1, 'drafts': []}]},
+        {'items': [{'versionId': 0, 'lockVersion': 0, 'drafts': []}]},
+        {
+            'action': 'save_draft',
+            'items': [
+                {
+                    'versionId': 1,
+                    'lockVersion': 0,
+                    'drafts': [],
+                    'issueVerifications': [{'issueId': 1, 'result': 'resolved'}],
+                }
+            ],
+        },
+        {'content': 'a' * 10001},
+        {'referenceFileIds': ['invalid']},
+        {'referenceFileIds': ['11111111-1111-4111-8111-111111111111'] * 2},
+        {'referenceFileIds': [f'{index:08d}-1111-4111-8111-111111111111' for index in range(6)]},
+        {'content': '  ', 'referenceFileIds': ['11111111-1111-4111-8111-111111111111']},
+    ],
+)
+def test_batch_feedback_rejects_invalid_snapshot(override: dict) -> None:
+    data = {'action': 'reject', 'content': '共同反馈', 'items': [{'versionId': 1, 'lockVersion': 0, 'drafts': []}]}
+    with pytest.raises(ValidationError):
+        ShotGridBatchFeedbackModel.model_validate({**data, **override})
+
+
+def test_batch_feedback_camel_case_and_trimmed_content() -> None:
+    command = ShotGridBatchFeedbackModel(
+        action='reject',
+        content='  新反馈  ',
+        items=[
+            {
+                'versionId': 1,
+                'lockVersion': 0,
+                'drafts': [{'draftId': 2, 'lockVersion': 3}],
+                'issueVerifications': [{'issueId': 4, 'result': 'still_present', 'comment': '  尚未调整  '}],
+            }
+        ],
+    )
+    assert command.content == '新反馈'
+    assert command.reference_file_ids == []
+    assert command.items[0].issue_verifications[0].comment == '尚未调整'
+    assert command.model_dump(by_alias=True)['items'][0]['drafts'] == [{'draftId': 2, 'lockVersion': 3}]
+
+
+@pytest.mark.parametrize('action', ['save_draft', 'reject'])
+def test_batch_feedback_accepts_five_references_with_camel_case(action: str) -> None:
+    ids = [f'{index:08d}-aaaa-4111-8111-111111111111' for index in range(5)]
+    command = ShotGridBatchFeedbackModel(
+        action=action,
+        content='参照附件',
+        referenceFileIds=[file_id.upper() for file_id in ids],
+        items=[{'versionId': 1, 'lockVersion': 0, 'drafts': []}],
+    )
+    assert command.model_dump(by_alias=True)['referenceFileIds'] == ids
 
 
 def _annotation_item(**overrides: object) -> dict[str, object]:

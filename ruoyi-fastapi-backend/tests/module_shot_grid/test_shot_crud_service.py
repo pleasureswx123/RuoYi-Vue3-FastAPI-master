@@ -7,6 +7,7 @@ import pytest
 
 from module_admin.entity.vo.user_vo import CurrentUserModel, UserInfoModel
 from module_shot_grid.dao.shot_crud_dao import ShotGridShotCrudDao
+from module_shot_grid.dao.task_reference_dao import ShotGridTaskReferenceDao
 from module_shot_grid.entity.vo.access_vo import ShotGridProjectAccessModel
 from module_shot_grid.entity.vo.shot_crud_vo import (
     ShotGridShotArchiveModel,
@@ -22,6 +23,12 @@ from module_shot_grid.service.shot_crud_service import ShotGridShotCrudService
 from module_shot_grid.service.shot_task_rules import require_shot_assignment_fields
 
 PROJECT_ID = 1001
+
+
+@pytest.fixture(autouse=True)
+def mock_reference_projection(monkeypatch: pytest.MonkeyPatch) -> None:
+    # 本文件隔离 DAO；真实附件引用和批量反显由 PostgreSQL 集成测试覆盖。
+    monkeypatch.setattr(ShotGridTaskReferenceDao, 'list_for_tasks', AsyncMock(return_value=[]))
 
 
 def test_previous_assignees_use_transfer_snapshots() -> None:

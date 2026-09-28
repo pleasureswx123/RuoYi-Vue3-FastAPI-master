@@ -431,7 +431,7 @@ describe('真实任务工作台', () => {
     ])
     expect(findTag(wrapper, '1 项我的任务').props()).toMatchObject({ type: 'info', size: 'small', effect: 'plain', round: true })
     expect(findTag(wrapper, '资产').props()).toMatchObject({ type: 'primary', size: 'small', effect: 'plain', round: true })
-    expect(findTag(wrapper, '待修订').props()).toMatchObject({ type: 'danger', effect: 'dark', round: true })
+    expect(findTag(wrapper, '待修改').props()).toMatchObject({ type: 'danger', effect: 'dark', round: true })
     expect(findTag(wrapper, '时间：已延期').props()).toMatchObject({ type: 'danger', effect: 'light', round: true })
     expect(findTag(wrapper, '紧急').props()).toMatchObject({ type: 'danger', effect: 'plain', round: true })
     expect(findTag(wrapper, '最终版本').props()).toMatchObject({ type: 'success', effect: 'plain', round: true })
@@ -590,10 +590,26 @@ describe('任务详情、状态动作与异步上下文', () => {
     }) })
   })
 
-  it('制作人任务详情完整展示镜头制作信息，并区分任务补充要求', async () => {
+  it.each(['shot_video', 'asset_image'])('两类任务均回显项目资料：%s', async taskKind => {
+    const factory = taskKind === 'shot_video' ? taskFixture : assetTaskFixture
+    getTaskDetail.mockResolvedValue({ data: factory(31, {
+      projectReferenceDescription: '剧本：雨夜追逐，参考冷色灯光',
+      projectReferenceFiles: [{ fileId: '11111111-1111-4111-8111-111111111111', originalName: '项目剧本.pdf', contentType: 'application/pdf', fileSize: 100, downloadUrl: '/shot-grid/tasks/31/project/reference-files/11111111-1111-4111-8111-111111111111/download' }]
+    }) })
     const { wrapper } = await mountDetail()
-    const brief = wrapper.find('.task-card--wide')
+    expect(wrapper.get('[data-testid="project-references"]').text()).toContain('雨夜追逐')
+    expect(wrapper.get('[data-testid="project-references"]').text()).toContain('项目剧本.pdf')
+    wrapper.unmount()
+  })
 
+  it('制作人任务详情完整展示镜头制作信息，并区分任务补充要求', async () => {
+    getTaskDetail.mockResolvedValue({ data: taskFixture(31, { referenceDescription: '参考影片暖色光线', referenceFiles: [{ fileId: '11111111-1111-4111-8111-111111111111', originalName: '制作参考.pdf', contentType: 'application/pdf', fileSize: 100, downloadUrl: '/shot-grid/tasks/31/reference-files/11111111-1111-4111-8111-111111111111/download' }] }) })
+    const { wrapper } = await mountDetail()
+    const brief = wrapper.find('[data-testid="task-requirements"]')
+
+    expect(brief.text()).toContain('制作参考.pdf')
+    expect(brief.text()).toContain('参考影片暖色光线')
+    expect(brief.text()).toContain('参考内容')
     expect(brief.text()).toContain('制作内容')
     expect(brief.text()).toContain('休眠舱启动')
     expect(brief.text()).toContain('近景')
@@ -608,7 +624,7 @@ describe('任务详情、状态动作与异步上下文', () => {
     expect(brief.text()).toContain('保持冷蓝色调和稳定镜头')
     expect(brief.text()).toContain('杨景锋')
     expect(brief.text()).not.toContain('YJF')
-    expect(wrapper.findAll('.task-card')[1].text()).not.toContain('休眠舱启动')
+    expect(wrapper.get('[data-testid="project-references"]').text()).not.toContain('休眠舱启动')
     expect(wrapper.get('[data-testid="version-workspace"]').attributes()).toMatchObject({
       'data-version-count': '0',
       'data-production-description': '休眠舱启动'

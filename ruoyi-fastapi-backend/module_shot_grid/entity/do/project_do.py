@@ -42,6 +42,7 @@ class ShotGridProject(ShotGridMutableAuditMixin, Base):
         comment='项目类型代码',
     )
     project_description = Column(Text, nullable=True, comment='项目描述')
+    reference_description = Column(Text, nullable=True, comment='项目共享资料说明')
     aspect_ratio = Column(String(20), nullable=False, server_default='16:9', comment='画幅')
     planned_duration_ms = Column(BigInteger, nullable=True, comment='计划总时长（毫秒）')
     delivery_date = Column(Date, nullable=True, comment='交付日期')
@@ -249,7 +250,7 @@ class ShotGridEpisode(ShotGridMutableAuditMixin, Base):
 
     __table_args__ = (
         UniqueConstraint('episode_id', 'project_id', name='uk_sg_episode_id_project'),
-        CheckConstraint('episode_no > 0', name='ck_sg_episode_no'),
+        CheckConstraint('episode_no >= 0', name='ck_sg_episode_no'),
         CheckConstraint('sort_order >= 0', name='ck_sg_episode_sort_order'),
         CheckConstraint("lifecycle_status in ('active', 'archived')", name='ck_sg_episode_lifecycle'),
         CheckConstraint('lock_version >= 0', name='ck_sg_episode_lock_version'),

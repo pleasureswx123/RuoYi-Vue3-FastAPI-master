@@ -4,7 +4,7 @@ const STATUS_META = {
   preparing: { label: '目录准备中', tone: 'info' },
   in_progress: { label: '制作中', tone: 'primary' },
   reviewing: { label: '待审核', tone: 'purple' },
-  revision: { label: '修改中', tone: 'danger' },
+  revision: { label: '待修改', tone: 'danger' },
   completed: { label: '已完成', tone: 'success' }
 }
 

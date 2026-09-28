@@ -622,6 +622,64 @@ class ShotGridIssueVerificationInputModel(ShotGridApiModel):
         return self
 
 
+class ShotGridBatchFeedbackDraftModel(ShotGridLockVersionModel):
+    """审核人已查看的草稿快照，避免批量发送未看到的新草稿。"""
+
+    model_config = ConfigDict(extra='forbid')
+    draft_id: int = Field(gt=0, le=SQL_BIGINT_MAX)
+
+
+class ShotGridBatchFeedbackItemModel(ShotGridLockVersionModel):
+    """一个待审核版本及其显式复核结果。"""
+
+    model_config = ConfigDict(extra='forbid')
+    version_id: int = Field(gt=0, le=SQL_BIGINT_MAX)
+    drafts: list[ShotGridBatchFeedbackDraftModel] = Field(max_length=200)
+    issue_verifications: list[ShotGridIssueVerificationInputModel] = Field(default_factory=list, max_length=200)
+
+    @model_validator(mode='after')
+    def validate_unique_items(self) -> 'ShotGridBatchFeedbackItemModel':
+        for items, key in [(self.drafts, 'draft_id'), (self.issue_verifications, 'issue_id')]:
+            ids = [getattr(item, key) for item in items]
+            if len(ids) != len(set(ids)):
+                raise ValueError('草稿及历史问题不能重复')
+        return self
+
+
+class ShotGridBatchFeedbackModel(ShotGridApiModel):
+    """批量保存整体反馈草稿，或复核历史问题后统一退回。"""
+
+    model_config = ConfigDict(extra='forbid')
+    action: Literal['save_draft', 'reject']
+    content: str = Field(default='', max_length=10000)
+    reference_file_ids: list[str] = Field(default_factory=list, max_length=5)
+    items: list[ShotGridBatchFeedbackItemModel] = Field(min_length=1, max_length=100)
+
+    @field_validator('reference_file_ids')
+    @classmethod
+    def validate_reference_file_ids(cls, value: list[str]) -> list[str]:
+        return ShotGridNoteCreateModel.validate_reference_file_ids(value)
+
+    @field_validator('content', mode='before')
+    @classmethod
+    def trim_content(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
+
+    @model_validator(mode='after')
+    def validate_batch(self) -> 'ShotGridBatchFeedbackModel':
+        ids = [item.version_id for item in self.items]
+        if len(ids) != len(set(ids)):
+            raise ValueError('版本不能重复')
+        if self.reference_file_ids and not self.content:
+            raise ValueError('添加参考内容后必须填写整体反馈说明')
+        if self.action == 'save_draft':
+            if not self.content:
+                raise ValueError('保存草稿时必须填写整体反馈')
+            if any(item.issue_verifications for item in self.items):
+                raise ValueError('保存草稿不提交历史问题复核结果')
+        return self
+
+
 class ShotGridRevisionTransferModel(ShotGridApiModel):
     """退回后交接修改，不改变历史版本归属。"""
 

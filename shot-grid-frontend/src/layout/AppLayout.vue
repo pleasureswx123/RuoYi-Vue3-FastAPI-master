@@ -6,6 +6,7 @@ import {
   Fold,
   Expand,
   Box,
+  Reading,
   Collection,
   Film,
   FolderOpened,
@@ -30,6 +31,7 @@ const fullscreenSupported = ref(false)
 const isFullscreen = ref(false)
 const fullscreenPending = ref(false)
 const companyLogoUrl = `${import.meta.env.BASE_URL}company_logo.svg`
+const userManualUrl = `${import.meta.env.BASE_URL}help/user-manual.html`
 const companyLogoMaskStyle = Object.freeze({
   '--app-company-logo-mask': `url("${companyLogoUrl}")`
 })
@@ -222,6 +224,9 @@ onBeforeUnmount(() => {
           </div>
         </div>
         <div class="app-account">
+          <el-tooltip content="使用操作手册（新标签页）" placement="bottom" :show-after="350">
+            <el-button tag="a" :href="userManualUrl" target="_blank" rel="noopener noreferrer" :icon="Reading" aria-label="打开使用操作手册（新标签页）">使用手册</el-button>
+          </el-tooltip>
           <el-button
             v-if="canUseSearch"
             class="app-search-trigger"

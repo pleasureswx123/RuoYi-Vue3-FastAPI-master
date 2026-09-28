@@ -17,6 +17,7 @@ ACCEPTED_STATUS = 202
 PROJECT_ID = 1001
 
 EXPECTED_ROUTES = {
+    ('GET', '/shot-grid/projects/{projectId}/reference-files/{fileId}/download'): 'shotgrid:project:query',
     ('GET', '/shot-grid/projects'): 'shotgrid:project:list',
     ('POST', '/shot-grid/projects'): 'shotgrid:project:add',
     ('PUT', '/shot-grid/projects/{projectId}'): 'shotgrid:project:edit',

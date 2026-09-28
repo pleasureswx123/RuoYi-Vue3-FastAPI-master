@@ -220,7 +220,7 @@ onBeforeUnmount(() => { previewController?.abort(); downloadController?.abort() 
     <div class="import-flow">
       <section class="file-picker" :class="{ 'has-file': file }">
         <el-icon><UploadFilled /></el-icon>
-        <div><strong>{{ file?.name || '选择镜头 Excel 工作簿' }}</strong><p>{{ file ? `${(file.size / 1024).toFixed(1)} KiB` : '仅支持 .xlsx，最大 10 MiB；每个可见 EPnnn 工作表表示一集。' }}</p></div>
+        <div><strong>{{ file?.name || '选择镜头 Excel 工作簿' }}</strong><p>{{ file ? `${(file.size / 1024).toFixed(1)} KiB` : '仅支持 .xlsx，最大 10 MiB；每个可见 EPnnn 工作表表示一集；可选 EP000 为预告片，EP001 起为正片。' }}</p></div>
         <el-button link type="primary" :loading="downloading" :disabled="isBusy" @click="downloadTemplate">下载官方模板</el-button>
         <el-upload ref="uploadRef" class="file-picker__upload" action="#" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" :auto-upload="false" :show-file-list="false" :limit="1" :disabled="isBusy" :on-change="chooseFile" :on-exceed="replaceFile"><el-button :icon="UploadFilled" :disabled="isBusy">{{ file ? '更换文件' : '选择文件' }}</el-button></el-upload>
         <el-button type="primary" :loading="previewing" :disabled="!file || committing" @click="runPreview">{{ preview ? '重新预览' : '预览导入内容' }}</el-button>

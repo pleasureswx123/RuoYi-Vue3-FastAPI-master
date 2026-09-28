@@ -36,9 +36,12 @@ class ShotGridTask(ShotGridMutableAuditMixin, Base):
     expected_end_time = Column(SHOT_GRID_DATETIME, nullable=True, comment='预期结束时间，仅供制作人参考')
     baseline_start_time = Column(SHOT_GRID_DATETIME, nullable=True, comment='首版排期开始时间，首次写入后冻结')
     baseline_end_time = Column(SHOT_GRID_DATETIME, nullable=True, comment='首版排期结束时间，首次写入后冻结')
+    reference_description = Column(Text, nullable=True, comment='参考内容说明')
     requirements = Column(Text, nullable=True, comment='制作要求')
 
-    revision_transfers = Column(SHOT_GRID_JSON, nullable=False, server_default=text("'[]'"), comment='只追加的退回修改转交历史')
+    revision_transfers = Column(
+        SHOT_GRID_JSON, nullable=False, server_default=text("'[]'"), comment='只追加的退回修改转交历史'
+    )
 
     __table_args__ = (
         ForeignKeyConstraint(

@@ -162,7 +162,7 @@ function resetFilters() {
           <el-option label="目录准备中" value="preparing" />
           <el-option label="制作中" value="in_progress" />
           <el-option label="待审核" value="pending_review" />
-          <el-option label="待修订" value="revision" />
+          <el-option label="待修改" value="revision" />
           <el-option label="已完成" value="completed" />
         </el-select>
       </el-form-item>

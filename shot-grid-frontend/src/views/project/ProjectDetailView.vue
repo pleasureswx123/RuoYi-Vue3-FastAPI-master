@@ -7,6 +7,7 @@ import { ArrowLeft, Calendar, Delete, Edit, Lock, Refresh } from '@element-plus/
 import { assertPositiveId, getProjectDetail, getProjectOverview } from '@/api/shot-grid/projects'
 import { useSessionStore } from '@/store/modules/session'
 import { tagTypeFromTone } from '@/utils/tag'
+import ReviewReferenceFiles from '@/components/review/ReviewReferenceFiles.vue'
 import ProjectArchiveDialog from '@/views/project/components/ProjectArchiveDialog.vue'
 import ProjectEditDialog from '@/views/project/components/ProjectEditDialog.vue'
 import ProjectMemberPanel from '@/views/project/components/ProjectMemberPanel.vue'
@@ -53,9 +54,9 @@ const metrics = computed(() => [
   { label: '总镜头', value: overview.value?.totalShots ?? project.value?.totalShots ?? 0 },
   { label: '总资产', value: overview.value?.totalAssets ?? project.value?.totalAssets ?? 0 },
   { label: '待审核镜头', value: overview.value?.pendingReviewShots ?? project.value?.pendingReviewShots ?? 0 },
-  { label: '修改中镜头', value: overview.value?.revisionShots ?? project.value?.revisionShots ?? 0 },
+  { label: '待修改镜头', value: overview.value?.revisionShots ?? project.value?.revisionShots ?? 0 },
   { label: '待审核资产项', value: overview.value?.pendingReviewAssetItems ?? project.value?.pendingReviewAssetItems ?? 0 },
-  { label: '修改中资产项', value: overview.value?.revisionAssetItems ?? project.value?.revisionAssetItems ?? 0 }
+  { label: '待修改资产项', value: overview.value?.revisionAssetItems ?? project.value?.revisionAssetItems ?? 0 }
 ])
 
 async function loadProject() {
@@ -157,6 +158,14 @@ onBeforeUnmount(() => controller?.abort())
         </el-descriptions>
       </el-card>
 
+      <el-card class="project-references" shadow="never" data-testid="project-references">
+        <p class="sg-eyebrow">PROJECT REFERENCES</p>
+        <h2>项目资料</h2>
+        <p v-if="project.referenceDescription" class="project-references__description">{{ project.referenceDescription }}</p>
+        <ReviewReferenceFiles v-if="project.referenceFiles?.length" :key="project.projectId" :files="project.referenceFiles" />
+        <el-empty v-if="!project.referenceDescription && !project.referenceFiles?.length" description="项目暂未提供剧本或参考资料" :image-size="48" />
+      </el-card>
+
       <el-card class="overview-section" shadow="never">
         <div class="overview-progress">
           <div><p class="sg-eyebrow">PROGRESS</p><h2>整体完成度</h2></div>
@@ -201,6 +210,10 @@ onBeforeUnmount(() => controller?.abort())
 .project-hero h2,.project-hero p { margin:0; }.project-hero h2{font-size:28px}.project-hero p{max-width:760px;margin-top:8px;color:var(--sg-text-secondary);font-size:13px;line-height:1.7}
 .project-hero__actions { display:flex; gap:9px; justify-content:flex-end; margin-top:-40px; }
 .project-hero__meta { margin-top:28px; }.project-hero__meta :deep(.el-descriptions__body),.project-hero__meta :deep(.el-descriptions__cell){background:rgba(13,16,21,.92)!important;border-color:var(--sg-border)!important}.project-hero__meta :deep(.el-descriptions__label){color:var(--sg-text-muted);font-size:10px}.project-hero__meta :deep(.el-descriptions__content){color:var(--sg-text-secondary);font-size:12px}
+.project-references { min-width:0;background:var(--sg-surface);border-color:var(--sg-border);border-radius:var(--sg-radius-lg) }
+.project-references :deep(.el-card__body) { display:grid;gap:12px;padding:24px }
+.project-references h2 { margin:0;font-size:19px }
+.project-references__description { margin:0;color:var(--sg-text-secondary);font-size:13px;line-height:1.7;white-space:pre-wrap;overflow-wrap:anywhere }
 .overview-section { background:var(--sg-surface);border-color:var(--sg-border);border-radius:var(--sg-radius-lg) }.overview-section :deep(.el-card__body){padding:24px}
 .overview-progress { display:grid;grid-template-columns:1fr auto;gap:12px;align-items:end }.overview-progress h2{margin:0;font-size:19px}.overview-progress>strong{color:var(--sg-accent);font-size:26px}.overview-progress>span{grid-column:1/-1;height:7px;overflow:hidden;background:rgba(255,255,255,.06);border-radius:99px}.overview-progress i{display:block;height:100%;background:linear-gradient(90deg,var(--sg-accent-strong),var(--sg-accent));border-radius:inherit}
 .overview-progress>.el-progress{--el-fill-color-light:var(--sg-progress-track);grid-column:1/-1}.overview-metrics { display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:20px }.overview-metrics>.el-card{background:rgba(255,255,255,.025);border-color:var(--sg-border);border-radius:10px}.overview-metrics :deep(.el-card__body){padding:15px}.overview-metrics :deep(.el-statistic__head){color:var(--sg-text-muted);font-size:10px}.overview-metrics :deep(.el-statistic__number){color:var(--sg-text);font-size:21px}

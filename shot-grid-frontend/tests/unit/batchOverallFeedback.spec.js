@@ -1,50 +1,337 @@
 import { mount, flushPromises } from '@vue/test-utils'
-import { ElButton, ElMessage } from 'element-plus'
-import { describe, it, expect, vi } from 'vitest'
+import { ElButton, ElCheckbox, ElCollapse, ElMenuItem, ElRadioGroup, ElSteps, ElTable } from 'element-plus'
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest'
+import ReviewReferenceInput from '@/components/review/ReviewReferenceInput.vue'
 import BatchOverallFeedbackDialog from '@/components/version/BatchOverallFeedbackDialog.vue'
-import { rejectBatchWithOverallFeedback } from '@/api/shot-grid/reviews'
-vi.mock('@/api/shot-grid/reviews', () => ({ rejectBatchWithOverallFeedback: vi.fn() }))
+import { getVersionReviewContext, submitBatchFeedback, uploadReviewReferenceFile } from '@/api/shot-grid/reviews'
+vi.mock('@/api/shot-grid/reviews', () => ({ uploadReviewReferenceFile: vi.fn(), getVersionReviewContext: vi.fn(), submitBatchFeedback: vi.fn() }))
 
-const shots = [{ shotCode: 'EP001-001-0080', latestVersion: { versionId: 31, versionNumber: 'V001' } }, { shotCode: 'EP001-001-0100', latestVersion: { versionId: 32, versionNumber: 'V002' } }]
-async function open() {
-  const wrapper = mount(BatchOverallFeedbackDialog, { global: { stubs: { teleport: true } } })
-  wrapper.vm.open(8, shots)
+const shots = [31, 32].map(versionId => ({ shotCode: '镜头' + versionId, latestVersion: { versionId, versionNumber: 'V002' }, canInspect: true }))
+const issue = id => ({ issueId: id, content: '原始问题' + id, originVersionNumber: 'V001', currentVersionResponse: { responseText: '已经调整，请复核' } })
+const context = (id, overrides = {}) => ({ data: {
+  currentVersion: { versionId: id, versionStatus: 'pending_review', lockVersion: 3 },
+  carriedIssues: [], currentVersionDrafts: [], currentVersionIssues: [], ...overrides
+} })
+let wrapper
+const originalScrollIntoView = HTMLElement.prototype.scrollIntoView
+async function open(isCurrent) {
+  wrapper = mount(BatchOverallFeedbackDialog, { attachTo: document.body, global: { stubs: { teleport: true } } })
+  wrapper.vm.open(8, shots, isCurrent)
   await flushPromises()
-  return wrapper
 }
-function submit(wrapper) {
-  return wrapper.findAllComponents(ElButton).find(button => button.text() === '发送意见并退回修改')
+const button = label => wrapper.findAllComponents(ElButton).find(item => item.text() === label)
+async function click(label) { await button(label).trigger('click'); await flushPromises() }
+const toFeedback = () => click('下一步：补充反馈')
+const toConfirm = () => click('下一步：确认发送')
+const sendLabel = '确认发送并退回修改（2 个镜头）'
+const send = () => click(sendLabel)
+const commonText = () => wrapper.get('textarea[placeholder^="填写适用于"]')
+const stage = () => wrapper.getComponent(ElSteps).props('active')
+const issueTable = () => wrapper.findAllComponents(ElTable).find(table => table.props('rowKey') === 'issueId')
+async function selectShot(id) {
+  await wrapper.findAllComponents(ElMenuItem).find(item => item.props('index') === String(id)).trigger('click')
+  await flushPromises()
 }
-describe('批量整体反馈并退回', () => {
-  it('校验空意见、固定版本快照、发送后关闭并刷新', async () => {
-    rejectBatchWithOverallFeedback.mockResolvedValue({ data: [] })
-    const wrapper = await open()
-    expect(wrapper.text()).toContain('任务将全部变为修改中')
-    await submit(wrapper).trigger('click')
-    await flushPromises()
-    expect(rejectBatchWithOverallFeedback).not.toHaveBeenCalled()
-    await wrapper.get('textarea').setValue('统一调整整体色调')
-    await submit(wrapper).trigger('click')
-    await flushPromises()
-    expect(rejectBatchWithOverallFeedback).toHaveBeenCalledWith(8, { versionIds: [31, 32], content: '统一调整整体色调' })
-    expect(wrapper.emitted('saved')).toEqual([[{ projectId: 8 }]])
-    wrapper.unmount()
+async function mark(result) {
+  await wrapper.get('input[type="radio"][value="' + result + '"]').setValue(true)
+  await flushPromises()
+}
+async function resolveAll() {
+  for (const id of [31, 32]) { await selectShot(id); await mark('resolved') }
+}
+async function selectIssue(index = 0) {
+  const table = issueTable()
+  table.vm.$.exposed.toggleRowSelection(table.props('data')[index], true)
+  await flushPromises()
+}
+async function prepareSend(content = '共同新意见') {
+  await toFeedback()
+  await commonText().setValue(content)
+  await toConfirm()
+}
+beforeEach(() => {
+  vi.clearAllMocks()
+  uploadReviewReferenceFile.mockReset().mockResolvedValue({ fileId: '11111111-1111-4111-8111-111111111111' })
+  HTMLElement.prototype.scrollIntoView = vi.fn()
+  getVersionReviewContext.mockImplementation(id => Promise.resolve(context(id)))
+  submitBatchFeedback.mockResolvedValue({ data: [] })
+})
+afterEach(() => {
+  wrapper?.unmount()
+  if (originalScrollIntoView) HTMLElement.prototype.scrollIntoView = originalScrollIntoView
+  else delete HTMLElement.prototype.scrollIntoView
+})
+
+describe('批量反馈三步向导', () => {
+  it('参考文件跨步骤保留，汇总只读；一次上传后用于全部镜头', async () => {
+    await open()
+    await toFeedback()
+    wrapper.getComponent(ReviewReferenceInput).vm.$emit('add', { raw: new File(['ref'], '参考.pdf') })
+    await commonText().setValue('按附件调整')
+    await toConfirm()
+    expect(wrapper.getComponent(ReviewReferenceInput).props('readonly')).toBe(true)
+    expect(wrapper.text()).toContain('参考.pdf')
+    await click('上一步')
+    expect(wrapper.getComponent(ReviewReferenceInput).props('files')).toHaveLength(1)
+    await toConfirm()
+    await send()
+    expect(uploadReviewReferenceFile).toHaveBeenCalledTimes(1)
+    expect(submitBatchFeedback.mock.calls[0][1]).toMatchObject({
+      referenceFileIds: ['11111111-1111-4111-8111-111111111111'], items: [{ versionId: 31 }, { versionId: 32 }]
+    })
   })
-  it('失败保留输入且不通知成功，提交期间阻止重复请求', async () => {
-    let fail
-    rejectBatchWithOverallFeedback.mockImplementation(() => new Promise((resolve, reject) => { fail = reject }))
-    const message = vi.spyOn(ElMessage, 'error').mockImplementation(() => {})
-    const wrapper = await open()
-    await wrapper.get('textarea').setValue('统一调整')
-    await submit(wrapper).trigger('click')
-    await flushPromises()
-    expect(submit(wrapper).props('loading')).toBe(true)
-    fail({ message: '有上轮问题待复核' })
-    await flushPromises()
-    expect(wrapper.get('textarea').element.value).toBe('统一调整')
-    expect(wrapper.emitted('saved')).toBeUndefined()
-    expect(message).toHaveBeenCalled()
+  it('已有待修改问题时也不能只附参考文件；清空会移除本次文字和附件', async () => {
+    getVersionReviewContext.mockImplementation(id => Promise.resolve(context(id, { currentVersionIssues: [issue(id)] })))
+    await open()
+    await toFeedback()
+    wrapper.getComponent(ReviewReferenceInput).vm.$emit('add', { raw: new File(['ref'], '参考.pdf') })
+    await toConfirm()
+    expect(stage()).toBe(1)
+    await vi.waitFor(() => expect(wrapper.text()).toContain('添加参考内容后，请填写共同反馈说明'))
+    await click('清空新增反馈')
+    expect(wrapper.getComponent(ReviewReferenceInput).props('files')).toEqual([])
+    await toConfirm()
+    expect(stage()).toBe(2)
+  })
+  it('上传失败不保存草稿，重试只上传未成功文件；成功后提交全部附件', async () => {
+    const fileId = '11111111-1111-4111-8111-111111111111'
+    uploadReviewReferenceFile.mockResolvedValueOnce({ fileId }).mockRejectedValueOnce(new Error('上传失败'))
+      .mockResolvedValueOnce({ fileId: '22222222-2222-4222-8222-222222222222' })
+    await open()
+    await toFeedback()
+    for (const name of ['图片参考.pdf', '动作参考.mov']) wrapper.getComponent(ReviewReferenceInput).vm.$emit('add', { raw: new File(['ref'], name) })
+    await commonText().setValue('参照附件')
+    await click('保存新增反馈草稿')
+    expect(submitBatchFeedback).not.toHaveBeenCalled()
+    await click('保存新增反馈草稿')
+    expect(uploadReviewReferenceFile).toHaveBeenCalledTimes(3)
+    expect(submitBatchFeedback.mock.calls[0][1]).toMatchObject({ action: 'save_draft', referenceFileIds: [fileId, '22222222-2222-4222-8222-222222222222'] })
+  })
+  it('上传途中关闭组件会取消上传，迟到结果不提交反馈', async () => {
+    let finishUpload
+    uploadReviewReferenceFile.mockImplementation(() => new Promise(resolve => { finishUpload = resolve }))
+    await open()
+    await toFeedback()
+    wrapper.getComponent(ReviewReferenceInput).vm.$emit('add', { raw: new File(['ref'], '参考.pdf') })
+    await commonText().setValue('附带参考')
+    await click('保存新增反馈草稿')
     wrapper.unmount()
-    message.mockRestore()
+    expect(uploadReviewReferenceFile.mock.calls[0][1].signal.aborted).toBe(true)
+    finishUpload({ fileId: '11111111-1111-4111-8111-111111111111' })
+    await flushPromises()
+    expect(submitBatchFeedback).not.toHaveBeenCalled()
+    wrapper = null
+  })
+  it('无旧问题显示无需复核；空意见不能进入发送预览，填写后按冻结版本发送', async () => {
+    await open()
+    expect(stage()).toBe(0)
+    expect(wrapper.find('textarea').exists()).toBe(false)
+    expect(wrapper.text()).toContain('无需复核')
+    expect(button(sendLabel)).toBeUndefined()
+    await toFeedback()
+    await toConfirm()
+    expect(stage()).toBe(1)
+    expect(wrapper.text()).toContain('无待修改内容')
+    expect(submitBatchFeedback).not.toHaveBeenCalled()
+    await commonText().setValue('  统一调整色调  ')
+    await toConfirm()
+    expect(stage()).toBe(2)
+    await send()
+    expect(submitBatchFeedback).toHaveBeenCalledWith(8, {
+      action: 'reject', content: '统一调整色调', referenceFileIds: [],
+      items: shots.map(shot => ({ versionId: shot.latestVersion.versionId, lockVersion: 3, drafts: [], issueVerifications: [] }))
+    })
+    expect(wrapper.emitted('saved')).toEqual([[{ projectId: 8 }]])
+  })
+  it('默认未复核；门禁定位漏项镜头，全部完成前不能补充新反馈', async () => {
+    getVersionReviewContext.mockImplementation(id => Promise.resolve(context(id, { carriedIssues: [issue(id)] })))
+    await open()
+    expect(wrapper.text()).toContain('制作人处理说明')
+    expect(wrapper.text()).toContain('已经调整，请复核')
+    expect(wrapper.getComponent(ElRadioGroup).props('modelValue')).toBe('')
+    await mark('resolved')
+    await toFeedback()
+    expect(stage()).toBe(0)
+    expect(issueTable().props('data')[0].issueId).toBe(32)
+    await vi.waitFor(() => expect(wrapper.text()).toContain('请选择复核结论'))
+    expect(submitBatchFeedback).not.toHaveBeenCalled()
+    await mark('resolved')
+    await prepareSend()
+    await send()
+    expect(submitBatchFeedback.mock.calls[0][1].items.map(item => item.issueVerifications)).toEqual([
+      [{ issueId: 31, result: 'resolved', comment: null }], [{ issueId: 32, result: 'resolved', comment: null }]
+    ])
+  })
+  it('仍需修改必须补原因；切换镜头和前后步骤保持结论与反馈', async () => {
+    getVersionReviewContext.mockImplementation(id => Promise.resolve(context(id, { carriedIssues: [issue(id)] })))
+    await open()
+    await mark('still_present')
+    await toFeedback()
+    expect(stage()).toBe(0)
+    await vi.waitFor(() => expect(wrapper.text()).toContain('请填写仍需修改的具体原因'))
+    expect(document.activeElement.tagName).toBe('TEXTAREA')
+    await wrapper.get('textarea[placeholder^="指出仍未"]').setValue('色温仍然偏暖')
+    await click('下一个未复核镜头')
+    expect(issueTable().props('data')[0].issueId).toBe(32)
+    await mark('resolved')
+    await prepareSend('共同补充')
+    await click('上一步')
+    expect(commonText().element.value).toBe('共同补充')
+    await click('上一步')
+    await selectShot(31)
+    expect(wrapper.get('textarea').element.value).toBe('色温仍然偏暖')
+    await toFeedback()
+    await toConfirm()
+    await send()
+    expect(submitBatchFeedback.mock.calls[0][1].items[0].issueVerifications[0].comment).toBe('色温仍然偏暖')
+  })
+  it('批量操作仅修改勾选项，统一修改原因按需展开且不能为空', async () => {
+    getVersionReviewContext.mockImplementation(id => Promise.resolve(context(id, { carriedIssues: [issue(id), issue(id + 100)] })))
+    await open()
+    expect(button('批量标记已解决')).toBeUndefined()
+    await selectIssue()
+    await click('批量标记仍需修改')
+    await click('应用修改原因')
+    expect(wrapper.findAllComponents(ElRadioGroup).map(group => group.props('modelValue'))).toEqual(['', ''])
+    await wrapper.get('input[placeholder="仅应用到当前勾选的问题"]').setValue('共同修改原因')
+    await click('应用修改原因')
+    expect(wrapper.findAllComponents(ElRadioGroup).map(group => group.props('modelValue'))).toEqual(['still_present', ''])
+    expect(wrapper.get('textarea').element.value).toBe('共同修改原因')
+    expect(button('批量标记已解决')).toBeUndefined()
+    await selectIssue(1)
+    await click('批量标记已解决')
+    await selectShot(32)
+    expect(wrapper.findAllComponents(ElRadioGroup).map(group => group.props('modelValue'))).toEqual(['', ''])
+  })
+  it('切换镜头清除勾选而保留复核状态，避免批量操作误改隐藏镜头', async () => {
+    getVersionReviewContext.mockImplementation(id => Promise.resolve(context(id, { carriedIssues: [issue(id)] })))
+    await open()
+    await mark('resolved')
+    await selectIssue()
+    await selectShot(32)
+    expect(button('批量标记已解决')).toBeUndefined()
+    await selectShot(31)
+    expect(wrapper.getComponent(ElRadioGroup).props('modelValue')).toBe('resolved')
+    expect(button('批量标记已解决')).toBeUndefined()
+  })
+  it('第二步确认已有草稿，定位未确认项并提交精确草稿快照', async () => {
+    getVersionReviewContext.mockImplementation(id => Promise.resolve(context(id, { currentVersionDrafts: [{ draftId: id + 100, lockVersion: 2, content: '其他审核人的草稿', reviewerName: '张三' }] })))
+    await open()
+    expect(wrapper.text()).not.toContain('其他审核人的草稿')
+    await toFeedback()
+    expect(wrapper.text()).toContain('其他审核人的草稿')
+    const confirmations = () => wrapper.findAllComponents(ElCheckbox).filter(box => box.text().includes('已核对'))
+    expect(confirmations().map(box => box.props('modelValue'))).toEqual([false, false])
+    await confirmations()[0].find('input').setValue(true)
+    await toConfirm()
+    expect(stage()).toBe(1)
+    expect(wrapper.getComponent(ElCollapse).props('modelValue')).toContain(32)
+    await confirmations()[1].find('input').setValue(true)
+    await toConfirm()
+    await send()
+    expect(submitBatchFeedback.mock.calls[0][1].items[0].drafts).toEqual([{ draftId: 131, lockVersion: 2 }])
+    expect(submitBatchFeedback.mock.calls[0][1].content).toBe('')
+  })
+  it('全部旧问题解决且无新意见时提示单镜头审核通过，不能空退回', async () => {
+    getVersionReviewContext.mockImplementation(id => Promise.resolve(context(id, { carriedIssues: [issue(id)] })))
+    await open()
+    await resolveAll()
+    await toFeedback()
+    await toConfirm()
+    expect(stage()).toBe(1)
+    expect(wrapper.text()).toContain('转单镜头审核通过')
+    expect(submitBatchFeedback).not.toHaveBeenCalled()
+  })
+  it('仍有修改问题时可不填共同意见，预览能展开查看原因', async () => {
+    getVersionReviewContext.mockImplementation(id => Promise.resolve(context(id, { carriedIssues: [issue(id)] })))
+    await open()
+    for (const id of [31, 32]) {
+      await selectShot(id)
+      await mark('still_present')
+      await wrapper.get('textarea').setValue('需要修改' + id)
+    }
+    await toFeedback()
+    await toConfirm()
+    expect(stage()).toBe(2)
+    const preview = wrapper.findAllComponents(ElTable).find(table => table.props('rowKey') === 'versionId')
+    preview.vm.$.exposed.toggleRowExpansion(preview.props('data')[0], true)
+    await flushPromises()
+    expect(wrapper.text()).toContain('修改原因：需要修改31')
+    await send()
+    expect(submitBatchFeedback.mock.calls[0][1].content).toBe('')
+  })
+  it('保存新增草稿只要求新文字，不要求确认已有草稿且不提交复核结论', async () => {
+    getVersionReviewContext.mockImplementation(id => Promise.resolve(context(id, { carriedIssues: [issue(id)], currentVersionDrafts: [{ draftId: id, lockVersion: 0, content: '原草稿' }] })))
+    await open()
+    expect(button('保存新增反馈草稿')).toBeUndefined()
+    await resolveAll()
+    await toFeedback()
+    await click('保存新增反馈草稿')
+    expect(submitBatchFeedback).not.toHaveBeenCalled()
+    await vi.waitFor(() => expect(wrapper.text()).toContain('请填写要保存的共同反馈'))
+    await commonText().setValue('仅暂存')
+    await click('保存新增反馈草稿')
+    expect(submitBatchFeedback.mock.calls[0][1].action).toBe('save_draft')
+    expect(submitBatchFeedback.mock.calls[0][1].items.every(item => item.issueVerifications.length === 0)).toBe(true)
+  })
+  it('清空新增反馈不清空已经完成的复核', async () => {
+    getVersionReviewContext.mockImplementation(id => Promise.resolve(context(id, { carriedIssues: [issue(id)] })))
+    await open()
+    await resolveAll()
+    await toFeedback()
+    await commonText().setValue('本次填写')
+    await click('清空新增反馈')
+    expect(commonText().element.value).toBe('')
+    await click('上一步')
+    expect(wrapper.getComponent(ElRadioGroup).props('modelValue')).toBe('resolved')
+    expect(wrapper.text()).toContain('已有问题已复核 2 / 2')
+  })
+  it.each([409, 0])('提交失败 %s 保留各步骤输入并锁止重复发送', async status => {
+    let fail
+    submitBatchFeedback.mockImplementation(() => new Promise((_resolve, reject) => { fail = reject }))
+    await open()
+    await prepareSend('保留这段')
+    await send()
+    expect(button(sendLabel).props('loading')).toBe(true)
+    await send()
+    expect(submitBatchFeedback).toHaveBeenCalledTimes(1)
+    fail({ httpStatus: status, message: '草稿已变更' })
+    await flushPromises()
+    expect(button(sendLabel).props('disabled')).toBe(true)
+    await click('上一步')
+    expect(commonText().element.value).toBe('保留这段')
+    expect(button('下一步：确认发送').props('disabled')).toBe(true)
+    expect(wrapper.emitted('saved')).toBeUndefined()
+  })
+  it('任一上下文加载失败阻止进入下一步和整批写入', async () => {
+    getVersionReviewContext.mockRejectedValue(new Error('无权读取'))
+    await open()
+    expect(button('下一步：补充反馈').props('disabled')).toBe(true)
+    expect(submitBatchFeedback).not.toHaveBeenCalled()
+  })
+  it('项目上下文变更时拒绝提交，不自动改投版本', async () => {
+    let valid = true
+    await open(() => valid)
+    await prepareSend('测试')
+    valid = false
+    await send()
+    expect(submitBatchFeedback).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('项目或所选任务已变化')
+  })
+  it('卸载隔离迟到请求，不再通知成功', async () => {
+    let finish
+    submitBatchFeedback.mockImplementation(() => new Promise(resolve => { finish = resolve }))
+    await open()
+    await prepareSend('测试')
+    await send()
+    wrapper.unmount()
+    finish({ data: [] })
+    await flushPromises()
+    expect(wrapper.emitted('saved')).toBeUndefined()
+  })
+  it('查看画面复用当前镜头审核入口', async () => {
+    await open()
+    await click('查看当前版本画面')
+    expect(wrapper.emitted('review')).toEqual([[shots[0]]])
   })
 })

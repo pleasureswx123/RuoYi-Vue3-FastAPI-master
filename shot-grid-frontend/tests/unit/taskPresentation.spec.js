@@ -27,7 +27,7 @@ describe('预期制作时间提醒不改变业务状态', () => {
 
 describe('任务展示契约', () => {
   it('集中映射稳定英文状态码，未知值不影响渲染', () => {
-    expect(taskStatusMeta('revision')).toMatchObject({ label: '待修订', tone: 'danger' })
+    expect(taskStatusMeta('revision')).toMatchObject({ label: '待修改', tone: 'danger' })
     expect(taskStatusMeta('not_started', 'asset_image').label).toBe('待开工')
     expect(taskStatusMeta('not_started', 'shot_video').label).toBe('待开工')
     expect(taskKindMeta('shot_video')).toMatchObject({ label: '镜头视频', shortLabel: '镜头' })

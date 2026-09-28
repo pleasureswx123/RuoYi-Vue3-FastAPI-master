@@ -348,3 +348,31 @@ def test_parser_skips_embedded_thumbnail_decoding(monkeypatch: pytest.MonkeyPatc
     result = ShotExcelParser().parse(contents)
     assert result.summary.valid_rows == 1
     assert result.rows[0].normalized.description == '镜头描述'
+
+
+def test_trailer_and_regular_episode_can_be_imported_together() -> None:
+    workbook = _minimal_workbook()
+    trailer = workbook.copy_worksheet(workbook.active)
+    trailer.title = 'EP000'
+    result = ShotExcelParser().parse(_save_workbook(workbook))
+    assert result.summary.valid_rows == TWO_VALID_ROWS
+    assert {(row.normalized.episode_no, row.normalized.episode_code) for row in result.rows} == {
+        (0, 'EP000'),
+        (1, 'EP001'),
+    }
+
+
+def test_duplicate_trailer_sheet_number_is_rejected() -> None:
+    workbook = _minimal_workbook()
+    workbook.active.title = 'EP000'
+    workbook.copy_worksheet(workbook.active).title = 'EP0000'
+    with pytest.raises(ShotGridDomainException):
+        ShotExcelParser().parse(_save_workbook(workbook))
+
+
+@pytest.mark.parametrize('name', ['EP-001', 'EP2147483648'])
+def test_invalid_episode_sheet_number_is_rejected(name: str) -> None:
+    workbook = _minimal_workbook()
+    workbook.active.title = name
+    with pytest.raises(ShotGridDomainException):
+        ShotExcelParser().parse(_save_workbook(workbook))

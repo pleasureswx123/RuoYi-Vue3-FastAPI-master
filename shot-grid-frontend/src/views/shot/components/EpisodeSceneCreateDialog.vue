@@ -42,9 +42,9 @@ const rules = {
   number: [{
     validator: (_rule, value, callback) => {
       const number = Number(value)
-      const minimum = isEpisode.value ? 1 : 0
-      if (!Number.isSafeInteger(number) || number < minimum) {
-        callback(new Error(isEpisode.value ? '集号必须为正整数' : '场次号必须为非负整数'))
+      const minimum = 0
+      if (value === null || value === undefined || value === '' || !Number.isSafeInteger(number) || number < minimum) {
+        callback(new Error(isEpisode.value ? '集号必须为非负整数，0 表示预告片' : '场次号必须为非负整数'))
       }
       else callback()
     },
@@ -177,7 +177,7 @@ onBeforeUnmount(() => suggestionController?.abort())
 <template>
   <ProjectModal
     :title="title"
-    :description="isEpisode ? '集号在项目内唯一；创建后会异步创建对应 NAS 集目录。' : '场次号在所属集内唯一；000 固定表示名称为“序”的序场。'"
+    :description="isEpisode ? '集号在项目内唯一；0 为预告片（EP000），1 起为正片。创建后异步创建 NAS 集目录。' : '场次号在所属集内唯一；000 固定表示名称为“序”的序场。'"
     :busy="busy"
     @close="closeDialog"
   >
@@ -189,7 +189,7 @@ onBeforeUnmount(() => suggestionController?.abort())
       </el-form-item>
       <div class="hierarchy-form__grid">
         <el-form-item :label="numberLabel" prop="number" required>
-          <el-input-number v-model="form.number" :min="isEpisode ? 1 : 0" :step="1" step-strictly controls-position="right" :disabled="busy || loadingSuggestion" />
+          <el-input-number v-model="form.number" :min="0" :step="1" step-strictly controls-position="right" :disabled="busy || loadingSuggestion" />
           <small>{{ numberPrefix }}{{ String(form.number ?? 0).padStart(3, '0') }}；默认取现有最大编号 + 1，可调整<span v-if="!isEpisode">，000 表示“序”</span>，最终由后端校验唯一性。</small>
         </el-form-item>
         <el-form-item label="名称" prop="name"><el-input v-model="form.name" maxlength="200" :placeholder="isEpisode ? '可选，如：第三集' : '可选，如：控制室'" :disabled="busy" /></el-form-item>

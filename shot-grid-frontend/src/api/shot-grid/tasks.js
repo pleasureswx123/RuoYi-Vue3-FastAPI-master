@@ -51,3 +51,7 @@ export function startTask(taskId, data) {
     silentError: true
   })
 }
+
+export function adjustShotProduction(projectId, data) {
+  return request({ url: `/shot-grid/projects/${assertPositiveId(projectId, '项目')}/shots/production-adjustments`, method: 'post', data, silentError: true })
+}

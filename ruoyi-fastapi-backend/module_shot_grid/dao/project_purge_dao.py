@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Select, and_, delete, or_, select, update
+from sqlalchemy import Select, String, and_, cast, delete, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from module_admin.dao.file_info_dao import FileInfoDao
@@ -202,6 +202,21 @@ class ShotGridProjectPurgeDao:
                     SysFileReference.business_id.in_([str(submission_id) for submission_id in submission_ids]),
                 )
             )
+        # 解除项目资料引用，共享给其他业务的文件继续保留。
+        project_reference_scope = (SysFileReference.business_type == 'shotgrid_project_reference') & (
+            SysFileReference.business_id == str(project_id)
+        )
+        file_ids.update(await db.scalars(select(SysFileReference.file_id).where(project_reference_scope)))
+        await db.execute(delete(SysFileReference).where(project_reference_scope))
+        # 解除本项目任务参考资料引用，共享给其他任务/项目的文件继续保留。
+        task_ids = select(ShotGridTask.task_id).where(ShotGridTask.project_id == project_id)
+        task_reference_scope = (
+            SysFileReference.business_type == 'shotgrid_task_reference'
+        ) & SysFileReference.business_id.in_(
+            select(cast(ShotGridTask.task_id, String)).where(ShotGridTask.task_id.in_(task_ids))
+        )
+        file_ids.update(await db.scalars(select(SysFileReference.file_id).where(task_reference_scope)))
+        await db.execute(delete(SysFileReference).where(task_reference_scope))
         if not file_ids:
             return []
 

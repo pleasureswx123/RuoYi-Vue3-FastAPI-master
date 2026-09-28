@@ -1,4 +1,5 @@
 from typing import Annotated
+from uuid import UUID
 
 from fastapi import Header, Path, Query, Request, Response
 from fastapi.encoders import jsonable_encoder
@@ -34,8 +35,10 @@ from module_shot_grid.entity.vo.project_vo import (
 )
 from module_shot_grid.service.project_overview_service import ShotGridProjectOverviewService
 from module_shot_grid.service.project_purge_service import ShotGridProjectPurgeService
+from module_shot_grid.service.project_reference_service import ShotGridProjectReferenceService
 from module_shot_grid.service.project_service import ShotGridProjectService
 from utils.response_util import ResponseUtil
+from utils.upload_util import UploadUtil
 
 SQL_BIGINT_MAX = 9_223_372_036_854_775_807
 
@@ -220,3 +223,24 @@ async def get_shot_grid_project_overview(
 ) -> Response:
     result = await ShotGridProjectOverviewService.get_overview(query_db, project_id)
     return ResponseUtil.success(data=result)
+
+
+@project_controller.get(
+    '/{projectId}/reference-files/{fileId}/download',
+    dependencies=[UserInterfaceAuthDependency('shotgrid:project:query')],
+)
+async def download_project_reference(
+    request: Request,
+    project_id: Annotated[int, Path(alias='projectId', gt=0, le=SQL_BIGINT_MAX)],
+    file_id: Annotated[UUID, Path(alias='fileId')],
+    query_db: Annotated[AsyncSession, DBSessionDependency()],
+    current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
+    access: Annotated[ShotGridProjectAccessModel, ProjectAccessDependency()],
+) -> Response:
+    result = await ShotGridProjectReferenceService.download(request, query_db, current_user, project_id, str(file_id))
+    return ResponseUtil.streaming(
+        data=result.data,
+        headers=UploadUtil.build_download_headers(result.filename, result.byte_range, result.accept_ranges),
+        media_type='application/octet-stream',
+        status_code=206 if result.byte_range.is_partial else 200,
+    )

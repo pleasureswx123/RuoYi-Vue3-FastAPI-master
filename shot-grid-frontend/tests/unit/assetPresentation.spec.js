@@ -39,7 +39,7 @@ describe('资产展示模型', () => {
       { status: 'preparing', label: '目录准备中', count: 1 },
       { status: 'in_progress', label: '制作中', count: 0 },
       { status: 'reviewing', label: '待审核', count: 0 },
-      { status: 'revision', label: '修改中', count: 0 },
+      { status: 'revision', label: '待修改', count: 0 },
       { status: 'completed', label: '已完成', count: 0 }
     ])
   })

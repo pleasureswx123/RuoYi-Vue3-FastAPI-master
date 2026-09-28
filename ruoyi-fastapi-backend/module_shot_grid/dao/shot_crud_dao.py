@@ -91,6 +91,7 @@ class ShotGridShotCrudDao:
                 task.lock_version.label('task_lock_version'),
                 task.assignee_user_id,
                 task.revision_transfers,
+                task.reference_description,
                 assignee.nick_name.label('assignee_nick_name'),
                 func.upper(assignee.nick_name).label('assignee_producer_code'),
                 ShotGridShot.create_by,

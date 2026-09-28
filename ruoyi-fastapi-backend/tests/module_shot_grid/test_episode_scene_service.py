@@ -74,8 +74,12 @@ def test_episode_scene_write_models_reject_lifecycle_or_identity_fields(model: t
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(('episode_no', 'code', 'directory'), [(0, 'EP000', 'EP00'), (1, 'EP001', 'EP01')])
 async def test_create_episode_freezes_result_and_writes_outbox_audit_in_one_transaction(
     monkeypatch: pytest.MonkeyPatch,
+    episode_no: int,
+    code: str,
+    directory: str,
 ) -> None:
     events: list[str] = []
     monkeypatch.setattr(
@@ -120,7 +124,7 @@ async def test_create_episode_freezes_result_and_writes_outbox_audit_in_one_tran
     result = await ShotGridEpisodeSceneService.create_episode(
         db,
         PROJECT_ID,
-        ShotGridEpisodeCreateModel(episodeNo=1, episodeName='第一集', sortOrder=10),
+        ShotGridEpisodeCreateModel(episodeNo=episode_no, episodeName='测试集', sortOrder=10),
         _current_user(),
         _access(),
     )
@@ -128,9 +132,9 @@ async def test_create_episode_freezes_result_and_writes_outbox_audit_in_one_tran
     operation = add_operation_mock.await_args.args[1]
     assert operation.operation_type == 'ensure_episode_directory'
     assert operation.aggregate_type == 'episode'
-    assert operation.target_relative_path == r'VIDEO\EP01'
-    assert result.episode_code == 'EP001'
-    assert result.storage_dir_name == 'EP01'
+    assert operation.target_relative_path == f'VIDEO\\{directory}'
+    assert result.episode_code == code
+    assert result.storage_dir_name == directory
     assert result.directory_status == 'pending'
     assert events == ['episode', 'outbox', 'audit', 'commit']
     db.rollback.assert_not_awaited()

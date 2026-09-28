@@ -31,6 +31,7 @@ from module_shot_grid.exceptions import ShotGridDomainException, shot_grid_error
 from module_shot_grid.service.platform_role_service import ShotGridPlatformRoleService
 from module_shot_grid.service.project_overview_service import ShotGridProjectOverviewService
 from module_shot_grid.service.project_path_service import ShotGridProjectPathService
+from module_shot_grid.service.project_reference_service import ShotGridProjectReferenceService
 
 
 class ShotGridProjectService:
@@ -101,6 +102,7 @@ class ShotGridProjectService:
             project_status=values['project_status'],
             storage_status=values['storage_status'],
         )
+        values['reference_files'] = await ShotGridProjectReferenceService.list_files(db, project_id)
         return ShotGridProjectDetailModel.model_validate(values)
 
     @classmethod
@@ -182,6 +184,7 @@ class ShotGridProjectService:
                     project_name=command.project_name,
                     project_type=command.project_type,
                     project_description=command.project_description,
+                    reference_description=command.reference_description,
                     aspect_ratio=command.aspect_ratio,
                     planned_duration_ms=command.planned_duration_ms,
                     delivery_date=command.delivery_date,
@@ -194,6 +197,10 @@ class ShotGridProjectService:
                     update_time=now,
                 ),
             )
+            if command.reference_file_ids:
+                await ShotGridProjectReferenceService.replace_files(
+                    db, project.project_id, command.reference_file_ids, user_id, actor_name
+                )
             for director_user_id in command.director_user_ids:
                 await ShotGridProjectMemberDao.add_member(
                     db,
@@ -277,6 +284,10 @@ class ShotGridProjectService:
                     'projectCode': project.project_code,
                     'storageRootId': storage_root.storage_root_id,
                     'directorUserIds': command.director_user_ids,
+                    'referenceDescription': ShotGridProjectReferenceService.audit_description(
+                        command.reference_description
+                    ),
+                    'referenceFileIds': command.reference_file_ids,
                     'memberUserIds': [member.user_id for member in command.members],
                     'platformRoleChanges': platform_role_changes,
                 },
@@ -333,12 +344,26 @@ class ShotGridProjectService:
                     '项目已有正式版本，不能普通修改项目类型或画幅',
                 )
 
+            reference_changes = {}
+            reference_audit = {}
+            if 'reference_description' in command.model_fields_set:
+                reference_changes['reference_description'] = command.reference_description
+                reference_audit['referenceDescription'] = {
+                    'before': ShotGridProjectReferenceService.audit_description(project.reference_description),
+                    'after': ShotGridProjectReferenceService.audit_description(command.reference_description),
+                }
+            if 'reference_file_ids' in command.model_fields_set:
+                before, after = await ShotGridProjectReferenceService.replace_files(
+                    db, project_id, command.reference_file_ids, user_id, actor_name
+                )
+                reference_audit['referenceFileIds'] = {'before': before, 'after': after}
             now = datetime.now()
             updated = await ShotGridProjectDao.update_project(
                 db,
                 project_id,
                 command.lock_version,
                 {
+                    **reference_changes,
                     'project_name': command.project_name,
                     'project_description': command.project_description,
                     'project_type': command.project_type,
@@ -354,6 +379,7 @@ class ShotGridProjectService:
             if updated is None:
                 raise cls._optimistic_lock_error()
             result = ShotGridProjectMutationResultModel.model_validate(updated)
+            result.reference_files = await ShotGridProjectReferenceService.list_files(db, project_id)
             await cls._audit_project_mutation(
                 db,
                 actor_name=actor_name,
@@ -364,6 +390,7 @@ class ShotGridProjectService:
                 oper_url=f'/shot-grid/projects/{project_id}',
                 oper_param={
                     'projectId': project_id,
+                    **reference_audit,
                     'projectName': command.project_name,
                     'projectDescription': command.project_description,
                     'projectType': command.project_type,
@@ -580,6 +607,13 @@ class ShotGridProjectService:
             raise shot_grid_error(422, 'SG_IDEMPOTENCY_KEY_INVALID', 'X-Idempotency-Key 长度必须为 1—100')
         raw_digest = hashlib.sha256(f'{user_id}:project:create:{normalized}'.encode()).hexdigest()
         payload = command.model_dump(mode='json')
+        # 空的可选资料不改变既有创建请求的幂等摘要。
+        if not payload['reference_description']:
+            payload.pop('reference_description')
+        if not payload['reference_file_ids']:
+            payload.pop('reference_file_ids')
+        else:
+            payload['reference_file_ids'] = sorted(payload['reference_file_ids'])
         payload['director_user_ids'] = sorted(payload['director_user_ids'])
         payload['members'] = sorted(payload['members'], key=lambda member: member['user_id'])
         payload_digest = hashlib.sha256(

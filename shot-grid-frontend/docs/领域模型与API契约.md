@@ -605,7 +605,7 @@ CHECK (
 | `preparing` | 目录准备中 |
 | `in_progress` | 制作中 |
 | `pending_review` | 待审核 |
-| `revision` | 修改中 |
+| `revision` | 待修改 |
 | `completed` | 已完成 |
 
 优先级：
@@ -1498,7 +1498,7 @@ ON sg_shot_asset_requirement (shot_id, asset_type, normalized_name);
 | `preparing` | 目录准备中 | 已确认开工，等待目录成功 |
 | `in_progress` | 制作中 | 唯一任务为 `in_progress` |
 | `reviewing` | 审核中 | 唯一任务为 `pending_review` |
-| `revision` | 修改中 | 唯一任务为 `revision` |
+| `revision` | 待修改 | 唯一任务为 `revision` |
 | `completed` | 已完成 | 唯一任务为 `completed` 且存在最终版本 |
 
 资产列表与详情返回 `itemStatusCounts`，固定包含 `unassigned/not_started/preparing/in_progress/reviewing/revision/completed` 七个非负整数键，仅统计活动且未删除分项。父级状态按 `revision → reviewing → in_progress → preparing → unassigned → not_started` 聚合；至少有一个活动分项且全部完成才为 `completed`，无活动分项为 `unassigned`。父级 `task.start` 仅表示可进入分项选择，至少存在一个实际可开工分项才返回；真正 start 必须对选中分项任务提交，不能整资产开工。 普通成员不能直接写入任一聚合状态。
@@ -2367,7 +2367,7 @@ GET /shot-grid/projects/{projectId}/overview
 Permission: shotgrid:project:overview
 ```
 
-返回《项目需求规格与业务规则》第 13 节冻结的全部统计。统计仅包含当前项目 `del_flag='0'` 且未归档的集、场次、镜头、资产和制作分项，由后端统一聚合；`overallProgress` 分母为 0 时返回 `0.0`。`completedAssets` 表示所有活动制作分项均已完成且至少存在一个制作分项的资产数；待审核、修改中资产表示至少一个制作分项处于对应状态。
+返回《项目需求规格与业务规则》第 13 节冻结的全部统计。统计仅包含当前项目 `del_flag='0'` 且未归档的集、场次、镜头、资产和制作分项，由后端统一聚合；`overallProgress` 分母为 0 时返回 `0.0`。`completedAssets` 表示所有活动制作分项均已完成且至少存在一个制作分项的资产数；待审核、待修改资产表示至少一个制作分项处于对应状态。
 
 ```text
 overallProgress =
@@ -3274,7 +3274,7 @@ Permission: shotgrid:task:start
 | 镜头 `shot_video` | 有接口权限的项目 `director` 或 `has_all_scope` 管理人员 | `{ "lockVersion": 0, "shotLockVersion": 0, "assetsConfirmed": true }` |
 | 资产 `asset_image` | 有接口权限的项目 `director` 或 `has_all_scope` 管理人员 | `{ "lockVersion": 0, "assetLockVersion": 0, "assetItemLockVersion": 0, "startConfirmed": true }` |
 
-- 镜头与资产制作分项的 `not_started` 均显示“待开工”。资产是否齐备由管理人员线下确认，系统只记录人工确认，不自动判断依赖完成度，也不提供撤销、暂停或批量开工。
+- 镜头与资产制作分项的 `not_started` 均显示“待开工”。资产是否齐备由管理人员线下确认，系统只记录人工确认，不自动判断依赖完成度，也不提供撤销、暂停；镜头列表支持下述逐项提交的批量开工，资产仍逐分项确认。
 - 镜头列表返回 `taskId`、`taskLockVersion` 和 `allowedActions`；原 `lockVersion` 仍是镜头版本。列表和详情共用管理范围、接口权限、项目可写、NAS 就绪、目标活动、任务未开始等动作门禁；写接口还会复核当前负责人资格，失效时需先重新分配。
 - 服务端先锁项目并重新解析访问权限，再锁任务和目标；镜头必须分别检查任务与镜头锁版本、`assetsConfirmed` 严格为布尔 `true`、当前负责人仍是活动且账号有效的 `creator`。缺少人工确认或镜头锁号返回 422 / `SG_SHOT_START_CONFIRMATION_REQUIRED`；过期版本返回 409；负责人失效返回 409 / `SG_TASK_ASSIGNEE_INVALID`。制作人即使有 `task:start` 权限也不能自行开工任一类型任务。
 - 资产同样在项目锁内重查权限，再锁任务、父资产和选中分项，复核三份版本、活动生命周期、完整分项名称及有效负责人。缺少 `startConfirmed: true` 或资产/分项锁号返回 422 / `SG_ASSET_START_CONFIRMATION_REQUIRED`；确认字段严格为布尔值。版本过期返回 409。开工只递增任务版本，不递增未修改的父资产与分项元数据版本。
@@ -4679,6 +4679,84 @@ commit 结果中的复用集/场均为 0、资产关系为 0。数据库终态�
 
 退回前的问题草稿仍可删除；已发布问题禁止删除，包括追加窗口内本人提出的问题。前端移除删除操作，旧 DELETE additional-issues 接口保留鉴权并明确拒绝（SG_PUBLISHED_ISSUE_DELETE_FORBIDDEN），不修改问题、附件引用、版本或任务状态。下一版提交前仍可追加新问题、编辑本人未解决问题；下一版受理后禁止追加与编辑。删除草稿不自动改变任务状态，不开放退回版本直接通过。
 
-### 2026-09-24 批量整体反馈并退回
+### 2026-09-24 批量整体反馈并退回（旧接口兼容，后续新入口见文末）
 
 镜头列表全部选中可审核任务时，可填写同一份整体文字反馈，点击“发送意见并退回修改”。POST /shot-grid/projects/{projectId}/review-overall-feedback/batch-reject 接收 versionIds（1..100，正整数且不重复）与 content（非空、最多 10000 字）。必须同时具备 shotgrid:note:add、shotgrid:version:review，并逐项复核项目审核管理范围、活动项目、最新待审核版本、任务待审核、自动审核单 active、无未完成文件提交。有已有草稿或上轮问题待复核时拒绝，必须进入任务逐个审核，不隐式发送原草稿或代替历史复核。同项目按任务 ID 固定顺序加锁，复用整体反馈草稿发布和审核退回逻辑；所有意见、任务 revision、版本 rejected、审核单 completed 及审计同一事务提交，失败整批回滚。成功后逐版本发布 review.reject 实时通知；不改变制作人。前端固定打开弹窗时的具体版本，不自动改投新版本。整体反馈发布后禁止删除，下一版提交前允许作者编辑。无数据库迁移。
+
+
+### 2026-09-28 镜头列表批量开始任务
+
+管理人员在镜头表格选中全部具备 `task.start` 的待开工镜头后，可一次确认批量开工。入口同时要求平台 `shotgrid:task:start`、`shotgrid:shot:query`、项目管理范围和可写项目；选中混合状态时不显示入口，不自动跳过不符合条件的镜头。弹窗逐项读取详情并核对打开时的任务和镜头锁号，展示负责人、完整制作信息和已有排期；统一优先级，仅未排期任务使用新填的未来完整时间，已有排期不覆盖。全部镜头资产线下齐备确认项默认选中，重置时恢复选中；手动取消勾选后校验阻止提交，仍须点击“确认批量开工”才发起请求。
+
+这是现有 `POST /shot-grid/tasks/{taskId}/start` 的前端顺序编排，不新增批量后端事务、数据库字段或权限：每项携带 `{ lockVersion, shotLockVersion, assetsConfirmed: true, priority }`，未排期项另传 `expectedStartTime/expectedEndTime`。服务端仍在原事务内校验权限、项目范围、状态、负责人、双版本、排期并写审计与目录 Outbox。每项独立提交，成功项保留；409/422 显示原因并继续其他项，权限或不确定网络错误停止后续请求。显示逐项结果且不在原弹窗重试，关闭后刷新并重新选择。项目切换或卸载停止后续请求并隔离迟到结果，已发出的请求可能已生效，返回原项目需刷新核对。批量表单遵循 ElForm 校验、重置、禁用和防重复提交契约。
+
+
+### 2026-09-28 镜头列表批量追加发送问题
+
+待修改镜头可多选并一次填写适用于全部目标的整版文字问题（去除首尾空白后非空，最多 10000 字，一次最多 100 个目标）。入口要求可写项目、管理范围、平台 note:add / version:review / version:query / reviewList:query 权限及每行 task.appendIssue，版本必须为最新退回版本。混选不符合条件的镜头时不显示入口。使用现有 ElTable 选择与 ElForm 校验、重置、加载和防重复提交契约。
+
+基座对齐：复用现有 GET /shot-grid/versions/{versionId}/review-context 的 canAppendIssues 和 currentVersion.lockVersion，以及 POST /shot-grid/versions/{versionId}/additional-issues；请求为 { issueScope: "version", content, referenceFileIds, lockVersion }，不新增表、迁移、权限或返回协议。打开弹窗时固定版本 ID，并在全部上下文核验后显示表单；保存核对时的锁号，提交时不自动更新锁号或改投新版本。每项独立事务，沿用服务端项目/任务/版本锁、有效权限、最新退回版本、下一版未受理门禁、审计和 issue.appended 实时通知。任务保持 revision，发送成功立即对制作人可见，问题仍不可删除。
+
+本功能为前端顺序编排：409/422 单项失败后继续其他项；权限、不可见或网络不确定错误停止后续项；显示成功、失败与未执行结果，原弹窗不重试，已成功项不重复发送。未知结果必须刷新并核对已有问题后再决定是否重发。弹窗期间暂停列表轮询及实时回源，切换项目或卸载停止后续调用并隔离迟到结果；已发出的请求可能仍生效，返回原项目需刷新核对。此处支持共同文字与可选参考附件；候选和画面批注继续通过单任务追加入口处理。
+
+
+### 2026-09-28 批量反馈与历史问题复核
+
+镜头列表入口升级为“批量反馈与复核”。新接口 `POST /shot-grid/projects/{projectId}/review-overall-feedback/batch` 是兼容扩展，旧 `batch-reject` 接口保留原有保守限制。沿用登录认证、同时具备 `shotgrid:note:add` 与 `shotgrid:version:review`、项目 director 或全部范围管理人员、现有 camelCase/envelope、审核 Service/DAO 和同事务审计，无数据库迁移。
+
+请求字段：`action: save_draft|reject`、`content`（最多 10000 字，保存草稿或附带参考内容时必须非空）、`referenceFileIds`（可省略，默认空，最多 5 个不重复 UUID）、`items`（1..100 个不重复版本）。每项携带 `versionId/lockVersion`、明确的 `drafts: [{draftId, lockVersion}]` 快照，以及 `issueVerifications: [{issueId, result, comment}]`。不支持批量通过或转交负责人。
+
+- 弹窗使用“复核已有问题 → 补充反馈 → 确认发送”三步向导，只读取打开时选中的版本。第一步以镜头导航和单镜头问题表展示原问题、制作人处理说明和审核人结论；问题默认未复核，全部有结论且仍需修改的原因齐备后才能继续。导航显示待复核数量，支持定位首个漏项及下一个未复核镜头。批量标记只作用于当前镜头勾选的问题，切换镜头清除勾选但保留复核填写。第二步区分已有草稿与共同新增反馈，草稿须逐镜头显式确认发布，默认不勾选。第三步按镜头汇总已解决、仍需修改、待发布意见和本轮已发布问题，展开可核对详情。返回上一步保留本次填写。
+- `save_draft` 只为每项保存新的整体反馈草稿，不发送、不改变任务或版本状态、不提交历史复核结果。复核选择仅留在当前弹窗，关闭后不保存。版本锁递增，重复提交相同快照被拒绝。 UI 仅在第二步提供“保存新增反馈草稿”，保存新增文字及参考内容；“清空新增反馈”重置本次文字和参考附件，不重置已完成的复核和草稿确认。步骤调整不改变 API、权限、锁号、事务或持久化语义。
+- `reject` 必须完整复核每个版本全部带入问题，仍存在的问题必须填写原因；每个任务必须至少存在共同新反馈、已有草稿、当前新问题或仍未解决问题。所有历史问题均解决且没有新问题时，应从批量退回中取消选择，单独审核通过。
+- 后端先锁项目并复核可写状态，再按任务 ID 固定顺序锁版本并重查管理范围、最新待审核状态、活动自动审核单和无未完成文件提交；已有草稿 ID 集合及各自锁号必须与请求精确一致。草稿新增、修改或删除都会导致冲突，绝不隐式发布审核人没看到的草稿。
+- 新共同意见复用整体反馈草稿，历史复核复用现有审核动作：原问题不复制或迁移，制作人说明与逐版本确认保留。整批草稿、问题、复核、状态及审计一次提交，任何项失败整批回滚；仅提交成功后发布逐版本 `review.reject` 通知。
+- 前端使用 ElForm 校验和显式按钮、ElTable 选择；加载/提交期间禁用，防重复请求。项目切换或卸载取消读取并隔离迟到结果，弹窗期间暂停列表自动刷新。冲突保留输入并要求重新核对；网络结果未知时不直接重试，需刷新确认。禁止自动换成更新版本后重发。
+
+### 2026-09-28 批量反馈参考内容
+
+- “批量反馈与复核”的补充反馈步骤与“批量追加发送问题”均提供“参考内容（可选）”，最多 5 个，每个不超过 20 MiB。支持 BMP/JPG/JPEG/PNG/GIF 图片、PDF/Office/TXT 文档及 MP4/MOV 短视频；沿用单条反馈规则，附件不能替代整体反馈文字。
+- 前端复用 `ReviewReferenceInput` 与 `useReviewReferenceAttachments`，通过既有鉴权上传接口 `/common/files/upload` 上传一次，再将同一组文件 ID 用于全部目标。展示文件名、图片预览、移除和上传进度；上传期间禁用编辑；关闭或卸载取消未完成上传并隔离迟到结果。上传失败不提交业务反馈，已成功上传的文件保留 ID，重试仅上传剩余文件。
+- 批量补充反馈的 `referenceFileIds` 是可选兼容扩展，旧请求仍可省略；`save_draft/reject` 都把这些文件交给现有 `add_issue_draft` 引用链路。校验当前审核人的所有权、上传人、私有本地存储、有效状态、类型及大小。文件引用与草稿、问题、复核和状态在同一事务提交或回滚；发布草稿时引用迁移到正式问题。同一文件可被多个问题引用，下载继续逐业务鉴权，无新增表或迁移。
+- 批量追加复用 `additional-issues` 已有 `referenceFileIds` 字段，各项独立提交，成功项引用保留；不改变部分成功和未知结果停止的原有语义。通用上传成功不表示反馈已发送，未绑定的上传文件遵循既有文件生命周期，不直接删除共享文件。
+- 第二步与最终汇总展示共同参考资料，前后切换保留本次文件；清空新增反馈同时移除本次文字和文件，不影响已有草稿、复核或草稿确认。保存新增反馈草稿会保存文字与参考内容，不提交复核结果。
+
+### 2026-09-28 制作中镜头任务调整（兼容扩展）
+
+新增 POST /shot-grid/projects/{projectId}/shots/production-adjustments，单条与批量共用（1..100 项），仅作用于活动项目中的 in_progress 镜头任务。保持普通编辑、待开工改派与返修交接原规则。请求包含 reason、items；每项有 shotId/taskId/lockVersion/shotLockVersion 及稀疏 changes，省略字段不修改，文本 null 明确清空。允许计划起止时间、负责人、优先级及镜头制作内容/时长/景别/机位/镜头运动/焦段/对白/音效/色调参考/备注；禁止更改镜头身份、目录和实际开工时间。
+
+沿用登录认证、task:edit、项目 director/全部范围；按变更字段额外要求 task:assign、task:schedule 或 shot:edit。Service 持有项目协调锁，按 taskId 排序锁任务、镜头，校验双版本、目标活动性、有效制作人和无待完成/失败待重试的版本提交。最终负责人及排期用于重叠校验（包含批内目标），重叠需显式确认精确冲突快照。整批业务、只追加排期历史及完整前后审计同事务提交，失败整体回滚。沿用平台日志分片记录长文本，首次排期不覆盖；无新增数据库结构或迁移。前端 ElForm/ElTable 三步确认，仅勾选字段进入请求，支持统一和逐镜头值；未知提交结果不直接重试。
+
+### 2026-09-28 制作任务参考内容（兼容扩展）
+
+- 制作调整 `changes.referenceFileIds` 为可选追加列表（1..5 个规范 UUID），省略不修改。每个任务累计最多 5 个有效文件，同一文件去重；批量共享上传文件引用，任一项失败整批回滚。
+- 复用平台私有文件上传与 `sys_file_reference`，业务类型 `shotgrid_task_reference`、业务 ID 为任务 ID，不新增数据表或迁移。仅接受当前操作者本人拥有且上传的活动本地私有文件，支持与反馈参考资料相同的图片、文档及 MP4/MOV，每个不超过 20 MiB。追加需要任务编辑及镜头编辑权限，沿用制作调整的管理范围、双锁和状态门禁。
+- 任务详情返回 `referenceFiles`；`GET /shot-grid/tasks/{taskId}/reference-files/{fileId}/download` 复用任务查询权限、项目可见范围与平台文件鉴权下载（deny 优先、支持 Range），不得公开 URL 或绕过文件服务。项目永久删除纳入该类业务引用的解除与独占文件清理。
+镜头列表和镜头详情的 referenceFiles 与任务详情共用任务参考文件引用及鉴权下载地址；列表按当前页任务 ID 批量查询，未分配镜头返回空列表，不逐镜头请求。任务详情、镜头详情和列表展开制作要求统一显示参考内容，图片可预览，文件可下载。
+
+### 2026-09-28 任务参考说明与列表列
+
+制作调整中的参考内容排在字段末尾，支持纯文字或附件。changes.referenceDescription 为追加说明（单次及累计最多 10000 字），空值不清空旧内容；与 referenceFileIds 共用管理范围、双锁、镜头编辑权限及原子事务审计。sg_task 新增可空 Text reference_description，迁移 20260928_33；有文字时禁止降级丢失数据。任务、镜头详情及镜头列表返回 referenceDescription，制作要求与附加参考内容列同时展示文字和受保护附件。附件仍累计最多 5 个，每个 20 MiB。
+
+
+### 2026-09-28 项目共享资料（兼容扩展）
+
+- 创建、编辑项目支持可选 `referenceDescription`（最多 10000 字）和 `referenceFileIds`（最多 5 个不重复 UUID）；资料可为剧本、参考文档、图片或 MP4/MOV，每个不超过 20 MiB。编辑省略字段保留原值，说明 null/空白清空，文件空列表解除引用，不直接删除物理文件。
+- 已核对 PostgreSQL 项目 DO、VO、项目管理权限/行锁/乐观锁、平台私有文件与事务：说明存入 `sg_project.reference_description`，迁移 `20260928_34` 接续 `20260928_33`，同步初始化 SQL；文件复用 `sys_file_reference`，类型 `shotgrid_project_reference`、业务 ID 为项目 ID。新增引用必须为操作者本人上传且拥有的有效本地私有文件，已绑定本项目的资料允许其他项目管理人保留；跨项目任意文件 ID 不构成授权。
+- 资料随项目创建/编辑及审计同事务保存；继承既有创建权限、编辑 director/全部范围、项目可写状态和 lockVersion 门禁。任务详情（镜头及资产）实时投影 `projectReferenceDescription/projectReferenceFiles`，不复制到任务。项目详情返回 `referenceDescription/referenceFiles`。下载必须经过项目查询或任务查询的接口权限、项目成员/全部范围、精确业务引用及平台文件鉴权（deny 优先）；不返回公开链接。
+- 前端复用 Element Plus Form、既有参考资料上传/预览组件和统一 Axios，上传失败不保存项目；保留已成功上传 ID 供重试，关闭/切换隔离迟到响应。项目永久删除解除本类引用，仍被其他业务引用的共享文件保留。资料说明按纯文本显示。归档只读。
+- 验证范围：定向模型/服务/路由与表单测试、隔离 PostgreSQL 引用事务和迁移验证；这些证据不代表完整系统 E2E。
+
+
+### 2026-09-28 可选预告片集 EP000
+
+集号允许 0..2147483647，EP000 表示可选预告片，EP001 起为正片。Excel 可增加名为 EP000 的工作表（复制官方模板工作表并改名），与正片一起或单独导入；不需要预告片时无需添加。新建集可手动输入 0，默认仍建议下一正片集号。集号在项目内唯一，归档集继续占号，负数、越界与重复 Sheet 集号仍拒绝。
+
+基座对齐：沿用 sg_episode 整数集号、原权限/项目锁/事务、导入预览与幂等提交、唯一索引及目录 Outbox；仅放宽 VO、解析与 PostgreSQL CHECK，迁移 20260928_35 接续 34，同步 PostgreSQL 初始化 SQL。展示统一三位 EP000；NAS 沿用至少两位目录快照约定（预告片 EP00，正片 EP01 等），不重命名任何已有目录，不改变镜头文件名规则。迁移不新增预告片数据，降级锁表且遇到任何集号 0（含删除/归档）拒绝，无数据截断或重编号。此兼容扩展仅承诺 PostgreSQL。
+
+
+### 使用操作手册与项目角色口径
+
+- 项目业务人员只有两类：制作人员（`creator`）与项目管理与审核人员（`director`）。界面中的“项目管理人”指后者；审核人是同一角色在审核环节的称谓，不是第三种项目角色。平台账号运维身份不扩展项目人员分类，既有平台权限与项目范围仍共同约束操作。
+- 顶栏手册入口使用 `${BASE_URL}help/user-manual.html`，静态文件位于 `public/help/user-manual.html`；兼容部署子路径，不再用 `docs` 中文文件名的 `?url` 资源地址。手册是可独立阅读、打印的静态文档，无业务表单或数据请求。
+- 正文与 `docs/Shot Grid使用操作手册.md` 同步维护，按通用操作流程编写，不混入开发版本、升级排障或单次需求背景。说明文件去向、两类角色职责和操作结果，保留必要的状态区别。

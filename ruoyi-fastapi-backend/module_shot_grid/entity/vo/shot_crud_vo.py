@@ -4,6 +4,7 @@ from typing import Any, Literal
 from pydantic import ConfigDict, Field, field_validator, model_validator
 
 from module_shot_grid.entity.vo.common_vo import ShotGridApiModel, ShotGridLockVersionModel, ShotGridPageQueryModel
+from module_shot_grid.entity.vo.task_vo import ShotGridTaskReferenceFileModel
 
 ShotStatus = Literal['unassigned', 'not_started', 'preparing', 'in_progress', 'reviewing', 'revision', 'completed']
 DirectoryStatus = Literal['not_created', 'pending', 'ready', 'failed']
@@ -303,6 +304,8 @@ class ShotGridShotLatestFeedbackModel(ShotGridApiModel):
 
 
 class ShotGridShotListItemModel(ShotGridApiModel):
+    reference_description: str | None = None
+    reference_files: list[ShotGridTaskReferenceFileModel] = Field(default_factory=list)
     """表格、卡片和故事板共用的镜头列表项。"""
 
     shot_id: int

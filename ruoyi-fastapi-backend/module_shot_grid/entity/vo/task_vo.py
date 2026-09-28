@@ -8,6 +8,7 @@ from module_shot_grid.entity.vo.common_vo import (
     ShotGridLockVersionModel,
     ShotGridPageQueryModel,
 )
+from module_shot_grid.entity.vo.project_reference_vo import ShotGridProjectReferenceFileModel
 
 TaskKind = Literal['shot_video', 'asset_image']
 TaskStatus = Literal['not_started', 'preparing', 'in_progress', 'pending_review', 'revision', 'completed']
@@ -312,7 +313,19 @@ class ShotGridTaskHandoffModel(ShotGridApiModel):
     handoff_note: str | None = None
 
 
+class ShotGridTaskReferenceFileModel(ShotGridApiModel):
+    file_id: str
+    original_name: str
+    content_type: str | None = None
+    file_size: int = Field(ge=0)
+    download_url: str
+
+
 class ShotGridTaskDetailModel(ShotGridTaskListItemModel):
+    project_reference_description: str | None = None
+    project_reference_files: list[ShotGridProjectReferenceFileModel] = Field(default_factory=list)
+    reference_description: str | None = None
+    reference_files: list[ShotGridTaskReferenceFileModel] = Field(default_factory=list)
     """任务详情；完整版本和意见继续走独立分页接口。"""
 
     shot_production: ShotGridTaskShotProductionModel | None = None

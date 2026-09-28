@@ -15,6 +15,7 @@ from module_shot_grid.dependencies.project_access import ProjectAccessDependency
 from module_shot_grid.entity.vo.access_vo import ShotGridProjectAccessModel
 from module_shot_grid.entity.vo.common_vo import ShotGridLockVersionModel
 from module_shot_grid.entity.vo.review_vo import (
+    ShotGridBatchFeedbackModel,
     ShotGridBatchOverallRejectModel,
     ShotGridCandidatePromptUpdateModel,
     ShotGridFinalDeliveryModel,
@@ -36,6 +37,7 @@ from module_shot_grid.entity.vo.review_vo import (
     ShotGridReviewListDetailModel,
     ShotGridReviewListItemModel,
     ShotGridReviewListQueryModel,
+    ShotGridReviewVersionSummaryModel,
     ShotGridRevisionTransferCommand,
     ShotGridVersionCandidateSelectModel,
     ShotGridVersionDetailModel,
@@ -394,6 +396,22 @@ async def reject_batch_with_overall_feedback(
     current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
 ) -> Response:
     result = await ShotGridReviewService.reject_batch_with_overall_feedback(query_db, project_id, command, current_user)
+    return ResponseUtil.success(data=result)
+
+
+@review_controller.post(
+    '/projects/{projectId}/review-overall-feedback/batch',
+    summary='批量保存反馈草稿或复核并退回修改',
+    response_model=DataResponseModel[list[ShotGridReviewVersionSummaryModel]],
+    dependencies=[UserInterfaceAuthDependency(['shotgrid:note:add', 'shotgrid:version:review'], is_strict=True)],
+)
+async def submit_batch_feedback(
+    project_id: Annotated[int, Path(alias='projectId', gt=0, le=SQL_BIGINT_MAX)],
+    command: ShotGridBatchFeedbackModel,
+    query_db: Annotated[AsyncSession, DBSessionDependency()],
+    current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
+) -> Response:
+    result = await ShotGridReviewService.submit_batch_feedback(query_db, project_id, command, current_user)
     return ResponseUtil.success(data=result)
 
 

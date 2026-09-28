@@ -282,7 +282,7 @@ class ShotExcelParser:
             episode_no = int(match.group(1))
         except ValueError:
             self._raise('SG_IMPORT_SHEET_NAME_INVALID', f'Sheet 名 {sheet_name} 的集号超出范围')
-        if episode_no <= 0 or episode_no > SQL_INTEGER_MAX:
+        if episode_no < 0 or episode_no > SQL_INTEGER_MAX:
             self._raise('SG_IMPORT_SHEET_NAME_INVALID', f'Sheet 名 {sheet_name} 的集号必须在数据库整数范围内')
         return episode_no
 

@@ -17,6 +17,8 @@ import {
 } from '@/views/project/projectPresentation'
 import MemberCandidateSelect from './MemberCandidateSelect.vue'
 import ProjectModal from './ProjectModal.vue'
+import ReviewReferenceInput from '@/components/review/ReviewReferenceInput.vue'
+import { useReviewReferenceAttachments } from '@/composables/useReviewReferenceAttachments'
 
 const props = defineProps({ currentUser: { type: Object, required: true } })
 const emit = defineEmits(['close', 'created'])
@@ -34,7 +36,11 @@ const roleOptionsError = ref(null)
 const pathPreview = ref(null)
 const previewLoading = ref(false)
 const previewError = ref(null)
+let active = true
+const { referenceAttachments, addReferenceFile, removeReferenceFile, resetReferenceAttachments, uploadPendingReferenceFiles } = useReviewReferenceAttachments({ canEdit: () => !busy.value, isCurrent: () => active })
 const form = reactive({
+  referenceFileIds: referenceAttachments,
+  referenceDescription: '',
   projectCode: '',
   projectName: '',
   projectType: 'ai_short_film',
@@ -93,6 +99,7 @@ const createRules = {
     },
     trigger: 'change'
   }],
+  referenceDescription: [{ max: 10000, message: '资料说明不能超过 10000 字', trigger: 'change' }],
   remark: [{ max: 500, message: '备注不能超过 500 个字符', trigger: 'change' }]
 }
 let storageController = null
@@ -268,6 +275,7 @@ function buildPayload() {
   const initialMembers = normalizedMembers.filter(member => member.projectRole !== 'director')
   return {
     projectCode, projectName, projectType: 'ai_short_film',
+    referenceDescription: form.referenceDescription.trim() || null,
     projectDescription: form.projectDescription.trim() || null, aspectRatio: form.aspectRatio,
     storageRootId,
     directorUserIds, members: initialMembers,
@@ -289,7 +297,9 @@ async function submit() {
     const preview = pathPreview.value || (await loadPathPreview())
     if (!preview || preview.pathConflict) return
 
+    payload.referenceFileIds = await uploadPendingReferenceFiles()
     const response = await createProject(payload, idempotency.forPayload(payload))
+    if (!active) return
     emit('created', response.data)
   } catch (error) {
     requestError.value = projectErrorState(error, '项目创建失败')
@@ -297,6 +307,7 @@ async function submit() {
 }
 
 function closeDialog() {
+  resetReferenceAttachments()
   storageGeneration += 1
   roleOptionsGeneration += 1
   storageController?.abort()
@@ -317,6 +328,7 @@ onMounted(() => {
   loadRoleOptions()
 })
 onBeforeUnmount(() => {
+  active = false
   if (previewTimer) clearTimeout(previewTimer)
   storageGeneration += 1
   roleOptionsGeneration += 1
@@ -328,7 +340,7 @@ onBeforeUnmount(() => {
 
 <template>
   <ProjectModal title="创建项目" description="项目名称同时作为 NAS 项目目录名称，系统自动计算并校验保存路径。" :busy="busy" wide @close="closeDialog">
-    <el-form ref="createFormRef" :model="form" :rules="createRules" class="project-form" size="large" label-position="top">
+    <el-form ref="createFormRef" :model="form" :disabled="busy" :rules="createRules" class="project-form" size="large" label-position="top">
       <div class="project-form__grid">
         <el-form-item label="项目名称" prop="projectName" required>
           <el-input v-model="form.projectName" maxlength="200" placeholder="如：罗刹夫人" />
@@ -383,6 +395,12 @@ onBeforeUnmount(() => {
 
       <el-form-item label="项目描述" prop="projectDescription" class="project-form__full">
         <el-input v-model="form.projectDescription" type="textarea" :rows="3" />
+      </el-form-item>
+      <el-form-item label="项目资料说明（可选）" prop="referenceDescription">
+        <el-input v-model="form.referenceDescription" type="textarea" :rows="4" maxlength="10000" show-word-limit placeholder="可填写剧本梗概、风格要求、参考资料说明等，供本项目所有任务制作时查阅。" />
+      </el-form-item>
+      <el-form-item label="剧本与参考附件（可选）" prop="referenceFileIds">
+        <ReviewReferenceInput :files="referenceAttachments" :disabled="busy" purpose="项目" @add="addReferenceFile" @remove="removeReferenceFile" />
       </el-form-item>
       <el-form-item label="备注" prop="remark" class="project-form__full">
         <el-input v-model="form.remark" type="textarea" :rows="2" maxlength="500" show-word-limit />

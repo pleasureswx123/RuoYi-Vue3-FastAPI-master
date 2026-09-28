@@ -90,6 +90,7 @@ class ShotGridProjectDao:
             select(
                 *cls._project_columns(overview, current_member),
                 ShotGridProject.project_description,
+                ShotGridProject.reference_description,
                 ShotGridProject.create_by,
                 ShotGridProject.create_time,
                 ShotGridProject.update_by,
@@ -179,6 +180,7 @@ class ShotGridProjectDao:
                 ShotGridProject.project_name,
                 ShotGridProject.project_type,
                 ShotGridProject.project_description,
+                ShotGridProject.reference_description,
                 ShotGridProject.aspect_ratio,
                 ShotGridProject.planned_duration_ms,
                 ShotGridProject.delivery_date,

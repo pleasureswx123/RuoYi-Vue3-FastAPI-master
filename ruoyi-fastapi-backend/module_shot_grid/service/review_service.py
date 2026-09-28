@@ -40,6 +40,7 @@ from module_shot_grid.entity.vo.access_vo import ShotGridProjectAccessModel
 from module_shot_grid.entity.vo.common_vo import ShotGridLockVersionModel
 from module_shot_grid.entity.vo.review_vo import (
     ShotGridAutoReviewListSummaryModel,
+    ShotGridBatchFeedbackModel,
     ShotGridBatchOverallRejectModel,
     ShotGridCandidatePromptUpdateModel,
     ShotGridCarriedIssueModel,
@@ -966,6 +967,95 @@ class ShotGridReviewService:
             raise
         for result in results:
             await publish_version_changed(result.version_id, 'review.reject')
+        return results
+
+    @classmethod
+    async def submit_batch_feedback(  # noqa: PLR0912
+        cls,
+        db: AsyncSession,
+        project_id: int,
+        command: ShotGridBatchFeedbackModel,
+        current_user: CurrentUserModel,
+    ) -> list[ShotGridReviewVersionSummaryModel]:
+        try:
+            contexts = []
+            for item in command.items:
+                context, access = await cls._resolve_version_access(db, item.version_id, current_user)
+                cls._require_director(access)
+                if int(context['project_id']) != project_id:
+                    raise shot_grid_error(403, 'SG_PROJECT_SCOPE_DENIED', '批量反馈只能包含当前项目的版本')
+                contexts.append((context, access, item))
+            await ShotGridProjectService._lock_mutable_project(db, project_id)
+            locked = []
+            # 固定顺序锁定整批，核对审核人看到的版本与草稿后才写入。
+            for context, access, item in sorted(contexts, key=lambda value: int(value[0]['task_id'])):
+                _, task, version, locked_access = await cls._lock_version_graph(db, context, current_user, access)
+                cls._require_director(locked_access)
+                cls._ensure_lock_version(version.lock_version, item.lock_version)
+                if version.version_status != 'pending_review' or task.task_status != 'pending_review':
+                    raise cls._invalid_transition('版本或任务已不处于待审核状态，请重新打开批量反馈')
+                if await ShotGridReviewDao.get_latest_version_no(db, task.task_id) != version.version_no:
+                    raise cls._invalid_transition('所选任务已有新版本，请重新打开批量反馈')
+                if await ShotGridVersionSubmissionDao.has_unresolved_submission(db, task.task_id):
+                    raise cls._invalid_transition('所选任务正在提交文件，请稍后刷新重试')
+                review_list = await ShotGridReviewDao.get_auto_review_list_for_update(db, project_id, item.version_id)
+                if review_list is None or review_list.review_status != 'active':
+                    raise cls._auto_review_integrity_error()
+                await cls._ensure_auto_review_relation(db, int(review_list.review_list_id), item.version_id)
+                drafts = await ShotGridReviewDao.get_issue_drafts_for_update(
+                    db, project_id=project_id, review_list_id=review_list.review_list_id, version_id=item.version_id
+                )
+                if {(draft.draft_id, draft.lock_version) for draft in drafts} != {
+                    (draft.draft_id, draft.lock_version) for draft in item.drafts
+                }:
+                    raise shot_grid_error(409, 'SG_REVIEW_DRAFTS_CHANGED', '意见草稿已变化，请重新打开并核对后提交')
+                locked.append((version, item))
+            results = []
+            for version, item in locked:
+                if command.content:
+                    await cls.add_issue_draft(
+                        db,
+                        item.version_id,
+                        ShotGridNoteCreateModel(
+                            issueScope='version', content=command.content, referenceFileIds=command.reference_file_ids
+                        ),
+                        current_user,
+                        commit=False,
+                    )
+                if command.action == 'reject':
+                    # 复用单版本的历史问题完整性、说明、发布、审计和状态转换门禁。
+                    await cls.create_review_action(
+                        db,
+                        item.version_id,
+                        ShotGridReviewActionCreateModel(
+                            actionType='reject',
+                            lockVersion=item.lock_version,
+                            issueVerifications=item.issue_verifications,
+                        ),
+                        str(uuid.uuid4()),
+                        current_user,
+                        commit=False,
+                    )
+                else:
+                    # 保存也推进版本锁，重复提交同一快照不能生成重复草稿。
+                    version.lock_version += 1
+                results.append(
+                    ShotGridReviewVersionSummaryModel(
+                        versionId=version.version_id,
+                        versionNo=version.version_no,
+                        versionNumber=f'V{version.version_no:03d}',
+                        versionStatus=version.version_status,
+                        selectedCandidateId=version.selected_candidate_id,
+                        lockVersion=version.lock_version,
+                    )
+                )
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            raise
+        if command.action == 'reject':
+            for result in results:
+                await publish_version_changed(result.version_id, 'review.reject')
         return results
 
     @classmethod

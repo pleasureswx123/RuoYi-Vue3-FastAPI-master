@@ -38,7 +38,7 @@ class ShotGridEpisodeCreateModel(ShotGridApiModel):
 
     model_config = ConfigDict(extra='forbid')
 
-    episode_no: int = Field(gt=0, le=2147483647, description='项目内集号')
+    episode_no: int = Field(ge=0, le=2147483647, description='项目内集号，0 为预告片')
     episode_name: str | None = Field(default=None, max_length=200, description='集名称')
     description: str | None = Field(default=None, max_length=10000, description='集说明')
     sort_order: int = Field(default=0, ge=0, le=2147483647, description='项目内排序')

@@ -1,7 +1,10 @@
 <script setup>
 import { computed } from 'vue'
+import ReviewReferenceFiles from '@/components/review/ReviewReferenceFiles.vue'
 
 const props = defineProps({
+  referenceDescription: { type: String, default: null },
+  referenceFiles: { type: Array, default: null },
   shot: { type: Object, required: true },
   layout: {
     type: String,
@@ -29,6 +32,11 @@ const narrativeSpan = computed(() => props.layout === 'dialog' ? 2 : 2)
       <el-descriptions-item label="音效" :span="narrativeSpan">{{ shot.soundEffect || '—' }}</el-descriptions-item>
       <el-descriptions-item label="色调参考" :span="narrativeSpan">{{ shot.colorReference || '—' }}</el-descriptions-item>
       <el-descriptions-item label="备注" :span="narrativeSpan">{{ shot.remark || '—' }}</el-descriptions-item>
+      <el-descriptions-item label="参考内容" :span="contentSpan">
+        <div v-if="referenceDescription || shot.referenceDescription">{{ referenceDescription || shot.referenceDescription }}</div>
+        <ReviewReferenceFiles v-if="(referenceFiles || shot.referenceFiles)?.length" :files="referenceFiles || shot.referenceFiles" />
+        <span v-else-if="!referenceDescription && !shot.referenceDescription">暂无参考内容</span>
+      </el-descriptions-item>
     </el-descriptions>
   </div>
 </template>

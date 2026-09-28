@@ -1,4 +1,5 @@
 from typing import Annotated
+from uuid import UUID
 
 from fastapi import Path, Query, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,6 +12,7 @@ from common.vo import DataResponseModel, PageResponseModel
 from module_admin.entity.vo.user_vo import CurrentUserModel
 from module_shot_grid.dependencies.project_access import ProjectAccessDependency, ProjectRoleDependency
 from module_shot_grid.entity.vo.access_vo import ShotGridProjectAccessModel
+from module_shot_grid.entity.vo.production_adjustment_vo import ShotGridProductionAdjustmentModel
 from module_shot_grid.entity.vo.task_vo import (
     ShotGridAssetItemTaskBatchAssignModel,
     ShotGridAssetItemTaskBatchAssignResultModel,
@@ -24,8 +26,12 @@ from module_shot_grid.entity.vo.task_vo import (
     ShotGridTaskStartModel,
     ShotGridTaskUpdateModel,
 )
+from module_shot_grid.service.production_adjustment_service import ShotGridProductionAdjustmentService
+from module_shot_grid.service.project_reference_service import ShotGridProjectReferenceService
+from module_shot_grid.service.task_reference_service import ShotGridTaskReferenceService
 from module_shot_grid.service.task_service import ShotGridTaskService
 from utils.response_util import ResponseUtil
+from utils.upload_util import UploadUtil
 
 SQL_BIGINT_MAX = 9_223_372_036_854_775_807
 
@@ -226,3 +232,61 @@ async def start_shot_grid_task(
 ) -> Response:
     result = await ShotGridTaskService.start_task(query_db, task_id, command, current_user)
     return ResponseUtil.success(data=result)
+
+
+@task_controller.post(
+    '/projects/{projectId}/shots/production-adjustments',
+    summary='单条或批量调整制作中镜头任务',
+    dependencies=[UserInterfaceAuthDependency('shotgrid:task:edit')],
+)
+async def adjust_shot_grid_production(
+    request: Request,
+    project_id: Annotated[int, Path(alias='projectId', gt=0, le=SQL_BIGINT_MAX)],
+    command: ShotGridProductionAdjustmentModel,
+    query_db: Annotated[AsyncSession, DBSessionDependency()],
+    current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
+) -> Response:
+    result = await ShotGridProductionAdjustmentService.adjust(query_db, project_id, command, current_user)
+    return ResponseUtil.success(data=result)
+
+
+@task_controller.get(
+    '/tasks/{taskId}/reference-files/{fileId}/download',
+    dependencies=[UserInterfaceAuthDependency('shotgrid:task:query')],
+)
+async def download_task_reference(
+    request: Request,
+    task_id: Annotated[int, Path(alias='taskId', gt=0, le=SQL_BIGINT_MAX)],
+    file_id: Annotated[UUID, Path(alias='fileId')],
+    query_db: Annotated[AsyncSession, DBSessionDependency()],
+    current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
+) -> Response:
+    await ShotGridTaskService.get_task_detail(query_db, task_id, current_user)
+    result = await ShotGridTaskReferenceService.download(request, query_db, current_user, task_id, str(file_id))
+    return ResponseUtil.streaming(
+        data=result.data,
+        headers=UploadUtil.build_download_headers(result.filename, result.byte_range, result.accept_ranges),
+        media_type='application/octet-stream',
+        status_code=206 if result.byte_range.is_partial else 200,
+    )
+
+
+@task_controller.get(
+    '/tasks/{taskId}/project/reference-files/{fileId}/download',
+    dependencies=[UserInterfaceAuthDependency('shotgrid:task:query')],
+)
+async def download_task_project_reference(
+    request: Request,
+    task_id: Annotated[int, Path(alias='taskId', gt=0, le=SQL_BIGINT_MAX)],
+    file_id: Annotated[UUID, Path(alias='fileId')],
+    query_db: Annotated[AsyncSession, DBSessionDependency()],
+    current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
+) -> Response:
+    project_id, _ = await ShotGridTaskService._resolve_task_access(query_db, task_id, current_user)
+    result = await ShotGridProjectReferenceService.download(request, query_db, current_user, project_id, str(file_id))
+    return ResponseUtil.streaming(
+        data=result.data,
+        headers=UploadUtil.build_download_headers(result.filename, result.byte_range, result.accept_ranges),
+        media_type='application/octet-stream',
+        status_code=206 if result.byte_range.is_partial else 200,
+    )

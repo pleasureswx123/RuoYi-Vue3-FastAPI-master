@@ -7,6 +7,10 @@ from pydantic import ConfigDict, Field, field_validator, model_validator
 from common.vo import ResponseBaseModel
 from module_shot_grid.entity.vo.common_vo import ShotGridApiModel, ShotGridLockVersionModel, ShotGridPageQueryModel
 from module_shot_grid.entity.vo.project_member_vo import ShotGridInitialMemberModel
+from module_shot_grid.entity.vo.project_reference_vo import (
+    ShotGridProjectReferenceFileModel,
+    ShotGridProjectReferenceInput,
+)
 
 ProjectStatus = Literal['preparing', 'active', 'completed', 'archived']
 ProjectPhase = Literal['planning', 'asset_production', 'shot_production', 'review', 'delivery', 'completed']
@@ -24,7 +28,7 @@ class ShotGridProjectListQueryModel(ShotGridPageQueryModel):
     scope: Literal['all'] | None = Field(default=None, description='显式跨项目范围')
 
 
-class ShotGridProjectCreateModel(ShotGridApiModel):
+class ShotGridProjectCreateModel(ShotGridProjectReferenceInput):
     """创建项目请求。"""
 
     model_config = ConfigDict(extra='forbid')
@@ -96,7 +100,7 @@ class ShotGridProjectCreateModel(ShotGridApiModel):
         return self
 
 
-class ShotGridProjectUpdateModel(ShotGridLockVersionModel):
+class ShotGridProjectUpdateModel(ShotGridLockVersionModel, ShotGridProjectReferenceInput):
     """修改项目基本信息请求。
 
     项目状态、项目代号和 NAS 绑定不属于普通编辑范围。额外字段采用拒绝策略，
@@ -194,6 +198,8 @@ class ShotGridProjectMutationResultModel(ShotGridApiModel):
     project_code: str = Field(description='项目代号')
     project_name: str = Field(description='项目名称')
     project_type: str = Field(description='项目类型')
+    reference_description: str | None = None
+    reference_files: list[ShotGridProjectReferenceFileModel] = Field(default_factory=list)
     project_description: str | None = Field(default=None, description='项目描述')
     aspect_ratio: AspectRatio = Field(description='画幅')
     planned_duration_ms: int | None = Field(default=None, description='计划总时长（毫秒）')
@@ -279,6 +285,8 @@ class ShotGridProjectListItemModel(ShotGridProjectOverviewModel):
 class ShotGridProjectDetailModel(ShotGridProjectListItemModel):
     """项目详情。"""
 
+    reference_description: str | None = None
+    reference_files: list[ShotGridProjectReferenceFileModel] = Field(default_factory=list)
     project_description: str | None = None
     allowed_actions: list[str] = Field(default_factory=list)
     create_by: str

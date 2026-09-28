@@ -25,7 +25,7 @@ class ShotAssetRequirementPreviewModel(ShotGridApiModel):
 class ShotImportNormalizedRowModel(ShotGridApiModel):
     """镜头 Excel 行的无数据库主键规范结果。"""
 
-    episode_no: int = Field(gt=0, le=SQL_INTEGER_MAX)
+    episode_no: int = Field(ge=0, le=SQL_INTEGER_MAX)
     episode_code: str = Field(pattern=r'^EP\d{3,}$')
     scene_no: int = Field(ge=0, le=SQL_INTEGER_MAX)
     scene_code: str = Field(pattern=r'^\d{3,}$')
