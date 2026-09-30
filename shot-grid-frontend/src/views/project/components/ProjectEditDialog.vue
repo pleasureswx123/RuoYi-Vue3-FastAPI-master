@@ -1,14 +1,16 @@
 <script setup>
 import { onBeforeUnmount, reactive, ref } from 'vue'
+import { ElDrawer } from 'element-plus'
+import 'element-plus/es/components/drawer/style/css'
 
 import { updateProject } from '@/api/shot-grid/projects'
 import { PROJECT_PHASE_OPTIONS, projectErrorState } from '@/views/project/projectPresentation'
-import ProjectModal from './ProjectModal.vue'
 import ReviewReferenceInput from '@/components/review/ReviewReferenceInput.vue'
 import { useReviewReferenceAttachments } from '@/composables/useReviewReferenceAttachments'
 
 const props = defineProps({
-  project: { type: Object, required: true }
+  project: { type: Object, required: true },
+  referencesOnly: { type: Boolean, default: false }
 })
 const emit = defineEmits(['close', 'saved', 'refresh'])
 const editFormRef = ref(null)
@@ -89,12 +91,25 @@ async function submit() {
 </script>
 
 <template>
-  <ProjectModal title="编辑项目" description="项目代号和 NAS 目录绑定创建后不可在此修改。" :busy="busy" @close="emit('close')">
+  <el-drawer
+    :title="referencesOnly ? '编辑项目资料' : '编辑项目'"
+    :model-value="true"
+    size="min(720px, 100vw)"
+    direction="rtl"
+    append-to-body
+    destroy-on-close
+    :close-on-click-modal="!busy"
+    :close-on-press-escape="!busy"
+    :show-close="!busy"
+    :before-close="done => { if (!busy) done() }"
+    @close="!busy && emit('close')"
+  >
     <el-form ref="editFormRef" :model="form" :disabled="busy" :rules="editRules" class="edit-form" size="large" label-position="top">
-      <el-form-item label="项目名称" prop="projectName" required>
+      <el-alert v-if="!referencesOnly" title="项目代号和 NAS 目录绑定创建后不可在此修改。" type="info" :closable="false" show-icon />
+      <el-form-item v-if="!referencesOnly" label="项目名称" prop="projectName" required>
         <el-input v-model="form.projectName" maxlength="200" />
       </el-form-item>
-      <div class="edit-form__grid">
+      <div v-if="!referencesOnly" class="edit-form__grid">
         <el-form-item label="当前阶段" prop="currentPhase" required>
           <el-select v-model="form.currentPhase" class="sg-select">
             <el-option v-for="phase in PROJECT_PHASE_OPTIONS" :key="phase.value" :label="phase.label" :value="phase.value" />
@@ -106,7 +121,7 @@ async function submit() {
           </el-select>
         </el-form-item>
       </div>
-      <el-form-item label="项目描述" prop="projectDescription">
+      <el-form-item v-if="!referencesOnly" label="项目描述" prop="projectDescription">
         <el-input v-model="form.projectDescription" type="textarea" :rows="4" />
       </el-form-item>
       <el-form-item label="项目资料说明（可选）" prop="referenceDescription">
@@ -115,19 +130,19 @@ async function submit() {
       <el-form-item label="剧本与参考附件（可选）" prop="referenceFileIds">
         <ReviewReferenceInput :files="referenceAttachments" :disabled="busy" purpose="项目" @add="addReferenceFile" @remove="removeReferenceFile" />
       </el-form-item>
-      <el-form-item label="备注" prop="remark">
+      <el-form-item v-if="!referencesOnly" label="备注" prop="remark">
         <el-input v-model="form.remark" type="textarea" :rows="2" maxlength="500" show-word-limit />
       </el-form-item>
       <el-alert v-if="requestError" :title="requestError.title" type="error" show-icon :closable="false">
         <span>{{ requestError.message }}</span>
         <el-button v-if="requestError?.status === 409" link type="danger" @click="emit('refresh')">刷新最新数据</el-button>
       </el-alert>
-      <footer>
-        <el-button :disabled="busy" @click="emit('close')">取消</el-button>
-        <el-button type="primary" :loading="busy" @click="submit">保存修改</el-button>
-      </footer>
     </el-form>
-  </ProjectModal>
+    <template #footer>
+      <el-button :disabled="busy" @click="emit('close')">取消</el-button>
+      <el-button type="primary" :loading="busy" @click="submit">{{ referencesOnly ? '保存资料' : '保存修改' }}</el-button>
+    </template>
+  </el-drawer>
 </template>
 
 <style scoped>
@@ -138,6 +153,5 @@ async function submit() {
 .edit-form :deep(.el-input),
 .edit-form :deep(.el-select) { width: 100%; }
 .edit-form :deep(.el-textarea__inner) { resize: vertical; }
-footer { display: flex; gap: 10px; justify-content: flex-end; }
 @media (max-width: 620px) { .edit-form__grid { grid-template-columns: 1fr; } }
 </style>

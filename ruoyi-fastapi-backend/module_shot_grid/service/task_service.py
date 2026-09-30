@@ -1,5 +1,3 @@
-import hashlib
-import json
 import re
 from datetime import datetime
 from typing import Any, Literal
@@ -16,7 +14,6 @@ from module_shot_grid.dao.task_dao import ShotGridTaskDao
 from module_shot_grid.entity.do.project_do import ShotGridProject
 from module_shot_grid.entity.do.storage_do import ShotGridProjectStorage, ShotGridStorageOperation
 from module_shot_grid.entity.do.task_do import ShotGridTask
-from module_shot_grid.entity.do.task_schedule_change_do import ShotGridTaskScheduleChange
 from module_shot_grid.entity.vo.access_vo import ShotGridProjectAccessModel
 from module_shot_grid.entity.vo.task_vo import (
     ShotGridAssetItemTaskBatchAssignModel,
@@ -44,6 +41,7 @@ from module_shot_grid.service.asset_task_rules import (
 from module_shot_grid.service.project_access_service import ShotGridProjectAccessService
 from module_shot_grid.service.project_reference_service import ShotGridProjectReferenceService
 from module_shot_grid.service.project_service import ShotGridProjectService
+from module_shot_grid.service.shot_reference_service import ShotGridShotReferenceService
 from module_shot_grid.service.shot_task_rules import missing_shot_assignment_fields, require_shot_assignment_fields
 from module_shot_grid.service.task_reference_service import ShotGridTaskReferenceService
 from module_shot_grid.shot_number import format_shot_code
@@ -111,6 +109,14 @@ class ShotGridTaskService:
         )
         detail.reference_description = row.get('reference_description')
         detail.reference_files = await ShotGridTaskReferenceService.list_files(db, task_id)
+        if row.get('shot_id'):
+            detail.reference_description = (
+                '\n\n'.join(filter(None, [row.get('shot_reference_description'), detail.reference_description])) or None
+            )
+            detail.reference_files = [
+                *await ShotGridShotReferenceService.list_files(db, project_id, row['shot_id'], task_id=task_id),
+                *detail.reference_files,
+            ]
         return detail
 
     @classmethod
@@ -560,18 +566,7 @@ class ShotGridTaskService:
                         '当前负责人已不是有效制作人员，请重新分配任务',
                     )
 
-            schedule_start, schedule_end, is_initial_schedule = cls._resolve_start_schedule(task, command, now)
-            schedule_change: ShotGridTaskScheduleChange | None = None
-            if is_initial_schedule:
-                schedule_change = cls._build_start_schedule_change(
-                    task=task,
-                    actor_user_id=actor_user_id,
-                    actor_name=actor_name,
-                    command=command,
-                    start_time=schedule_start,
-                    end_time=schedule_end,
-                    now=now,
-                )
+            schedule_start, schedule_end, _ = cls._resolve_start_schedule(task, command, now)
 
             directory_operation_id: int | None = None
             if storage is None or storage.storage_status != 'ready':
@@ -595,9 +590,6 @@ class ShotGridTaskService:
                         'SG_TASK_ASSIGNEE_INVALID',
                         '当前负责人已不是有效制作人员，请重新分配任务',
                     )
-                if schedule_change is not None:
-                    cls._apply_initial_schedule(task, schedule_start, schedule_end)
-                    db.add(schedule_change)
                 latest_directory_status = await ShotGridTaskDao.get_latest_shot_directory_operation_status(
                     db,
                     project_id,
@@ -631,9 +623,6 @@ class ShotGridTaskService:
                 shot.update_time = now
                 shot.lock_version += 1
             else:
-                if schedule_change is not None:
-                    cls._apply_initial_schedule(task, schedule_start, schedule_end)
-                    db.add(schedule_change)
                 latest_directory_status = await ShotGridTaskDao.get_latest_asset_directory_operation_status(
                     db,
                     project_id,
@@ -872,7 +861,7 @@ class ShotGridTaskService:
         command: ShotGridTaskStartModel,
         now: datetime,
     ) -> tuple[datetime, datetime, bool]:
-        """已有排期只读沿用；未排期任务必须提交新的未来完整范围。"""
+        """只读沿用已保存排期，开工不能兼作首次排期。"""
 
         current_start = getattr(task, 'expected_start_time', None)
         current_end = getattr(task, 'expected_end_time', None)
@@ -892,74 +881,7 @@ class ShotGridTaskService:
             return current_start, current_end, False
         if baseline_start is not None or baseline_end is not None:
             raise shot_grid_error(409, 'SG_TASK_SCHEDULE_READ_ONLY', '任务当前排期缺失，请先修复后再开工')
-        if command.expected_start_time is None or command.expected_end_time is None:
-            raise shot_grid_error(422, 'SG_TASK_EXPECTED_TIME_INVALID', '未排期任务开工前必须填写完整预期制作时间')
-        if command.expected_start_time < now:
-            raise shot_grid_error(422, 'SG_TASK_EXPECTED_TIME_INVALID', '新排期开始时间不能早于当前时间，请重新选择')
-        return command.expected_start_time, command.expected_end_time, True
-
-    @staticmethod
-    def _build_start_schedule_change(
-        *,
-        task: ShotGridTask,
-        actor_user_id: int,
-        actor_name: str,
-        command: ShotGridTaskStartModel,
-        start_time: datetime,
-        end_time: datetime,
-        now: datetime,
-    ) -> ShotGridTaskScheduleChange:
-        idempotency_key = f'task-start:{task.task_id}:{command.lock_version}'
-        hash_payload = {
-            'taskId': task.task_id,
-            'lockVersion': command.lock_version,
-            'expectedStartTime': start_time.isoformat(),
-            'expectedEndTime': end_time.isoformat(),
-            'operationSource': 'start',
-        }
-        request_hash = hashlib.sha256(
-            json.dumps(hash_payload, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode('utf-8')
-        ).hexdigest()
-        next_lock_version = task.lock_version + 1
-        return ShotGridTaskScheduleChange(
-            project_id=task.project_id,
-            task_id=task.task_id,
-            operator_user_id=actor_user_id,
-            from_start_time=None,
-            from_end_time=None,
-            to_start_time=start_time,
-            to_end_time=end_time,
-            change_type='initial',
-            operation_source='start',
-            change_reason='首次排期（开工确认）',
-            overlap_acknowledged=False,
-            overlap_task_ids=[],
-            task_lock_version_before=task.lock_version,
-            task_lock_version_after=next_lock_version,
-            idempotency_key=idempotency_key,
-            request_hash=request_hash,
-            result_snapshot={
-                'taskId': task.task_id,
-                'projectId': task.project_id,
-                'currentStart': start_time.isoformat(),
-                'currentEnd': end_time.isoformat(),
-                'baselineStart': start_time.isoformat(),
-                'baselineEnd': end_time.isoformat(),
-                'lockVersion': next_lock_version,
-                'operationSource': 'start',
-            },
-            create_by=actor_name,
-            create_time=now,
-        )
-
-    @staticmethod
-    def _apply_initial_schedule(task: ShotGridTask, start_time: datetime, end_time: datetime) -> None:
-        task.expected_start_time = start_time
-        task.expected_end_time = end_time
-        task.baseline_start_time = start_time
-        task.baseline_end_time = end_time
-        # 截止日期只保留为既有工作台筛选/排序投影，不参与状态机。
-        task.due_date = end_time.date()
+        raise shot_grid_error(422, 'SG_TASK_SCHEDULE_REQUIRED', '请先设置并保存计划起止时间，再确认开工')
 
     @staticmethod
     def _require_lock_version(actual: int, expected: int) -> None:

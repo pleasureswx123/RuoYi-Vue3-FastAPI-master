@@ -23,6 +23,7 @@ import {
   historyTagType,
   historyVersionStatusMeta,
   productionHistoryActiveStep,
+  productionHistoryStage,
   productionHistoryErrorState
 } from './productionHistoryPresentation'
 
@@ -58,7 +59,7 @@ const selectedLane = computed(() => {
   return lanes.value.find(lane => String(lane.laneId) === selectedLaneKey.value) || null
 })
 const stageSource = computed(() => selectedLane.value || history.value?.summary || null)
-const currentStage = computed(() => String(stageSource.value?.currentStage || 'created'))
+const currentStage = computed(() => productionHistoryStage(stageSource.value))
 const activeStep = computed(() => productionHistoryActiveStep(currentStage.value, stageSource.value?.activeStep))
 const currentStageMeta = computed(() => historyStageMeta(currentStage.value))
 const currentAssignee = computed(() => assigneeDisplayName(selectedLane.value?.task?.assignee))
@@ -276,7 +277,7 @@ function taskForEvent(event) {
         </header>
         <section v-if="currentHandoff" class="history-handoff" aria-label="当前流转状态">
           <span class="history-handoff__stage">当前环节 <el-tag :type="currentHandoff.type === 'error' ? 'warning' : currentHandoff.type" size="small" effect="light" round>{{ currentHandoff.stage }}</el-tag></span>
-          <span v-if="selectedLane?.task" class="history-handoff__stage">任务状态 <el-tag :type="historyTagType(taskStatusMeta(selectedLane.task.taskStatus))" size="small" effect="light" round>{{ taskStatusMeta(selectedLane.task.taskStatus).label }}</el-tag></span>
+          <span v-if="selectedLane?.task" class="history-handoff__stage">任务状态 <el-tag :type="historyTagType(taskStatusMeta(selectedLane.task))" size="small" effect="light" round>{{ taskStatusMeta(selectedLane.task).label }}</el-tag></span>
           <strong class="history-handoff__owner">{{ currentHandoff.owner }}</strong>
           <span class="history-handoff__next">下一步：{{ currentHandoff.next }}</span>
         </section>
@@ -298,7 +299,7 @@ function taskForEvent(event) {
             </template>
           </el-table-column>
           <el-table-column label="当前阶段" width="120">
-            <template #default="{ row }"><el-tag :type="historyTagType(historyStageMeta(row.currentStage))" effect="plain" round>{{ historyStageMeta(row.currentStage).label }}</el-tag></template>
+            <template #default="{ row }"><el-tag :type="historyTagType(historyStageMeta(row))" effect="plain" round>{{ historyStageMeta(row).label }}</el-tag></template>
           </el-table-column>
           <el-table-column label="负责人" min-width="130">
             <template #default="{ row }">{{ assigneeDisplayName(row.task?.assignee) }}</template>

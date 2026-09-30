@@ -93,7 +93,7 @@ class ShotGridAdjustmentConflict(ShotGridApiModel):
 
 class ShotGridProductionAdjustmentModel(ShotGridApiModel):
     model_config = ConfigDict(extra='forbid')
-    reason: str = Field(min_length=1, max_length=500)
+    reason: str = Field(default='未填写', max_length=500)
     items: list[ShotGridProductionAdjustmentItem] = Field(min_length=1, max_length=100)
     overlap_acknowledged: bool = False
     expected_conflicts: list[ShotGridAdjustmentConflict] = Field(default_factory=list, max_length=100)
@@ -101,7 +101,7 @@ class ShotGridProductionAdjustmentModel(ShotGridApiModel):
     @field_validator('reason', mode='before')
     @classmethod
     def trim_reason(cls, value: object) -> object:
-        return value.strip() if isinstance(value, str) else value
+        return (value.strip() or '未填写') if isinstance(value, str) else value
 
     @model_validator(mode='after')
     def validate_unique(self) -> 'ShotGridProductionAdjustmentModel':

@@ -27,6 +27,8 @@ from module_shot_grid.entity.vo.review_vo import (
     ShotGridManualReviewListOrderModel,
     ShotGridManualReviewListUpdateModel,
     ShotGridManualReviewListVersionsModel,
+    ShotGridMineReviewQueryModel,
+    ShotGridMineSubmissionProjectModel,
     ShotGridMineVersionQueryModel,
     ShotGridNoteCreateModel,
     ShotGridReviewActionCreateModel,
@@ -37,6 +39,9 @@ from module_shot_grid.entity.vo.review_vo import (
     ShotGridReviewListDetailModel,
     ShotGridReviewListItemModel,
     ShotGridReviewListQueryModel,
+    ShotGridReviewProducerOptionModel,
+    ShotGridReviewProducerQueryModel,
+    ShotGridReviewProjectOptionModel,
     ShotGridReviewVersionSummaryModel,
     ShotGridRevisionTransferCommand,
     ShotGridVersionCandidateSelectModel,
@@ -76,6 +81,35 @@ review_controller = APIRouterPro(
 
 
 @review_controller.get(
+    '/review-lists/mine/producers',
+    summary='审核范围内的项目制作成员',
+    response_model=DataResponseModel[list[ShotGridReviewProducerOptionModel]],
+    dependencies=[UserInterfaceAuthDependency('shotgrid:reviewList:list')],
+)
+async def get_shot_grid_mine_review_producers(
+    query: Annotated[ShotGridReviewProducerQueryModel, Query()],
+    query_db: Annotated[AsyncSession, DBSessionDependency()],
+    current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
+) -> Response:
+    result = await ShotGridReviewService.get_mine_review_producers(query_db, query.project_id, current_user)
+    return ResponseUtil.success(msg='查询成功', data=result)
+
+
+@review_controller.get(
+    '/review-lists/mine/projects',
+    summary='本人待审核项目选项',
+    response_model=DataResponseModel[list[ShotGridReviewProjectOptionModel]],
+    dependencies=[UserInterfaceAuthDependency('shotgrid:reviewList:list')],
+)
+async def get_shot_grid_mine_review_projects(
+    query_db: Annotated[AsyncSession, DBSessionDependency()],
+    current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
+) -> Response:
+    result = await ShotGridReviewService.get_mine_review_projects(query_db, current_user)
+    return ResponseUtil.success(msg='查询成功', data=result)
+
+
+@review_controller.get(
     '/review-lists/mine',
     summary='跨项目查询待我审核',
     response_model=PageResponseModel[ShotGridReviewListItemModel],
@@ -83,12 +117,26 @@ review_controller = APIRouterPro(
 )
 async def get_shot_grid_mine_review_lists(
     request: Request,
-    review_query: Annotated[ShotGridReviewListQueryModel, Query()],
+    review_query: Annotated[ShotGridMineReviewQueryModel, Query()],
     query_db: Annotated[AsyncSession, DBSessionDependency()],
     current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
 ) -> Response:
     result = await ShotGridReviewService.get_mine_review_lists(query_db, review_query, current_user)
     return ResponseUtil.success(msg='查询成功', model_content=result)
+
+
+@review_controller.get(
+    '/versions/mine/projects',
+    summary='本人历史提交的可访问项目选项',
+    response_model=DataResponseModel[list[ShotGridMineSubmissionProjectModel]],
+    dependencies=[UserInterfaceAuthDependency('shotgrid:version:list')],
+)
+async def get_shot_grid_mine_submission_projects(
+    query_db: Annotated[AsyncSession, DBSessionDependency()],
+    current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
+) -> Response:
+    result = await ShotGridReviewService.get_mine_submission_projects(query_db, current_user)
+    return ResponseUtil.success(msg='查询成功', data=result)
 
 
 @review_controller.get(

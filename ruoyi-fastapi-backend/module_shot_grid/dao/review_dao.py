@@ -1,7 +1,7 @@
 from datetime import datetime, time
 from typing import Any
 
-from sqlalchemy import String, and_, asc, delete, desc, exists, func, select, update
+from sqlalchemy import Select, String, and_, asc, case, delete, desc, exists, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -35,6 +35,7 @@ from module_shot_grid.entity.do.version_do import (
     ShotGridVersionSubmission,
 )
 from module_shot_grid.entity.vo.review_vo import (
+    ShotGridMineReviewQueryModel,
     ShotGridMineVersionQueryModel,
     ShotGridReviewActionQueryModel,
     ShotGridReviewListQueryModel,
@@ -101,9 +102,125 @@ class ShotGridReviewDao:
         )
         return dict(row) if row is not None else None
 
+    @staticmethod
+    def _mine_review_scope(statement: Select, user_id: int, has_all_scope: bool) -> Select:
+        """队列和项目选项共用审核范围，避免筛选入口扩大可见范围。"""
+        statement = statement.where(
+            ShotGridReviewList.del_flag == '0',
+            ShotGridReviewList.review_status == 'active',
+            ShotGridProject.del_flag == '0',
+            ShotGridProject.project_status != 'archived',
+        )
+        if not has_all_scope:
+            statement = statement.join(
+                ShotGridProjectMember,
+                (ShotGridProjectMember.project_id == ShotGridReviewList.project_id)
+                & (ShotGridProjectMember.user_id == user_id)
+                & (ShotGridProjectMember.project_role == 'director')
+                & (ShotGridProjectMember.member_status == 'active'),
+            )
+        return statement
+
+    @classmethod
+    async def get_mine_review_projects(
+        cls, db: AsyncSession, user_id: int, has_all_scope: bool
+    ) -> list[dict[str, Any]]:
+        statement = select(ShotGridProject.project_id, ShotGridProject.project_name, ShotGridProject.project_code).join(
+            ShotGridReviewList, ShotGridReviewList.project_id == ShotGridProject.project_id
+        )
+        statement = cls._mine_review_scope(statement, user_id, has_all_scope)
+        rows = (
+            await db.execute(statement.distinct().order_by(ShotGridProject.project_name, ShotGridProject.project_id))
+        ).mappings()
+        return [dict(row) for row in rows]
+
+    @classmethod
+    async def get_mine_review_producers(
+        cls, db: AsyncSession, user_id: int, has_all_scope: bool, project_id: int | None
+    ) -> list[dict[str, Any]]:
+        projects = select(ShotGridProject.project_id).join(
+            ShotGridReviewList, ShotGridReviewList.project_id == ShotGridProject.project_id
+        )
+        projects = cls._mine_review_scope(projects, user_id, has_all_scope)
+        if project_id is not None:
+            projects = projects.where(ShotGridProject.project_id == project_id)
+        statement = (
+            select(SysUser.user_id, SysUser.user_name, SysUser.nick_name)
+            .join(ShotGridProjectMember, ShotGridProjectMember.user_id == SysUser.user_id)
+            .where(
+                ShotGridProjectMember.project_id.in_(projects.correlate(None)),
+                ShotGridProjectMember.project_role == 'creator',
+                ShotGridProjectMember.member_status == 'active',
+                SysUser.del_flag == '0',
+            )
+            .distinct()
+            .order_by(SysUser.user_name, SysUser.user_id)
+        )
+        return [dict(row) for row in (await db.execute(statement)).mappings()]
+
+    @staticmethod
+    def _filter_mine_review_content(statement: Select, query: ShotGridMineReviewQueryModel) -> Select:
+        """单版或批量单内的同一个版本满足组合条件，避免关联查询放大分页记录。"""
+        version = aliased(ShotGridVersion)
+        task = aliased(ShotGridTask)
+        shot = aliased(ShotGridShot)
+        user = aliased(SysUser)
+        relation = aliased(ShotGridReviewListVersion)
+        content = (
+            select(version.version_id)
+            .join(task, task.task_id == version.task_id)
+            .outerjoin(shot, shot.shot_id == task.shot_id)
+            .outerjoin(user, user.user_id == version.submitted_by)
+            .where(
+                task.del_flag == '0',
+                version.project_id == ShotGridReviewList.project_id,
+                or_(
+                    version.version_id == ShotGridReviewList.auto_version_id,
+                    exists(
+                        select(relation.version_id).where(
+                            relation.review_list_id == ShotGridReviewList.review_list_id,
+                            relation.version_id == version.version_id,
+                        )
+                    ).correlate(ShotGridReviewList, version),
+                ),
+            )
+        )
+        if query.keyword and query.keyword.strip():
+            keyword = f'%{query.keyword.strip()}%'
+            content = content.where(
+                or_(
+                    ShotGridReviewList.review_list_name.ilike(keyword),
+                    task.task_name.ilike(keyword),
+                    shot.shot_no.cast(String).ilike(keyword),
+                )
+            )
+        if query.task_kind:
+            content = content.where(task.task_kind == query.task_kind)
+        if query.submitted_by is not None:
+            content = content.where(version.submitted_by == query.submitted_by)
+        if query.submitter_keyword and query.submitter_keyword.strip():
+            keyword = f'%{query.submitter_keyword.strip()}%'
+            content = content.where(or_(user.user_name.ilike(keyword), user.nick_name.ilike(keyword)))
+        if query.submitted_from:
+            content = content.where(version.submitted_time >= datetime.combine(query.submitted_from, time.min))
+        if query.submitted_to:
+            content = content.where(version.submitted_time <= datetime.combine(query.submitted_to, time.max))
+        if any(
+            (
+                query.keyword,
+                query.task_kind,
+                query.submitted_by,
+                query.submitter_keyword,
+                query.submitted_from,
+                query.submitted_to,
+            )
+        ):
+            statement = statement.where(content.exists().correlate(ShotGridReviewList))
+        return statement
+
     @classmethod
     async def get_mine_review_lists(
-        cls, db: AsyncSession, user_id: int, query: ShotGridReviewListQueryModel, has_all_scope: bool
+        cls, db: AsyncSession, user_id: int, query: ShotGridMineReviewQueryModel, has_all_scope: bool
     ) -> tuple[list[dict[str, Any]], int]:
         thumbnail_file_id, derivation_status = cls._review_media_projection()
         relation_count = (
@@ -125,6 +242,10 @@ class ShotGridReviewDao:
                 ShotGridReviewList.review_status,
                 ShotGridReviewList.auto_version_id,
                 ShotGridVersion.task_id,
+                ShotGridTask.task_name,
+                ShotGridTask.task_kind,
+                ShotGridVersion.submitted_time,
+                SysUser.user_name.label('submitted_by_name'),
                 ShotGridVersion.version_no,
                 ShotGridVersion.version_status,
                 relation_count.label('version_count'),
@@ -135,26 +256,48 @@ class ShotGridReviewDao:
             )
             .join(ShotGridProject, ShotGridProject.project_id == ShotGridReviewList.project_id)
             .outerjoin(ShotGridVersion, ShotGridVersion.version_id == ShotGridReviewList.auto_version_id)
-            .where(
-                ShotGridReviewList.del_flag == '0',
-                ShotGridReviewList.review_status == 'active',
-                ShotGridProject.del_flag == '0',
-                ShotGridProject.project_status != 'archived',
-            )
+            .outerjoin(ShotGridTask, ShotGridTask.task_id == ShotGridVersion.task_id)
+            .outerjoin(ShotGridShot, ShotGridShot.shot_id == ShotGridTask.shot_id)
+            .outerjoin(ShotGridEpisode, ShotGridEpisode.episode_id == ShotGridShot.episode_id)
+            .outerjoin(ShotGridScene, ShotGridScene.scene_id == ShotGridShot.scene_id)
+            .outerjoin(SysUser, SysUser.user_id == ShotGridVersion.submitted_by)
         )
-        if not has_all_scope:
-            statement = statement.join(
-                ShotGridProjectMember,
-                (ShotGridProjectMember.project_id == ShotGridReviewList.project_id)
-                & (ShotGridProjectMember.user_id == user_id)
-                & (ShotGridProjectMember.project_role == 'director')
-                & (ShotGridProjectMember.member_status == 'active'),
+        statement = cls._mine_review_scope(statement, user_id, has_all_scope)
+        if query.project_id is not None:
+            statement = statement.where(ShotGridReviewList.project_id == query.project_id)
+        if query.project_keyword and query.project_keyword.strip():
+            project_keyword = f'%{query.project_keyword.strip()}%'
+            statement = statement.where(
+                or_(
+                    ShotGridProject.project_name.ilike(project_keyword),
+                    ShotGridProject.project_code.ilike(project_keyword),
+                )
             )
         if query.review_mode:
             statement = statement.where(ShotGridReviewList.review_mode == query.review_mode)
-        if query.keyword:
-            statement = statement.where(ShotGridReviewList.review_list_name.ilike(f'%{query.keyword.strip()}%'))
-        statement = statement.order_by(ShotGridReviewList.create_time.desc(), ShotGridReviewList.review_list_id.desc())
+        statement = cls._filter_mine_review_content(statement, query)
+        order = asc if query.is_asc == 'ascending' else desc
+        if query.order_by_column == 'shotNo':
+            statement = statement.order_by(
+                ShotGridProject.project_id.asc(),
+                case(
+                    (ShotGridTask.task_kind == 'shot_video', 0), (ShotGridTask.task_kind == 'asset_image', 1), else_=2
+                ),
+                *[
+                    order(column).nulls_last()
+                    for column in (ShotGridEpisode.episode_no, ShotGridScene.scene_no, ShotGridShot.shot_no)
+                ],
+                ShotGridTask.task_id.asc().nulls_last(),
+                ShotGridVersion.version_no.desc().nulls_last(),
+                ShotGridReviewList.review_list_id.asc(),
+            )
+        else:
+            time_column = (
+                func.coalesce(ShotGridVersion.submitted_time, ShotGridReviewList.create_time)
+                if query.order_by_column == 'submittedTime'
+                else ShotGridReviewList.create_time
+            )
+            statement = statement.order_by(order(time_column), order(ShotGridReviewList.review_list_id))
         total = int(
             (await db.execute(select(func.count()).select_from(statement.order_by(None).subquery()))).scalar_one()
         )
@@ -162,6 +305,33 @@ class ShotGridReviewDao:
             await db.execute(statement.offset((query.page_num - 1) * query.page_size).limit(query.page_size))
         ).mappings()
         return [dict(row) for row in rows], total
+
+    @classmethod
+    async def get_mine_submission_projects(cls, db: AsyncSession, user_id: int) -> list[dict[str, Any]]:
+        statement = (
+            select(
+                ShotGridProject.project_id,
+                ShotGridProject.project_name,
+                ShotGridProject.project_code,
+                ShotGridProject.project_status,
+            )
+            .join(ShotGridVersion, ShotGridVersion.project_id == ShotGridProject.project_id)
+            .join(ShotGridTask, ShotGridTask.task_id == ShotGridVersion.task_id)
+            .join(
+                ShotGridProjectMember,
+                (ShotGridProjectMember.project_id == ShotGridProject.project_id)
+                & (ShotGridProjectMember.user_id == user_id)
+                & (ShotGridProjectMember.member_status == 'active'),
+            )
+            .where(
+                ShotGridVersion.submitted_by == user_id,
+                ShotGridProject.del_flag == '0',
+                ShotGridTask.del_flag == '0',
+            )
+            .distinct()
+            .order_by(ShotGridProject.project_name, ShotGridProject.project_id)
+        )
+        return [dict(row) for row in (await db.execute(statement)).mappings()]
 
     @classmethod
     async def get_recent_mine_versions(
@@ -208,6 +378,8 @@ class ShotGridReviewDao:
                 ShotGridTask.del_flag == '0',
             )
         )
+        if query.project_id is not None:
+            statement = statement.where(ShotGridVersion.project_id == query.project_id)
         if query.project_keyword and query.project_keyword.strip():
             keyword = f'%{query.project_keyword.strip()}%'
             statement = statement.where(

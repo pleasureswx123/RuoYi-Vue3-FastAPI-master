@@ -5,6 +5,8 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 
 import { createShot, getScenePage, updateShot } from '@/api/shot-grid/shots'
 import { secondsToDurationMs, shotErrorState } from '@/views/shot/shotPresentation'
+import ReviewReferenceInput from '@/components/review/ReviewReferenceInput.vue'
+import { useReviewReferenceAttachments } from '@/composables/useReviewReferenceAttachments'
 import ProjectDrawer from '@/views/project/components/ProjectDrawer.vue'
 import ProjectModal from '@/views/project/components/ProjectModal.vue'
 
@@ -30,7 +32,15 @@ const validationMessage = ref('')
 const requestError = ref(null)
 let scenesController = null
 
+const { referenceAttachments, addReferenceFile, removeReferenceFile, resetReferenceAttachments, uploadPendingReferenceFiles } = useReviewReferenceAttachments({
+  canEdit: () => !busy.value,
+  isCurrent: () => Number(props.projectId) === operationContext.projectId && Number(props.operationGeneration) === operationContext.operationGeneration
+})
+resetReferenceAttachments((props.shot?.shotReferenceFiles || []).map(file => ({ ...file })))
+
 const form = reactive({
+  referenceDescription: props.shot?.shotReferenceDescription || '',
+  referenceFileIds: referenceAttachments,
   episodeId: props.shot?.episodeId
     ? String(props.shot.episodeId)
     : (props.initialEpisodeId ? String(props.initialEpisodeId) : ''),
@@ -96,6 +106,7 @@ const positiveIdRule = message => ({
   trigger: 'change'
 })
 const shotFormRules = {
+  referenceDescription: [{ max: 10000, message: '参考说明不能超过 10000 字', trigger: 'blur' }],
   episodeId: [positiveIdRule('请选择有效集')],
   sceneId: [positiveIdRule('请选择有效场次')],
   shotNo: [{
@@ -188,6 +199,7 @@ function buildPayload() {
     cameraMovement: optionalText(form.cameraMovement),
     focalLength: optionalText(form.focalLength),
     description,
+    referenceDescription: optionalText(form.referenceDescription),
     dialogue: optionalText(form.dialogue),
     soundEffect: optionalText(form.soundEffect),
     colorReference: optionalText(form.colorReference),
@@ -211,6 +223,7 @@ async function submit() {
   let payload
   try { payload = buildPayload() } catch (error) { validationMessage.value = error.message; busy.value = false; return }
   try {
+    payload.referenceFileIds = await uploadPendingReferenceFiles()
     const response = isEdit.value
       ? await updateShot(operationContext.projectId, operationContext.shotId, payload)
       : await createShot(operationContext.projectId, payload)
@@ -240,14 +253,16 @@ onBeforeUnmount(() => {
 <template>
   <component
     :is="isEdit ? ProjectDrawer : ProjectModal"
-    :title="isEdit ? `编辑 ${shot.shotCode}` : '新建镜头'"
-    :description="isEdit ? '镜头号保持不变，可补充制作信息；负责人改派请使用任务分配动作。' : '手动填写镜头号，允许跳号，同一场次不能重复；创建后可继续补充制作信息。'"
+    :title="isEdit ? `编辑 ${[shot.episodeCode, shot.sceneCode, shot.shotCode].filter(Boolean).join(' / ')}` : '新建镜头'"
+    :description="isEdit ? '镜头号保持不变，可补充制作信息；制作人调整请使用“改派制作人”。' : '手动填写镜头号，允许跳号，同一场次不能重复；创建后可继续补充制作信息。'"
     :busy="busy"
     v-bind="isEdit ? { closeGuard: confirmDiscardChanges } : {}"
     wide
     @close="closeDialog"
   >
-    <el-form ref="shotFormRef" :model="form" :rules="shotFormRules" class="shot-form" size="large" label-position="top" aria-label="镜头信息表单">
+    <el-form ref="shotFormRef" :model="form" :rules="shotFormRules" class="shot-form" size="default" label-position="top" aria-label="镜头信息表单">
+      <el-card shadow="never" class="shot-form__section">
+        <template #header><div class="shot-form__section-heading"><strong>基本信息</strong><span>{{ isEdit ? '所属集、场次与镜头号不可修改' : '确定镜头归属与编号' }}</span></div></template>
       <div class="shot-form__grid shot-form__grid--identity">
         <el-form-item label="所属集" prop="episodeId" required><el-select v-model="form.episodeId" class="sg-select" placeholder="请选择集" :disabled="isEdit || busy"><el-option label="请选择集" value="" /><el-option v-for="episode in episodes" :key="episode.episodeId" :label="`${episode.episodeCode} ${episode.episodeName || ''}`" :value="String(episode.episodeId)" /></el-select></el-form-item>
         <el-form-item label="所属场次" prop="sceneId" required><el-select v-model="form.sceneId" class="sg-select" :placeholder="scenesLoading ? '正在加载…' : '请选择场次'" :disabled="isEdit || scenesLoading || busy" @change="changeScene"><el-option :label="scenesLoading ? '正在加载…' : '请选择场次'" value="" /><el-option v-for="scene in scenes" :key="scene.sceneId" :label="`${scene.sceneCode} ${scene.sceneName || ''}`" :value="String(scene.sceneId)" /></el-select></el-form-item>
@@ -258,20 +273,37 @@ onBeforeUnmount(() => {
           <el-input v-model="form.shotNo" inputmode="numeric" maxlength="9" placeholder="例如：0010、0030" :disabled="isEdit || !form.sceneId || busy" @keyup.enter="submit" /></el-form-item>
         <el-form-item label="时长（秒）" prop="durationSeconds"><el-input-number v-model="form.durationSeconds" :min="0" :step="0.001" :precision="3" controls-position="right" :disabled="busy" /></el-form-item>
       </div>
-      <el-form-item class="shot-form__full" label="制作内容描述" prop="description"><el-input v-model="form.description" type="textarea" :rows="4" :disabled="busy" /></el-form-item>
+      </el-card>
+      <el-card shadow="never" class="shot-form__section shot-form__section--content">
+        <template #header><div class="shot-form__section-heading"><strong>制作内容</strong><span>分配制作人前需填写，可先保存草稿</span></div></template>
+      <el-form-item class="shot-form__full" label="制作内容描述" prop="description"><el-input v-model="form.description" type="textarea" :autosize="{ minRows: 4, maxRows: 8 }" placeholder="描述画面主体、动作与场景，让制作人明确本镜头要完成什么" :disabled="busy" /></el-form-item>
+      </el-card>
+      <el-card shadow="never" class="shot-form__section">
+        <template #header><div class="shot-form__section-heading"><strong>镜头参数</strong><span>选填，补充画面与拍摄要求</span></div></template>
       <div class="shot-form__grid shot-form__grid--parameters">
         <el-form-item label="景别" prop="shotSize"><el-input v-model="form.shotSize" maxlength="500" placeholder="如：近景" :disabled="busy" /></el-form-item>
         <el-form-item label="机位" prop="cameraPosition"><el-input v-model="form.cameraPosition" maxlength="500" :disabled="busy" /></el-form-item>
         <el-form-item label="焦段" prop="focalLength"><el-input v-model="form.focalLength" maxlength="500" placeholder="支持 35/25 等文本" :disabled="busy" /></el-form-item>
-      </div>
       <el-form-item label="镜头运动" prop="cameraMovement"><el-input v-model="form.cameraMovement" maxlength="500" :disabled="busy" /></el-form-item>
 
+      </div>
+      </el-card>
+      <el-card shadow="never" class="shot-form__section">
+        <template #header><div class="shot-form__section-heading"><strong>补充说明</strong><span>选填，提供声音、色调及其他要求</span></div></template>
       <div class="shot-form__grid shot-form__grid--text">
         <el-form-item label="台词 / 对白" prop="dialogue"><el-input v-model="form.dialogue" type="textarea" :rows="3" :disabled="busy" /></el-form-item>
         <el-form-item label="音效" prop="soundEffect"><el-input v-model="form.soundEffect" type="textarea" :rows="3" :disabled="busy" /></el-form-item>
         <el-form-item label="色调参考" prop="colorReference"><el-input v-model="form.colorReference" type="textarea" :rows="3" :disabled="busy" /></el-form-item>
         <el-form-item label="备注" prop="remark"><el-input v-model="form.remark" type="textarea" :rows="3" maxlength="2000" show-word-limit :disabled="busy" /></el-form-item>
       </div>
+      </el-card>
+      <el-card shadow="never" class="shot-form__section">
+        <template #header><div class="shot-form__section-heading"><strong>参考内容</strong><span>选填，供制作人查阅</span></div></template>
+        <div class="shot-form__references">
+          <el-form-item label="参考说明" prop="referenceDescription"><el-input v-model="form.referenceDescription" type="textarea" :rows="4" maxlength="10000" show-word-limit placeholder="填写画面风格、参考链接或素材使用说明" :disabled="busy" /></el-form-item>
+          <el-form-item label="参考附件" prop="referenceFileIds"><ReviewReferenceInput :files="referenceAttachments" :disabled="busy" @add="addReferenceFile" @remove="removeReferenceFile" /></el-form-item>
+        </div>
+      </el-card>
       <p v-if="isEdit && shot.assets?.length" class="shot-form__hint">当前 {{ shot.assets.length }} 项关联资产将保持不变；如需调整，请前往资产管理。</p>
       <el-alert v-if="validationMessage || requestError" class="shot-form__alert" :type="requestError ? 'error' : 'warning'" :closable="false" show-icon :title="requestError?.title || '请检查表单'"><div class="form-alert-content"><p>{{ requestError?.message || validationMessage }}</p><el-button v-if="requestError?.status === 409" link type="primary" @click="emit('refresh')">刷新镜头后重试</el-button></div></el-alert>
       <footer v-if="!isEdit"><el-button :disabled="busy" @click="requestClose">取消</el-button><el-button type="primary" :loading="busy" :disabled="!canSubmit" @click="submit">{{ isEdit ? '保存修改' : '创建镜头' }}</el-button></footer>
@@ -283,11 +315,20 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.shot-form__references{display:grid;gap:16px}
+.shot-form__section { --el-card-padding: 16px; border-color: var(--sg-border); border-radius: 10px; }
+.shot-form__section :deep(.el-card__header) { padding: 12px 16px; background: var(--sg-surface-soft); }
+.shot-form__section-heading { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 12px; }
+.shot-form__section-heading strong { font-size: 14px; color: var(--sg-text); }
+.shot-form__section-heading span { font-size: 12px; color: var(--sg-text-muted); }
+.shot-form__section--content :deep(.el-textarea__inner) { line-height: 1.7; }
+.shot-form :deep(.el-input__inner), .shot-form :deep(.el-textarea__inner), .shot-form :deep(.el-select__wrapper) { font-size: 12px; }
+
 .shot-form{display:grid;gap:16px}.shot-form__grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.shot-form__grid--text{align-items:start}.shot-form:deep(.el-form-item){margin-bottom:0}.shot-form:deep(.el-form-item__label){height:auto;margin-bottom:0;padding-bottom:6px;color:var(--sg-text);font-size:12px;font-weight:650;line-height:1.2}.shot-form:deep(.el-select),.shot-form:deep(.el-input-number){width:100%}.shot-form__hint{margin:0;padding:12px;color:var(--sg-text-muted);font-size:12px;background:rgba(255,255,255,.025);border-radius:9px}.form-alert-content{display:grid;gap:5px}.form-alert-content p{margin:0}.form-alert-content code,.form-alert-content small{color:var(--sg-text-muted);font-size:11px}.form-alert-content:deep(.el-button){width:max-content;margin:0;padding:0}footer{display:flex;gap:10px;justify-content:flex-end}@media(max-width:700px){.shot-form__grid{grid-template-columns:1fr}}
 .shot-form__grid--identity{grid-template-columns:repeat(4,minmax(0,1fr));align-items:start}
 @media(max-width:700px){.shot-form__grid--identity{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:420px){.shot-form__grid--identity{grid-template-columns:1fr}}
 .shot-form__label-help{display:inline-flex;align-items:center;gap:5px}.shot-form__help-icon{color:var(--sg-text-muted);cursor:help}.shot-form__help-icon:focus-visible{outline:2px solid var(--sg-accent);outline-offset:2px;border-radius:50%}
-.shot-form__grid--parameters{grid-template-columns:repeat(3,minmax(0,1fr))}
+.shot-form__grid--parameters{grid-template-columns:repeat(2,minmax(0,1fr))}
 @media(max-width:700px){.shot-form__grid--parameters{grid-template-columns:1fr}}
 </style>

@@ -49,7 +49,7 @@ async function submit() {
       reviewDate: form.reviewDate || null,
       versionIds: form.versionIds
     })
-    ElMessage.success('人工批量审核单已创建')
+    ElMessage.success('批量审核单已创建')
     dialogVisible.value = false
     emit('created', created.data)
   } catch (error) {
@@ -61,8 +61,8 @@ async function submit() {
 </script>
 
 <template>
-  <el-dialog v-model="dialogVisible" title="创建人工批量审核单" width="720px" destroy-on-close>
-    <el-form ref="formRef" :model="form" :rules="formRules" label-position="top" aria-label="创建人工批量审核单">
+  <el-dialog v-model="dialogVisible" title="创建批量审核单" width="720px" destroy-on-close>
+    <el-form ref="formRef" :model="form" :rules="formRules" label-position="top" aria-label="创建批量审核单">
       <el-form-item label="审核单名称" prop="reviewListName"><el-input v-model="form.reviewListName" maxlength="240" show-word-limit placeholder="例如：EP01 本周镜头集中审核" /></el-form-item>
       <div class="dialog-grid"><el-form-item label="审核日期" prop="reviewDate"><el-date-picker v-model="form.reviewDate" type="date" value-format="YYYY-MM-DD" placeholder="选择审核日期" /></el-form-item><el-form-item label="说明" prop="description"><el-input v-model="form.description" maxlength="1000" placeholder="可选" /></el-form-item></div>
       <el-form-item label="选择待审核版本" prop="versionIds">

@@ -1,12 +1,23 @@
 from datetime import date, datetime
 from typing import Any, Literal
+from uuid import UUID
 
 from pydantic import ConfigDict, Field, field_validator, model_validator
 
 from module_shot_grid.entity.vo.common_vo import ShotGridApiModel, ShotGridLockVersionModel, ShotGridPageQueryModel
 from module_shot_grid.entity.vo.task_vo import ShotGridTaskReferenceFileModel
 
-ShotStatus = Literal['unassigned', 'not_started', 'preparing', 'in_progress', 'reviewing', 'revision', 'completed']
+ShotStatus = Literal[
+    'pending_info',
+    'unassigned',
+    'pending_schedule',
+    'not_started',
+    'preparing',
+    'in_progress',
+    'reviewing',
+    'revision',
+    'completed',
+]
 DirectoryStatus = Literal['not_created', 'pending', 'ready', 'failed']
 AssetType = Literal['Character', 'Environment', 'Prop']
 SQL_BIGINT_MAX = 9_223_372_036_854_775_807
@@ -71,6 +82,8 @@ class ShotGridShotWriteFieldsModel(ShotGridApiModel):
     camera_position: str | None = Field(default=None, max_length=500, description='机位')
     camera_movement: str | None = Field(default=None, max_length=500, description='镜头运动')
     focal_length: str | None = Field(default=None, max_length=500, description='焦段原始文本')
+    reference_description: str | None = Field(default=None, max_length=10000)
+    reference_file_ids: list[str] = Field(default_factory=list, max_length=5)
     description: str = Field(default='', description='镜头制作内容描述，可后续补充')
     dialogue: str | None = Field(default=None, description='台词或对白')
     sound_effect: str | None = Field(default=None, description='音效说明')
@@ -111,12 +124,21 @@ class ShotGridShotWriteFieldsModel(ShotGridApiModel):
         'dialogue',
         'sound_effect',
         'color_reference',
+        'reference_description',
         'remark',
         mode='before',
     )
     @classmethod
     def normalize_optional_text(cls, value: Any) -> str | None:
         return _strip_optional_text(value)
+
+    @field_validator('reference_file_ids')
+    @classmethod
+    def validate_reference_file_ids(cls, value: list[str]) -> list[str]:
+        normalized = [str(UUID(file_id)) for file_id in value]
+        if len(normalized) != len(set(normalized)):
+            raise ValueError('参考文件不能重复')
+        return normalized
 
     @field_validator('asset_ids')
     @classmethod
@@ -304,6 +326,8 @@ class ShotGridShotLatestFeedbackModel(ShotGridApiModel):
 
 
 class ShotGridShotListItemModel(ShotGridApiModel):
+    shot_reference_description: str | None = None
+    shot_reference_files: list[ShotGridTaskReferenceFileModel] = Field(default_factory=list)
     reference_description: str | None = None
     reference_files: list[ShotGridTaskReferenceFileModel] = Field(default_factory=list)
     """表格、卡片和故事板共用的镜头列表项。"""

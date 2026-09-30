@@ -6,13 +6,17 @@ import '@svar-ui/vue-gantt/all.css'
 import { useThemeStore } from '@/store/modules/theme'
 import {
   ganttColumns,
+  ganttChangedRange,
   ganttScaleFor,
   rangeChangeRequest,
   toGanttTasks
 } from '@/views/schedule/adapters/svarGanttAdapter'
 import ScheduleGanttTaskTemplate from '@/views/schedule/components/ScheduleGanttTaskTemplate.vue'
+import ScheduleGanttDateCell from '@/views/schedule/components/ScheduleGanttDateCell.vue'
 
 const props = defineProps({
+  selectedTaskId: { type: Number, default: null },
+  resetToken: { type: Number, default: 0 },
   rows: { type: Array, default: () => [] },
   scale: { type: String, default: 'day' },
   groupBy: { type: String, default: 'assignee' },
@@ -31,14 +35,21 @@ const GANTT_CANVAS_GRID_COLOR = {
   dark: '#30353d'
 }
 
-const ganttTasks = computed(() => toGanttTasks(props.rows, {
+const ganttTasks = computed(() => {
+  // 取消草稿时重新提供服务端日期，清除组件内部的拖动坐标缓存。
+  void props.resetToken
+  return toGanttTasks(props.rows, {
   editable: props.editable,
   groupBy: props.groupBy
 }).map(task => ({
   ...task,
+  showAssignee: props.groupBy !== 'assignee',
   showBaseline: props.showBaseline
-})))
-const columnConfig = ganttColumns()
+}))
+})
+const columnConfig = computed(() => ganttColumns().map(column => column.id === 'start'
+  ? { ...column, cell: ScheduleGanttDateCell }
+  : column))
 const ganttRuntimeStyle = computed(() => {
   const gridColor = GANTT_CANVAS_GRID_COLOR[themeStore.mode] || GANTT_CANVAS_GRID_COLOR.light
   return {
@@ -76,13 +87,19 @@ const ganttStart = computed(() => new Date(props.windowStart))
 const ganttEnd = computed(() => new Date(props.windowEnd))
 
 function initializeGantt(api) {
+  // 在位移预览前阻止只读任务，不能等拖动结束才拒绝保存。
+  api.intercept('drag-task', ({ id }) => {
+    const task = ganttTasks.value.find(item => item.id === id)
+    if (!props.editable || !task || task.readonly || task.taskId == null) return false
+  })
   api.on('select-task', ({ id }) => {
     const selected = ganttTasks.value.find(task => task.id === id)
     if (selected?.taskId != null) {
       emit('task-click', { taskId: selected.taskId })
     }
   })
-  api.intercept('update-task', ({ id, task: changes = {} }) => {
+  api.intercept('update-task', ({ id, task: changes = {}, diff = 0, inProgress }) => {
+    if (inProgress || (!changes.start && !changes.end)) return false
     const original = ganttTasks.value.find(task => task.id === id)
     if (!original) {
       emit('change-rejected', { reason: 'task-missing', taskId: id })
@@ -93,8 +110,7 @@ function initializeGantt(api) {
     }
     const request = rangeChangeRequest({
       task: original,
-      nextStart: changes.start || original.start,
-      nextEnd: changes.end || original.end,
+      ...ganttChangedRange(original, changes, diff, scaleConfig.value.lengthUnit),
       nextAssigneeUserId: changes.assigneeUserId ?? original.assigneeUserId,
       operationSource: 'gantt'
     })
@@ -114,8 +130,10 @@ function initializeGantt(api) {
       :key="themeStore.mode"
       :style="ganttRuntimeStyle"
       :tasks="ganttTasks"
+      :selected="selectedTaskId == null ? [] : [`task:${selectedTaskId}`]"
       :links="[]"
       :columns="columnConfig"
+      :grid-width="columnConfig.reduce((total, column) => total + column.width, 0)"
       :scales="scaleConfig.scales"
       :start="ganttStart"
       :end="ganttEnd"
@@ -135,7 +153,7 @@ function initializeGantt(api) {
 <style scoped>
 .schedule-gantt-adapter {
   min-width: 0;
-  min-height: 420px;
+  min-height: 0;
   height: 100%;
   overflow: hidden;
 }
@@ -147,6 +165,18 @@ function initializeGantt(api) {
 .schedule-gantt-adapter :deep(.wx-area) {
   color: var(--sg-text);
   background-color: var(--sg-surface);
+}
+
+.schedule-gantt-adapter :deep(.wx-chart) {
+  scrollbar-width: none;
+}
+
+.schedule-gantt-adapter :deep(.wx-table .wx-cell) {
+  font-size: 12px;
+}
+
+.schedule-gantt-adapter :deep(.wx-chart::-webkit-scrollbar) {
+  height: 0;
 }
 
 .schedule-gantt-adapter :deep(.wx-table .wx-header),
@@ -184,5 +214,12 @@ function initializeGantt(api) {
 
 .schedule-gantt-adapter :deep(.wx-scale .wx-cell) {
   border-right: var(--wx-gantt-border);
+}
+.schedule-gantt-adapter :deep(.wx-bar:has(.schedule-task-content.is-readonly)) {
+  cursor: pointer !important;
+}
+.schedule-gantt-adapter :deep(.wx-bar:has(.schedule-task-content.is-readonly) .wx-link),
+.schedule-gantt-adapter :deep(.wx-bar:has(.schedule-task-content.is-readonly) .wx-progress-marker) {
+  display: none;
 }
 </style>

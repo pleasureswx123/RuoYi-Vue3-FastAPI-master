@@ -2,6 +2,41 @@ import { taskKindMeta, taskPriorityMeta, taskStatusMeta } from '@/views/task/tas
 
 const DAY_MS = 24 * 60 * 60 * 1000
 
+const SCHEDULE_STATUS_COLORS = {
+  not_started: 'var(--sg-shot-status-not-started)',
+  preparing: 'var(--sg-shot-status-preparing)',
+  in_progress: 'var(--sg-shot-status-in-progress)',
+  pending_review: 'var(--sg-shot-status-reviewing)',
+  revision: 'var(--sg-shot-status-revision)',
+  completed: 'var(--sg-shot-status-completed)'
+}
+
+export const scheduleStatusOptions = Object.keys(SCHEDULE_STATUS_COLORS).filter(value => value !== 'preparing').map(value => ({
+  value,
+  label: taskStatusMeta(value).label
+}))
+
+export function scheduleStatusStyle(status) {
+  return { '--sg-schedule-status-color': SCHEDULE_STATUS_COLORS[status] || 'var(--sg-text-muted)' }
+}
+
+export function matchesScheduleDeadline(task, filter, serverTime = new Date()) {
+  if (!filter) return true
+  if (task.taskStatus === 'completed' || !task.currentEnd) return false
+  const end = new Date(task.currentEnd)
+  const now = new Date(serverTime)
+  if (!Number.isFinite(end.getTime()) || !Number.isFinite(now.getTime())) return false
+  if (filter === 'overdue') return end < now
+  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  const finish = new Date(start)
+  if (filter === 'week') {
+    start.setDate(start.getDate() - (start.getDay() + 6) % 7)
+    finish.setTime(start.getTime())
+    finish.setDate(finish.getDate() + 7)
+  } else finish.setDate(finish.getDate() + 1)
+  return end >= start && end < finish
+}
+
 function timestamp(value) {
   if (!value) return null
   const result = new Date(value).getTime()
@@ -45,7 +80,7 @@ export function scheduleTaskLabel(task) {
 
 export function scheduleTaskMeta(task) {
   return {
-    status: taskStatusMeta(task?.taskStatus),
+    status: taskStatusMeta(task),
     kind: taskKindMeta(task?.taskKind),
     priority: taskPriorityMeta(task?.priority),
     label: scheduleTaskLabel(task)

@@ -1,4 +1,5 @@
 <script setup>
+import { RefreshLeft } from '@element-plus/icons-vue'
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { appendVersionIssue, getVersionReviewContext } from '@/api/shot-grid/reviews'
@@ -113,7 +114,7 @@ async function send() {
     </el-form>
     <footer class="batch-issue-actions">
       <el-button :disabled="busy" @click="close">{{ finished || error ? '关闭并刷新' : '取消' }}</el-button>
-      <template v-if="!loading && !error && !finished"><el-button :disabled="busy" @click="reset">重置</el-button><el-button type="primary" :loading="busy" :disabled="busy" @click="send">追加并发送（{{ rows.length }}）</el-button></template>
+      <template v-if="!loading && !error && !finished"><el-button :icon="RefreshLeft" :disabled="busy" @click="reset">重置</el-button><el-button type="primary" :loading="busy" :disabled="busy" @click="send">追加并发送（{{ rows.length }}）</el-button></template>
     </footer>
   </ProjectModal>
 </template>

@@ -62,7 +62,11 @@ class ShotGridScheduleQueryModel(ShotGridApiModel):
     group_by: ScheduleGroupBy = 'assignee'
     assignee_user_ids: list[int] = Field(default_factory=list, max_length=100)
     task_kinds: list[TaskKind] = Field(default_factory=list, max_length=10)
-    task_statuses: list[TaskStatus] = Field(default_factory=list, max_length=20)
+    task_statuses: list[
+        Literal[
+            'pending_schedule', 'not_started', 'preparing', 'in_progress', 'pending_review', 'revision', 'completed'
+        ]
+    ] = Field(default_factory=list, max_length=20)
     priorities: list[TaskPriority] = Field(default_factory=list, max_length=10)
     episode_ids: list[int] = Field(default_factory=list, max_length=100)
     scene_ids: list[int] = Field(default_factory=list, max_length=100)
@@ -237,7 +241,7 @@ class ShotGridScheduleUpdateModel(ShotGridApiModel):
     expected_start_time: BusinessDateTime
     expected_end_time: BusinessDateTime
     operation_source: ScheduleClientOperationSource
-    change_reason: str = Field(min_length=1, max_length=500)
+    change_reason: str = Field(default='未填写', max_length=500)
     overlap_acknowledged: StrictBool = False
     expected_conflict_task_ids: list[int] = Field(default_factory=list, max_length=1000)
 
@@ -246,10 +250,7 @@ class ShotGridScheduleUpdateModel(ShotGridApiModel):
     def normalize_reason(cls, value: object) -> str:
         if not isinstance(value, str):
             raise ValueError('changeReason 必须是字符串')
-        normalized = value.strip()
-        if not normalized:
-            raise ValueError('changeReason 不能为空')
-        return normalized
+        return value.strip() or '未填写'
 
     @field_validator('expected_conflict_task_ids')
     @classmethod

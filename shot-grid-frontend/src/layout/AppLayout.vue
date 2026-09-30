@@ -25,7 +25,7 @@ import ThemeModeSwitch from '@/components/theme/ThemeModeSwitch.vue'
 const route = useRoute()
 const router = useRouter()
 const sessionStore = useSessionStore()
-const collapsed = ref(true)
+const collapsed = ref(false)
 const searchVisible = ref(false)
 const fullscreenSupported = ref(false)
 const isFullscreen = ref(false)

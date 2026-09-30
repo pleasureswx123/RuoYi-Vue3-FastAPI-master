@@ -26,8 +26,10 @@ from module_shot_grid.entity.vo.task_vo import (
     ShotGridTaskStartModel,
     ShotGridTaskUpdateModel,
 )
+from module_shot_grid.exceptions import shot_grid_error
 from module_shot_grid.service.production_adjustment_service import ShotGridProductionAdjustmentService
 from module_shot_grid.service.project_reference_service import ShotGridProjectReferenceService
+from module_shot_grid.service.shot_reference_service import ShotGridShotReferenceService
 from module_shot_grid.service.task_reference_service import ShotGridTaskReferenceService
 from module_shot_grid.service.task_service import ShotGridTaskService
 from utils.response_util import ResponseUtil
@@ -284,6 +286,31 @@ async def download_task_project_reference(
 ) -> Response:
     project_id, _ = await ShotGridTaskService._resolve_task_access(query_db, task_id, current_user)
     result = await ShotGridProjectReferenceService.download(request, query_db, current_user, project_id, str(file_id))
+    return ResponseUtil.streaming(
+        data=result.data,
+        headers=UploadUtil.build_download_headers(result.filename, result.byte_range, result.accept_ranges),
+        media_type='application/octet-stream',
+        status_code=206 if result.byte_range.is_partial else 200,
+    )
+
+
+@task_controller.get(
+    '/tasks/{taskId}/shot/reference-files/{fileId}/download',
+    dependencies=[UserInterfaceAuthDependency('shotgrid:task:query')],
+)
+async def download_task_shot_reference(
+    request: Request,
+    task_id: Annotated[int, Path(alias='taskId', gt=0, le=SQL_BIGINT_MAX)],
+    file_id: Annotated[UUID, Path(alias='fileId')],
+    query_db: Annotated[AsyncSession, DBSessionDependency()],
+    current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
+) -> Response:
+    detail = await ShotGridTaskService.get_task_detail(query_db, task_id, current_user)
+    if not detail.target.shot_id:
+        raise shot_grid_error(403, 'SG_FILE_ACCESS_DENIED', '文件不存在或无权访问')
+    result = await ShotGridShotReferenceService.download(
+        request, query_db, current_user, detail.project_id, detail.target.shot_id, str(file_id)
+    )
     return ResponseUtil.streaming(
         data=result.data,
         headers=UploadUtil.build_download_headers(result.filename, result.byte_range, result.accept_ranges),

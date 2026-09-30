@@ -27,6 +27,7 @@ import ProjectStatePanel from './ProjectStatePanel.vue'
 
 const props = defineProps({
   projectId: { type: Number, required: true },
+  showOperations: { type: Boolean, default: true },
   canDiagnose: { type: Boolean, default: false },
   canRetryProject: { type: Boolean, default: false },
   canRetryOperation: { type: Boolean, default: false }
@@ -192,7 +193,7 @@ onBeforeUnmount(() => { storageController?.abort(); operationsController?.abort(
   <el-card class="detail-panel storage-panel" shadow="never">
     <template #header>
       <header class="detail-panel__heading">
-        <div><p class="sg-eyebrow">FILE & NAS</p><h2>项目存储与目录状态</h2><span>可在此查看或复制项目 NAS 路径，并跟踪目录创建与重试记录。</span></div>
+        <div><h2>项目存储</h2><span>查看存储状态，复制项目 NAS 路径。</span></div>
         <el-button :icon="Refresh" circle aria-label="刷新存储状态" :loading="loading || operationsLoading" @click="refreshAll" />
       </header>
     </template>
@@ -212,6 +213,7 @@ onBeforeUnmount(() => { storageController?.abort(); operationsController?.abort(
     </el-card>
     <el-empty v-else :image-size="64" description="当前项目尚无存储信息" />
 
+    <template v-if="showOperations">
     <template v-if="canDiagnose">
       <el-form ref="operationFilterFormRef" :model="filters" class="operation-toolbar" size="large" inline aria-label="目录操作筛选">
         <strong>目录操作记录</strong>
@@ -241,6 +243,7 @@ onBeforeUnmount(() => { storageController?.abort(); operationsController?.abort(
       </template>
     </template>
     <el-alert v-else class="diagnostic-note" title="目录操作记录仅对项目管理人或跨项目管理员开放" type="info" show-icon :closable="false" />
+    </template>
 
     <ProjectModal v-if="retryTarget" title="人工重试目录操作" description="重试后会新增一条操作记录，原失败记录将继续保留。" :busy="retryBusy" @close="closeRetryDialog">
       <el-form ref="retryFormRef" :model="retryForm" :rules="retryRules" class="retry-form" label-position="top">

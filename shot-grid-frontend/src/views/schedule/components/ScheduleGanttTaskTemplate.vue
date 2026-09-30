@@ -2,6 +2,8 @@
 import { computed } from 'vue'
 
 import { baselineOverlayStyle } from '@/views/schedule/adapters/svarGanttAdapter'
+import { scheduleStatusStyle } from '@/views/schedule/schedulePresentation'
+import { taskStatusMeta } from '@/views/task/taskPresentation'
 
 defineOptions({ name: 'ScheduleGanttTaskTemplate' })
 
@@ -12,6 +14,9 @@ const props = defineProps({
 const baselineStyle = computed(() => baselineOverlayStyle(props.data))
 const hasConflict = computed(() => props.data.conflictTaskIds?.length > 0)
 const isGroup = computed(() => props.data.isScheduleGroup === true)
+const barLabel = computed(() => !isGroup.value && props.data.showAssignee !== false && props.data.assigneeName
+  ? `${props.data.text} · ${props.data.assigneeName}`
+  : props.data.text)
 const hasBaseline = computed(() => (
   props.data.showBaseline !== false
   && !isGroup.value
@@ -42,9 +47,11 @@ const currentBarClasses = computed(() => ({
     <span
       class="schedule-task-content__current"
       :class="currentBarClasses"
+      :style="isGroup ? undefined : scheduleStatusStyle(data.taskStatus)"
+      :title="isGroup ? barLabel : `${barLabel} · ${taskStatusMeta(data).label}`"
       data-testid="schedule-current-bar"
     >
-      <span class="schedule-task-content__label">{{ data.text }}</span>
+      <span class="schedule-task-content__label">{{ barLabel }}</span>
     </span>
   </div>
 </template>
@@ -74,19 +81,10 @@ const currentBarClasses = computed(() => ({
 }
 
 .schedule-task-content__current.is-current-schedule {
-  background: color-mix(in srgb, var(--el-color-primary) 22%, var(--sg-surface-raised));
-  border-color: color-mix(in srgb, var(--el-color-primary) 55%, transparent);
+  background: color-mix(in srgb, var(--sg-schedule-status-color) 18%, var(--sg-surface-raised));
+  border-color: color-mix(in srgb, var(--sg-schedule-status-color) 65%, transparent);
 }
 
-.schedule-task-content__current.status-completed {
-  background: color-mix(in srgb, var(--el-color-success) 18%, var(--sg-surface-raised));
-  border-color: var(--el-color-success);
-}
-
-.schedule-task-content__current.is-conflicted {
-  border-color: var(--el-color-danger);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--el-color-danger) 38%, transparent);
-}
 
 .schedule-task-content__current.is-readonly {
   cursor: default;

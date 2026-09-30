@@ -159,7 +159,7 @@ def _task_row(**overrides: Any) -> dict[str, Any]:
     return row
 
 
-def test_start_schedule_contract_preserves_existing_range_and_requires_new_future_range() -> None:
+def test_start_schedule_contract_preserves_existing_range_and_requires_saved_schedule() -> None:
     now = datetime(2026, 8, 31, 10)
     existing = _task()
     existing.expected_start_time = datetime(2026, 8, 29, 9)
@@ -198,7 +198,7 @@ def test_start_schedule_contract_preserves_existing_range_and_requires_new_futur
             ShotGridTaskStartModel(lockVersion=INITIAL_TASK_LOCK_VERSION),
             now,
         )
-    assert missing_range.value.error_key == 'SG_TASK_EXPECTED_TIME_INVALID'
+    assert missing_range.value.error_key == 'SG_TASK_SCHEDULE_REQUIRED'
 
     with pytest.raises(ShotGridDomainException) as past_range:
         ShotGridTaskService._resolve_start_schedule(
@@ -210,7 +210,22 @@ def test_start_schedule_contract_preserves_existing_range_and_requires_new_futur
             ),
             now,
         )
-    assert past_range.value.error_key == 'SG_TASK_EXPECTED_TIME_INVALID'
+    assert past_range.value.error_key == 'SG_TASK_SCHEDULE_REQUIRED'
+
+
+@pytest.mark.parametrize('start_time', ['2026-08-30T09:00:00', '2099-09-01T09:00:00'])
+def test_unscheduled_start_cannot_bypass_saved_schedule_with_inline_dates(start_time: str) -> None:
+    with pytest.raises(ShotGridDomainException) as error:
+        ShotGridTaskService._resolve_start_schedule(
+            _task(),
+            ShotGridTaskStartModel(
+                lockVersion=INITIAL_TASK_LOCK_VERSION,
+                expectedStartTime=start_time,
+                expectedEndTime='2099-09-02T18:00:00',
+            ),
+            datetime(2026, 8, 31, 10),
+        )
+    assert error.value.error_key == 'SG_TASK_SCHEDULE_REQUIRED'
 
 
 @pytest.mark.parametrize(
@@ -959,6 +974,9 @@ async def test_start_shot_allows_manager_and_increments_lock_in_same_transaction
 ) -> None:
     monkeypatch.setattr(ShotGridTaskService, '_now', staticmethod(lambda: datetime(2026, 8, 28, 10)))
     task = _task(assignee_user_id=ASSIGNEE_USER_ID, lock_version=INITIAL_TASK_LOCK_VERSION)
+    task.expected_start_time = task.baseline_start_time = datetime(2026, 8, 29, 9)
+    task.expected_end_time = task.baseline_end_time = datetime(2026, 8, 30, 18)
+    task.due_date = date(2026, 8, 30)
     access = _access(user_id=3, all_scope=all_scope)
     monkeypatch.setattr(
         'module_shot_grid.service.task_service.ShotGridTaskService._resolve_task_access',
@@ -1036,8 +1054,6 @@ async def test_start_shot_allows_manager_and_increments_lock_in_same_transaction
             shotLockVersion=0,
             assetsConfirmed=True,
             priority='urgent',
-            expectedStartTime='2026-08-29T09:00:00',
-            expectedEndTime='2026-08-30T18:00:00',
         ),
         _current_user(user_id=3),
     )
@@ -1060,11 +1076,7 @@ async def test_start_shot_allows_manager_and_increments_lock_in_same_transaction
     assert audit.await_args.kwargs['payload']['confirmationMethod'] == 'manual'
     assert audit.await_args.kwargs['result']['operatedBy'] == access.user_id
     assert task.assignee_user_id == ASSIGNEE_USER_ID
-    history = next(
-        call.args[0] for call in db.add.call_args_list if isinstance(call.args[0], ShotGridTaskScheduleChange)
-    )
-    assert history.change_type == 'initial'
-    assert history.operation_source == 'start'
+    assert not any(isinstance(call.args[0], ShotGridTaskScheduleChange) for call in db.add.call_args_list)
     db.commit.assert_awaited_once()
     db.rollback.assert_not_awaited()
 
@@ -1077,6 +1089,9 @@ async def test_start_asset_task_creates_shared_directory_outbox_and_enters_prepa
 ) -> None:
     monkeypatch.setattr(ShotGridTaskService, '_now', staticmethod(lambda: datetime(2026, 8, 28, 10)))
     task = _task(assignee_user_id=ASSIGNEE_USER_ID, lock_version=INITIAL_TASK_LOCK_VERSION)
+    task.expected_start_time = task.baseline_start_time = datetime(2026, 8, 29, 9)
+    task.expected_end_time = task.baseline_end_time = datetime(2026, 8, 30, 18)
+    task.due_date = date(2026, 8, 30)
     task.task_kind = 'asset_image'
     task.shot_id = None
     task.asset_item_id = ASSET_ITEM_ID
@@ -1159,8 +1174,6 @@ async def test_start_asset_task_creates_shared_directory_outbox_and_enters_prepa
             assetItemLockVersion=5,
             startConfirmed=True,
             priority='high',
-            expectedStartTime='2026-08-29T09:00:00',
-            expectedEndTime='2026-08-30T18:00:00',
         ),
         _current_user(user_id=ASSIGNEE_USER_ID),
     )

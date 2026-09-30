@@ -8,6 +8,8 @@ from sqlalchemy.orm import aliased
 from sqlalchemy.sql import Select
 
 from module_admin.entity.do.user_do import SysUser
+from module_shot_grid.dao.schedule_phase import task_phase_expression
+from module_shot_grid.dao.shot_phase import missing_shot_content_expression
 from module_shot_grid.entity.do.asset_do import ShotGridAsset, ShotGridShotAsset
 from module_shot_grid.entity.do.project_do import (
     ShotGridEpisode,
@@ -92,6 +94,7 @@ class ShotGridShotCrudDao:
                 task.assignee_user_id,
                 task.revision_transfers,
                 task.reference_description,
+                ShotGridShot.reference_description.label('shot_reference_description'),
                 assignee.nick_name.label('assignee_nick_name'),
                 func.upper(assignee.nick_name).label('assignee_producer_code'),
                 ShotGridShot.create_by,
@@ -176,7 +179,10 @@ class ShotGridShotCrudDao:
         if query.shot_no_end is not None:
             statement = statement.where(ShotGridShot.shot_no <= query.shot_no_end)
         if query.shot_status is not None:
-            statement = statement.where(status_expression == query.shot_status)
+            if query.shot_status in {'pending_schedule', 'not_started'}:
+                statement = statement.where(task_phase_expression(task) == query.shot_status)
+            else:
+                statement = statement.where(status_expression == query.shot_status)
         if query.assignee_user_id is not None:
             statement = statement.where(task.assignee_user_id == query.assignee_user_id)
         if query.asset_id is not None:
@@ -1015,6 +1021,7 @@ class ShotGridShotCrudDao:
             )
         )
         return case(
+            (and_(task.task_id.is_(None), missing_shot_content_expression(ShotGridShot)), 'pending_info'),
             (task.task_id.is_(None), 'unassigned'),
             (task.task_status == 'pending_review', 'reviewing'),
             (and_(task.task_status == 'completed', final_exists), 'completed'),

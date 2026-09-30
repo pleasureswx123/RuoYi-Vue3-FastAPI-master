@@ -2,12 +2,24 @@ import { describe, expect, it } from 'vitest'
 
 import {
   baselineVariance,
+  matchesScheduleDeadline,
   scheduleErrorState,
   scheduleReminder,
   scheduleTaskLabel
 } from '@/views/schedule/schedulePresentation'
 
 describe('排期展示派生', () => {
+  it('到期筛选排除已完成任务，并按服务端日期区分今天、逾期和自然周', () => {
+    const now = '2026-09-29T12:00:00'
+    const task = { taskStatus: 'in_progress', currentEnd: '2026-09-29T18:00:00' }
+    expect(matchesScheduleDeadline(task, 'today', now)).toBe(true)
+    expect(matchesScheduleDeadline(task, 'overdue', now)).toBe(false)
+    expect(matchesScheduleDeadline(task, 'week', now)).toBe(true)
+    expect(matchesScheduleDeadline({ ...task, currentEnd: '2026-09-29T09:00:00' }, 'overdue', now)).toBe(true)
+    expect(matchesScheduleDeadline({ ...task, currentEnd: '2026-10-05T00:00:00' }, 'week', now)).toBe(false)
+    expect(matchesScheduleDeadline({ ...task, taskStatus: 'completed' }, 'today', now)).toBe(false)
+    expect(matchesScheduleDeadline({ ...task, currentEnd: null }, 'today', now)).toBe(false)
+  })
   it('按后端原始时间派生基线偏差，不构造进度百分比', () => {
     const variance = baselineVariance({
       currentStart: '2026-09-03T09:00:00',

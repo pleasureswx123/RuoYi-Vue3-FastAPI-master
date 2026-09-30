@@ -7,6 +7,7 @@ from sqlalchemy.orm import aliased
 from sqlalchemy.sql import Select
 
 from module_admin.entity.do.user_do import SysUser
+from module_shot_grid.dao.schedule_phase import task_phase_expression
 from module_shot_grid.entity.do.asset_do import ShotGridAsset, ShotGridAssetItem
 from module_shot_grid.entity.do.project_do import (
     ShotGridEpisode,
@@ -235,7 +236,12 @@ class ShotGridTaskScheduleDao:
         if query.task_kinds:
             statement = statement.where(ShotGridTask.task_kind.in_(query.task_kinds))
         if query.task_statuses:
-            statement = statement.where(ShotGridTask.task_status.in_(query.task_statuses))
+            phase = (
+                task_phase_expression(ShotGridTask)
+                if {'pending_schedule', 'not_started'}.intersection(query.task_statuses)
+                else ShotGridTask.task_status
+            )
+            statement = statement.where(phase.in_(query.task_statuses))
         if query.priorities:
             statement = statement.where(ShotGridTask.priority.in_(query.priorities))
         if query.episode_ids:
@@ -298,7 +304,10 @@ class ShotGridTaskScheduleDao:
         statement = cls._apply_filters(statement, query, include_display_filters=True)
         return statement.order_by(
             statement.selected_columns.group_sort_order,
-            ShotGridTask.expected_start_time.asc().nulls_last(),
+            # 分组内按镜头业务编号排序，改期不改变镜头的阅读顺序。
+            statement.selected_columns.episode_no.asc().nulls_last(),
+            statement.selected_columns.scene_no.asc().nulls_last(),
+            statement.selected_columns.shot_no.asc().nulls_last(),
             statement.selected_columns.target_sort_order.asc().nulls_last(),
             ShotGridTask.task_id,
         )
@@ -310,12 +319,15 @@ class ShotGridTaskScheduleDao:
         statement = cls._base_task_statement(query).where(
             ShotGridTask.project_id == project_id,
             ShotGridTask.task_status != 'completed',
-            ShotGridTask.expected_start_time.is_(None),
-            ShotGridTask.expected_end_time.is_(None),
+            or_(ShotGridTask.expected_start_time.is_(None), ShotGridTask.expected_end_time.is_(None)),
         )
         statement = cls._apply_filters(statement, query, include_display_filters=False)
         return statement.order_by(
             statement.selected_columns.group_sort_order,
+            # 分组内按镜头业务编号排序，改期不改变镜头的阅读顺序。
+            statement.selected_columns.episode_no.asc().nulls_last(),
+            statement.selected_columns.scene_no.asc().nulls_last(),
+            statement.selected_columns.shot_no.asc().nulls_last(),
             statement.selected_columns.target_sort_order.asc().nulls_last(),
             ShotGridTask.task_id,
         )

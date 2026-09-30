@@ -16,32 +16,12 @@ function safeError(error) {
   }
 }
 
-function conflictIds(error) {
-  const ids = error?.details?.conflictTaskIds
-  if (!Array.isArray(ids)) return []
-  return [...new Set(ids.map(Number).filter(id => Number.isSafeInteger(id) && id > 0))].sort((a, b) => a - b)
-}
-
-function conflictDetails(error) {
-  if (!Array.isArray(error?.details?.conflicts)) return []
-  return error.details.conflicts.filter(item => (
-    Number.isSafeInteger(Number(item?.taskId))
-    && item?.targetName
-    && item?.assignee?.userName
-    && item?.startTime
-    && item?.endTime
-  ))
-}
-
 export function useScheduleMutation(store, options = {}) {
   const visible = ref(false)
   const saving = ref(false)
   const activeTask = shallowRef(null)
   const draft = ref(null)
   const error = ref(null)
-  const conflictTaskIds = ref([])
-  const conflicts = ref([])
-  const overlapAcknowledged = ref(false)
   let idempotencyKey = ''
   let disposed = false
 
@@ -54,9 +34,6 @@ export function useScheduleMutation(store, options = {}) {
       operationSource: rangeDraft.operationSource || 'dialog',
       changeReason: rangeDraft.changeReason || ''
     }
-    conflictTaskIds.value = []
-    conflicts.value = []
-    overlapAcknowledged.value = false
     error.value = null
     idempotencyKey = newIdempotencyKey(task.taskId)
     visible.value = true
@@ -68,9 +45,6 @@ export function useScheduleMutation(store, options = {}) {
     visible.value = false
     activeTask.value = null
     draft.value = null
-    conflictTaskIds.value = []
-    conflicts.value = []
-    overlapAcknowledged.value = false
     error.value = null
     idempotencyKey = ''
   }
@@ -83,9 +57,7 @@ export function useScheduleMutation(store, options = {}) {
       expectedStartTime: form.expectedStartTime || draft.value.expectedStartTime,
       expectedEndTime: form.expectedEndTime || draft.value.expectedEndTime,
       operationSource: form.operationSource || draft.value.operationSource,
-      changeReason: form.changeReason,
-      overlapAcknowledged: Boolean(form.overlapAcknowledged),
-      expectedConflictTaskIds: form.overlapAcknowledged ? [...conflictTaskIds.value] : []
+      changeReason: form.changeReason
     }
     saving.value = true
     error.value = null
@@ -98,20 +70,11 @@ export function useScheduleMutation(store, options = {}) {
       visible.value = false
       activeTask.value = null
       draft.value = null
-      conflictTaskIds.value = []
-      conflicts.value = []
-      overlapAcknowledged.value = false
       await options.onSaved?.(saved)
       return saved
     } catch (caught) {
       if (disposed) return null
       error.value = safeError(caught)
-      if (caught?.errorKey === 'SG_TASK_SCHEDULE_OVERLAP') {
-        conflictTaskIds.value = conflictIds(caught)
-        conflicts.value = conflictDetails(caught)
-        overlapAcknowledged.value = false
-        return null
-      }
       if (caught?.errorKey === 'SG_OPTIMISTIC_LOCK_CONFLICT') {
         await options.onRefresh?.()
         const refreshed = store.tasks.find(item => item.taskId === task.taskId)
@@ -139,9 +102,6 @@ export function useScheduleMutation(store, options = {}) {
     activeTask,
     draft,
     error,
-    conflictTaskIds,
-    conflicts,
-    overlapAcknowledged,
     open,
     close,
     save,

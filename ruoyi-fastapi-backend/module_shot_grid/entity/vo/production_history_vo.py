@@ -7,7 +7,9 @@ from module_shot_grid.entity.vo.common_vo import ShotGridApiModel
 
 ProductionHistorySubjectType = Literal['shot', 'asset']
 ProductionHistoryLaneType = Literal['shot', 'assetItem']
-ProductionHistoryStage = Literal['created', 'assigned', 'production', 'review', 'revision', 'final']
+ProductionHistoryStage = Literal[
+    'created', 'pending_info', 'unassigned', 'assigned', 'production', 'review', 'revision', 'final'
+]
 ProductionHistoryEvidenceLevel = Literal['confirmed', 'inferred']
 ProductionHistoryEventType = Literal[
     'subject_created',

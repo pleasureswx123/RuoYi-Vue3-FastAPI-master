@@ -207,3 +207,25 @@ def test_schedule_preserves_shot_number_range() -> None:
     )
     assert 'sg_shot.shot_no >= 10' in sql
     assert 'sg_shot.shot_no <= 50' in sql
+
+
+def test_schedule_orders_shots_by_episode_scene_and_shot_before_time() -> None:
+    query = ShotGridScheduleQueryModel(windowStart='2026-09-01T00:00:00', windowEnd='2026-10-01T00:00:00')
+    for statement in (
+        ShotGridTaskScheduleDao.build_schedule_statement(11, query),
+        ShotGridTaskScheduleDao.build_unscheduled_statement(11, query),
+    ):
+        ordering = _sql(statement).rsplit('order by', 1)[1]
+        assert ordering.index('episode_no') < ordering.index('scene_no') < ordering.index('shot_no')
+        assert 'expected_start_time' not in ordering
+
+
+def test_unscheduled_query_includes_partial_ranges_and_phase_filter() -> None:
+    sql = _sql(
+        ShotGridTaskScheduleDao.build_unscheduled_statement(
+            PROJECT_ID,
+            _query(taskStatuses=['pending_schedule']),
+        )
+    )
+    assert 'sg_task.expected_start_time is null or sg_task.expected_end_time is null' in sql
+    assert "else sg_task.task_status end in ('pending_schedule')" in sql

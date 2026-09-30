@@ -4,6 +4,7 @@ from sqlalchemy import and_, asc, case, desc, exists, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from module_admin.entity.do.user_do import SysUser
+from module_shot_grid.dao.schedule_phase import task_phase_expression
 from module_shot_grid.entity.do.asset_do import ShotGridAsset, ShotGridAssetItem, ShotGridShotAsset
 from module_shot_grid.entity.do.project_do import ShotGridProjectMember
 from module_shot_grid.entity.do.storage_do import ShotGridProjectStorage, ShotGridStorageOperation
@@ -17,11 +18,12 @@ from module_shot_grid.entity.do.version_do import (
 from module_shot_grid.entity.vo.asset_crud_vo import ASSET_ITEM_STATUSES, ShotGridAssetListQueryModel
 
 ACTIVE_TASK_STATUSES = ('not_started', 'preparing', 'in_progress', 'pending_review', 'revision')
-STATUS_RANK_REVISION = 6
-STATUS_RANK_REVIEWING = 5
-STATUS_RANK_IN_PROGRESS = 4
-STATUS_RANK_PREPARING = 3
-STATUS_RANK_UNASSIGNED = 2
+STATUS_RANK_REVISION = 7
+STATUS_RANK_REVIEWING = 6
+STATUS_RANK_IN_PROGRESS = 5
+STATUS_RANK_PREPARING = 4
+STATUS_RANK_UNASSIGNED = 3
+STATUS_RANK_PENDING_SCHEDULE = 2
 
 
 class ShotGridAssetCrudDao:
@@ -46,7 +48,7 @@ class ShotGridAssetCrudDao:
                 'completed',
             ),
             (ShotGridTask.task_status == 'completed', 'reviewing'),
-            else_='not_started',
+            else_=task_phase_expression(ShotGridTask),
         ).label('item_status')
         return (
             select(
@@ -96,7 +98,8 @@ class ShotGridAssetCrudDao:
                         (item_state.c.item_status == 'reviewing', STATUS_RANK_REVIEWING),
                         (item_state.c.item_status == 'in_progress', STATUS_RANK_IN_PROGRESS),
                         (item_state.c.item_status == 'preparing', STATUS_RANK_PREPARING),
-                        (item_state.c.item_status == 'unassigned', 2),
+                        (item_state.c.item_status == 'unassigned', STATUS_RANK_UNASSIGNED),
+                        (item_state.c.item_status == 'pending_schedule', STATUS_RANK_PENDING_SCHEDULE),
                         (item_state.c.item_status == 'not_started', 1),
                         else_=0,
                     )
@@ -112,6 +115,7 @@ class ShotGridAssetCrudDao:
             (rollup.c.priority_rank == STATUS_RANK_IN_PROGRESS, 'in_progress'),
             (rollup.c.priority_rank == STATUS_RANK_PREPARING, 'preparing'),
             (rollup.c.priority_rank == STATUS_RANK_UNASSIGNED, 'unassigned'),
+            (rollup.c.priority_rank == STATUS_RANK_PENDING_SCHEDULE, 'pending_schedule'),
             else_='not_started',
         ).label('asset_status')
         return select(

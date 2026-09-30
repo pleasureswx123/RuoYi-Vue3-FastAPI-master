@@ -46,7 +46,7 @@ vi.mock('sortablejs', () => ({ default: { create: sortableCreate } }))
 vi.mock('@/views/schedule/ScheduleBoard.vue', () => ({
   default: {
     name: 'ScheduleBoard',
-    props: ['projectId', 'targetKind', 'initialMode', 'initialFilters', 'editableAllowed'],
+    props: ['projectId', 'targetKind', 'initialMode', 'initialFilters', 'editableAllowed', 'actionLoader', 'actionFactory'],
     template: '<section data-testid="schedule-board-entry" :data-target-kind="targetKind" :data-mode="initialMode" />'
   }
 }))
@@ -126,7 +126,7 @@ const assignableShotRow = { ...shotRow, status: 'not_started', allowedActions: [
 const formComponents = { ElAlert, ElButton, ElDatePicker, ElDescriptions, ElDescriptionsItem, ElForm, ElFormItem, ElIcon, ElInput, ElInputNumber, ElOption, ElSelect, ElUpload }
 const scheduleBoardStub = {
   name: 'ScheduleBoard',
-  props: ['projectId', 'targetKind', 'initialMode', 'initialFilters', 'editableAllowed'],
+  props: ['projectId', 'targetKind', 'initialMode', 'initialFilters', 'editableAllowed', 'actionLoader', 'actionFactory'],
   template: '<section data-testid="schedule-board-entry" :data-target-kind="targetKind" :data-mode="initialMode" />'
 }
 const projectModalStub = {
@@ -249,6 +249,24 @@ describe('镜头管理真实列表页', () => {
     reorderShot.mockResolvedValue({ data: { shotId: 41, sequencePosition: 1, lockVersion: 1 } })
   })
 
+  it('排期操作读取对应镜头详情，以服务端动作权限显示审核按钮并校验归属', async () => {
+    const { wrapper } = await mountView(['shotgrid:shot:list', 'shotgrid:shot:query', 'shotgrid:reviewList:query', 'shotgrid:version:query'])
+    try {
+      wrapper.findComponent(ElRadioGroup).vm.$emit('update:modelValue', 'gantt')
+      await flushPromises()
+      const board = wrapper.findComponent({ name: 'ScheduleBoard' })
+      const scheduleTask = { projectId: 8, taskId: 69, target: { targetKind: 'shot', targetId: 999 } }
+      const detail = { ...shotRow, projectId: 8, shotId: 999, taskId: 69, status: 'reviewing', latestVersion: { versionId: 31 }, allowedActions: ['task.review'] }
+      getShotDetail.mockResolvedValue({ data: detail })
+      const target = await board.props('actionLoader')(scheduleTask, {})
+      expect(getShotDetail).toHaveBeenLastCalledWith(8, 999, {})
+      expect(board.props('actionFactory')(target).some(action => action.button.label === '审核任务')).toBe(true)
+      expect(board.props('actionFactory')({ ...target, allowedActions: [] }).some(action => action.button.label === '审核任务')).toBe(false)
+      getShotDetail.mockResolvedValue({ data: { ...detail, taskId: 70 } })
+      await expect(board.props('actionLoader')(scheduleTask, {})).rejects.toThrow('任务与镜头信息已变化')
+    } finally { wrapper.unmount() }
+  })
+
   it.each([['in_progress', '去做任务'], ['revision', '去修改'], ['reviewing', '追加审核文件']])('本人任务入口 %s 在抽屉打开并保留路由', async (status, label) => {
     getShotPage.mockResolvedValue({ rows: [{ ...shotRow, taskId: 69, status, allowedActions: ['task.work'] }], total: 1 })
     const { wrapper, router } = await mountView(['shotgrid:shot:list', 'shotgrid:task:query'])
@@ -259,6 +277,32 @@ describe('镜头管理真实列表页', () => {
     expect(openWorkDrawer).toHaveBeenCalledWith('/tasks/69')
     expect(router.currentRoute.value.fullPath).toBe('/shots?projectId=8')
     wrapper.unmount()
+  })
+
+  it.each([['storyboard', true], ['storyboard', false]])('%s 操作按权限显示且不冒泡打开履历：查询权限=%s', async (viewMode, permitted) => {
+    getShotPage.mockResolvedValue({ rows: [{ ...shotRow, taskId: 69, status: 'reviewing', allowedActions: ['task.work'] }], total: 1 })
+    const { wrapper } = await mountView(['shotgrid:shot:list', ...(permitted ? ['shotgrid:task:query'] : [])])
+    try {
+      wrapper.findComponent(ElRadioGroup).vm.$emit('update:modelValue', viewMode)
+      await flushPromises()
+      const card = wrapper.find('.story-frame')
+      const actions = card.find('.shot-row-actions')
+      expect(actions.exists()).toBe(true)
+      expect(actions.text()).toContain('制作履历')
+      expect(actions.text().includes('查看任务')).toBe(permitted)
+      expect(actions.text().includes('追加审核文件')).toBe(permitted)
+      if (permitted) {
+        const button = actions.findAll('button').find(item => item.text() === '追加审核文件')
+        openWorkDrawer.mockClear()
+        getShotDetail.mockClear()
+        await button.trigger('keydown', { key: 'Enter' })
+        await button.trigger('click')
+        await flushPromises()
+        expect(openWorkDrawer).toHaveBeenCalledWith('/tasks/69')
+        expect(getShotDetail).not.toHaveBeenCalled()
+        expect(wrapper.findComponent(ShotDetailView).exists()).toBe(false)
+      }
+    } finally { wrapper.unmount() }
   })
 
   it.each([
@@ -326,7 +370,7 @@ describe('镜头管理真实列表页', () => {
     assignShotTask.mockReset().mockResolvedValue({ data: { taskId: 71 } })
     const { wrapper } = await mountView(['shotgrid:shot:list', 'shotgrid:shot:query', 'shotgrid:task:assign'])
     try {
-      const label = withTask ? '改派任务' : '分配任务'
+      const label = withTask ? '改派制作人' : '分配制作人'
       const actions = wrapper.find('.shot-row-actions')
       const button = actions.findAll('button').find(item => buttonLabel(item) === label)
       expect(button).toBeDefined()
@@ -336,7 +380,7 @@ describe('镜头管理真实列表页', () => {
         expect(action.find('svg').exists()).toBe(true)
         expect(action.text()).toBe(action.attributes('aria-label'))
         expect(action.props('circle')).toBe(false)
-        expect(action.props()).toMatchObject({ round: true, plain: true })
+        expect(action.props()).toMatchObject({ round: false, plain: !['分配制作人', '编辑'].includes(action.attributes('aria-label')) })
         expect(action.classes()).not.toContain('is-text')
       }
       await button.trigger('click')
@@ -346,7 +390,7 @@ describe('镜头管理真实列表页', () => {
       expect(dialog.props('shot').shotId).toBe(41)
       expect(wrapper.findComponent(ShotDetailView).exists()).toBe(false)
       await setElSelectValue(dialog.findComponent(ElSelect), '7')
-      await dialog.findAllComponents(ElButton).find(item => buttonLabel(item) === (withTask ? '确认改派' : '创建并分配任务')).trigger('click')
+      await dialog.findAllComponents(ElButton).find(item => buttonLabel(item) === (withTask ? '确认改派' : '确认分配制作人')).trigger('click')
       await flushPromises()
       expect(assignShotTask).toHaveBeenCalledWith(8, 41, withTask ? { assigneeUserId: 7, taskLockVersion: 6 } : { assigneeUserId: 7 })
       expect(wrapper.findComponent(ShotAssignDialog).exists()).toBe(false)
@@ -361,7 +405,7 @@ describe('镜头管理真实列表页', () => {
     vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm')
     const { wrapper } = await mountView(['shotgrid:shot:list', 'shotgrid:shot:query', 'shotgrid:task:start'])
     try {
-      await wrapper.findAllComponents(ElButton).find(item => buttonLabel(item) === '开始任务').trigger('click')
+      await wrapper.findAllComponents(ElButton).find(item => buttonLabel(item) === '确认开工').trigger('click')
       await flushPromises()
       const dialog = wrapper.findComponent({ name: 'TaskStartDialog' })
       expect(dialog.exists()).toBe(true)
@@ -379,14 +423,14 @@ describe('镜头管理真实列表页', () => {
     const { wrapper } = await mountView(['shotgrid:shot:list', 'shotgrid:shot:query', 'shotgrid:task:assign'])
     getShotDetail.mockResolvedValueOnce({ data: { ...shotRow, allowedActions: [] } })
     try {
-      const button = wrapper.find('.shot-row-actions').findAll('button').find(item => buttonLabel(item) === '改派任务')
+      const button = wrapper.find('.shot-row-actions').findAll('button').find(item => buttonLabel(item) === '改派制作人')
       expect(button).toBeDefined()
       await button.trigger('click')
       await flushPromises()
       expect(wrapper.findComponent(ShotAssignDialog).exists()).toBe(false)
       let finish
       getShotDetail.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
-      await wrapper.find('.shot-row-actions').findAll('button').find(item => buttonLabel(item) === '改派任务').trigger('click')
+      await wrapper.find('.shot-row-actions').findAll('button').find(item => buttonLabel(item) === '改派制作人').trigger('click')
       const signal = getShotDetail.mock.calls.at(-1)[2].signal
       await setElSelectValue(wrapper.find('.project-context').findComponent(ElSelect), '9')
       await flushPromises()
@@ -451,7 +495,7 @@ describe('镜头管理真实列表页', () => {
     getShotPage.mockResolvedValue({ rows: [{ ...shotRow, status, allowedActions }], total: 1 })
     const { wrapper } = await mountView(['shotgrid:shot:list', 'shotgrid:shot:query', 'shotgrid:task:assign'])
     try {
-      expect(wrapper.find('.shot-row-actions').findAll('button').map(buttonLabel)).not.toContain('改派任务')
+      expect(wrapper.find('.shot-row-actions').findAll('button').map(buttonLabel)).not.toContain('改派制作人')
       expect(shotRowCheckboxes(wrapper)[0].element.disabled).toBe(true)
       await setShotHeaderSelection(wrapper, true)
       expect(selectedTableShots(wrapper)).toEqual([])
@@ -607,7 +651,7 @@ describe('镜头管理真实列表页', () => {
       await flushPromises()
       expect(getShotPage).toHaveBeenCalledTimes(calls)
       expect(wrapper.findComponent(ShotFormDialog).props('shot')).toMatchObject({ description: '正在编辑的内容', lockVersion: 3 })
-      expect(findTag(wrapper, '待开工')).toBeDefined()
+      expect(findTag(wrapper, '待排期')).toBeDefined()
     } finally {
       wrapper.unmount()
       vi.useRealTimers()
@@ -656,13 +700,13 @@ describe('镜头管理真实列表页', () => {
 
   it.each([
     ['table', 'confirm'], ['table', 'cancel'],
-    ['card', 'confirm'], ['card', 'cancel'],
+
     ['storyboard', 'confirm'], ['storyboard', 'cancel']
   ])('%s 视图镜头开工先确认人工核对结果，选择 %s 后按预期处理', async (viewMode, action) => {
     startTask.mockReset()
     startTask.mockResolvedValue({ data: { taskId: 71, taskStatus: 'preparing', lockVersion: 5 } })
     getShotPage.mockResolvedValue({ rows: [{
-      ...shotRow, taskId: 71, status: 'not_started', allowedActions: ['task.start'],
+      ...shotRow, taskId: 71, status: 'not_started', expectedStartTime: '2026-10-01T09:00:00', expectedEndTime: '2026-10-02T18:00:00', allowedActions: ['task.start'],
       assignee: { userId: 7, userName: '杨景锋', nickName: 'YJF', producerCode: 'YJF' }
     }], total: 1, hasNext: false })
     getShotDetail.mockResolvedValue({ data: { ...shotRow, allowedActions: ['task.start'], task: { taskId: 71, lockVersion: 4, priority: 'normal' } } })
@@ -671,7 +715,7 @@ describe('镜头管理真实列表页', () => {
       wrapper.findComponent(ElRadioGroup).vm.$emit('update:modelValue', viewMode)
       await flushPromises()
       const detailCalls = getShotDetail.mock.calls.length
-      const button = wrapper.findAllComponents(ElButton).find(item => buttonLabel(item) === '开始任务')
+      const button = wrapper.findAllComponents(ElButton).find(item => buttonLabel(item) === '确认开工')
       expect(button).toBeDefined()
       expect(button.props('size')).toBe('small')
       await button.trigger('click')
@@ -704,7 +748,7 @@ describe('镜头管理真实列表页', () => {
     const { wrapper } = await mountView(missing === 'platform'
       ? ['shotgrid:shot:list'] : ['shotgrid:shot:list', 'shotgrid:task:start'])
     try {
-      expect(wrapper.findAllComponents(ElButton).map(buttonLabel)).not.toContain('开始任务')
+      expect(wrapper.findAllComponents(ElButton).map(buttonLabel)).not.toContain('确认开工')
     } finally {
       wrapper.unmount()
     }
@@ -728,9 +772,9 @@ describe('镜头管理真实列表页', () => {
     getShotDetail.mockImplementation((_project, shotId) => Promise.resolve({ data: { ...rows.find(row => row.shotId === shotId), task: { taskId: shotId+100, lockVersion: 3, assignee: { userId: 7 }, priority: 'normal' } } }))
     const { wrapper } = await mountView(['shotgrid:shot:list', 'shotgrid:shot:query', 'shotgrid:task:query', 'shotgrid:task:edit'])
     try {
-      expect(wrapper.findAllComponents(ElButton).filter(item => buttonLabel(item) === '调整制作任务')).toHaveLength(2)
+      expect(wrapper.findAllComponents(ElButton).filter(item => buttonLabel(item) === '编辑')).toHaveLength(2)
       await setShotHeaderSelection(wrapper, true)
-      const button = wrapper.findAllComponents(ElButton).find(item => buttonLabel(item).startsWith('批量调整制作任务'))
+      const button = wrapper.findAllComponents(ElButton).find(item => buttonLabel(item).startsWith('批量编辑制作任务'))
       await button.trigger('click'); await flushPromises()
       const dialog = wrapper.findComponent({ name: 'ProductionAdjustmentDialog' })
       expect(dialog.props('context').shots.map(shot => [shot.taskId, shot.taskLockVersion, shot.lockVersion])).toEqual([[141, 3, 2], [142, 3, 2]])
@@ -778,7 +822,7 @@ describe('镜头管理真实列表页', () => {
   })
 
   it('只有开工权限也能通过表格选择批量任务，弹窗固定快照并支持取消刷新', async () => {
-    const rows = [41, 42].map((shotId, index) => ({ ...shotRow, shotId, taskId: 71 + index, status: 'not_started', allowedActions: ['task.start'] }))
+    const rows = [41, 42].map((shotId, index) => ({ ...shotRow, shotId, taskId: 71 + index, status: 'not_started', expectedStartTime: '2026-10-01T09:00:00', expectedEndTime: '2026-10-02T18:00:00', allowedActions: ['task.start'] }))
     getShotPage.mockResolvedValue({ rows, total: 2, hasNext: false })
     getShotDetail.mockImplementation((_projectId, shotId) => Promise.resolve({ data: {
       ...rows.find(row => row.shotId === shotId), task: { taskId: shotId + 30, lockVersion: 4 }
@@ -786,7 +830,7 @@ describe('镜头管理真实列表页', () => {
     const { wrapper } = await mountView(['shotgrid:shot:list', 'shotgrid:shot:query', 'shotgrid:task:start'])
     try {
       await setShotHeaderSelection(wrapper, true)
-      const button = wrapper.findAllComponents(ElButton).find(item => buttonLabel(item).startsWith('批量开始任务'))
+      const button = wrapper.findAllComponents(ElButton).find(item => buttonLabel(item).startsWith('批量确认开工'))
       expect(buttonLabel(button)).toContain('2')
       await button.trigger('click')
       await flushPromises()
@@ -800,16 +844,45 @@ describe('镜头管理真实列表页', () => {
     } finally { wrapper.unmount() }
   })
 
+  it('未排期行显示设置排期并直接进入单项排期，已有排期行显示确认开工', async () => {
+    const row = { ...shotRow, taskId: 71, status: 'not_started', allowedActions: ['task.start'] }
+    getShotPage.mockResolvedValue({ rows: [row, { ...row, shotId: 42, taskId: 72, expectedStartTime: '2026-10-01', expectedEndTime: '2026-10-02' }], total: 2, hasNext: false })
+    getShotDetail.mockResolvedValue({ data: { ...row, task: { taskId: 71, lockVersion: row.taskLockVersion } } })
+    const { wrapper } = await mountView(['shotgrid:shot:list', 'shotgrid:shot:query', 'shotgrid:task:schedule', 'shotgrid:task:start'])
+    try {
+      const buttons = wrapper.findAllComponents(ElButton)
+      expect(buttons.filter(item => buttonLabel(item) === '确认开工')).toHaveLength(1)
+      await buttons.find(item => buttonLabel(item) === '设置排期').trigger('click'); await flushPromises()
+      expect(wrapper.findComponent({ name: 'BatchShotStartDialog' }).props('context').single).toBe(true)
+      expect(document.body.textContent).toContain('排期原因')
+      expect(document.body.textContent).not.toContain('确认镜头开工')
+    } finally { wrapper.unmount() }
+  })
+
+  it('仅有排期权限可选择待开工任务并打开独立批量排期入口', async () => {
+    const row = { ...shotRow, taskId: 71, status: 'not_started', allowedActions: [] }
+    getShotPage.mockResolvedValue({ rows: [row], total: 1, hasNext: false })
+    getShotDetail.mockResolvedValue({ data: { ...row, task: { taskId: 71, lockVersion: row.taskLockVersion } } })
+    const { wrapper } = await mountView(['shotgrid:shot:list', 'shotgrid:shot:query', 'shotgrid:task:schedule'])
+    try {
+      await setShotHeaderSelection(wrapper, true)
+      const button = wrapper.findAllComponents(ElButton).find(item => buttonLabel(item).startsWith('批量设置排期'))
+      await button.trigger('click'); await flushPromises()
+      expect(wrapper.findComponent({ name: 'BatchShotStartDialog' }).props('context').mode).toBe('schedule')
+      expect(wrapper.findAllComponents(ElButton).some(item => buttonLabel(item).startsWith('确认开工（'))).toBe(false)
+    } finally { wrapper.unmount() }
+  })
+
   it('选中含不可开工镜头时不显示批量开工，不偷偷跳过选中项', async () => {
     getShotPage.mockResolvedValue({ rows: [
-      { ...shotRow, taskId: 71, status: 'not_started', allowedActions: ['task.start'] },
+      { ...shotRow, taskId: 71, status: 'not_started', expectedStartTime: '2026-10-01T09:00:00', expectedEndTime: '2026-10-02T18:00:00', allowedActions: ['task.start'] },
       { ...shotRow, shotId: 42, taskId: null, status: 'unassigned', allowedActions: ['task.assign'] }
     ], total: 2, hasNext: false })
     const { wrapper } = await mountView(['shotgrid:shot:list', 'shotgrid:shot:query', 'shotgrid:task:start', 'shotgrid:task:assign'])
     try {
       await setShotHeaderSelection(wrapper, true)
       expect(selectedTableShots(wrapper)).toHaveLength(2)
-      expect(wrapper.findAllComponents(ElButton).some(item => buttonLabel(item).startsWith('批量开始任务'))).toBe(false)
+      expect(wrapper.findAllComponents(ElButton).some(item => buttonLabel(item).startsWith('批量确认开工'))).toBe(false)
     } finally { wrapper.unmount() }
   })
 
@@ -822,12 +895,12 @@ describe('镜头管理真实列表页', () => {
       projectStatus: 'active', storageStatus: 'ready', myProjectRole: 'director'
     } }))
     getShotPage.mockImplementation(projectId => Promise.resolve({ rows: [{
-      ...shotRow, projectId: Number(projectId), taskId: 71, status: 'not_started', allowedActions: ['task.start']
+      ...shotRow, projectId: Number(projectId), taskId: 71, status: 'not_started', expectedStartTime: '2026-10-01T09:00:00', expectedEndTime: '2026-10-02T18:00:00', allowedActions: ['task.start']
     }], total: 1, hasNext: false }))
     getShotDetail.mockResolvedValue({ data: { ...shotRow, allowedActions: ['task.start'], task: { taskId: 71, lockVersion: 4 } } })
     const { wrapper } = await mountView(['shotgrid:shot:list', 'shotgrid:shot:query', 'shotgrid:task:start'])
     try {
-      const button = wrapper.findAllComponents(ElButton).find(item => buttonLabel(item) === '开始任务')
+      const button = wrapper.findAllComponents(ElButton).find(item => buttonLabel(item) === '确认开工')
       await button.trigger('click')
       await button.trigger('click')
       await flushPromises()
@@ -865,7 +938,7 @@ describe('镜头管理真实列表页', () => {
     getShotDetail.mockResolvedValue({ data: { ...shotRow, allowedActions: ['task.start'], task: { taskId: 71, lockVersion: 4 } } })
     const { wrapper } = await mountView(['shotgrid:shot:list', 'shotgrid:shot:query', 'shotgrid:task:start'])
     try {
-      const button = wrapper.findAllComponents(ElButton).find(item => buttonLabel(item) === '开始任务')
+      const button = wrapper.findAllComponents(ElButton).find(item => buttonLabel(item) === '确认开工')
       await button.trigger('click')
       await flushPromises()
       await completeTaskStartForm(wrapper)
@@ -885,7 +958,7 @@ describe('镜头管理真实列表页', () => {
     }
   })
 
-  it('在项目范围内保留三种镜头视图并增加人员泳道与任务甘特', async () => {
+  it('镜头卡片整合为故事板并保留表格与排期视图', async () => {
     const { wrapper } = await mountView()
     const projectForm = wrapper.findAllComponents(ElForm).find(form => form.classes().includes('project-context'))
     const filterForm = wrapper.findAllComponents(ElForm).find(form => form.classes().includes('shot-filters'))
@@ -932,29 +1005,28 @@ describe('镜头管理真实列表页', () => {
     expect(wrapper.find('.shot-table-wrap').text()).not.toContain('目录已就绪')
     expect(wrapper.find('.shot-chip').exists()).toBe(false)
     const viewLabels = wrapper.find('.shot-list-toolbar__views').findAllComponents(ElRadioButton).map(button => buttonLabel(button))
-    expect(viewLabels).toEqual(['表格', '卡片', '故事板', '人员泳道', '任务甘特'])
+    expect(viewLabels).toEqual(['表格', '故事板', '人员泳道', '任务甘特'])
     wrapper.find('.shot-list-toolbar__views').findComponent(ElRadioGroup).vm.$emit('update:modelValue', 'swimlane')
     await flushPromises()
     expect(wrapper.get('[data-testid="schedule-board-entry"]').attributes()).toMatchObject({
       'data-target-kind': 'shot',
       'data-mode': 'swimlane'
     })
+    expect(wrapper.find('.shot-pagination').exists()).toBe(false)
+    expect(wrapper.find('.shot-list-toolbar__summary').text()).toBe('任务排期')
     expect(wrapper.findComponent({ name: 'ScheduleBoard' }).props('initialFilters')).toMatchObject({
       keyword: '', assigneeUserIds: [], episodeIds: [], sceneIds: [], taskStatuses: []
     })
 
     const viewSwitch = wrapper.findComponent(ElRadioGroup)
-    viewSwitch.vm.$emit('update:modelValue', 'card')
-    await flushPromises()
-    expect(wrapper.find('.shot-card').exists()).toBe(true)
-    expect(wrapper.find('.shot-card h3').text()).toBe('0001 · 第 1 镜')
-    expect(wrapper.find('.shot-card header small').text()).toBe('EP001 / 001')
+    expect(wrapper.find('.shot-card').exists()).toBe(false)
     viewSwitch.vm.$emit('update:modelValue', 'storyboard')
     await flushPromises()
     expect(wrapper.find('.story-frame').exists()).toBe(true)
-    expect(wrapper.find('.story-frame__index').text()).toBe('01')
-    expect(wrapper.find('.story-frame strong').text()).toBe('EP001 · 001 · 0001')
-    expect(wrapper.find('.story-frame small').text()).toContain('本场第 1 镜 · 3.5 秒')
+    expect(wrapper.find('.story-frame h3').text()).toBe('EP001 / 001 / 0001')
+    expect(wrapper.find('.story-frame__specs').text()).toContain('3.5 秒')
+    expect(wrapper.find('.story-frame__index').exists()).toBe(false)
+    expect(wrapper.find('.story-frame__actions').text()).toContain('制作履历')
     wrapper.unmount()
   })
 
@@ -1494,7 +1566,7 @@ describe('镜头管理真实列表页', () => {
     expect(wrapper.find('[aria-label="批量分配制作人"]').exists()).toBe(false)
     await batchAssignButton.trigger('click')
     await flushPromises()
-    expect(document.body.textContent).toContain('其中包含已分配镜头')
+    expect(document.body.textContent).toContain('拟分配制作人')
     const batchAssignForm = wrapper.findAllComponents(ElForm).find(form => form.attributes('aria-label') === '镜头批量分配表单')
     expect(batchAssignForm.props('rules')).toHaveProperty('assigneeUserId')
     const confirmButton = [...document.body.querySelectorAll('button')]
@@ -1504,6 +1576,8 @@ describe('镜头管理真实列表页', () => {
     expect(batchAssignShotTasks).not.toHaveBeenCalled()
 
     await setElSelectValue(batchAssignForm.findComponent(ElSelect), '7')
+    await batchAssignForm.findAllComponents(ElButton).find(button => button.text() === '应用到勾选项').trigger('click')
+    await flushPromises()
     let resolveAssignment
     batchAssignShotTasks.mockImplementationOnce(() => new Promise(resolve => { resolveAssignment = resolve }))
     confirmButton.click()
@@ -1521,6 +1595,37 @@ describe('镜头管理真实列表页', () => {
     expect(selectedTableShots(wrapper)).toEqual([])
     confirmSpy.mockRestore()
     wrapper.unmount()
+  })
+
+  it.each([false, true])('批量分配逐行指定多人，分组失败=%s 时停止并保留结果', async failSecond => {
+    const rows = [41, 42, 43].map(shotId => ({ ...assignableShotRow, shotId, shotCode: String(shotId) }))
+    getShotPage.mockResolvedValue({ rows, total: 3 })
+    listShotAssignees.mockResolvedValue({ rows: [7, 8, 9].map(userId => ({ userId, userName: `制作人${userId}`, projectRole: 'creator' })), total: 3, hasNext: false })
+    const { wrapper } = await mountView(['shotgrid:shot:list', 'shotgrid:task:assign'])
+    try {
+      await setShotHeaderSelection(wrapper, true)
+      await flushPromises()
+      await wrapper.findAll('button').find(button => button.text().includes('批量重新分配')).trigger('click')
+      await flushPromises()
+      const form = wrapper.findAllComponents(ElForm).find(item => item.attributes('aria-label') === '镜头批量分配表单')
+      const selects = form.findAllComponents(ElSelect)
+      for (let i = 0; i < 3; i++) await setElSelectValue(selects[i + 1], String(i + 7))
+      expect(form.text()).toContain('制作人7 1 项')
+      expect(batchAssignShotTasks).not.toHaveBeenCalled()
+      batchAssignShotTasks.mockImplementation((_project, userId) => userId === 8 && failSecond ? Promise.reject({ httpStatus: 409, message: '版本冲突' }) : Promise.resolve({ data: {} }))
+      const confirm = [...document.body.querySelectorAll('button')].find(button => button.textContent.includes('确认重新分配'))
+      confirm.click()
+      await flushPromises()
+      expect(batchAssignShotTasks).toHaveBeenNthCalledWith(1, 8, 7, [{ shotId: 41, taskLockVersion: 4 }])
+      expect(batchAssignShotTasks).toHaveBeenNthCalledWith(2, 8, 8, [{ shotId: 42, taskLockVersion: 4 }])
+      expect(batchAssignShotTasks).toHaveBeenCalledTimes(failSecond ? 2 : 3)
+      if (failSecond) {
+        expect(document.body.textContent).toContain('已分配')
+        expect(document.body.textContent).toContain('失败，需刷新核对')
+        expect(document.body.textContent).toContain('未提交')
+        expect(confirm.disabled).toBe(true)
+      }
+    } finally { wrapper.unmount() }
   })
 
   it('服务端 403 不会伪装成空镜头列表', async () => {
@@ -1834,7 +1939,7 @@ describe('镜头 Element Plus 表单契约', () => {
       props: {
         projectId: 8,
         operationGeneration: 1,
-        shot: { ...shotRow, description: '', durationMs: 0, status: 'unassigned', storageDirName: null },
+        shot: { ...shotRow, description: '', durationMs: 0, status: 'unassigned', storageDirName: null, shotReferenceDescription: '原参考说明' },
         episodes: [{ episodeId: 21, episodeCode: 'EP001' }]
       },
       global: { components: formComponents, stubs: { ProjectModal: projectModalStub } }
@@ -1848,6 +1953,9 @@ describe('镜头 Element Plus 表单契约', () => {
     const form = wrapper.findComponent(ElForm)
     const field = prop => form.findAllComponents(ElFormItem).find(item => item.props('prop') === prop).findComponent(ElInput)
     const submit = wrapper.findAllComponents(ElButton).find(button => buttonLabel(button).includes('保存'))
+    expect(document.querySelector('.project-drawer__heading h2')?.textContent).toContain([shotRow.episodeCode, shotRow.sceneCode, shotRow.shotCode].join(' / '))
+    expect(field('referenceDescription').props('modelValue')).toBe('原参考说明')
+    field('referenceDescription').vm.$emit('update:modelValue', '新的参考说明')
     field('shotSize').vm.$emit('update:modelValue', '景'.repeat(501))
     await submit.trigger('click')
     await flushPromises()
@@ -1857,7 +1965,7 @@ describe('镜头 Element Plus 表单契约', () => {
     await submit.trigger('click')
     await flushPromises()
     expect(updateShot).toHaveBeenCalledWith(8, shotRow.shotId, expect.objectContaining({
-      description: '', durationMs: 0, shotSize: '景'.repeat(500), remark: '注'.repeat(2000)
+      description: '', durationMs: 0, shotSize: '景'.repeat(500), remark: '注'.repeat(2000), referenceDescription: '新的参考说明', referenceFileIds: []
     }))
     expect(wrapper.emitted('saved')).toHaveLength(1)
     await wrapper.findAllComponents(ElButton).find(button => buttonLabel(button) === '取消').trigger('click')
@@ -1912,13 +2020,16 @@ describe('镜头 Element Plus 表单契约', () => {
     const form = wrapper.findComponent(ElForm)
     const formItems = form.findAllComponents(ElFormItem)
     const formItem = prop => formItems.find(item => item.props('prop') === prop)
-    const submitButton = wrapper.findAllComponents(ElButton).find(button => buttonLabel(button) === '创建并分配任务')
+    const submitButton = wrapper.findAllComponents(ElButton).find(button => buttonLabel(button) === '确认分配制作人')
 
     expect(form.props('rules')).toMatchObject({ assigneeUserId: expect.any(Array) })
     expect(formItems.map(item => item.props('prop'))).toEqual(['assigneeUserId'])
     expect(wrapper.find('textarea').exists()).toBe(false)
     const productionInfo = wrapper.find('.assign-form__production')
     expect(productionInfo.text()).toContain('完整制作信息')
+    expect(wrapper.findComponent({ name: 'ShotProductionInfo' }).exists()).toBe(false)
+    await productionInfo.find('.el-collapse-item__header').trigger('click')
+    await flushPromises()
     expect(productionInfo.text()).toContain(shotRow.description)
     expect(productionInfo.text()).toContain(shotRow.shotSize)
     expect(productionInfo.text()).toContain(shotRow.cameraPosition)
@@ -1971,10 +2082,11 @@ describe('镜头 Element Plus 表单契约', () => {
     })
 
     expect(wrapper.findAllComponents(ElFormItem).map(item => item.props('prop'))).toEqual(['assigneeUserId'])
-    const productionInfo = wrapper.find('.assign-form__production')
-    expect(productionInfo.text()).toContain(shotRow.description)
-    expect(productionInfo.text()).toContain(shotRow.soundEffect)
-    expect(productionInfo.text()).toContain(shotRow.colorReference)
+    expect(wrapper.find('.assign-form__production').exists()).toBe(false)
+    expect(wrapper.find('.assign-form__summary').text()).toContain(shotRow.description)
+    expect(wrapper.find('.assign-form__current').text()).toContain('杨景锋')
+    expect(wrapper.find('.assign-form__warning').exists()).toBe(false)
+    expect(wrapper.findComponent(ElFormItem).props('label')).toBe('新制作人')
     expect(wrapper.find('textarea').exists()).toBe(false)
     wrapper.unmount()
   })
@@ -2065,7 +2177,7 @@ describe('镜头详情跨项目请求隔离', () => {
       projectId === 8 ? '旧镜头' : '当前镜头'
     ) }))
     const { wrapper, router } = await mountDetailView()
-    await wrapper.findAll('button').find(button => button.text().includes('分配任务')).trigger('click')
+    await wrapper.findAll('button').find(button => button.text().includes('分配制作人')).trigger('click')
     const oldAssignDialog = wrapper.findComponent(ShotAssignDialog).vm
     const oldAssignGeneration = oldAssignDialog.$props.operationGeneration
 
@@ -2094,7 +2206,7 @@ describe('镜头详情跨项目请求隔离', () => {
       targetProjectId === 8 ? '同一目标镜头' : '中转镜头'
     ) }))
     const { wrapper, router } = await mountDetailView()
-    await wrapper.findAll('button').find(button => button.text().includes('分配任务')).trigger('click')
+    await wrapper.findAll('button').find(button => button.text().includes('分配制作人')).trigger('click')
     const oldAssignDialog = wrapper.findComponent(ShotAssignDialog)
     const oldAssignGeneration = oldAssignDialog.props('operationGeneration')
 
@@ -2102,7 +2214,7 @@ describe('镜头详情跨项目请求隔离', () => {
     await flushPromises()
     await router.push('/projects/8/shots/41')
     await flushPromises()
-    await wrapper.findAll('button').find(button => button.text().includes('分配任务')).trigger('click')
+    await wrapper.findAll('button').find(button => button.text().includes('分配制作人')).trigger('click')
     const newAssignDialog = wrapper.findComponent(ShotAssignDialog)
     const newAssignGeneration = newAssignDialog.props('operationGeneration')
     expect(newAssignGeneration).not.toBe(oldAssignGeneration)

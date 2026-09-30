@@ -189,3 +189,10 @@ def test_history_vo_serializes_camel_case_contract() -> None:
     assert payload['activeStep'] == REVISION_STEP
     assert payload['reviewActionCount'] == REVIEW_ACTION_COUNT
     assert 'current_stage' not in payload
+
+
+def test_unassigned_shot_history_distinguishes_missing_content() -> None:
+    pending = _lane(1, current_stage='pending_info')
+    ready = _lane(2, current_stage='unassigned')
+    assert ShotGridProductionHistoryService._aggregate_stage([pending]) == ('pending_info', 0)
+    assert ShotGridProductionHistoryService._aggregate_stage([ready]) == ('unassigned', 0)

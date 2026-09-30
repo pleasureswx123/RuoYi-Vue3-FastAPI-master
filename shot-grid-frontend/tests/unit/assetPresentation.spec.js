@@ -32,9 +32,10 @@ describe('资产展示模型', () => {
     expect(assetDirectoryStatusMeta('failed')).toMatchObject({ label: '目录处理异常', tone: 'danger' })
   })
 
-  it('固定展示七类制作分项状态数量，并忽略异常计数', () => {
+  it('固定展示八类制作分项状态数量，并忽略异常计数', () => {
     expect(assetItemStatusEntries({ not_started: 2, preparing: 1, in_progress: -4, unknown: 9 })).toEqual([
       { status: 'unassigned', label: '待分配', count: 0 },
+      { status: 'pending_schedule', label: '待排期', count: 0 },
       { status: 'not_started', label: '待开工', count: 2 },
       { status: 'preparing', label: '目录准备中', count: 1 },
       { status: 'in_progress', label: '制作中', count: 0 },

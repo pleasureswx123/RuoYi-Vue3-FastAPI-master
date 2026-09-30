@@ -92,3 +92,15 @@ def test_shot_number_range_is_inclusive_and_keeps_project_scope() -> None:
     assert 'sg_shot.shot_no >= 10' in sql
     assert 'sg_shot.shot_no <= 50' in sql
     assert 'sg_shot.project_id = 1001' in sql
+
+
+def test_pending_info_filter_is_applied_before_pagination() -> None:
+    for phase in ('pending_info', 'unassigned'):
+        sql = str(
+            ShotGridShotCrudDao.build_list_statement(1001, ShotGridShotListQueryModel(shotStatus=phase)).compile(
+                dialect=postgresql.dialect(), compile_kwargs={'literal_binds': True}
+            )
+        )
+        assert "btrim(coalesce(sg_shot.description, '')," in sql
+        assert 'shot_list_task.task_id IS NULL' in sql
+        assert f"END = '{phase}'" in sql

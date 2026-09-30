@@ -259,6 +259,7 @@ class ShotGridProjectOverviewModel(ShotGridApiModel):
     revision_shots: int = 0
     revision_assets: int = 0
     revision_asset_items: int = 0
+    pending_info_shots: int = 0
     unassigned_shots: int = 0
     unassigned_assets: int = 0
     unassigned_asset_items: int = 0

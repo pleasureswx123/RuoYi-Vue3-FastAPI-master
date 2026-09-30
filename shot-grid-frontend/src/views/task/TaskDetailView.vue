@@ -371,7 +371,7 @@ onBeforeUnmount(() => {
           <p class="sg-eyebrow">{{ task.project.projectCode }} · {{ taskKindMeta(task.taskKind).label }}</p>
           <div class="task-hero__title">
             <h2>{{ task.taskName }}</h2>
-            <el-tag :type="tagTypeFromTone(taskStatusMeta(task.taskStatus, task.taskKind).tone)" size="small" effect="light" round>{{ taskStatusMeta(task.taskStatus, task.taskKind).label }}</el-tag>
+            <el-tag :type="tagTypeFromTone(taskStatusMeta(task).tone)" size="small" effect="light" round>{{ taskStatusMeta(task).label }}</el-tag>
           </div>
           <p>{{ task.target.targetName }} · {{ task.project.projectName }}</p>
           <small>更新于 {{ formatTaskDateTime(task.updateTime) }}</small>
@@ -400,7 +400,7 @@ onBeforeUnmount(() => {
 
       <el-alert
         v-if="isWaitingForStart"
-        title="等待管理人员确认开工"
+        :title="task.expectedStartTime && task.expectedEndTime ? '等待管理人员确认开工' : '待排期：等待管理人员设置计划起止时间'"
         :description="isShotTask
           ? '任务已分配。管理人员确认所需资产齐备并开始任务后，制作目录就绪即可提交版本。'
           : '任务已分配。管理人员确认该制作分项的开工条件齐备并开始任务后，制作目录就绪即可提交版本；同一资产的其他分项独立确认。'"
@@ -436,7 +436,7 @@ onBeforeUnmount(() => {
           <p v-else class="task-requirements">{{ task.requirements || '暂无额外制作要求。' }}</p>
           <el-descriptions class="task-fields" :column="4" border>
             <el-descriptions-item label="主制作人">{{ taskAssigneeLabel(task.assignee) }}</el-descriptions-item>
-            <el-descriptions-item label="预期制作时间" :span="2"><TaskTimeReminder :task="task" :now="currentTime" /></el-descriptions-item>
+            <el-descriptions-item label="计划起止时间" :span="2"><TaskTimeReminder :task="task" :now="currentTime" /></el-descriptions-item>
             <el-descriptions-item label="已提交版本">{{ task.versionCount }}</el-descriptions-item>
           </el-descriptions>
         </el-card>

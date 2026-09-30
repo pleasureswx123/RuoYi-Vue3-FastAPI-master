@@ -16,7 +16,8 @@ function padDatePart(value) {
   return String(value).padStart(2, '0')
 }
 
-function formatGanttDate(value) {
+export function formatGanttDate(value) {
+  if (!value) return ''
   const date = value instanceof Date ? value : new Date(value)
   if (Number.isNaN(date.getTime())) {
     return ''
@@ -29,14 +30,13 @@ export function ganttColumns() {
     {
       id: 'text',
       header: '任务名称',
-      width: 220,
-      flexgrow: 1,
+      width: 160,
       sort: true
     },
     {
       id: 'start',
-      header: '开始日期',
-      width: 128,
+      header: '起止日期',
+      width: 104,
       align: 'center',
       sort: true,
       template: formatGanttDate
@@ -157,6 +157,27 @@ function formatLocalDateTime(value) {
     + `T${padDatePart(value.getHours())}:${padDatePart(value.getMinutes())}:${padDatePart(value.getSeconds())}`
 }
 
+// SVAR 拖动结束事件携带原日期和按当前刻度计算的 diff，拦截时尚未应用位移。
+export function ganttChangedRange(original, changes, diff = 0, lengthUnit = 'day') {
+  const shift = value => {
+    const date = new Date(value)
+    if (lengthUnit === 'month') {
+      const day = date.getDate()
+      date.setDate(1)
+      date.setMonth(date.getMonth() + diff)
+      const lastDay = new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate()
+      date.setDate(Math.min(day, lastDay))
+    } else {
+      date.setDate(date.getDate() + diff * (lengthUnit === 'week' ? 7 : 1))
+    }
+    return date
+  }
+  return {
+    nextStart: changes.start ? shift(changes.start) : original.start,
+    nextEnd: changes.end ? shift(changes.end) : original.end
+  }
+}
+
 export function rangeChangeRequest({ task, nextStart, nextEnd, nextAssigneeUserId, operationSource }) {
   if (task.readonly) {
     return { accepted: false, reason: 'readonly' }
@@ -179,7 +200,7 @@ export function rangeChangeRequest({ task, nextStart, nextEnd, nextAssigneeUserI
 export function toSwimlaneRows(tasks, { groupBy = 'assignee' } = {}) {
   const lanes = new Map()
   for (const task of tasks) {
-    const laneId = groupBy === 'assignee' ? `assignee:${task.assigneeUserId}` : task.groupKey
+    const laneId = groupBy === 'assignee' ? `assignee:${task.assigneeUserId}` : groupBy === 'task_kind' ? `${task.groupKey}:assignee:${task.assigneeUserId}` : task.groupKey
     const laneName = groupBy === 'assignee' ? task.assigneeName : task.groupName
     if (!lanes.has(laneId)) {
       lanes.set(laneId, {
@@ -187,13 +208,16 @@ export function toSwimlaneRows(tasks, { groupBy = 'assignee' } = {}) {
         assigneeUserId: task.assigneeUserId,
         assigneeName: task.assigneeName,
         groupName: laneName,
+        parentGroupKey: task.groupKey,
         tasks: []
       })
     }
     lanes.get(laneId).tasks.push(task)
   }
 
-  return Array.from(lanes.values()).map(lane => {
+  const orderedLanes = Array.from(lanes.values())
+  if (groupBy === 'task_kind') orderedLanes.sort((a, b) => String(a.parentGroupKey).localeCompare(String(b.parentGroupKey)) || a.assigneeName.localeCompare(b.assigneeName, 'zh-CN') || a.assigneeUserId - b.assigneeUserId)
+  return orderedLanes.map(lane => {
     const trackEnds = []
     const sortedTasks = [...lane.tasks].sort((left, right) => (
       left.start - right.start || left.end - right.end || left.taskId - right.taskId

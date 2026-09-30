@@ -8,6 +8,7 @@ const TYPE_META = {
 
 const STATUS_META = {
   unassigned: { label: '待分配', tone: 'warning' },
+  pending_schedule: { label: '待排期', tone: 'warning' },
   not_started: { label: '待开工', tone: 'muted' },
   preparing: { label: '目录准备中', tone: 'info' },
   in_progress: { label: '制作中', tone: 'primary' },
@@ -32,7 +33,7 @@ export function assetStatusMeta(status) {
 }
 
 export function assetItemStatusEntries(counts = {}) {
-  return ['unassigned', 'not_started', 'preparing', 'in_progress', 'reviewing', 'revision', 'completed']
+  return ['unassigned', 'pending_schedule', 'not_started', 'preparing', 'in_progress', 'reviewing', 'revision', 'completed']
     .map(status => ({
       status,
       label: assetStatusMeta(status).label,

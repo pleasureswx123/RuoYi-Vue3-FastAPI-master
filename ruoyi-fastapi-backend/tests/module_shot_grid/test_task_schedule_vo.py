@@ -66,7 +66,7 @@ def test_schedule_query_rejects_invalid_window_precision_or_enums(override: dict
         ShotGridScheduleQueryModel(**payload)
 
 
-def test_schedule_update_requires_complete_range_reason_and_client_source() -> None:
+def test_schedule_update_requires_complete_range_and_client_source() -> None:
     command = ShotGridScheduleUpdateModel(
         lockVersion=3,
         expectedStartTime='2026-09-01T09:00:00',
@@ -87,7 +87,7 @@ def test_schedule_update_requires_complete_range_reason_and_client_source() -> N
         {'expectedEndTime': '2026-09-01T09:00:00'},
         {'expectedStartTime': '2026-09-01T09:00:00.000000'},
         {'operationSource': 'start'},
-        {'changeReason': '   '},
+        {'changeReason': 'x' * 501},
         {'expectedConflictTaskIds': [4, 4]},
     ]
     base = {
@@ -194,3 +194,15 @@ def test_schedule_change_and_unscheduled_models_keep_distinct_time_semantics() -
     assert page.rows[0].task_id == UNSCHEDULED_TASK_ID
     assert change.from_start_time is None
     assert change.model_dump(by_alias=True, mode='json')['toEndTime'] == '2026-09-02T18:00:00'
+
+
+@pytest.mark.parametrize('extra', [{}, {'changeReason': ''}, {'changeReason': '   '}])
+def test_schedule_reason_is_optional(extra: dict) -> None:
+    command = ShotGridScheduleUpdateModel(
+        lockVersion=0,
+        expectedStartTime='2026-09-01T09:00:00',
+        expectedEndTime='2026-09-03T18:00:00',
+        operationSource='dialog',
+        **extra,
+    )
+    assert command.change_reason == '未填写'

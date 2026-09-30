@@ -36,9 +36,12 @@ export function useAssetItemStart({ getAsset, getContextKey, isLoading, hasPermi
       taskId: Number(item.task.taskId), lockVersion: Number(item.task.lockVersion),
       assetLockVersion: Number(asset.lockVersion), assetItemLockVersion: Number(item.lockVersion), generation
     })
+    let scheduleChanged = false
     startingOperation.value = operation
     try {
       const response = await dialog.requestStartDialog({
+        canSchedule: hasPermission('shotgrid:task:schedule'),
+        onScheduleSaved: () => { scheduleChanged = true },
         name: `${asset.assetName} · ${item.productionItem}`, assigneeName: assigneeName(item.task),
         asset: { ...asset }, item: { ...item }, task: { ...item.task }, taskId: operation.taskId,
         command: {
@@ -58,11 +61,13 @@ export function useAssetItemStart({ getAsset, getContextKey, isLoading, hasPermi
       }
       ElMessage.success(response.data?.taskStatus === 'preparing' ? '已确认开工，正在准备制作目录' : '已确认开工，负责人可以开始制作')
       await onStarted(operation)
+      scheduleChanged = false
     } catch (error) {
       if (error === 'cancel' || error === 'close' || !isCurrent(operation)) return
       ElMessage.error(error?.message || '确认开工失败，请刷新后重试')
       if (Number(error?.httpStatus || error?.status) === 409) await refresh()
     } finally {
+      if (scheduleChanged && isCurrent(operation)) await refresh()
       if (startingOperation.value === operation) startingOperation.value = null
     }
   }

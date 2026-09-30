@@ -2163,6 +2163,7 @@ COMMENT ON COLUMN sg_scene.del_flag IS '删除标志（0正常 2删除）';
 
 -- sg_shot
 CREATE TABLE sg_shot (
+	reference_description TEXT,
 	shot_id BIGSERIAL NOT NULL,
 	project_id BIGINT NOT NULL,
 	episode_id BIGINT NOT NULL,

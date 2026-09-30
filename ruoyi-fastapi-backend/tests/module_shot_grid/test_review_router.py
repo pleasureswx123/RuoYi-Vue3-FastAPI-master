@@ -11,7 +11,10 @@ SQL_BIGINT_MAX = 9_223_372_036_854_775_807
 
 EXPECTED_ROUTES = {
     ('GET', '/shot-grid/review-lists/mine'): 'shotgrid:reviewList:list',
+    ('GET', '/shot-grid/review-lists/mine/projects'): 'shotgrid:reviewList:list',
+    ('GET', '/shot-grid/review-lists/mine/producers'): 'shotgrid:reviewList:list',
     ('GET', '/shot-grid/versions/mine/recent'): 'shotgrid:version:list',
+    ('GET', '/shot-grid/versions/mine/projects'): 'shotgrid:version:list',
     ('GET', '/shot-grid/tasks/{taskId}/versions'): 'shotgrid:version:list',
     ('GET', '/shot-grid/versions/{versionId}'): 'shotgrid:version:query',
     ('GET', '/shot-grid/projects/{projectId}/review-lists'): 'shotgrid:reviewList:list',

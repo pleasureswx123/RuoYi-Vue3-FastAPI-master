@@ -28,6 +28,7 @@ import {
 import { assertPositiveId } from '@/api/shot-grid/projects'
 import { getVersionDetail } from '@/api/shot-grid/versions'
 import VersionDetailCard from '@/components/version/VersionDetailCard.vue'
+import VersionHistoryPanel from '@/components/version/VersionHistoryPanel.vue'
 import ReviewReferenceFiles from '@/components/review/ReviewReferenceFiles.vue'
 import ReviewReferenceInput from '@/components/review/ReviewReferenceInput.vue'
 import { useReviewReferenceAttachments } from '@/composables/useReviewReferenceAttachments'
@@ -70,6 +71,22 @@ const manualBusy = ref('')
 const activeManualVersionId = ref(null)
 const selectedIssueId = ref(null)
 const mediaWorkspace = ref(null)
+const historyVisible = ref(false)
+const historySelection = ref(null)
+const versionOrder = value => Number(value?.versionNo ?? String(value?.versionNumber || '').match(/\d+/)?.[0] ?? 0)
+const canCompareHistory = computed(() => canListVersions.value && canQueryVersion.value
+  && Number(historySelection.value?.taskId) === Number(version.value?.taskId)
+  && versionOrder(historySelection.value) > 0 && versionOrder(historySelection.value) < versionOrder(version.value))
+async function compareHistory() {
+  if (!canCompareHistory.value || !mediaWorkspace.value?.compareWithVersion(historySelection.value)) return
+  historyVisible.value = false
+  await nextTick()
+  reviewWorkStep.value?.scrollIntoView?.({ behavior: 'smooth', block: 'start' })
+}
+watch(() => version.value?.versionId, () => {
+  historyVisible.value = false
+  historySelection.value = null
+})
 const reviewWorkStep = ref(null)
 const candidatePreviewPulse = ref(false)
 const issueFormRef = ref(null)
@@ -899,6 +916,10 @@ onBeforeUnmount(() => {
 
         </aside>
         <main class="review-main">
+          <div class="review-version-context" aria-label="当前审核版本">
+            <div><strong>当前审核 · {{ version.versionNumber }}</strong><p>{{ version.submitterName || '制作人' }} · {{ formatReviewDateTime(version.submittedTime) }}</p></div>
+            <el-button v-if="canListVersions && canQueryVersion" type="primary" plain @click="historyVisible = true">版本记录</el-button>
+          </div>
           <ReviewProductionTarget v-if="version.productionTarget" :target="version.productionTarget" />
 
           <section ref="reviewWorkStep" class="review-work-step" :class="{ 'is-candidate-focus': candidatePreviewPulse }">
@@ -1087,10 +1108,19 @@ onBeforeUnmount(() => {
       </el-form>
       <template #footer><el-button :disabled="Boolean(actionBusy)" @click="approvalVisible = false">继续审核</el-button><el-button type="success" :loading="actionBusy === 'approve'" @click="confirmApproval">确认通过并交付</el-button></template>
     </el-dialog>
+    <el-drawer v-model="historyVisible" title="版本记录" size="min(1100px, 94vw)" append-to-body destroy-on-close>
+      <template #header><div><strong>版本记录 · 当前审核 {{ version?.versionNumber }}</strong><p class="review-history-hint">查看历史不会切换审核对象，当前未提交意见会保留。</p></div></template>
+      <VersionHistoryPanel v-if="historyVisible && version?.taskId" :key="version.versionId" :task-id="Number(version.taskId)" :current-review-version-id="Number(version.versionId)" :can-list="canListVersions" :can-query="canQueryVersion" :can-download="canDownload" :can-list-notes="hasPermission('shotgrid:note:list')" @version-selected="historySelection = $event" @selection-loading="historySelection = null">
+        <template #actions><el-button type="primary" :disabled="!canCompareHistory" @click="compareHistory">与当前审核版对比</el-button></template>
+      </VersionHistoryPanel>
+      <template #footer><el-button type="primary" plain @click="historyVisible = false">返回审核</el-button></template>
+    </el-drawer>
   </section>
 </template>
 
 <style scoped>
+.review-version-context{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 16px;background:var(--sg-surface);border:1px solid var(--sg-border);border-radius:var(--sg-radius-md)}
+.review-version-context p,.review-history-hint{margin:6px 0 0;color:var(--sg-text-muted);font-size:12px}
 :global(.app-content:has(.review-detail-page)){overflow:visible}
 .review-detail-page.review-detail-page--embedded { padding: 0; }
 .review-detail-page--embedded > .sg-page-heading { margin-bottom: 0; }

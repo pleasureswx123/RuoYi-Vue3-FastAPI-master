@@ -336,6 +336,7 @@ class ShotGridShot(ShotGridMutableAuditMixin, Base):
     camera_movement = Column(String(500), nullable=True, comment='镜头运动')
     focal_length = Column(String(500), nullable=True, comment='焦段原始文本')
     description = Column(Text, nullable=False, comment='镜头描述')
+    reference_description = Column(Text, nullable=True, comment='镜头参考内容说明')
     remark = Column(String(2000), nullable=True, comment='备注')
     dialogue = Column(Text, nullable=True, comment='台词或对白')
     sound_effect = Column(Text, nullable=True, comment='音效说明')

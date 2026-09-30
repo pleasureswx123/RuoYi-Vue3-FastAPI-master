@@ -1,9 +1,12 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { ElAlert, ElTag } from 'element-plus'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { createPinia } from 'pinia'
 
 import { getTaskScheduleChanges } from '@/api/shot-grid/schedules'
 import ScheduleTaskDrawer from '@/views/schedule/components/ScheduleTaskDrawer.vue'
+
+vi.mock('@/api/shot-grid/productionHistory', () => ({ getProductionHistory: vi.fn().mockResolvedValue({ data: { lanes: [], events: [] } }) }))
 
 vi.mock('@/api/shot-grid/schedules', () => ({
   getTaskScheduleChanges: vi.fn()
@@ -42,25 +45,69 @@ describe('排期详情抽屉', () => {
     vi.clearAllMocks()
   })
 
-  it('把人员重叠显示为业务警告，并只保留排期决策信息', async () => {
+  it('允许排期重叠，详情不展示重叠警告和计数并保留排期信息', async () => {
     getTaskScheduleChanges.mockResolvedValue({ rows: [], total: 0, hasNext: false })
     wrapper = mount(ScheduleTaskDrawer, {
       attachTo: document.body,
       props: { visible: true, task, canEdit: true },
-      global: { stubs: { teleport: true } }
+      global: { plugins: [createPinia()], stubs: { teleport: true } }
     })
     await flushPromises()
 
     const conflictAlert = wrapper.findAllComponents(ElAlert).find(alert => alert.text().includes('人员排期重叠'))
     const conflictTag = wrapper.findAllComponents(ElTag).find(tag => tag.text().includes('项重叠'))
 
-    expect(conflictAlert?.props('type')).toBe('warning')
-    expect(conflictTag?.props('type')).toBe('warning')
-    expect(conflictAlert?.text()).not.toContain('排期已正常加载，这不是系统故障')
-    expect(conflictAlert?.text()).toContain('EP001-001-0020')
-    expect(conflictAlert?.text()).toContain('重叠时段')
-    expect(conflictAlert?.find('time[datetime="2026-09-03T09:00:00"]').exists()).toBe(true)
-    expect(conflictAlert?.find('time[datetime="2026-09-05T18:00:00"]').exists()).toBe(true)
-    expect(conflictAlert?.text()).toContain('可调整当前排期，或在保存时确认保留重叠')
+    expect(conflictAlert).toBeUndefined()
+    expect(conflictTag).toBeUndefined()
+    expect(wrapper.text()).not.toContain('EP001-001-0020')
+    expect(wrapper.text()).toContain('当前开始')
+    expect(wrapper.text()).toContain('首版基线')
+    expect(wrapper.text()).toContain('最近排期变更')
+    expect(wrapper.text()).toContain('调整排期')
+  })
+  it('权限读取完成后显示底部操作，打开业务入口时保留排期详情', async () => {
+    getTaskScheduleChanges.mockResolvedValue({ rows: [] })
+    const run = vi.fn()
+    const actionLoader = vi.fn().mockResolvedValue({ allowedActions: ['task.review'] })
+    const actionFactory = target => target?.allowedActions?.includes('task.review')
+      ? [{ key: 'review', button: { label: '审核任务', type: 'primary', plain: false }, run }]
+      : []
+    wrapper = mount(ScheduleTaskDrawer, {
+      props: { visible: true, task, actionLoader, actionFactory },
+      global: { plugins: [createPinia()], stubs: { teleport: true } }
+    })
+    expect(wrapper.text()).toContain('正在加载可用操作')
+    await flushPromises()
+    expect(actionLoader).toHaveBeenCalledWith(task, expect.objectContaining({ signal: expect.any(AbortSignal) }))
+    await wrapper.get('.el-drawer__footer button').trigger('click')
+    expect(wrapper.emitted('update:visible')).toBeUndefined()
+    expect(wrapper.props('visible')).toBe(true)
+    expect(run).toHaveBeenCalledTimes(1)
+  })
+
+  it('切换任务取消旧权限读取并忽略迟到结果，失败时可重试', async () => {
+    getTaskScheduleChanges.mockResolvedValue({ rows: [] })
+    let resolveOld
+    const actionLoader = vi.fn()
+      .mockImplementationOnce(() => new Promise(resolve => { resolveOld = resolve }))
+      .mockRejectedValueOnce(new Error('权限读取失败'))
+      .mockResolvedValueOnce(null)
+    const actionFactory = vi.fn(() => [])
+    wrapper = mount(ScheduleTaskDrawer, {
+      props: { visible: true, task, actionLoader, actionFactory },
+      global: { plugins: [createPinia()], stubs: { teleport: true } }
+    })
+    const signal = actionLoader.mock.calls[0][1].signal
+    await wrapper.setProps({ task: { ...task, taskId: 32 } })
+    await flushPromises()
+    expect(signal.aborted).toBe(true)
+    resolveOld({ taskId: 31, allowedActions: ['task.review'] })
+    await flushPromises()
+    expect(actionFactory).not.toHaveBeenCalledWith(expect.objectContaining({ taskId: 31 }))
+    expect(wrapper.text()).toContain('权限读取失败')
+    await wrapper.get('.el-drawer__footer button').trigger('click')
+    await flushPromises()
+    expect(actionLoader).toHaveBeenCalledTimes(3)
+    expect(wrapper.text()).not.toContain('权限读取失败')
   })
 })

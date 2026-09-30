@@ -5,36 +5,55 @@ import { getTaskScheduleChanges } from '@/api/shot-grid/schedules'
 import { formatTaskDateTime, taskPriorityMeta, taskStatusMeta } from '@/views/task/taskPresentation'
 import { scheduleTaskLabel } from '@/views/schedule/schedulePresentation'
 import { tagTypeFromTone } from '@/utils/tag'
+import ShotActionButtons from '@/views/shot/components/ShotActionButtons.vue'
+import TableActionButton from '@/components/TableActionButton.vue'
+import ScheduleMilestones from './ScheduleMilestones.vue'
+import { Edit } from '@element-plus/icons-vue'
 
 const props = defineProps({
   visible: Boolean,
   task: { type: Object, default: null },
-  canEdit: Boolean
+  canEdit: Boolean,
+  position: { type: Number, default: 0 },
+  total: { type: Number, default: 0 },
+  actionLoader: { type: Function, default: null },
+  actionFactory: { type: Function, default: null }
 })
 
-const emit = defineEmits(['update:visible', 'edit'])
+const emit = defineEmits(['update:visible', 'edit', 'navigate'])
 const history = ref([])
+const orderedHistory = computed(() => [...history.value].sort((a, b) => new Date(a.createTime) - new Date(b.createTime) || a.scheduleChangeId - b.scheduleChangeId))
 const historyLoading = ref(false)
 const historyError = ref(null)
 let historyController = null
 let generation = 0
+const actionTarget = ref(null)
+const actionLoading = ref(false)
+const actionError = ref('')
+let actionController = null
+let actionGeneration = 0
+const actions = computed(() => props.actionFactory?.(actionTarget.value) || [])
 
-const conflictDetails = computed(() => {
-  const currentStart = props.task?.currentStart
-  const currentEnd = props.task?.currentEnd
-  return (props.task?.conflicts || []).map(conflict => {
-    const currentStartTime = Date.parse(currentStart)
-    const currentEndTime = Date.parse(currentEnd)
-    const conflictStartTime = Date.parse(conflict.startTime)
-    const conflictEndTime = Date.parse(conflict.endTime)
-    const validRange = [currentStartTime, currentEndTime, conflictStartTime, conflictEndTime].every(Number.isFinite)
-    return {
-      ...conflict,
-      overlapStart: validRange && currentStartTime >= conflictStartTime ? currentStart : conflict.startTime,
-      overlapEnd: validRange && currentEndTime <= conflictEndTime ? currentEnd : conflict.endTime
-    }
-  })
-})
+async function loadActions() {
+  const current = ++actionGeneration
+  actionController?.abort()
+  actionTarget.value = null
+  actionError.value = ''
+  actionLoading.value = false
+  if (!props.visible || !props.task || !props.actionLoader) return
+  const controller = new AbortController()
+  actionController = controller
+  actionLoading.value = true
+  try {
+    const target = await props.actionLoader(props.task, { signal: controller.signal })
+    if (current === actionGeneration) actionTarget.value = target
+  } catch (error) {
+    if (current === actionGeneration && !controller.signal.aborted) actionError.value = error?.message || '操作权限加载失败'
+  } finally {
+    if (current === actionGeneration) actionLoading.value = false
+  }
+}
+watch(() => [props.visible, props.task?.projectId, props.task?.taskId, props.task?.lockVersion], loadActions, { immediate: true })
 
 const drawerVisible = computed({
   get: () => props.visible,
@@ -42,12 +61,13 @@ const drawerVisible = computed({
 })
 
 async function loadHistory() {
+  const currentGeneration = ++generation
   historyController?.abort()
   historyController = null
   history.value = []
   historyError.value = null
+  historyLoading.value = false
   if (!props.visible || !props.task?.taskId) return
-  const currentGeneration = ++generation
   const controller = new AbortController()
   historyController = controller
   historyLoading.value = true
@@ -68,8 +88,10 @@ async function loadHistory() {
   }
 }
 
-watch(() => [props.visible, props.task?.taskId], loadHistory, { immediate: true })
+watch(() => [props.visible, props.task?.taskId, props.task?.lockVersion], loadHistory, { immediate: true })
 onBeforeUnmount(() => {
+  actionGeneration += 1
+  actionController?.abort()
   generation += 1
   historyController?.abort()
 })
@@ -84,81 +106,85 @@ onBeforeUnmount(() => {
     body-class="sg-detail-drawer__body"
     :title="task ? `排期详情 · ${scheduleTaskLabel(task)}` : '排期详情'"
     direction="rtl"
-    size="560px"
+    size="min(1040px, 95vw)"
     append-to-body
     destroy-on-close
   >
     <div v-if="task" class="schedule-task-detail">
+      <div v-if="total" class="schedule-task-detail__navigation">
+        <el-button size="small" :disabled="position <= 1" @click="emit('navigate', -1)">上一项</el-button>
+        <span>{{ position || '—' }} / {{ total }}</span>
+        <el-button size="small" :disabled="!position || position >= total" @click="emit('navigate', 1)">下一项</el-button>
+      </div>
       <div class="schedule-task-detail__tags">
-        <el-tag :type="tagTypeFromTone(taskStatusMeta(task.taskStatus).tone)" effect="light" round>{{ taskStatusMeta(task.taskStatus).label }}</el-tag>
+        <el-tag :type="tagTypeFromTone(taskStatusMeta(task).tone)" effect="light" round>{{ taskStatusMeta(task).label }}</el-tag>
         <el-tag :type="tagTypeFromTone(taskPriorityMeta(task.priority).tone)" effect="plain" round>{{ taskPriorityMeta(task.priority).label }}优先级</el-tag>
-        <el-tag v-if="task.conflicts?.length" type="warning" effect="plain" round>{{ task.conflicts.length }} 项重叠</el-tag>
       </div>
       <el-descriptions :column="1" border>
         <el-descriptions-item label="负责人">{{ task.assignee?.userName || task.assignee?.nickName || '—' }}</el-descriptions-item>
         <el-descriptions-item label="当前开始">{{ formatTaskDateTime(task.currentStart) }}</el-descriptions-item>
         <el-descriptions-item label="当前结束">{{ formatTaskDateTime(task.currentEnd) }}</el-descriptions-item>
-        <el-descriptions-item label="首版基线">{{ formatTaskDateTime(task.baselineStart) }} 至 {{ formatTaskDateTime(task.baselineEnd) }}</el-descriptions-item>
+        <el-descriptions-item label="最初排期">{{ formatTaskDateTime(task.baselineStart) }} 至 {{ formatTaskDateTime(task.baselineEnd) }}</el-descriptions-item>
         <el-descriptions-item label="任务版本">{{ task.lockVersion }}</el-descriptions-item>
       </el-descriptions>
-      <el-alert
-        v-if="task.conflicts?.length"
-        class="schedule-task-conflict"
-        type="warning"
-        :closable="false"
-        show-icon
-        :title="`发现 ${task.conflicts.length} 项人员排期重叠`"
-      >
-        <template #default>
-          <ul class="schedule-task-conflict__list">
-            <li v-for="conflict in conflictDetails" :key="conflict.taskId" :data-conflict-task-id="conflict.taskId">
-              <strong>{{ conflict.targetName }}</strong>
-              <span>
-                冲突任务：
-                <time :datetime="conflict.startTime">{{ formatTaskDateTime(conflict.startTime) }}</time>
-                至
-                <time :datetime="conflict.endTime">{{ formatTaskDateTime(conflict.endTime) }}</time>
-              </span>
-              <span>
-                重叠时段：
-                <time :datetime="conflict.overlapStart">{{ formatTaskDateTime(conflict.overlapStart) }}</time>
-                至
-                <time :datetime="conflict.overlapEnd">{{ formatTaskDateTime(conflict.overlapEnd) }}</time>
-              </span>
-            </li>
-          </ul>
-          <p class="schedule-task-conflict__action">可调整当前排期，或在保存时确认保留重叠。</p>
-        </template>
-      </el-alert>
+
+      <div class="schedule-task-detail__timelines">
+      <ScheduleMilestones :task="task" :active="visible" />
+      <section>
       <div class="schedule-task-detail__heading">
-        <div><p class="sg-eyebrow">HISTORY</p><h3>最近排期变更</h3></div>
-        <el-button v-if="canEdit" type="primary" @click="emit('edit', task)">调整排期</el-button>
+        <h4>最近排期变更</h4>
       </div>
       <el-skeleton v-if="historyLoading" animated :rows="4" />
       <el-alert v-else-if="historyError" type="error" :closable="false" title="排期历史加载失败" description="请稍后重试，不会将失败显示为空历史。" show-icon />
-      <el-timeline v-else-if="history.length">
-        <el-timeline-item v-for="item in history" :key="item.scheduleChangeId" :timestamp="formatTaskDateTime(item.createTime)" placement="top">
-          <strong>{{ item.operator?.userName || '未知操作人' }} · {{ item.changeReason }}</strong>
-          <p>{{ formatTaskDateTime(item.toStartTime) }} 至 {{ formatTaskDateTime(item.toEndTime) }}</p>
+      <el-timeline v-else-if="history.length" mode="alternate">
+        <el-timeline-item v-for="(item, index) in orderedHistory" :key="item.scheduleChangeId" :type="index === orderedHistory.length - 1 ? 'warning' : 'success'" hollow :timestamp="formatTaskDateTime(item.createTime)" placement="top">
+          <strong class="schedule-change-summary">{{ item.operator?.userName || '未知操作人' }} · {{ item.changeReason }}</strong>
+          <el-tooltip :content="`原 ${item.fromStartTime ? formatTaskDateTime(item.fromStartTime) : '未排期'} 至 ${item.fromEndTime ? formatTaskDateTime(item.fromEndTime) : '未排期'}`" placement="top">
+            <p class="schedule-change-range">原 {{ item.fromStartTime ? formatTaskDateTime(item.fromStartTime) : '未排期' }} 至 {{ item.fromEndTime ? formatTaskDateTime(item.fromEndTime) : '未排期' }}</p>
+          </el-tooltip>
+          <el-tooltip :content="`新 ${formatTaskDateTime(item.toStartTime)} 至 ${formatTaskDateTime(item.toEndTime)}`" placement="top">
+            <p class="schedule-change-range">新 {{ formatTaskDateTime(item.toStartTime) }} 至 {{ formatTaskDateTime(item.toEndTime) }}</p>
+          </el-tooltip>
         </el-timeline-item>
       </el-timeline>
       <el-empty v-else :image-size="52" description="暂无可证明的排期变更历史" />
+      </section>
+      </div>
     </div>
+    <template v-if="actionLoader || canEdit" #footer>
+      <div class="schedule-task-actions">
+        <span v-if="actionLoading" role="status">正在加载可用操作…</span>
+        <el-alert v-else-if="actionError" type="error" :title="actionError" :closable="false">
+          <el-button link type="primary" @click="loadActions">重试</el-button>
+        </el-alert>
+        <ShotActionButtons v-else-if="actions.length" :actions="actions" />
+        <TableActionButton v-if="canEdit" element-palette :round="false" label="调整排期" type="warning" :icon="Edit" @click="emit('edit', task)" />
+      </div>
+    </template>
   </el-drawer>
 </template>
 
 <style scoped>
 .schedule-task-detail { display: grid; gap: 18px; }
+.schedule-change-range { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.schedule-change-summary { font-size: 12px; line-height: 20px; }
+.schedule-task-detail__navigation { display: flex; justify-content: space-between; align-items: center; color: var(--sg-text-muted); font-size: 12px; }
+.schedule-task-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; text-align: left; }
+.schedule-task-actions > span { color: var(--sg-text-muted); font-size: 12px; }
 .schedule-task-detail__tags,.schedule-task-detail__heading { display: flex; gap: 8px; align-items: center; }
 .schedule-task-detail__heading { justify-content: space-between; }
-.schedule-task-detail__heading h3,.schedule-task-detail__heading p { margin: 0; }
-.schedule-task-detail__heading h3 { margin-top: 4px; }
+.schedule-task-detail__heading h4 { margin: 0; font-size: 14px; font-weight: 600; line-height: 20px; }
 .schedule-task-detail :deep(.el-descriptions__body),.schedule-task-detail :deep(.el-descriptions__cell) { background: var(--sg-surface-raised)!important; border-color: var(--sg-border)!important; }
 .schedule-task-detail :deep(.el-timeline-item__content) p { margin: 6px 0 0; color: var(--sg-text-muted); font-size: 11px; }
-.schedule-task-conflict__action { margin: 0; }
-.schedule-task-conflict__list { display: grid; gap: 10px; margin: 10px 0; padding: 0; list-style: none; }
-.schedule-task-conflict__list li { display: grid; gap: 3px; }
-.schedule-task-conflict__list strong { color: var(--sg-text); }
-.schedule-task-conflict__list span { color: var(--sg-text-muted); font-size: 12px; line-height: 1.55; }
-.schedule-task-conflict__action { font-weight: 600; }
+.schedule-task-detail__timelines { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); gap: 24px; align-items: start; }
+.schedule-task-detail__timelines > section {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  padding: 16px;
+  background: var(--sg-surface-raised);
+  border: 1px solid var(--sg-border);
+  border-radius: 12px;
+}
+.schedule-task-detail__timelines .schedule-task-detail__heading { margin-bottom: 16px; }
+@media (max-width: 700px) { .schedule-task-detail__timelines { grid-template-columns: 1fr; } }
 </style>

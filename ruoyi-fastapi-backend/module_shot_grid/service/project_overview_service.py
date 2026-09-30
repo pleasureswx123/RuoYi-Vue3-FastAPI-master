@@ -25,6 +25,7 @@ class ShotGridProjectOverviewService:
         'revision_shots',
         'revision_assets',
         'revision_asset_items',
+        'pending_info_shots',
         'unassigned_shots',
         'unassigned_assets',
         'unassigned_asset_items',

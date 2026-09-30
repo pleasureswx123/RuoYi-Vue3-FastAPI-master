@@ -42,9 +42,11 @@ def test_sparse_patch_and_explicit_clear() -> None:
     }
 
 
-def test_duplicate_and_blank_reason() -> None:
+def test_duplicate_rejected_and_reason_optional() -> None:
     data = command({'priority': 'high'}).model_dump(by_alias=True, exclude_unset=True)
     with pytest.raises(ValidationError):
         ShotGridProductionAdjustmentModel.model_validate({**data, 'items': data['items'] * 2})
-    with pytest.raises(ValidationError):
-        ShotGridProductionAdjustmentModel.model_validate({**data, 'reason': '  '})
+    for reason in ('', '  '):
+        assert ShotGridProductionAdjustmentModel.model_validate({**data, 'reason': reason}).reason == '未填写'
+    data.pop('reason')
+    assert ShotGridProductionAdjustmentModel.model_validate(data).reason == '未填写'

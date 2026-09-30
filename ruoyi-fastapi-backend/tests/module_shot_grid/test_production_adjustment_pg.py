@@ -136,26 +136,9 @@ async def test_sparse_changes_audit_and_concurrent_snapshot(pg_sessions):
         assert saved['before']['description'] == '原制作内容' and saved['after']['description'] == '新' * 3000
 
 
-async def test_overlap_snapshot_recheck_and_preserved_baseline(pg_sessions):
+async def test_overlap_allowed_and_preserved_baseline(pg_sessions):
     await prepare(pg_sessions)
     command = make_command({'expectedStartTime': '2026-10-01T09:00:00', 'expectedEndTime': '2026-10-01T18:00:00'})
-    async with pg_sessions() as db:
-        with pytest.raises(ShotGridDomainException) as error:
-            await Service.adjust(db, PROJECT_ID, command, _user(permissions=PERMISSIONS))
-        assert error.value.error_key == 'SG_ADJUST_OVERLAP'
-        conflicts = error.value.details['conflicts']
-    async with pg_sessions() as db:
-        assert (await db.get(ShotGridTask, 960)).expected_start_time == START
-        assert not list(
-            await db.scalars(select(ShotGridTaskScheduleChange).where(ShotGridTaskScheduleChange.task_id >= 960))
-        )
-    command = ShotGridProductionAdjustmentModel.model_validate(
-        {
-            **command.model_dump(by_alias=True, exclude_unset=True),
-            'overlapAcknowledged': True,
-            'expectedConflicts': conflicts,
-        }
-    )
     async with pg_sessions() as db:
         await Service.adjust(db, PROJECT_ID, command, _user(permissions=PERMISSIONS))
         task = await db.get(ShotGridTask, 960)
@@ -164,6 +147,8 @@ async def test_overlap_snapshot_recheck_and_preserved_baseline(pg_sessions):
             await db.scalars(select(ShotGridTaskScheduleChange).where(ShotGridTaskScheduleChange.task_id >= 960))
         )
         assert len(changes) == 2 and all(change.change_reason == command.reason for change in changes)
+        assert all(change.overlap_task_ids for change in changes)
+        assert all(not change.overlap_acknowledged for change in changes)
 
 
 @pytest.mark.parametrize('boundary', ['state', 'task_lock', 'shot_lock', 'submission', 'creator', 'project'])

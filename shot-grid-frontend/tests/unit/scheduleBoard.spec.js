@@ -3,7 +3,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { ElButton, ElCheckbox, ElDatePicker, ElSelect } from 'element-plus'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { getProjectSchedule, getTaskScheduleChanges } from '@/api/shot-grid/schedules'
+import { getProjectSchedule, getTaskScheduleChanges, updateTaskSchedule } from '@/api/shot-grid/schedules'
 import ScheduleBoard from '@/views/schedule/ScheduleBoard.vue'
 import PersonnelSwimlane from '@/views/schedule/components/PersonnelSwimlane.vue'
 import ScheduleTaskDrawer from '@/views/schedule/components/ScheduleTaskDrawer.vue'
@@ -16,10 +16,11 @@ vi.mock('@/views/schedule/components/ScheduleGanttAdapter.vue', () => ({
     name: 'ScheduleGanttAdapter',
     props: ['rows', 'scale', 'editable'],
     emits: ['task-click', 'range-change-request', 'change-rejected'],
-    template: '<div data-testid="schedule-gantt-stub" />'
+    template: '<div data-testid="schedule-gantt-stub"><div class="wx-chart"><div class="wx-area"><div class="wx-bars"><div class="wx-bar">任务</div></div></div></div></div>'
   }
 }))
 
+vi.mock('@/api/shot-grid/productionHistory', () => ({ getProductionHistory: vi.fn().mockResolvedValue({ data: { lanes: [], events: [] } }) }))
 vi.mock('@/api/shot-grid/schedules', () => ({
   getProjectSchedule: vi.fn(),
   getTaskScheduleChanges: vi.fn(),
@@ -79,6 +80,134 @@ describe('共享任务排期面板', () => {
     getTaskScheduleChanges.mockResolvedValue({ rows: [], total: 0, hasNext: false })
   })
 
+  it('点击图例立即筛选并同步下拉框，再次点击恢复全部状态', async () => {
+    const wrapper = mount(ScheduleBoard, {
+      props: {
+        projectId: 11,
+        initialWindowStart: '2026-09-01T00:00:00',
+        initialWindowEnd: '2026-09-08T00:00:00',
+        initialFilters: { keyword: 'EP001', assigneeUserIds: [7] }
+      }
+    })
+    await flushPromises()
+    getProjectSchedule.mockResolvedValueOnce({ data: { rows: [rows[0]], groups: [], total: 1 } })
+    const legend = wrapper.get('.schedule-board__legend [data-status="in_progress"]')
+    await legend.trigger('click')
+    await flushPromises()
+    expect(getProjectSchedule).toHaveBeenLastCalledWith(11, expect.objectContaining({
+      taskStatuses: ['in_progress'], keyword: 'EP001', assigneeUserIds: [7]
+    }), expect.anything())
+    expect(wrapper.getComponent(PersonnelSwimlane).props('rows')).toHaveLength(1)
+    expect(wrapper.getComponent(ScheduleToolbar).findAllComponents(ElSelect).some(select =>
+      JSON.stringify(select.props('modelValue')) === '["in_progress"]'
+    )).toBe(true)
+    expect(legend.attributes('aria-pressed')).toBe('true')
+    await legend.trigger('click')
+    await flushPromises()
+    expect(getProjectSchedule).toHaveBeenLastCalledWith(11, expect.objectContaining({ taskStatuses: [] }), expect.anything())
+    expect(wrapper.getComponent(PersonnelSwimlane).props('rows')).toHaveLength(2)
+    expect(legend.attributes('aria-pressed')).toBe('false')
+    wrapper.unmount()
+  })
+
+  it('空白处拖动和 Shift 滚轮横移画布，任务条仍可点击且不触发筛选请求', async () => {
+    const wrapper = mount(ScheduleBoard, {
+      props: {
+        projectId: 11,
+        initialWindowStart: '2026-09-01T00:00:00',
+        initialWindowEnd: '2026-09-08T00:00:00'
+      }
+    })
+    await flushPromises()
+    const viewport = wrapper.get('.schedule-board__viewport')
+    Object.defineProperties(viewport.element, {
+      scrollWidth: { value: 1600 }, clientWidth: { value: 800 }
+    })
+    viewport.element.scrollLeft = 100
+    const pointer = (type, x) => {
+      const event = new MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, button: 0 })
+      Object.defineProperty(event, 'pointerId', { value: 1 })
+      return event
+    }
+    viewport.element.dispatchEvent(pointer('pointerdown', 300))
+    window.dispatchEvent(pointer('pointermove', 220))
+    await wrapper.vm.$nextTick()
+    expect(viewport.element.scrollLeft).toBe(180)
+    expect(viewport.classes()).toContain('is-panning')
+    window.dispatchEvent(pointer('pointerup', 220))
+    window.dispatchEvent(pointer('pointermove', 100))
+    expect(viewport.element.scrollLeft).toBe(180)
+    viewport.element.dispatchEvent(new WheelEvent('wheel', { shiftKey: true, deltaY: 60, cancelable: true }))
+    expect(viewport.element.scrollLeft).toBe(240)
+    viewport.element.dispatchEvent(new WheelEvent('wheel', { deltaY: 60, cancelable: true }))
+    expect(viewport.element.scrollLeft).toBe(240)
+    const bar = wrapper.get('.personnel-task')
+    bar.element.dispatchEvent(pointer('pointerdown', 300))
+    window.dispatchEvent(pointer('pointermove', 200))
+    expect(viewport.element.scrollLeft).toBe(240)
+    await bar.trigger('click')
+    await flushPromises()
+    expect(wrapper.getComponent(ScheduleTaskDrawer).props('visible')).toBe(true)
+    expect(getProjectSchedule).toHaveBeenCalledTimes(2)
+    wrapper.unmount()
+  })
+
+  it('甘特图拖动内部画布而非外层容器，保留任务条操作并在失焦后结束拖动', async () => {
+    const wrapper = mount(ScheduleBoard, {
+      props: {
+        projectId: 11, initialMode: 'gantt',
+        initialWindowStart: '2026-09-01T00:00:00',
+        initialWindowEnd: '2026-09-08T00:00:00'
+      }
+    })
+    await flushPromises()
+    const chart = wrapper.get('.wx-chart').element
+    Object.defineProperties(chart, { scrollWidth: { value: 1600 }, clientWidth: { value: 800 } })
+    chart.scrollLeft = 100
+    const pointer = (type, x) => {
+      const event = new MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, button: 0 })
+      Object.defineProperty(event, 'pointerId', { value: 1 })
+      return event
+    }
+    wrapper.get('.wx-bars').element.dispatchEvent(pointer('pointerdown', 300))
+    window.dispatchEvent(pointer('pointermove', 220))
+    expect(chart.scrollLeft).toBe(180)
+    expect(wrapper.get('.schedule-board__viewport').element.scrollLeft).toBe(0)
+    window.dispatchEvent(new Event('blur'))
+    window.dispatchEvent(pointer('pointermove', 100))
+    expect(chart.scrollLeft).toBe(180)
+    wrapper.get('.wx-area').element.dispatchEvent(new WheelEvent('wheel', { bubbles: true, shiftKey: true, deltaY: 60, cancelable: true }))
+    expect(chart.scrollLeft).toBe(240)
+    wrapper.get('.wx-bar').element.dispatchEvent(pointer('pointerdown', 300))
+    window.dispatchEvent(pointer('pointermove', 200))
+    expect(chart.scrollLeft).toBe(240)
+    expect(getProjectSchedule).toHaveBeenCalledTimes(2)
+    wrapper.unmount()
+  })
+
+  it('筛选后保留窗口选项与状态总数，详情可在当前结果中切换', async () => {
+    const wrapper = mount(ScheduleBoard, {
+      props: { projectId: 11, initialWindowStart: '2026-09-01T00:00:00', initialWindowEnd: '2026-09-08T00:00:00' }
+    })
+    await flushPromises()
+    wrapper.getComponent(PersonnelSwimlane).vm.$emit('task-click', { taskId: 31 })
+    await flushPromises()
+    const drawer = wrapper.getComponent(ScheduleTaskDrawer)
+    expect(drawer.props('position')).toBe(1)
+    expect(drawer.props('total')).toBe(2)
+    drawer.vm.$emit('navigate', 1)
+    await flushPromises()
+    expect(drawer.props('task').taskId).toBe(32)
+    expect(drawer.props('position')).toBe(2)
+    getProjectSchedule.mockResolvedValueOnce({ data: { rows: [], total: 0 } })
+    await wrapper.get('.schedule-board__legend [data-status="completed"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.getComponent(ScheduleToolbar).props('filterOptions').assignees).toEqual([{ value: 7, label: '杨景锋' }])
+    expect(wrapper.get('.schedule-board__legend [data-status="in_progress"]').text()).toContain('1')
+    expect(wrapper.text()).toContain('当前窗口显示 0 项任务')
+    wrapper.unmount()
+  })
+
   it('继承镜头号区间并在清空后移除查询范围', async () => {
     const wrapper = mount(ScheduleBoard, {
       props: {
@@ -110,7 +239,7 @@ describe('共享任务排期面板', () => {
     expect(swimlane.props('editable')).toBe(false)
     expect(wrapper.findAll('[data-testid="personnel-lane"]')).toHaveLength(1)
     expect(wrapper.find('[data-testid="personnel-lane"]').attributes('data-track-count')).toBe('2')
-    expect(wrapper.text()).toContain('默认只读')
+    expect(wrapper.text()).toContain('拖动编辑未开启')
   })
 
   it('切换甘特模式更新查询状态，点击任务打开同一详情抽屉', async () => {
@@ -273,6 +402,24 @@ describe('共享任务排期面板', () => {
     expect(getProjectSchedule.mock.calls.at(-1)[1]).toMatchObject({ targetKind: 'asset_item' })
   })
 
+  it('直接安排时间无需开启拖动编辑，保存后切换窗口并选中任务', async () => {
+    const wrapper = mount(ScheduleBoard, { props: { projectId: 11, editableAllowed: true, initialWindowStart: '2026-09-01T00:00:00', initialWindowEnd: '2026-09-08T00:00:00' } })
+    await flushPromises()
+    wrapper.getComponent(ScheduleTaskDrawer).vm.$emit('edit', rows[0])
+    await flushPromises()
+    expect(wrapper.getComponent(ScheduleEditDialog).props('visible')).toBe(true)
+    expect(wrapper.getComponent(PersonnelSwimlane).props('editable')).toBe(false)
+    const saved = { ...rows[0], currentStart: '2026-11-01T09:00:00', currentEnd: '2026-11-03T18:00:00', lockVersion: 9 }
+    getProjectSchedule.mockResolvedValue({ data: { rows: [saved], groups: [], total: 1, hasNext: false } })
+    updateTaskSchedule.mockResolvedValueOnce({ data: saved })
+    wrapper.getComponent(ScheduleEditDialog).vm.$emit('save-request', { expectedStartTime: saved.currentStart, expectedEndTime: saved.currentEnd, changeReason: '调整计划' })
+    await flushPromises()
+    expect(wrapper.getComponent(PersonnelSwimlane).props('selectedTaskId')).toBe(saved.taskId)
+    expect(wrapper.getComponent(PersonnelSwimlane).props('editable')).toBe(false)
+    expect(wrapper.emitted('query-change').at(-1)[0].windowStart).toBe('2026-10-25T00:00:00')
+    wrapper.unmount()
+  })
+
   it('无编辑授权时拒绝进入编辑模式', async () => {
     const wrapper = mount(ScheduleBoard, {
       props: {
@@ -334,7 +481,7 @@ describe('共享任务排期面板', () => {
     const selectByPlaceholder = placeholder => toolbar.findAllComponents(ElSelect).find(item => item.props('placeholder') === placeholder)
     selectByPlaceholder('全部负责人').vm.$emit('update:modelValue', [7])
     selectByPlaceholder('全部状态').vm.$emit('update:modelValue', ['in_progress'])
-    const conflictToggle = toolbar.findAllComponents(ElCheckbox).find(item => item.text() === '仅冲突')
+    const conflictToggle = toolbar.findAllComponents(ElCheckbox).find(item => item.text() === '仅排期重叠')
     conflictToggle.vm.$emit('update:modelValue', true)
     await toolbar.findAllComponents(ElButton).find(item => item.text() === '应用筛选').trigger('click')
     await flushPromises()
@@ -343,9 +490,10 @@ describe('共享任务排期面板', () => {
       assigneeUserIds: [7], taskStatuses: ['in_progress'], onlyConflicts: true
     })
 
-    const baselineToggle = toolbar.findAllComponents(ElCheckbox).find(item => item.text() === '显示首版基线')
-    baselineToggle.vm.$emit('change', false)
-    await flushPromises()
+    const baselineToggle = toolbar.findAllComponents(ElCheckbox).find(item => item.text() === '对比最初排期')
     expect(wrapper.getComponent(PersonnelSwimlane).props('showBaseline')).toBe(false)
+    baselineToggle.vm.$emit('change', true)
+    await flushPromises()
+    expect(wrapper.getComponent(PersonnelSwimlane).props('showBaseline')).toBe(true)
   })
 })

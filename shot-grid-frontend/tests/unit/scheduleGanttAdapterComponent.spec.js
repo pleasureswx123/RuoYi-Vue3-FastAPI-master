@@ -20,6 +20,7 @@ vi.mock('@svar-ui/vue-gantt', () => ({
       cellWidth: { type: Number, default: 0 },
       lengthUnit: { type: String, default: '' },
       taskTemplate: { type: Object, default: null },
+      selected: { type: Array, default: () => [] },
       readonly: Boolean,
       start: { type: Date, default: null },
       end: { type: Date, default: null },
@@ -97,9 +98,18 @@ describe('ScheduleGanttAdapter', () => {
         operationSource: 'gantt'
       }
     ]])
+    await wrapper.setProps({ selectedTaskId: 31 })
+    expect(ganttHarness.receivedProps.selected).toEqual(['task:31'])
+    await wrapper.setProps({ selectedTaskId: null })
+    expect(ganttHarness.receivedProps.selected).toEqual([])
     expect(ganttHarness.receivedProps.readonly).toBe(false)
     expect(ganttHarness.receivedProps.lengthUnit).toBe('day')
-    expect(ganttHarness.receivedProps.columns.map(column => column.header)).toEqual(['任务名称', '开始日期'])
+    expect(ganttHarness.receivedProps.columns.map(column => column.header)).toEqual(['任务名称', '起止日期'])
+    const dateCell = mount(ganttHarness.receivedProps.columns.find(column => column.id === 'start').cell, {
+      props: { row: { start: new Date(2026, 8, 24), end: new Date(2026, 9, 1) } }
+    })
+    expect(dateCell.findAll('.schedule-date-cell__line').map(line => line.text())).toEqual(['起2026-09-24', '止2026-10-01'])
+    dateCell.unmount()
     expect(ganttHarness.receivedProps.taskTemplate?.name).toBe('ScheduleGanttTaskTemplate')
     expect(ganttHarness.receivedProps.start).toEqual(new Date('2026-09-01T00:00:00'))
     expect(ganttHarness.receivedProps.end).toEqual(new Date('2026-10-01T00:00:00'))
@@ -113,6 +123,50 @@ describe('ScheduleGanttAdapter', () => {
       id: 'task:31',
       parent: 'group:scene:5'
     })
+  })
+
+  it.each([
+    ['day', { start: new Date(2026, 8, 1, 9) }, 1, '2026-09-02T09:00:00', '2026-09-05T18:00:00'],
+    ['day', { end: new Date(2026, 8, 5, 18) }, -1, '2026-09-01T09:00:00', '2026-09-04T18:00:00'],
+    ['week', { start: new Date(2026, 8, 1, 9), end: new Date(2026, 8, 5, 18) }, 1, '2026-09-08T09:00:00', '2026-09-12T18:00:00'],
+    ['month', { start: new Date(2026, 0, 31, 9) }, 1, '2026-02-28T09:00:00', '2026-09-05T18:00:00']
+  ])('将 %s 刻度的真实拖动 diff 转换为新日期草稿', async (scale, changes, diff, start, end) => {
+    const wrapper = mount(ScheduleGanttAdapter, {
+      props: { rows: [scheduleRow], scale, editable: true, windowStart: '2026-01-01T00:00:00', windowEnd: '2026-10-01T00:00:00' }
+    })
+    await nextTick()
+    const intercept = ganttHarness.interceptors.get('update-task')
+    expect(intercept({ id: 'task:31', task: changes, diff })).toBe(false)
+    expect(wrapper.emitted('range-change-request')[0][0]).toMatchObject({ expectedStartTime: start, expectedEndTime: end })
+    expect(scheduleRow.currentStart).toBe('2026-09-01T09:00:00')
+    wrapper.unmount()
+  })
+
+  it('只读任务在拖动预览前被拦截，可编辑任务正常拖动且仍可点击详情', async () => {
+    const wrapper = mount(ScheduleGanttAdapter, { props: { rows: [scheduleRow, { ...scheduleRow, taskId: 32, allowedActions: [] }], editable: true, windowStart: '2026-09-01', windowEnd: '2026-10-01' } })
+    await nextTick()
+    const drag = ganttHarness.interceptors.get('drag-task')
+    expect(drag({ id: 'task:32', left: 100, inProgress: true })).toBe(false)
+    expect(drag({ id: 'group:assignee:7' })).toBe(false)
+    expect(drag({ id: 'task:31' })).toBeUndefined()
+    expect(wrapper.emitted('range-change-request')).toBeUndefined()
+    ganttHarness.listeners.get('select-task')({ id: 'task:32' })
+    expect(wrapper.emitted('task-click')[0][0]).toEqual({ taskId: 32 })
+    await wrapper.setProps({ editable: false })
+    expect(drag({ id: 'task:31' })).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('取消草稿重新传入原日期，丢弃渲染器临时坐标', async () => {
+    const wrapper = mount(ScheduleGanttAdapter, { props: { rows: [scheduleRow], editable: true, windowStart: '2026-09-01', windowEnd: '2026-10-01' } })
+    await nextTick()
+    const previous = ganttHarness.receivedProps.tasks
+    previous[1].$x = 999
+    await wrapper.setProps({ resetToken: 1 })
+    expect(ganttHarness.receivedProps.tasks).not.toBe(previous)
+    expect(ganttHarness.receivedProps.tasks[1].$x).toBeUndefined()
+    expect(ganttHarness.receivedProps.tasks[1].start).toEqual(new Date(scheduleRow.currentStart))
+    wrapper.unmount()
   })
 
   it('把渲染器选择动作转换为领域任务点击事件', async () => {

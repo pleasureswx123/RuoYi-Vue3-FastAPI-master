@@ -2,6 +2,8 @@
 import ScheduleGanttAdapter from '@/views/schedule/components/ScheduleGanttAdapter.vue'
 
 defineProps({
+  selectedTaskId: { type: Number, default: null },
+  resetToken: { type: Number, default: 0 },
   rows: { type: Array, default: () => [] },
   scale: { type: String, default: 'day' },
   groupBy: { type: String, default: 'assignee' },
@@ -17,6 +19,8 @@ const emit = defineEmits(['task-click', 'range-change-request', 'change-rejected
 <template>
   <ScheduleGanttAdapter
     :rows="rows"
+    :reset-token="resetToken"
+    :selected-task-id="selectedTaskId"
     :scale="scale"
     :group-by="groupBy"
     :window-start="windowStart"

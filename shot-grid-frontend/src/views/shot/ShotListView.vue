@@ -8,7 +8,7 @@ import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, r
 import { useRoute, useRouter } from 'vue-router'
 import { ElCheckbox, ElCheckboxGroup, ElPopover, ElMessage, ElMessageBox } from 'element-plus'
 import { shotDetailColumns, useShotTablePresentation } from './useShotTablePresentation'
-import { Calendar, Clock, Delete, Edit, Grid, List, Plus, Refresh, RefreshLeft, Search, Switch, Upload, User, VideoCamera, VideoPlay, View } from '@element-plus/icons-vue'
+import { Calendar, Clock, Delete, Edit, List, Plus, Refresh, RefreshLeft, Search, Switch, Upload, User, VideoCamera, VideoPlay, View } from '@element-plus/icons-vue'
 import Sortable from 'sortablejs'
 
 import { getProjectDetail, getProjectPage } from '@/api/shot-grid/projects'
@@ -23,7 +23,7 @@ import { useVersionCollectionRealtime } from '@/composables/useVersionCollection
 import { formatTaskDateTime, taskTimeReminder } from '@/views/task/taskPresentation'
 import { useSessionStore } from '@/store/modules/session'
 import { tagTypeFromTone } from '@/utils/tag'
-import TableActionButton from '@/components/TableActionButton.vue'
+import ShotActionButtons from './components/ShotActionButtons.vue'
 import RelatedDetailDrawer from '@/components/RelatedDetailDrawer.vue'
 import { getVersionDetail } from '@/api/shot-grid/versions'
 import { projectRoleMeta, storageMeta } from '@/views/project/projectPresentation'
@@ -47,6 +47,15 @@ const episodes = ref([])
 const scenes = ref([])
 const members = ref([])
 const shots = ref([])
+function storyboardSpecs(shot) {
+  return [
+    { label: '时长', value: shot.durationMs > 0 ? formatShotDuration(shot.durationMs) : '' },
+    { label: '景别', value: shot.shotSize },
+    { label: '机位', value: shot.cameraPosition },
+    { label: '运动', value: shot.cameraMovement },
+    { label: '焦段', value: shot.focalLength }
+  ].filter(item => item.value)
+}
 const batchFeedbackDialog = ref(null)
 const batchFeedbackOpen = ref(false)
 const batchIssueContext = ref(null)
@@ -71,16 +80,89 @@ function openTaskDetail(shot) {
   workDrawerProjectId.value = currentProjectId.value
   workDrawer.value?.open(`/tasks/${Number(shot.taskId)}`)
 }
+// 表格与卡片共用操作定义，权限、加载状态和入口保持一致。
+function shotActions(shot) {
+  const work = workAction(shot)
+  const assigned = Boolean(shot.task || shot.taskLockVersion != null)
+  const items = []
+  const add = (key, visible, button, run) => { if (visible) items.push({ key, button, run }) }
+  const workButton = work && {
+    label: work.label, type: work.supplemental ? 'info' : work.tone, color: work.color,
+    plain: Boolean(work.supplemental), icon: work.supplemental ? work.icon : VideoPlay,
+    hint: work.hint, title: work.hint,
+    loading: openingWorkShotId.value === shot.shotId, disabled: Boolean(openingWorkShotId.value)
+  }
+  add('start', canStartShot(shot), {
+    label: '确认开工', type: 'success', plain: false, icon: VideoPlay,
+    loading: startingOperation.value?.shotId === shot.shotId, disabled: startDisabled.value
+  }, () => confirmStartShot(shot))
+  add('edit', canEditShot(shot), {
+    label: shot.status === 'pending_info' ? '完善信息' : '编辑', title: shot.status === 'pending_info' ? '缺少制作内容，请先完善信息' : '编辑镜头', type: 'warning', plain: false, icon: Edit, loading: editingShotId.value === Number(shot.shotId), disabled: deleting.value
+  }, () => openEditDialog(shot))
+  const hasSchedule = Boolean((shot.expectedStartTime || shot.task?.expectedStartTime) && (shot.expectedEndTime || shot.task?.expectedEndTime))
+  add('schedule', canScheduleShot(shot), {
+    label: hasSchedule ? '调整排期' : '设置排期', type: 'primary', plain: false, icon: Clock, disabled: startDisabled.value
+  }, () => openBatchStart('schedule', [shot], true))
+  add('work', work && !work.supplemental, workButton, () => openWork(shot))
+  add('assign', canOpenShotAssign(shot), {
+    label: assigned ? '改派制作人' : '分配制作人', type: assigned ? 'warning' : 'primary', plain: assigned,
+    icon: assigned ? Switch : User, loading: assigningShotId.value === Number(shot.shotId),
+    disabled: shotsLoading.value || assigning.value || deleting.value || Boolean(startingOperation.value) || Boolean(singleAssignContext.value) || Boolean(assigningShotId.value)
+  }, () => openSingleAssign(shot))
+  add('view', canViewTask(shot), { label: '查看任务', type: 'primary', icon: View }, () => openTaskDetail(shot))
+  add('history', true, { label: '制作履历', color: '#159b94', icon: Clock }, () => openShot(shot))
+  add('adjust', canAdjustShot(shot), { label: '编辑', type: 'warning', icon: Edit, disabled: startDisabled.value }, () => openProductionAdjustment([shot]))
+  add('supplement', work?.supplemental, workButton, () => openWork(shot))
+  add('delete', canDelete.value, {
+    label: '删除', hint: canDeleteShot(shot) ? '删除镜头' : '任务已经开始，不能删除',
+    type: 'danger', icon: Delete, disabled: !canDeleteShot(shot) || deleting.value
+  }, () => confirmDeleteShots([shot]))
+  // 按当前制作阶段突出下一步操作，其余按钮保持原顺序。
+  const primaryKey = shot.status === 'unassigned' ? 'assign'
+    : !hasSchedule && canScheduleShot(shot) ? 'schedule' : 'start'
+  const primaryIndex = items.findIndex(item => item.key === primaryKey)
+  if (primaryIndex > 0) items.unshift(...items.splice(primaryIndex, 1))
+  if (['unassigned', 'pending_schedule', 'not_started'].includes(shot.status)) {
+    const editIndex = items.findIndex(item => item.key === 'edit')
+    if (editIndex >= 0) {
+      const [editAction] = items.splice(editIndex, 1)
+      const deleteIndex = items.findIndex(item => item.key === 'delete')
+      items.splice(deleteIndex >= 0 ? deleteIndex : items.length, 0, editAction)
+    }
+  }
+  return items
+}
+async function loadScheduleActionTarget(task, options) {
+  const projectId = currentProjectId.value
+  if (Number(task.projectId) !== Number(projectId) || task.target?.targetKind !== 'shot') return null
+  if (!hasPermission('shotgrid:shot:query')) {
+    return { taskId: task.taskId, allowedActions: [], scheduleViewOnly: true }
+  }
+  const response = await getShotDetail(projectId, task.target.targetId, options)
+  const shot = response.data
+  if (Number(shot?.taskId ?? shot?.task?.taskId) !== Number(task.taskId) || Number(shot?.projectId) !== Number(projectId)) {
+    throw new Error('任务与镜头信息已变化，请刷新排期后重试')
+  }
+  return shot
+}
+function scheduleTaskActions(shot) {
+  if (!shot) return []
+  const keys = shot.scheduleViewOnly ? ['view'] : ['schedule', 'start', 'work', 'view', 'history', 'supplement']
+  return shotActions(shot).filter(action => keys.includes(action.key))
+}
 function workAction(shot) {
   if (shot.allowedActions?.includes('task.work') && hasPermission('shotgrid:task:query')) {
-    const label = { revision: '去修改', reviewing: '追加审核文件' }[shot.status] || '去做任务'
-    return { label, type: 'task' }
+    if (shot.status === 'reviewing') {
+      return { label: '追加审核文件', type: 'task', tone: '', supplemental: true, hint: '用于提交审核后补充文件；审核文件应在提交时准备完整。', icon: Upload }
+    }
+    const label = shot.status === 'revision' ? '去修改' : '去做任务'
+    return { label, type: 'task', tone: shot.status === 'revision' ? 'warning' : 'primary' }
   }
   if (shot.allowedActions?.includes('task.review') && shot.latestVersion?.versionId && hasPermission('shotgrid:reviewList:query') && hasPermission('shotgrid:version:query')) {
-    return { label: '审核任务', type: 'review' }
+    return { label: '审核任务', type: 'review', tone: 'primary', color: '#8b5cf6' }
   }
   if (shot.allowedActions?.includes('task.appendIssue') && shot.latestVersion?.versionId && hasPermission('shotgrid:reviewList:query') && hasPermission('shotgrid:version:query') && hasPermission('shotgrid:note:add')) {
-    return { label: '追加发送问题', type: 'review' }
+    return { label: '追加发送问题', type: 'review', tone: '', supplemental: true, hint: '用于退回后补充遗漏问题；完整反馈应在审核时填写。', icon: Edit }
   }
   return null
 }
@@ -201,7 +283,21 @@ onBeforeUnmount(() => {
   if (tableHeightFrame !== null) cancelAnimationFrame(tableHeightFrame)
 })
 const projectContext = reactive({ projectId: '', scope: '' })
-const batchAssignForm = reactive({ assigneeUserId: '' })
+const batchAssignForm = reactive({ assigneeUserId: '', rows: [] })
+const batchAssignTable = ref(null)
+const batchAssignChecked = ref([])
+const batchAssignAttempted = ref(false)
+const batchAssignError = ref('')
+let batchAssignProject = null
+let batchAssignGeneration = 0
+const batchAssignCounts = computed(() => {
+  const counts = new Map()
+  for (const row of batchAssignForm.rows) {
+    const key = row.assigneeUserId
+    counts.set(key, (counts.get(key) || 0) + 1)
+  }
+  return [...counts].map(([id, count]) => ({ id, count, name: id ? shotAssigneeName(creatorMembers.value.find(member => String(member.userId) === id)) : '未指定' }))
+})
 const query = reactive({
   keyword: '', episodeId: '', sceneId: '', shotNoStart: '', shotNoEnd: '', shotStatus: '', assigneeUserId: '',
   pageNum: 1, pageSize: 10, orderByColumn: 'sortOrder', isAsc: 'ascending'
@@ -378,7 +474,7 @@ const shotFilterRules = {
   sceneId: [optionalPositiveIdRule('请选择有效场次')],
   shotStatus: [{
     validator: (_rule, value, callback) => {
-      if (value && !['unassigned', 'not_started', 'preparing', 'in_progress', 'reviewing', 'revision', 'completed'].includes(value)) {
+      if (value && !['pending_info', 'unassigned', 'pending_schedule', 'not_started', 'preparing', 'in_progress', 'reviewing', 'revision', 'completed'].includes(value)) {
         callback(new Error('请选择有效镜头状态'))
         return
       }
@@ -388,19 +484,20 @@ const shotFilterRules = {
   }],
   assigneeUserId: [optionalPositiveIdRule('请选择有效制作人')]
 }
+const batchAssigneeRules = [{ validator: (_rule, value, callback) => {
+  callback(creatorMembers.value.some(member => String(member.userId) === value) ? undefined : new Error('请选择项目制作人'))
+}, trigger: 'change' }]
 const batchAssignRules = {
-  assigneeUserId: [{
-    validator: (_rule, value, callback) => {
-      const userId = Number(value)
-      const memberExists = creatorMembers.value.some(item => Number(item.userId) === userId)
-      if (!Number.isSafeInteger(userId) || userId <= 0 || !memberExists) {
-        callback(new Error('请选择要分配的新制作人'))
-        return
-      }
-      callback()
-    },
-    trigger: 'change'
-  }]
+  assigneeUserId: [{ validator: (_rule, value, callback) => {
+    callback(!value || creatorMembers.value.some(member => String(member.userId) === value) ? undefined : new Error('请选择有效制作人'))
+  }, trigger: 'change' }]
+}
+async function applyBatchAssignee() {
+  if (assigning.value || batchAssignAttempted.value) return
+  if (!await batchAssignFormRef.value.validateField('assigneeUserId').catch(() => false)) return
+  if (!batchAssignForm.assigneeUserId) return ElMessage.warning('请先选择制作人')
+  for (const row of batchAssignChecked.value) row.assigneeUserId = batchAssignForm.assigneeUserId
+  batchAssignFormRef.value.clearValidate()
 }
 
 function shotTimeState(shot) {
@@ -429,6 +526,8 @@ function canStartShot(shot) {
   return Boolean(
     canStart.value && hasPermission('shotgrid:shot:query') && shot?.status === 'not_started' &&
     shot.allowedActions?.includes('task.start') &&
+    (shot.expectedStartTime || shot.task?.expectedStartTime) &&
+    (shot.expectedEndTime || shot.task?.expectedEndTime) &&
     Number.isSafeInteger(shot.taskId) && shot.taskId > 0 &&
     Number.isSafeInteger(shot.taskLockVersion) && shot.taskLockVersion >= 0 &&
     Number.isSafeInteger(shot.lockVersion) && shot.lockVersion >= 0
@@ -440,16 +539,22 @@ function isCurrentStart(operation) {
     currentProjectId.value === operation.projectId && projectGeneration === operation.projectGeneration
 }
 
-function openBatchStart() {
-  if (startDisabled.value || !selectedShots.value.length || !selectedShots.value.every(canStartShot)) return
+function canScheduleShot(shot) {
+  return Boolean(canSchedule.value && hasPermission('shotgrid:shot:query') && shot?.status === 'not_started' &&
+    Number.isSafeInteger(shot.taskId) && shot.taskId > 0 && Number.isSafeInteger(shot.taskLockVersion) &&
+    Number.isSafeInteger(shot.lockVersion))
+}
+function openBatchStart(mode = 'start', targets = selectedShots.value, single = false) {
+  const eligible = mode === 'schedule' ? canScheduleShot : canStartShot
+  if (startDisabled.value || !targets.length || !targets.every(eligible) || targets.length > 100) return
   const operation = Object.freeze({ projectId: currentProjectId.value, projectGeneration })
-  const snapshot = selectedShots.value.map(shot => ({ ...shot }))
+  const snapshot = targets.map(shot => ({ ...shot }))
   startingOperation.value = operation
   batchStartContext.value = {
-    projectId: operation.projectId, shots: snapshot, members: [...members.value],
+    projectId: operation.projectId, shots: snapshot, members: [...members.value], mode, single, canSchedule: canSchedule.value,
     validateContext: () => isCurrentStart(operation) && snapshot.every(shot => {
-      const current = shots.value.find(item => item.shotId === shot.shotId)
-      return canStartShot(current) && current.taskId === shot.taskId &&
+      const current = shots.value.find(item => item.shotId === shot.shotId) || shot
+      return eligible(current) && current.taskId === shot.taskId &&
         current.taskLockVersion === shot.taskLockVersion && current.lockVersion === shot.lockVersion
     })
   }
@@ -469,6 +574,7 @@ async function confirmStartShot(shot) {
     shotId: shot.shotId, taskId: shot.taskId,
     lockVersion: shot.taskLockVersion, shotLockVersion: shot.lockVersion
   })
+  let scheduleChanged = false
   startingOperation.value = operation
   try {
     const detailResponse = await getShotDetail(operation.projectId, operation.shotId)
@@ -481,12 +587,14 @@ async function confirmStartShot(shot) {
       return
     }
     const response = await requestStartDialog({
+      canSchedule: canSchedule.value,
+      onScheduleSaved: () => { scheduleChanged = true },
       name: [detail.episodeCode, detail.sceneCode, detail.shotCode].join(' / '),
       assigneeName: shotAssigneeName(detail.task.assignee || shot.assignee, members.value),
       shot: detail, task: detail.task, taskId: operation.taskId,
       command: { lockVersion: operation.lockVersion, shotLockVersion: operation.shotLockVersion, assetsConfirmed: true },
       validateContext: () => {
-        const currentShot = shots.value.find(item => item.shotId === operation.shotId)
+        const currentShot = shots.value.find(item => item.shotId === operation.shotId) || shot
         return isCurrentStart(operation) && canStartShot(currentShot) && currentShot.taskId === operation.taskId &&
           currentShot.taskLockVersion === operation.lockVersion && currentShot.lockVersion === operation.shotLockVersion
       }
@@ -500,21 +608,23 @@ async function confirmStartShot(shot) {
       : '已确认开工，负责人可以开始制作')
     closeDetailDrawer()
     await loadShots()
+    scheduleChanged = false
   } catch (error) {
     if (error === 'cancel' || error === 'close' || !isCurrentStart(operation)) return
     ElMessage.error(error?.message || '确认开工失败，请刷新后重试')
     if (Number(error?.httpStatus || error?.status) === 409) await loadShots()
   } finally {
+    if (scheduleChanged && isCurrentStart(operation)) await loadShots()
     if (startingOperation.value === operation) startingOperation.value = null
   }
 }
 
 function canDeleteShot(shot) {
-  return canDelete.value && ['unassigned', 'not_started'].includes(shot?.status)
+  return canDelete.value && ['pending_info', 'unassigned', 'not_started'].includes(shot?.status)
 }
 
 function canEditShot(shot) {
-  return canEdit.value && ['unassigned', 'not_started'].includes(shot?.status)
+  return canEdit.value && ['pending_info', 'unassigned', 'not_started'].includes(shot?.status)
 }
 
 function canAssignShot(shot) {
@@ -546,7 +656,7 @@ async function openSingleAssign(shot) {
     const current = response.data
     if (Number(current?.projectId) !== projectId || Number(current?.shotId) !== shotId ||
       !canOpenShotAssign(current) || !current.allowedActions?.includes('task.assign')) {
-      ElMessage.warning('镜头状态或权限已变化，当前不能分配任务。')
+      ElMessage.warning('镜头状态或权限已变化，当前不能分配制作人。')
       await loadShots()
       return
     }
@@ -624,7 +734,7 @@ async function handleBatchFeedbackSaved(context) {
 }
 
 function canSelectShot(shot) {
-  return canAdjustShot(shot) || canAssignShot(shot) || canDeleteShot(shot) || canAddOverallFeedback(shot) || canStartShot(shot) || canAppendShotIssue(shot)
+  return canScheduleShot(shot) || canAdjustShot(shot) || canAssignShot(shot) || canDeleteShot(shot) || canAddOverallFeedback(shot) || canStartShot(shot) || canAppendShotIssue(shot)
 }
 
 function isShotSelectable(shot) {
@@ -897,7 +1007,7 @@ function initRowSortable() {
 
 function isShotOrderMutable(shot) {
   return (
-    ['unassigned', 'not_started'].includes(shot?.status) &&
+    ['pending_info', 'unassigned', 'not_started'].includes(shot?.status) &&
     !shot?.storageDirName &&
     shot?.directoryStatus === 'not_created' &&
     !shot?.latestVersion
@@ -905,7 +1015,7 @@ function isShotOrderMutable(shot) {
 }
 
 function shotOrderLockReason(shot) {
-  if (!['unassigned', 'not_started'].includes(shot?.status)) return '该镜头已开始制作，不能调整顺序'
+  if (!['pending_info', 'unassigned', 'not_started'].includes(shot?.status)) return '该镜头已开始制作，不能调整顺序'
   if (shot?.storageDirName || shot?.directoryStatus !== 'not_created') return '该镜头目录已冻结，不能调整顺序'
   if (shot?.latestVersion) return '该镜头已有版本，不能调整顺序'
   return ''
@@ -1051,61 +1161,71 @@ async function syncShotTableSelection() {
 }
 
 async function confirmBatchAssign() {
-  if (assigning.value || !selectedShots.value.length) return
-  const valid = batchAssignFormRef.value
-    ? await batchAssignFormRef.value.validate().catch(() => false)
-    : false
-  if (!valid) return
-  const assigneeUserId = Number(batchAssignForm.assigneeUserId)
-  const member = creatorMembers.value.find(item => Number(item.userId) === assigneeUserId)
-  if (!member) {
-    ElMessage.warning('请先选择要分配的新制作人')
-    return
+  if (assigning.value || batchAssignAttempted.value || !batchAssignForm.rows.length) return
+  if (!await batchAssignFormRef.value.validate().catch(() => false)) return
+  const targetProjectId = batchAssignProject
+  const generation = batchAssignGeneration
+  const current = () => !disposed && targetProjectId === currentProjectId.value && generation === projectGeneration
+  if (!current()) return
+  if (batchAssignForm.rows.some(row => !canAssignShot(row.shot))) return ElMessage.warning('镜头状态或权限已变化，请关闭后刷新重试')
+  const groups = new Map()
+  for (const row of batchAssignForm.rows) {
+    if (!groups.has(row.assigneeUserId)) groups.set(row.assigneeUserId, [])
+    groups.get(row.assigneeUserId).push(row)
   }
-  const blocked = selectedShots.value.find(shot => !canAssignShot(shot))
-  if (blocked) {
-    ElMessage.warning(`${blocked.shotCode} 当前不能分配或改派，请刷新状态；仅未开工任务可改派`)
-    return
-  }
-  const targetProjectId = currentProjectId.value
-  const items = selectedShots.value.map(shot => ({
-    shotId: shot.shotId,
-    taskLockVersion: shot.taskLockVersion
-  }))
-  if (currentProjectId.value !== targetProjectId) return
   assigning.value = true
+  batchAssignAttempted.value = true
   try {
-    await batchAssignShotTasks(targetProjectId, assigneeUserId, items)
-    ElMessage.success(`已将 ${items.length} 个镜头分配给 ${shotAssigneeName(member)}`)
-    if (currentProjectId.value === targetProjectId) {
+    for (const [userId, rows] of groups) {
+      if (!current()) return
+      try {
+        await batchAssignShotTasks(targetProjectId, Number(userId), rows.map(row => ({ shotId: row.shot.shotId, taskLockVersion: row.shot.taskLockVersion })))
+        if (!current()) return
+        rows.forEach(row => { row.result = '已分配' })
+      } catch (error) {
+        if (!current()) return
+        rows.forEach(row => { row.result = '失败，需刷新核对' })
+        const state = shotErrorState(error, '镜头批量分配失败')
+        batchAssignError.value = `${state.title}：${state.message}。成功项已生效，其余项未继续执行，请关闭刷新后核对。`
+        return
+      }
+    }
+    if (current()) {
+      ElMessage.success(`已分配 ${batchAssignForm.rows.length} 个镜头`)
       showBatchAssign.value = false
       resetBatchAssignForm()
       clearShotSelection()
       await loadShots()
     }
-  } catch (error) {
-    const state = shotErrorState(error, '镜头批量分配失败')
-    ElMessage.error(`${state.title}：${state.message}`)
-    if (state.status === 409 && currentProjectId.value === targetProjectId) await loadShots()
   } finally { assigning.value = false }
 }
 
-function openBatchAssignDialog() {
+async function openBatchAssignDialog() {
   if (!selectedShots.value.length || assigning.value || deleting.value) return
   resetBatchAssignForm()
+  batchAssignProject = currentProjectId.value
+  batchAssignGeneration = projectGeneration
+  batchAssignForm.rows = selectedShots.value.map(shot => ({ shot: { ...shot }, assigneeUserId: '', result: '未提交' }))
   showBatchAssign.value = true
+  await nextTick()
+  batchAssignTable.value?.toggleAllSelection()
 }
 
-function closeBatchAssignDialog(force = false) {
+async function closeBatchAssignDialog(force = false) {
   if (assigning.value && !force) return
+  const refresh = batchAssignAttempted.value && batchAssignProject === currentProjectId.value && !force
   showBatchAssign.value = false
   resetBatchAssignForm()
+  if (refresh) { clearShotSelection(); await loadShots() }
 }
 
 function resetBatchAssignForm() {
-  batchAssignFormRef.value?.resetFields()
   batchAssignFormRef.value?.clearValidate()
   batchAssignForm.assigneeUserId = ''
+  batchAssignForm.rows = []
+  batchAssignChecked.value = []
+  batchAssignAttempted.value = false
+  batchAssignError.value = ''
 }
 
 async function openEditDialog(shot) {
@@ -1326,7 +1446,7 @@ onBeforeUnmount(() => { disposed = true; closeSingleAssign(); destroyRowSortable
   <ProductionAdjustmentDialog v-if="adjustmentContext" :context="adjustmentContext" @close="closeProductionAdjustment" />
   <BatchShotStartDialog v-if="batchStartContext" :context="batchStartContext" @close="closeBatchStart" />
   <BatchAppendIssueDialog v-if="batchIssueContext" :context="batchIssueContext" @close="closeBatchAppendIssues" />
-  <section ref="shotPageRef" class="sg-page shot-page" :class="{ 'shot-page--table': viewMode === 'table' }">
+  <section ref="shotPageRef" class="sg-page shot-page" :class="{ 'shot-page--table': viewMode === 'table', 'shot-page--schedule': ['swimlane', 'gantt'].includes(viewMode) }">
     <header class="sg-page-heading shot-heading">
       <h2 class="sg-page-title">镜头管理</h2>
       <div class="shot-heading__actions"><el-button v-if="canCreateEpisode" @click="openHierarchyCreate('episode')">新建集</el-button><el-button v-if="canCreateScene" :disabled="!episodes.length" @click="openHierarchyCreate('scene')">新建场次</el-button><el-button v-if="canImport" :icon="Upload" @click="openImportDialog">导入 Excel</el-button><el-button v-if="canCreate" type="primary" :icon="Plus" @click="openCreateDialog">新建镜头</el-button></div>
@@ -1363,7 +1483,7 @@ onBeforeUnmount(() => { disposed = true; closeSingleAssign(); destroyRowSortable
             </el-form-item>
           </div>
           <el-form-item class="shot-filter-item" prop="shotStatus">
-            <el-select v-model="query.shotStatus" class="sg-select" placeholder="全部状态" aria-label="按状态筛选" @change="submitFilters"><el-option label="全部状态" value="" /><el-option v-for="status in ['unassigned','not_started','in_progress','reviewing','revision','completed']" :key="status" :label="shotStatusMeta(status).label" :value="status" /></el-select>
+            <el-select v-model="query.shotStatus" class="sg-select" placeholder="全部状态" aria-label="按状态筛选" @change="submitFilters"><el-option label="全部状态" value="" /><el-option v-for="status in ['pending_info', 'unassigned','pending_schedule','not_started','in_progress','reviewing','revision','completed']" :key="status" :label="shotStatusMeta(status).label" :value="status" /></el-select>
           </el-form-item>
           <el-form-item class="shot-filter-item" prop="assigneeUserId">
             <el-select v-model="query.assigneeUserId" class="sg-select" placeholder="全部制作人" aria-label="按制作人筛选" @change="submitFilters"><el-option label="全部制作人" value="" /><el-option v-for="member in creatorMembers" :key="member.userId" :label="shotAssigneeOptionLabel(member)" :value="String(member.userId)" /></el-select>
@@ -1375,7 +1495,7 @@ onBeforeUnmount(() => { disposed = true; closeSingleAssign(); destroyRowSortable
           </el-form-item>
         </el-form>
 
-        <div class="shot-list-toolbar"><div class="shot-list-toolbar__summary"><strong>{{ total }}</strong><span>个镜头<span v-if="shotsLoading"> · 正在刷新</span><span v-else>{{ dragSortHint }}</span></span><template v-if="viewMode === 'table' && selectedShots.length"><el-button v-if="selectedShots.every(canAdjustShot)" text type="primary" :disabled="startDisabled || selectedShots.length > 100" @click="openProductionAdjustment(selectedShots)">批量调整制作任务（{{ selectedShots.length }}）</el-button><el-button v-if="selectedShots.every(canAppendShotIssue)" text type="primary" :disabled="startDisabled" @click="openBatchAppendIssues">批量追加发送问题（{{ selectedShots.length }}）</el-button><el-button v-if="canStart && selectedShots.every(canStartShot)" text type="primary" :icon="VideoPlay" :disabled="startDisabled" @click="openBatchStart">批量开始任务（{{ selectedShots.length }}）</el-button><el-button v-if="selectedShots.every(canAddOverallFeedback)" text type="primary" :disabled="assigning || deleting || shotsLoading" @click="openBatchFeedback">批量反馈与复核（{{ selectedShots.length }}）</el-button><el-button v-if="canAssign && selectedShots.every(canAssignShot)" text type="primary" :loading="assigning" :disabled="deleting" @click="openBatchAssignDialog">{{ batchAssignLabel }}（{{ selectedShots.length }}）</el-button><el-button v-if="canDelete" text type="danger" :icon="Delete" :disabled="!canDeleteSelection || deleting || assigning" :loading="deleting" :title="!canDeleteSelection ? '选中项包含已开始任务，不能批量删除' : ''" @click="confirmDeleteShots(selectedShots)">批量删除（{{ selectedShots.length }}）</el-button></template></div><el-button v-if="shotFeatures.manualSortEnabled && viewMode === 'table' && (canEdit || sceneOrderMode)" size="small" :type="sceneOrderMode ? 'primary' : 'default'" :disabled="shotsLoading || reordering || assigning || deleting || (!sceneOrderMode && (!isSceneOrderScope || total > MAX_SCENE_SORT_SHOTS))" @click="toggleSceneOrderMode">{{ sceneOrderMode ? '退出排序' : '排序模式' }}</el-button><el-popover v-if="viewMode === 'table'" placement="bottom-end" :width="280" trigger="click">
+        <div class="shot-list-toolbar"><div class="shot-list-toolbar__summary"><strong v-if="['swimlane', 'gantt'].includes(viewMode)">任务排期</strong><strong v-else>{{ total }}</strong><span v-if="!['swimlane', 'gantt'].includes(viewMode)">个镜头<span v-if="shotsLoading"> · 正在刷新</span><span v-else>{{ dragSortHint }}</span></span><template v-if="viewMode === 'table' && selectedShots.length"><el-button v-if="canStart && selectedShots.every(canStartShot)" text type="primary" :icon="VideoPlay" :disabled="startDisabled" @click="openBatchStart('start')">批量确认开工（{{ selectedShots.length }}）</el-button><el-button v-if="selectedShots.every(canAdjustShot)" text type="primary" :disabled="startDisabled || selectedShots.length > 100" @click="openProductionAdjustment(selectedShots)">批量编辑制作任务（{{ selectedShots.length }}）</el-button><el-button v-if="selectedShots.every(canAppendShotIssue)" text type="primary" :disabled="startDisabled" @click="openBatchAppendIssues">批量追加发送问题（{{ selectedShots.length }}）</el-button><el-button v-if="selectedShots.every(canScheduleShot)" text type="primary" :disabled="startDisabled || selectedShots.length > 100" @click="openBatchStart('schedule')">批量设置排期（{{ selectedShots.length }}）</el-button><el-button v-if="selectedShots.every(canAddOverallFeedback)" text type="primary" :disabled="assigning || deleting || shotsLoading" @click="openBatchFeedback">批量反馈与复核（{{ selectedShots.length }}）</el-button><el-button v-if="canAssign && selectedShots.every(canAssignShot)" text type="primary" :loading="assigning" :disabled="deleting" :title="selectedShots.some(shot => shot.status === 'pending_info') ? '选中项包含待完善镜头，请先补齐制作内容' : !selectedShots.every(canAssignShot) ? '选中项包含当前不可分配的镜头' : ''" @click="openBatchAssignDialog">{{ batchAssignLabel }}（{{ selectedShots.length }}）</el-button><el-button v-if="canDelete" text type="danger" :icon="Delete" :disabled="!canDeleteSelection || deleting || assigning" :loading="deleting" :title="!canDeleteSelection ? '选中项包含已开始任务，不能批量删除' : ''" @click="confirmDeleteShots(selectedShots)">批量删除（{{ selectedShots.length }}）</el-button></template></div><el-button v-if="shotFeatures.manualSortEnabled && viewMode === 'table' && (canEdit || sceneOrderMode)" size="small" :type="sceneOrderMode ? 'primary' : 'default'" :disabled="shotsLoading || reordering || assigning || deleting || (!sceneOrderMode && (!isSceneOrderScope || total > MAX_SCENE_SORT_SHOTS))" @click="toggleSceneOrderMode">{{ sceneOrderMode ? '退出排序' : '排序模式' }}</el-button><el-popover v-if="viewMode === 'table'" placement="bottom-end" :width="280" trigger="click">
           <template #reference><el-button size="small" aria-label="表格列设置">列设置</el-button></template>
           <el-form ref="columnSettingsFormRef" label-position="top" :model="{ mode: tablePresentationMode }" class="shot-column-settings">
             <el-form-item label="显示方式" prop="mode"><el-select v-model="tablePresentationMode" aria-label="表格显示方式"><el-option label="自动适应" value="auto" /><el-option label="精简列" value="compact" /><el-option label="完整列" value="full" /><el-option label="自定义列" value="custom" /></el-select></el-form-item>
@@ -1383,11 +1503,11 @@ onBeforeUnmount(() => { disposed = true; closeSingleAssign(); destroyRowSortable
             <p>收起的信息仍可在行首展开查看。拖动表头边界可调整列宽。</p>
             <el-button text type="primary" @click="resetTablePresentation">恢复自动布局</el-button>
           </el-form>
-        </el-popover><el-radio-group v-model="viewMode" class="shot-list-toolbar__views" size="small" aria-label="镜头视图"><el-radio-button value="table"><el-icon><List /></el-icon>表格</el-radio-button><el-radio-button value="card"><el-icon><Grid /></el-icon>卡片</el-radio-button><el-radio-button value="storyboard"><el-icon><VideoCamera /></el-icon>故事板</el-radio-button><el-radio-button value="swimlane"><el-icon><Clock /></el-icon>人员泳道</el-radio-button><el-radio-button value="gantt"><el-icon><Calendar /></el-icon>任务甘特</el-radio-button></el-radio-group></div>
+        </el-popover><el-radio-group v-model="viewMode" class="shot-list-toolbar__views" size="small" aria-label="镜头视图"><el-radio-button value="table"><el-icon><List /></el-icon>表格</el-radio-button><el-radio-button value="storyboard"><el-icon><VideoCamera /></el-icon>故事板</el-radio-button><el-radio-button value="swimlane"><el-icon><Clock /></el-icon>人员泳道</el-radio-button><el-radio-button value="gantt"><el-icon><Calendar /></el-icon>任务甘特</el-radio-button></el-radio-group></div>
 
         <el-alert v-if="pollingError" :title="pollingError" type="warning" show-icon :closable="false" />
         <Suspense v-if="['swimlane', 'gantt'].includes(viewMode) && currentProjectId">
-          <ScheduleBoard :project-id="currentProjectId" target-kind="shot" :initial-mode="viewMode" :initial-filters="scheduleInitialFilters" :editable-allowed="canSchedule" @query-change="handleScheduleQueryChange" />
+          <ScheduleBoard :project-id="currentProjectId" target-kind="shot" :initial-mode="viewMode" :initial-filters="scheduleInitialFilters" :editable-allowed="canSchedule" :action-loader="loadScheduleActionTarget" :action-factory="scheduleTaskActions" @query-change="handleScheduleQueryChange" />
           <template #fallback><el-card class="shot-loading" shadow="never"><el-skeleton animated :rows="8" /></el-card></template>
         </Suspense>
         <ProjectStatePanel v-else-if="shotsError" :title="shotsError.title" :message="shotsError.message" :retryable="shotsError.retryable" @retry="loadProjectContext" />
@@ -1437,9 +1557,9 @@ onBeforeUnmount(() => { disposed = true; closeSingleAssign(); destroyRowSortable
             <el-table-column label="状态" column-key="status" :width="tableColumnWidths.status || 90">
               <template #default="scope">
                 <div v-if="scope?.row">
-                  <el-tag class="shot-status-tag" :class="shotStatusTagClass(scope.row.status)"
-                          :type="tagTypeFromTone(shotStatusMeta(scope.row.status).tone)" size="small" effect="light"
-                          round>{{ shotStatusMeta(scope.row.status).label }}
+                  <el-tag class="shot-status-tag" :class="shotStatusTagClass(scope.row)"
+                          :type="tagTypeFromTone(shotStatusMeta(scope.row).tone)" size="small" effect="light"
+                          round>{{ shotStatusMeta(scope.row).label }}
                   </el-tag>
                   <el-tag v-if="scope.row.directoryStatus === 'failed'" class="shot-status-tag shot-status-tag--directory-failed"
                           :type="tagTypeFromTone(directoryStatusMeta(scope.row.directoryStatus).tone)" size="small"
@@ -1448,28 +1568,37 @@ onBeforeUnmount(() => { disposed = true; closeSingleAssign(); destroyRowSortable
                 </div>
               </template>
             </el-table-column>
-            <el-table-column label="操作" column-key="actions" :width="Math.max(360, tableColumnWidths.actions || 360)" fixed="right">
+            <el-table-column label="操作" column-key="actions" :width="Math.max(420, tableColumnWidths.actions || 420)" fixed="right">
               <template #default="scope">
-                <div v-if="scope?.row" class="shot-row-actions">
-                  <TableActionButton v-if="canAdjustShot(scope.row)" label="调整制作任务" type="primary" :icon="Edit" :disabled="startDisabled" @click="openProductionAdjustment([scope.row])" />
-                  <TableActionButton v-if="canStartShot(scope.row)" label="开始任务" type="primary" :plain="false" :icon="VideoPlay" :loading="startingOperation?.shotId === scope.row.shotId" :disabled="startDisabled" @click="confirmStartShot(scope.row)" />
-                  <TableActionButton v-if="canOpenShotAssign(scope.row)" :label="scope.row.task || scope.row.taskLockVersion != null ? '改派任务' : '分配任务'" type="info" :icon="scope.row.task || scope.row.taskLockVersion != null ? Switch : User" :loading="assigningShotId === Number(scope.row.shotId)" :disabled="shotsLoading || assigning || deleting || Boolean(startingOperation) || Boolean(singleAssignContext) || Boolean(assigningShotId)" @click="openSingleAssign(scope.row)" />
-                  <TableActionButton v-if="workAction(scope.row)" :label="workAction(scope.row).label" type="primary" :plain="false" :icon="VideoPlay" :loading="openingWorkShotId === scope.row.shotId" :disabled="Boolean(openingWorkShotId)" @click="openWork(scope.row)" />
-                  <TableActionButton v-if="canViewTask(scope.row)" label="查看任务" :icon="View" @click="openTaskDetail(scope.row)" />
-                  <TableActionButton label="制作履历" :icon="Clock" @click="openShot(scope.row)" />
-                  <TableActionButton v-if="canEditShot(scope.row)" label="编辑" :icon="Edit" :loading="editingShotId === Number(scope.row.shotId)" :disabled="deleting" @click="openEditDialog(scope.row)" />
-                  <TableActionButton v-if="canDelete" label="删除" :hint="canDeleteShot(scope.row) ? '删除镜头' : '任务已经开始，不能删除'" type="danger" :icon="Delete" :disabled="!canDeleteShot(scope.row) || deleting" @click="confirmDeleteShots([scope.row])" />
-                </div>
+                <ShotActionButtons v-if="scope?.row" :actions="shotActions(scope.row)" />
               </template>
             </el-table-column>
           </el-table>
         </div>
 
-        <div v-else-if="viewMode === 'card'" class="shot-grid" :class="{ 'is-refreshing':shotsLoading }"><el-card v-for="shot in shots" :key="shot.shotId" class="shot-card" shadow="hover" role="link" tabindex="0" @click="openShot(shot)" @keydown.enter="openShot(shot)" @keydown.space.prevent="openShot(shot)"><div class="shot-card__media"><ProtectedThumbnail class="shot-thumb" :thumbnail="shot.thumbnail" :video="shot.proxyMedia" :alt="`${shot.shotCode} 缩略图`" /><span class="shot-card__duration">{{ formatShotDuration(shot.durationMs) }}</span></div><header><div><small>{{ shot.episodeCode }} / {{ shot.sceneCode }}</small><h3>{{ shot.shotCode }} · 第 {{ shot.shotNo }} 镜</h3></div><el-tag class="shot-status-tag" :class="shotStatusTagClass(shot.status)" :type="tagTypeFromTone(shotStatusMeta(shot.status).tone)" size="small" effect="light" round>{{ shotStatusMeta(shot.status).label }}</el-tag></header><p>{{ shot.description }}</p><footer><span>{{ shotAssigneeName(shot.assignee, members) }}</span><span>{{ shot.shotSize || '未设景别' }}</span><el-button v-if="canStartShot(shot)" size="small" type="primary" :icon="VideoPlay" :loading="startingOperation?.shotId === shot.shotId" :disabled="startDisabled" @click.stop="confirmStartShot(shot)" @keydown.stop>开始任务</el-button></footer></el-card></div>
+        <div v-else class="storyboard" :class="{ 'is-refreshing': shotsLoading }">
+            <el-card v-for="shot in shots" :key="shot.shotId" class="story-frame" shadow="hover">
+              <div class="story-frame__media">
+                <ProtectedThumbnail class="shot-thumb" :thumbnail="shot.thumbnail" :video="shot.proxyMedia" :alt="`${shot.shotCode} 缩略图`" />
+              </div>
+              <div class="story-frame__content">
+                <header class="story-frame__heading">
+                  <h3>{{ shot.episodeCode }} / {{ shot.sceneCode }} / {{ shot.shotCode }}</h3>
+                  <el-tag class="shot-status-tag" :class="shotStatusTagClass(shot)" :type="tagTypeFromTone(shotStatusMeta(shot).tone)" size="small" effect="light" round>{{ shotStatusMeta(shot).label }}</el-tag>
+                </header>
+                <div class="story-frame__description">{{ shot.description || '暂未填写制作内容' }}</div>
+                <div v-if="shot.dialogue" class="story-frame__text"><span>台词 / 对白</span><p>{{ shot.dialogue }}</p></div>
+                <div v-if="shot.soundEffect" class="story-frame__text"><span>音效</span><p>{{ shot.soundEffect }}</p></div>
+                <el-descriptions v-if="storyboardSpecs(shot).length" class="story-frame__specs" :column="2" size="small">
+                  <el-descriptions-item v-for="item in storyboardSpecs(shot)" :key="item.label" :label="item.label">{{ item.value }}</el-descriptions-item>
+                </el-descriptions>
+                <div class="story-frame__assignee">制作人：{{ shotAssigneeName(shot.assignee, members) }}</div>
+                <ShotActionButtons class="story-frame__actions" :actions="shotActions(shot)" />
+              </div>
+            </el-card>
+        </div>
 
-        <div v-else class="storyboard" :class="{ 'is-refreshing':shotsLoading }"><el-card v-for="shot in shots" :key="shot.shotId" class="story-frame" shadow="hover" role="link" tabindex="0" @click="openShot(shot)" @keydown.enter="openShot(shot)" @keydown.space.prevent="openShot(shot)"><span class="story-frame__index" title="本场镜头序号">{{ String(shot.shotNo).padStart(2,'0') }}</span><ProtectedThumbnail class="shot-thumb" :thumbnail="shot.thumbnail" :video="shot.proxyMedia" :alt="`${shot.shotCode} 缩略图`" /><div><strong>{{ shot.episodeCode }} · {{ shot.sceneCode }} · {{ shot.shotCode }}</strong><p>{{ shot.description }}</p><small>本场第 {{ shot.shotNo }} 镜 · {{ formatShotDuration(shot.durationMs) }} · {{ shot.shotSize || '未设景别' }} · {{ shotAssigneeName(shot.assignee, members) }}</small><el-button v-if="canStartShot(shot)" size="small" type="primary" :icon="VideoPlay" :loading="startingOperation?.shotId === shot.shotId" :disabled="startDisabled" @click.stop="confirmStartShot(shot)" @keydown.stop>开始任务</el-button></div></el-card></div>
-
-        <el-pagination ref="shotPaginationRef" v-if="shots.length && !sceneOrderFullyLoaded" class="shot-pagination" background layout="total, sizes, prev, pager, next" :page-sizes="[10, 20, 30, 40, 50, 100]" :current-page="query.pageNum" :page-size="query.pageSize" :total="total" :disabled="shotsLoading" aria-label="镜头分页" @current-change="changePage" @size-change="changePageSize" />
+        <el-pagination ref="shotPaginationRef" v-if="![ 'swimlane', 'gantt' ].includes(viewMode) && shots.length && !sceneOrderFullyLoaded" class="shot-pagination" background layout="total, sizes, prev, pager, next" :page-sizes="[10, 20, 30, 40, 50, 100]" :current-page="query.pageNum" :page-size="query.pageSize" :total="total" :disabled="shotsLoading" aria-label="镜头分页" @current-change="changePage" @size-change="changePageSize" />
       </template>
     </template>
 
@@ -1478,13 +1607,30 @@ onBeforeUnmount(() => { disposed = true; closeSingleAssign(); destroyRowSortable
     <ShotAssignDialog v-if="singleAssignContext" :key="singleAssignContext.operationGeneration" :project-id="singleAssignContext.projectId" :operation-generation="singleAssignContext.operationGeneration" :shot="singleAssignContext.shot" :members="members" @close="closeSingleAssign" @assigned="handleSingleAssigned" @refresh="refreshSingleAssign" />
     <ShotImportDialog v-if="showImport && importProjectId && importOperationGeneration" :project-id="importProjectId" :operation-generation="importOperationGeneration" :project-name="project?.projectName" @close="closeImportDialog" @imported="handleImported" />
     <EpisodeSceneCreateDialog v-if="showHierarchyCreate && currentProjectId" :project-id="currentProjectId" :mode="hierarchyCreateMode" :episodes="episodes" :initial-episode-id="query.episodeId" @close="closeHierarchyCreate" @saved="handleHierarchySaved" />
-    <el-dialog v-model="showBatchAssign" class="shot-batch-assign-dialog" :title="batchAssignLabel" width="520px" append-to-body :close-on-click-modal="!assigning" :close-on-press-escape="!assigning" :show-close="!assigning" @closed="resetBatchAssignForm">
-      <el-form ref="batchAssignFormRef" :model="batchAssignForm" :rules="batchAssignRules" class="batch-assign-form" label-position="top" aria-label="镜头批量分配表单">
-        <div class="batch-assign-summary"><strong>已选择 {{ selectedShots.length }} 个镜头</strong><span v-if="hasAssignedSelection">其中包含已分配镜头，确认后将改派到新的制作人。</span><span v-else>确认后将为所选镜头创建制作任务。</span></div>
-        <el-form-item label="新的制作人" prop="assigneeUserId" required><el-select v-model="batchAssignForm.assigneeUserId" placeholder="请选择项目制作人员" aria-label="批量分配制作人" :disabled="assigning"><el-option v-for="member in creatorMembers" :key="member.userId" :label="shotAssigneeOptionLabel(member)" :value="String(member.userId)" /></el-select></el-form-item>
+    <el-drawer v-model="showBatchAssign" class="shot-batch-assign-drawer" :title="batchAssignLabel" size="min(1040px, 95vw)" direction="rtl" append-to-body :close-on-click-modal="!assigning" :close-on-press-escape="!assigning" :show-close="!assigning" @close="closeBatchAssignDialog()">
+      <el-form ref="batchAssignFormRef" :model="batchAssignForm" :rules="batchAssignRules" class="batch-assign-form" label-position="top" aria-label="镜头批量分配表单" :disabled="assigning || batchAssignAttempted">
+        <div class="batch-assign-summary"><strong>共 {{ batchAssignForm.rows.length }} 个镜头待核对</strong><span>先批量指定制作人，再逐项微调，确认后生效。</span></div>
+        <div class="batch-assign-toolbar">
+          <div class="batch-assign-toolbar__label"><strong>批量设置</strong><span>已勾选 {{ batchAssignChecked.length }} 项</span></div>
+          <el-form-item prop="assigneeUserId"><el-select popper-class="batch-assign-member-options" v-model="batchAssignForm.assigneeUserId" filterable clearable placeholder="选择制作人" aria-label="批量分配制作人"><el-option v-for="member in creatorMembers" :key="member.userId" :label="shotAssigneeOptionLabel(member)" :value="String(member.userId)" /></el-select></el-form-item>
+          <el-button type="primary" :disabled="!batchAssignChecked.length" @click="applyBatchAssignee">应用到勾选项</el-button>
+        </div>
+        <div class="batch-assign-table-heading"><strong>逐项核对</strong><span>可在右侧单独调整制作人</span></div>
+        <el-table class="batch-assign-table" ref="batchAssignTable" :data="batchAssignForm.rows" :row-key="row => row.shot.shotId" height="100%" @selection-change="value => batchAssignChecked = value">
+          <el-table-column type="selection" width="44" :selectable="() => !assigning && !batchAssignAttempted" />
+          <el-table-column label="镜头" width="200"><template #default="{ row }">{{ [row.shot.episodeCode, row.shot.sceneCode, row.shot.shotCode].join(' / ') }}</template></el-table-column>
+          <el-table-column label="制作内容" min-width="280" show-overflow-tooltip><template #default="{ row }">{{ row.shot.description || '未填写' }}</template></el-table-column>
+          <el-table-column label="拟分配制作人" width="240"><template #default="{ row, $index }">
+            <el-form-item :prop="`rows.${$index}.assigneeUserId`" :rules="batchAssigneeRules"><el-select popper-class="batch-assign-member-options" v-model="row.assigneeUserId" filterable clearable :aria-label="`${row.shot.shotCode} 拟分配制作人`" placeholder="请选择制作人"><el-option v-for="member in creatorMembers" :key="member.userId" :label="shotAssigneeOptionLabel(member)" :value="String(member.userId)" /></el-select></el-form-item>
+            <small v-if="row.shot.assignee" class="batch-assign-current">当前：{{ shotAssigneeName(row.shot.assignee, members) }}</small>
+          </template></el-table-column>
+          <el-table-column v-if="batchAssignAttempted" label="执行结果" prop="result" min-width="150" />
+        </el-table>
+        <div class="batch-assign-counts" aria-label="分配汇总"><strong>分配汇总</strong><div class="batch-assign-counts__tags"><el-tag v-for="group in batchAssignCounts" :key="group.id" :type="group.id ? 'info' : 'warning'" effect="plain">{{ group.name }} {{ group.count }} 项</el-tag></div></div>
       </el-form>
-      <template #footer><el-button :disabled="assigning" @click="closeBatchAssignDialog()">取消</el-button><el-button type="primary" :loading="assigning" :disabled="assigning" @click="confirmBatchAssign">确认{{ hasAssignedSelection ? '重新分配' : '分配' }}</el-button></template>
-    </el-dialog>
+      <el-alert v-if="batchAssignError" :title="batchAssignError" type="error" show-icon :closable="false" />
+      <template #footer><el-button :disabled="assigning" @click="closeBatchAssignDialog()">{{ batchAssignAttempted ? '关闭并刷新' : '取消' }}</el-button><el-button type="primary" :loading="assigning" :disabled="assigning || batchAssignAttempted" @click="confirmBatchAssign">确认{{ hasAssignedSelection ? '重新分配' : '分配' }}</el-button></template>
+    </el-drawer>
     <el-drawer v-model="showDetail" class="sg-detail-drawer shot-detail-drawer" modal-class="sg-detail-drawer-mask" header-class="sg-detail-drawer__header" body-class="sg-detail-drawer__body" :title="detailDrawerTitle" direction="rtl" size="85%" resizable append-to-body destroy-on-close @closed="clearDetailDrawer">
       <ShotDetailView v-if="detailShotId && currentProjectId" embedded :target-project-id="currentProjectId" :target-shot-id="detailShotId" @changed="handleDetailChanged" @deleted="handleDetailDeleted" />
     </el-drawer>
@@ -1494,10 +1640,21 @@ onBeforeUnmount(() => { disposed = true; closeSingleAssign(); destroyRowSortable
 </template>
 
 <style scoped>
+.shot-data-table :deep(td.el-table__expanded-cell) { padding: 8px 0; background: var(--sg-text-secondary); }
+.shot-expanded-details { padding: 0 24px; background: var(--sg-surface-soft); }
+.shot-expanded-details :deep(.el-descriptions__body) { overflow: hidden; border-radius: 6px; }
+.shot-expanded-details :deep(.el-descriptions__cell) { padding: 10px 14px; font-size: 12px; line-height: 1.7; }
+.shot-expanded-details :deep(.el-descriptions__label) { width: 104px; white-space: nowrap; }
+.shot-expanded-details .shot-detail-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+@media (max-width: 700px) {
+  .shot-expanded-details { padding: 0 12px; }
+  .shot-expanded-details :deep(.el-descriptions__cell) { padding: 8px 10px; }
+}
+
 .shot-card__media{position:relative}
 .shot-directory-status{height:16px;padding:0 5px;font-size:10px;line-height:1}
-.shot-list-toolbar>.shot-list-toolbar__summary{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:0;background:transparent;border:0}.shot-list-toolbar__summary>strong{color:var(--sg-text);font-size:23px;line-height:1}.shot-list-toolbar__summary>span{color:var(--sg-text-muted);font-size:11px}.shot-list-toolbar__summary:deep(.el-button){margin-left:0}.batch-assign-summary{display:grid;gap:6px;margin-bottom:20px;padding:14px;color:var(--sg-text-secondary);background:var(--sg-accent-soft);border-radius:10px}.batch-assign-summary strong{color:var(--sg-text)}.batch-assign-summary span{font-size:12px;line-height:1.5}.batch-assign-form:deep(.el-form-item){margin-bottom:0}.batch-assign-form:deep(.el-select){width:100%}.shot-selection{width:15px;height:15px;cursor:pointer}.shot-selection:disabled{cursor:not-allowed;opacity:.35}.shot-row-actions{display:flex;gap:2px;align-items:center;white-space:nowrap}.shot-long-text{line-height:1.55;white-space:pre-wrap}.shot-identity strong,.shot-identity small,.shot-parameters span,.shot-parameters small{display:block}.shot-identity small,.shot-parameters small{margin-top:5px;color:var(--sg-text-muted)}.shot-assets{display:flex;gap:5px;align-items:flex-start;flex-direction:column}.shot-assets__empty{color:var(--sg-text-muted)}.shot-status{display:grid;gap:5px;justify-items:start}
-.shot-page{position:relative;padding-inline:16px}.shot-heading__actions{display:flex;gap:10px}.project-context{display:flex;gap:16px;align-items:end;margin-bottom:14px;padding:16px;background:linear-gradient(90deg,rgba(255,182,87,.06),transparent),var(--sg-surface);border:1px solid var(--sg-border);border-radius:var(--sg-radius-md)}.project-context label{display:grid;min-width:280px;gap:6px}.project-context label>span{color:var(--sg-text-muted);font-size:10px}select,input{color:var(--sg-text);background:var(--sg-surface-soft);border:1px solid var(--sg-border);border-radius:9px}select{height:40px;padding:0 10px}.shot-filters{display:grid;grid-template-columns:minmax(240px,1.6fr) repeat(4,minmax(130px,.7fr)) auto auto;gap:9px;margin-bottom:14px;padding:14px;background:var(--sg-surface);border:1px solid var(--sg-border);border-radius:var(--sg-radius-md)}.shot-search{display:flex;height:40px;gap:8px;align-items:center;padding:0 11px;background:var(--sg-surface-soft);border:1px solid var(--sg-border);border-radius:9px}.shot-search input{min-width:0;flex:1;background:transparent;border:0;outline:0}.shot-list-toolbar{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin:0 2px 12px;color:var(--sg-text-muted);font-size:12px}.shot-list-toolbar>div{display:flex;gap:5px;padding:4px;background:var(--sg-surface);border:1px solid var(--sg-border);border-radius:9px}.shot-list-toolbar button{display:flex;gap:5px;align-items:center;padding:7px 9px;color:var(--sg-text-muted);cursor:pointer;background:transparent;border:0;border-radius:6px}.shot-list-toolbar button.active{color:var(--sg-accent);background:var(--sg-accent-soft)}.shot-loading,.shot-empty{display:grid;min-height:320px;place-items:center;align-content:center;padding:30px;color:var(--sg-text-muted);background:var(--sg-surface);border:1px dashed var(--sg-border-strong);border-radius:var(--sg-radius-lg)}.shot-empty>.el-icon{color:var(--sg-accent);font-size:34px}.shot-empty h3,.shot-empty p{margin:12px 0 0}.shot-empty p{max-width:600px;font-size:12px;text-align:center}.shot-table-wrap{overflow:hidden;background:var(--sg-surface);border:1px solid var(--sg-border);border-radius:var(--sg-radius-md)}.shot-data-table{--el-table-text-color:var(--sg-text-secondary);--el-table-header-text-color:var(--sg-text-muted);--el-table-border-color:var(--sg-border);width:100%}.shot-data-table:deep(.el-table__cell){padding:12px 0;font-size:11px}.shot-data-table:deep(th.el-table__cell){font-weight:650}.shot-description{line-height:1.55}.feedback-cell{line-height:1.55}.shot-thumb{position:relative;overflow:hidden;aspect-ratio:16/9;background:var(--sg-surface-soft);border-radius:10px}.shot-thumb img{width:100%;height:100%;object-fit:cover}.shot-thumb>div{display:grid;width:100%;height:100%;gap:5px;color:var(--sg-text-muted);place-items:center;align-content:center}.shot-thumb--small{width:90px}.shot-thumb--small>.el-icon{position:absolute;top:50%;left:50%;color:var(--sg-text-muted);font-size:20px;transform:translate(-50%,-50%)}.shot-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:15px}.shot-card{padding:12px;cursor:pointer;background:var(--sg-surface);border:1px solid var(--sg-border);border-radius:var(--sg-radius-md);transition:transform .15s,border-color .15s}.shot-card:hover,.shot-card:focus-visible,.story-frame:hover,.story-frame:focus-visible{border-color:rgba(255,182,87,.35);outline:0;transform:translateY(-2px)}.shot-card__duration{position:absolute;right:8px;bottom:8px;padding:4px 6px;color:white;font-size:10px;background:rgba(0,0,0,.72);border-radius:5px}.shot-card header,.shot-card footer{display:flex;gap:10px;align-items:center;justify-content:space-between}.shot-card header{margin-top:13px}.shot-card h3,.shot-card small,.shot-card p{margin:0}.shot-card h3{margin-top:3px;font-size:18px}.shot-card small,.shot-card footer{color:var(--sg-text-muted);font-size:10px}.shot-card>p{min-height:44px;margin:11px 0;color:var(--sg-text-secondary);font-size:12px;line-height:1.55}.storyboard{display:grid;gap:10px}.story-frame{display:grid;grid-template-columns:45px 230px 1fr;gap:14px;align-items:center;padding:10px;cursor:pointer;background:var(--sg-surface);border:1px solid var(--sg-border);border-radius:var(--sg-radius-md);transition:transform .15s,border-color .15s}.story-frame__index{color:var(--sg-accent);font-size:12px;font-weight:800;text-align:center}.story-frame p{margin:7px 0;color:var(--sg-text-secondary);font-size:12px}.story-frame small{color:var(--sg-text-muted)}.is-refreshing{opacity:.55}.shot-pagination{display:flex;gap:14px;align-items:center;justify-content:center;margin-top:20px;color:var(--sg-text-muted);font-size:12px}@media(max-width:1480px){.shot-filters{grid-template-columns:repeat(3,minmax(0,1fr))}.shot-search{grid-column:span 2}.shot-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.project-context{align-items:stretch;flex-direction:column}}@media(max-width:760px){.shot-filters,.shot-grid{grid-template-columns:1fr}.shot-search{grid-column:auto}.story-frame{grid-template-columns:35px 120px 1fr}.project-context label{min-width:0}}
+.shot-list-toolbar>.shot-list-toolbar__summary{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:0;background:transparent;border:0}.shot-list-toolbar__summary>strong{color:var(--sg-text);font-size:23px;line-height:1}.shot-list-toolbar__summary>span{color:var(--sg-text-muted);font-size:11px}.shot-list-toolbar__summary:deep(.el-button){margin-left:0}.batch-assign-summary{display:grid;gap:6px;margin-bottom:20px;padding:14px;color:var(--sg-text-secondary);background:var(--sg-accent-soft);border-radius:10px}.batch-assign-summary strong{color:var(--sg-text)}.batch-assign-summary span{font-size:12px;line-height:1.5}.batch-assign-form:deep(.el-form-item){margin-bottom:0}.batch-assign-form:deep(.el-select){width:100%}.shot-selection{width:15px;height:15px;cursor:pointer}.shot-selection:disabled{cursor:not-allowed;opacity:.35}.shot-row-actions{display:flex;gap:6px;align-items:center;flex-wrap:wrap}.shot-long-text{line-height:1.55;white-space:pre-wrap}.shot-identity strong,.shot-identity small,.shot-parameters span,.shot-parameters small{display:block}.shot-identity small,.shot-parameters small{margin-top:5px;color:var(--sg-text-muted)}.shot-assets{display:flex;gap:5px;align-items:flex-start;flex-direction:column}.shot-assets__empty{color:var(--sg-text-muted)}.shot-status{display:grid;gap:5px;justify-items:start}
+.shot-page{position:relative;padding-inline:16px}.shot-heading__actions{display:flex;gap:10px}.project-context{display:flex;gap:16px;align-items:end;margin-bottom:14px;padding:16px;background:linear-gradient(90deg,rgba(255,182,87,.06),transparent),var(--sg-surface);border:1px solid var(--sg-border);border-radius:var(--sg-radius-md)}.project-context label{display:grid;min-width:280px;gap:6px}.project-context label>span{color:var(--sg-text-muted);font-size:10px}select,input{color:var(--sg-text);background:var(--sg-surface-soft);border:1px solid var(--sg-border);border-radius:9px}select{height:40px;padding:0 10px}.shot-filters{display:grid;grid-template-columns:minmax(240px,1.6fr) repeat(4,minmax(130px,.7fr)) auto auto;gap:9px;margin-bottom:14px;padding:14px;background:var(--sg-surface);border:1px solid var(--sg-border);border-radius:var(--sg-radius-md)}.shot-search{display:flex;height:40px;gap:8px;align-items:center;padding:0 11px;background:var(--sg-surface-soft);border:1px solid var(--sg-border);border-radius:9px}.shot-search input{min-width:0;flex:1;background:transparent;border:0;outline:0}.shot-list-toolbar{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin:0 2px 12px;color:var(--sg-text-muted);font-size:12px}.shot-list-toolbar>div{display:flex;gap:5px;padding:4px;background:var(--sg-surface);border:1px solid var(--sg-border);border-radius:9px}.shot-list-toolbar button{display:flex;gap:5px;align-items:center;padding:7px 9px;color:var(--sg-text-muted);cursor:pointer;background:transparent;border:0;border-radius:6px}.shot-list-toolbar button.active{color:var(--sg-accent);background:var(--sg-accent-soft)}.shot-loading,.shot-empty{display:grid;min-height:320px;place-items:center;align-content:center;padding:30px;color:var(--sg-text-muted);background:var(--sg-surface);border:1px dashed var(--sg-border-strong);border-radius:var(--sg-radius-lg)}.shot-empty>.el-icon{color:var(--sg-accent);font-size:34px}.shot-empty h3,.shot-empty p{margin:12px 0 0}.shot-empty p{max-width:600px;font-size:12px;text-align:center}.shot-table-wrap{overflow:hidden;background:var(--sg-surface);border:1px solid var(--sg-border);border-radius:var(--sg-radius-md)}.shot-data-table{--el-table-text-color:var(--sg-text-secondary);--el-table-header-text-color:var(--sg-text-muted);--el-table-border-color:var(--sg-border);width:100%}.shot-data-table:deep(.el-table__cell){padding:12px 0;font-size:11px}.shot-data-table:deep(th.el-table__cell){font-weight:650}.shot-description{line-height:1.55}.feedback-cell{line-height:1.55}.shot-thumb{position:relative;overflow:hidden;aspect-ratio:16/9;background:var(--sg-surface-soft);border-radius:10px}.shot-thumb img{width:100%;height:100%;object-fit:cover}.shot-thumb>div{display:grid;width:100%;height:100%;gap:5px;color:var(--sg-text-muted);place-items:center;align-content:center}.shot-thumb--small{width:90px}.shot-thumb--small>.el-icon{position:absolute;top:50%;left:50%;color:var(--sg-text-muted);font-size:20px;transform:translate(-50%,-50%)}.shot-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,300px),1fr));gap:15px}.shot-card{padding:12px;cursor:pointer;background:var(--sg-surface);border:1px solid var(--sg-border);border-radius:var(--sg-radius-md);transition:transform .15s,border-color .15s}.shot-card:hover,.shot-card:focus-visible,.story-frame:hover,.story-frame:focus-visible{border-color:rgba(255,182,87,.35);outline:0;transform:translateY(-2px)}.shot-card__duration{position:absolute;right:8px;bottom:8px;padding:4px 6px;color:white;font-size:10px;background:rgba(0,0,0,.72);border-radius:5px}.shot-card header,.shot-card footer{display:flex;gap:10px;align-items:center;justify-content:space-between}.shot-card header{margin-top:13px}.shot-card h3,.shot-card small,.shot-card p{margin:0}.shot-card h3{margin-top:3px;font-size:18px}.shot-card small,.shot-card footer{color:var(--sg-text-muted);font-size:10px}.shot-card>p{min-height:44px;margin:11px 0;color:var(--sg-text-secondary);font-size:12px;line-height:1.55}.storyboard{display:grid;gap:10px}.story-frame{display:grid;grid-template-columns:45px 230px 1fr;gap:14px;align-items:center;padding:10px;cursor:pointer;background:var(--sg-surface);border:1px solid var(--sg-border);border-radius:var(--sg-radius-md);transition:transform .15s,border-color .15s}.story-frame__index{color:var(--sg-accent);font-size:12px;font-weight:800;text-align:center}.story-frame p{margin:7px 0;color:var(--sg-text-secondary);font-size:12px}.story-frame small{color:var(--sg-text-muted)}.is-refreshing{opacity:.55}.shot-pagination{display:flex;gap:14px;align-items:center;justify-content:center;margin-top:20px;color:var(--sg-text-muted);font-size:12px}@media(max-width:1480px){.shot-filters{grid-template-columns:repeat(3,minmax(0,1fr))}.shot-search{grid-column:span 2}.project-context{align-items:stretch;flex-direction:column}}@media(max-width:760px){.shot-filters{grid-template-columns:1fr}.shot-search{grid-column:auto}.story-frame{grid-template-columns:35px 120px 1fr}.project-context label{min-width:0}}
 .shot-list-toolbar>.shot-list-toolbar__summary{gap:8px;padding:0;background:transparent;border:0;border-radius:0}.shot-list-toolbar>.shot-list-toolbar__summary .el-button{margin-left:0;padding:8px 15px;color:inherit;background:transparent;border-radius:4px}.shot-list-toolbar>.shot-list-toolbar__summary .el-button--primary{color:var(--el-color-primary)}.shot-list-toolbar>.shot-list-toolbar__summary .el-button--danger{color:var(--el-color-danger)}
 .project-context:deep(.el-form-item){min-width:280px;margin:0}.project-context:deep(.el-form-item__label){height:auto;padding-bottom:6px;color:var(--sg-text-muted);font-size:10px;line-height:1}.shot-filters .shot-search{height:auto;padding:0;background:transparent;border:0}.shot-search:deep(.el-input__wrapper){min-height:40px;background:var(--sg-surface-soft);box-shadow:0 0 0 1px var(--sg-border) inset}.shot-list-toolbar__views{padding:0!important;background:transparent!important}.shot-list-toolbar__views:deep(.el-radio-button__inner){display:flex;gap:6px;align-items:center;color:var(--sg-text-muted);background:var(--sg-surface);border-color:var(--sg-border);box-shadow:none}.shot-list-toolbar__views:deep(.el-radio-button__original-radio:checked+.el-radio-button__inner){color:var(--sg-accent);background:var(--sg-accent-soft);border-color:rgba(255,182,87,.32);box-shadow:-1px 0 0 0 rgba(255,182,87,.32)}.shot-card{padding:0}.shot-card:deep(.el-card__body){padding:12px}.shot-card:deep(.el-card__body)>p{min-height:44px;margin:11px 0;color:var(--sg-text-secondary);font-size:12px;line-height:1.55}.story-frame{display:block;padding:0}.story-frame:deep(.el-card__body){display:grid;grid-template-columns:45px 230px minmax(0,1fr);gap:14px;align-items:center;padding:10px}.shot-pagination{margin-top:20px}.shot-pagination:deep(.el-pager li),.shot-pagination:deep(button){background:var(--sg-surface)!important}.shot-pagination:deep(.is-active){color:#17130d!important;background:var(--sg-accent)!important}@media(max-width:760px){.story-frame:deep(.el-card__body){grid-template-columns:35px 120px minmax(0,1fr)}}
 .shot-filters{grid-template-columns:minmax(200px,1.4fr) repeat(2,minmax(100px,.65fr)) minmax(240px,1.3fr) repeat(2,minmax(100px,.65fr)) auto}
@@ -1524,6 +1681,8 @@ onBeforeUnmount(() => { disposed = true; closeSingleAssign(); destroyRowSortable
 }
 
 .shot-page.shot-page--table { padding-bottom: 16px; }
+.shot-page.shot-page--schedule { padding-bottom: 12px; }
+.shot-page--schedule .shot-pagination { margin-top: 12px; }
 
 .shot-drag-handle {
   color: var(--sg-text-muted);
@@ -1542,35 +1701,67 @@ onBeforeUnmount(() => { disposed = true; closeSingleAssign(); destroyRowSortable
   box-shadow: inset 0 1px 0 rgba(255,182,87,.35), inset 0 -1px 0 rgba(255,182,87,.35);
 }
 .shot-row-actions { flex-wrap: wrap; gap: 4px; white-space: normal; }
-.shot-row-actions :deep(.el-button) { margin-left: 0; }
+.shot-card :deep(.el-card__body) { display: flex; flex-direction: column; height: 100%; box-sizing: border-box; }
+.shot-card__actions { margin-top: auto; padding-top: 12px; border-top: 1px solid var(--sg-border); }
+.shot-card footer { margin-bottom: 12px; }
 .task-date-cell { white-space: nowrap; font-variant-numeric: tabular-nums; }
-</style>
 
-<style scoped>
-.shot-assignee-history { display: grid; gap: 4px; }
-.shot-assignee-history__previous { color: var(--sg-text-muted); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
-</style>
+/* 批量分配：操作、核对表格与汇总分别成区，减少行内无效留白。 */
+.shot-batch-assign-drawer :deep(.el-drawer__header) { padding-bottom: 16px; border-bottom: 1px solid var(--sg-border); margin-bottom: 16px; }
+.shot-batch-assign-drawer :deep(.el-drawer__footer) { padding-top: 16px; border-top: 1px solid var(--sg-border); }
+:global(.shot-batch-assign-drawer .el-drawer__body) { display: flex; flex-direction: column; }
+:global(.shot-batch-assign-drawer .el-drawer__body > .el-alert) { flex-shrink: 0; }
+.batch-assign-form { display: flex; flex-direction: column; flex: 1; min-height: 360px; }
+.batch-assign-form > * { flex-shrink: 0; }
+.batch-assign-form > .batch-assign-table { flex: 1 1 0; min-height: 180px; }
+.batch-assign-form .batch-assign-summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 16px; padding: 0; margin: 0 0 16px; background: transparent; }
+.batch-assign-summary strong { font-size: 14px; }
+.batch-assign-summary span { color: var(--sg-text-muted); }
+.batch-assign-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 16px; margin-bottom: 20px; background: var(--sg-surface-soft); border: 1px solid var(--sg-border); border-radius: 10px; }
+.batch-assign-toolbar__label { display: flex; flex-direction: column; gap: 4px; min-width: 112px; margin-right: auto; }
+.batch-assign-toolbar__label strong { font-size: 13px; color: var(--sg-text); }
+.batch-assign-toolbar__label span { font-size: 12px; color: var(--sg-text-muted); }
+.batch-assign-toolbar :deep(.el-form-item) { flex: 0 1 300px; min-width: 180px; }
+.batch-assign-toolbar :deep(.el-button) { margin-left: 0; }
+.batch-assign-table-heading { display: flex; flex-wrap: wrap; align-items: baseline; gap: 12px; margin-bottom: 10px; font-size: 12px; }
+.batch-assign-table-heading strong { font-size: 13px; color: var(--sg-text); }
+.batch-assign-table-heading span { color: var(--sg-text-muted); }
+.batch-assign-table { border: 1px solid var(--sg-border); border-radius: 8px; }
+.batch-assign-form :deep(.batch-assign-table .el-table__cell) { padding-top: 10px; padding-bottom: 10px; }
+.batch-assign-form :deep(.batch-assign-table .el-form-item) { margin: 0; }
+.batch-assign-form :deep(.batch-assign-table .el-form-item__error) { position: static; line-height: 1.4; }
+.batch-assign-current { display: block; margin-top: 5px; color: var(--sg-text-muted); font-size: 11px; }
+.batch-assign-counts { display: flex; align-items: flex-start; gap: 16px; margin: 16px 0 4px; padding: 14px 16px; background: var(--sg-surface-soft); border: 1px solid var(--sg-border); border-radius: 8px; font-size: 12px; }
+.batch-assign-counts > strong { flex: 0 0 auto; padding-top: 4px; color: var(--sg-text-secondary); font-weight: 500; }
+.batch-assign-counts__tags { display: flex; flex-wrap: wrap; gap: 8px; }
+.batch-assign-counts :deep(.el-tag) { height: 28px; padding: 0 10px; }
+@media (max-width: 640px) {
+  .batch-assign-toolbar__label { flex-basis: 100%; }
+  .batch-assign-toolbar :deep(.el-form-item) { flex: 1 1 180px; }
+  .batch-assign-counts { flex-direction: column; gap: 8px; }
+}
+.batch-assign-form,
+.batch-assign-form :deep(.el-table),
+.batch-assign-form :deep(.el-select__wrapper),
+.batch-assign-form :deep(.el-select__input),
+.batch-assign-form .batch-assign-current { font-size: 12px; }
+:global(.batch-assign-member-options .el-select-dropdown__item) { font-size: 12px; }
 
-<style scoped src="../../assets/styles/compact-list.css"></style>
-
-<style scoped>
-.shot-list-toolbar__summary { margin-right: auto; }
-.shot-identity-with-media { display: flex; align-items: center; gap: 12px; }
-.shot-identity-with-media .shot-thumb { flex: 0 0 80px; width: 80px; border-radius: 6px; }
-.shot-identity-with-media .shot-identity { min-width: 0; }
-.shot-identity strong { overflow-wrap: anywhere; }
-.shot-data-table :deep(.el-table__cell) { font-size: 12px; }
-.shot-description { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; line-height: 1.65; }
-.shot-expand-content { padding: 2px 0; height: auto; margin-top: 4px; font-size: 11px; }
-.shot-plan { display: grid; gap: 4px; font-size: 11px; }
-.shot-plan small { color: var(--sg-text-muted); }
-.shot-plan .task-time-state:empty { display: none; }
-.shot-expanded-details { padding: 8px 12px; max-width: 1200px; margin-inline: auto; font-size: 12px; }
-.shot-detail-text { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; }
-.shot-expanded-details :deep(.el-descriptions__table) { table-layout: fixed; }
-.shot-expanded-details :deep(.el-descriptions__cell) { padding: 4px 8px !important; font-size: 12px !important; line-height: 1.5; }
-.shot-column-settings p { color: var(--sg-text-muted); font-size: 12px; line-height: 1.6; }
-.shot-column-settings :deep(.el-checkbox-group) { display: grid; grid-template-columns: 1fr 1fr; }
-.shot-row-actions { flex-wrap: wrap; align-items: center; gap: 6px; }
-@media (max-width: 760px) { .shot-expanded-details { padding: 6px 8px; } }
+/* CSS 多列瀑布流按列从上到下阅读，卡片内部不拆分。 */
+.storyboard{display:block;columns:340px;column-gap:16px}
+.storyboard .story-frame{display:inline-block;vertical-align:top;width:100%;box-sizing:border-box;break-inside:avoid;min-width:0;margin:0 0 16px;padding:0;border-radius:10px;overflow:hidden;cursor:default}
+.storyboard .story-frame :deep(.el-card__body){display:flex;flex-direction:column;gap:0;padding:0;height:100%}
+.story-frame__media{position:relative;width:100%;aspect-ratio:16/9;background:var(--sg-media-stage-bg)}
+.story-frame__media .shot-thumb{position:absolute;inset:0;width:100%;height:100%;border-radius:0}
+.story-frame__content{display:grid;gap:12px;min-width:0;padding:16px}
+.story-frame__heading{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.story-frame__heading h3{margin:0;font-size:13px;line-height:1.5;overflow-wrap:anywhere}
+.story-frame__description{font-size:13px;line-height:1.7;white-space:pre-wrap;overflow-wrap:anywhere;max-height:132px;overflow:auto}
+.story-frame__text{padding:10px 12px;background:var(--sg-surface-soft);border-radius:6px;font-size:12px}
+.story-frame__text>span{color:var(--sg-text-muted)}
+.story-frame__text p{margin:4px 0 0;font-size:12px;line-height:1.6;white-space:pre-wrap;overflow-wrap:anywhere;max-height:90px;overflow:auto}
+.story-frame__specs :deep(.el-descriptions__cell){font-size:12px;overflow-wrap:anywhere}
+.story-frame__specs :deep(.el-descriptions__table){table-layout:fixed}
+.story-frame__assignee{font-size:12px;color:var(--sg-text-secondary)}
+.story-frame__actions{padding-top:12px;border-top:1px solid var(--sg-border)}
 </style>

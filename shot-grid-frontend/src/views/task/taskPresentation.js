@@ -1,6 +1,8 @@
+import { taskStage } from '@/views/task/taskStage'
 const FALLBACK_META = Object.freeze({ label: '未知', tone: 'neutral' })
 
 const TASK_STATUS = Object.freeze({
+  pending_schedule: Object.freeze({ label: '待排期', tone: 'warning' }),
   not_started: Object.freeze({ label: '待开工', tone: 'neutral' }),
   preparing: Object.freeze({ label: '目录准备中', tone: 'warning' }),
   in_progress: Object.freeze({ label: '制作中', tone: 'info' }),
@@ -28,7 +30,7 @@ const VERSION_STATUS = Object.freeze({
 })
 
 export function taskStatusMeta(value) {
-  return TASK_STATUS[value] || FALLBACK_META
+  return TASK_STATUS[taskStage(value)] || FALLBACK_META
 }
 
 export function taskKindMeta(value) {
@@ -69,7 +71,7 @@ export function taskTimeReminder(task, now = new Date()) {
   if (task?.taskStatus === 'completed') return { state: 'completed', label: '已完成', tone: 'success', message: '任务已完成，不再进行时间预警。' }
   const end = task?.expectedEndTime || (task?.dueDate ? `${task.dueDate}T23:59:59` : null)
   const remaining = end ? new Date(end).getTime() - now.getTime() : NaN
-  if (!Number.isFinite(remaining)) return { state: 'unset', label: '未设置时间', tone: 'neutral', message: '管理员尚未设置预期制作时间。' }
+  if (!Number.isFinite(remaining)) return { state: 'unset', label: '未设置时间', tone: 'neutral', message: '管理员尚未设置计划起止时间。' }
   if (remaining <= 0) return { state: 'overdue', label: '已延期', tone: 'danger', message: '已超过预期结束时间，请尽快处理；仍可提交作品。' }
   if (remaining <= 24 * 60 * 60 * 1000) return { state: 'warning', label: '临近结束', tone: 'warning', message: '距预期结束不足 24 小时，请优先处理这个任务。' }
   return { state: 'normal', label: '正常', tone: 'success', message: '请按管理员期望的时间安排制作。' }

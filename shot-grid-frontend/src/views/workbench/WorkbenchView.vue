@@ -1,10 +1,11 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
-import { useRouter } from 'vue-router'
-import { Refresh, Right, Search } from '@element-plus/icons-vue'
+import { ElTable, ElTableColumn, ElTabs, ElTabPane, ElRadioGroup, ElRadioButton } from 'element-plus'
+import RelatedDetailDrawer from '@/components/RelatedDetailDrawer.vue'
+import { RefreshLeft, Refresh, Search } from '@element-plus/icons-vue'
 
 import { getMineTaskPage } from '@/api/shot-grid/tasks'
-import { getMineReviewListPage } from '@/api/shot-grid/reviews'
+import ReviewQueuePanel from './ReviewQueuePanel.vue'
 import MySubmissionsPanel from './MySubmissionsPanel.vue'
 import { useTaskStatePolling } from '@/composables/useTaskStatePolling'
 import { useCurrentTime } from '@/composables/useCurrentTime'
@@ -12,39 +13,43 @@ import TaskTimeReminder from '@/views/task/components/TaskTimeReminder.vue'
 import { useSessionStore } from '@/store/modules/session'
 import { tagTypeFromTone } from '@/utils/tag'
 import ProjectStatePanel from '@/views/project/components/ProjectStatePanel.vue'
-import { reviewModeMeta } from '@/views/review/reviewPresentation'
 import {
-  taskAssigneeLabel,
-  taskTimeReminder,
   taskErrorState,
   taskKindMeta,
   taskPriorityMeta,
-  taskStatusMeta
+  taskStatusMeta,
+  taskVersionStatusMeta
 } from '@/views/task/taskPresentation'
 
-const router = useRouter()
 const sessionStore = useSessionStore()
 const tasks = ref([])
+const taskDetailDrawer = ref(null)
+const statusOptions = [
+  { value: 'unfinished', label: '未完成' },
+  { value: 'revision', label: '待修改' },
+  { value: 'in_progress', label: '制作中' },
+  { value: 'pending_review', label: '待审核' },
+  { value: 'pending_schedule', label: '待排期' },
+  { value: 'not_started', label: '待开工' },
+  { value: 'completed', label: '已完成' },
+  { value: '', label: '全部' }
+]
 const currentTime = useCurrentTime()
 const total = ref(0)
 const loading = ref(false)
 const errorState = ref(null)
-const pendingReviews = ref([])
-const pendingReviewTotal = ref(0)
-const reviewActivityError = ref(false)
-const activityLoading = ref(false)
 const taskFilterForm = ref(null)
 const query = reactive({
   keyword: '',
   taskKind: '',
-  taskStatus: '',
+  taskStatus: 'unfinished',
   priority: '',
   dueDateRange: [],
   pageNum: 1,
   pageSize: 20,
-  orderByColumn: 'shotNo',
+  orderByColumn: 'workbench',
   isAsc: 'ascending',
-  orderValue: 'shotNo:ascending'
+  orderValue: 'workbench:ascending'
 })
 const taskFilterRules = {
   dueDateRange: [{
@@ -62,8 +67,6 @@ const taskFilterRules = {
 const appliedQuery = ref('')
 let controller = null
 let loadGeneration = 0
-let activityController = null
-let activityGeneration = 0
 let disposed = false
 
 const displayName = computed(() => sessionStore.user?.userName || sessionStore.user?.nickName || '制作成员')
@@ -73,17 +76,17 @@ const hasPermission = permission => (
 const canReviewQueue = computed(() => (
   hasPermission('shotgrid:reviewList:list') && hasPermission('shotgrid:version:review')
 ))
-const canViewRecentSubmissions = computed(() => hasPermission('shotgrid:version:list'))
+const hasProductionRole = computed(() => !canReviewQueue.value || sessionStore.roles.includes('shotgrid_creator'))
+const canViewTasks = computed(() => hasProductionRole.value && hasPermission('shotgrid:task:list'))
+const canViewRecentSubmissions = computed(() => hasProductionRole.value && hasPermission('shotgrid:version:list'))
+const activeTab = ref(canReviewQueue.value ? 'reviews' : canViewTasks.value ? 'tasks' : 'submissions')
+const welcomeDescription = computed(() => canReviewQueue.value
+  ? '在“待审核”中查看管理范围内的审核内容，跟进审核进度。'
+  : '在“我的任务”中跟进制作进度，在“提交记录”中查看历史版本与审核反馈。')
 const pageCount = computed(() => Math.max(1, Math.ceil(total.value / query.pageSize)))
-const pageSummary = computed(() => ({
-  inProgress: tasks.value.filter(task => task.taskStatus === 'in_progress').length,
-  pendingReview: tasks.value.filter(task => task.taskStatus === 'pending_review').length,
-  revision: tasks.value.filter(task => task.taskStatus === 'revision').length,
-  overdue: tasks.value.filter(task => taskTimeReminder(task, currentTime.value).state === 'overdue').length
-}))
 const { pollingError } = useTaskStatePolling({
   getDelay: () => {
-    if (loading.value || errorState.value || appliedQuery.value !== JSON.stringify(query)) return null
+    if (activeTab.value !== 'tasks' || loading.value || errorState.value || appliedQuery.value !== JSON.stringify(query)) return null
     const activeTasks = tasks.value.filter(task => (
       !['completed', 'archived'].includes(task.project?.projectStatus) && task.target?.lifecycleStatus !== 'archived'
     ))
@@ -103,7 +106,8 @@ function buildParams() {
   return {
     keyword: query.keyword.trim() || undefined,
     taskKind: query.taskKind || undefined,
-    taskStatus: query.taskStatus || undefined,
+    taskStatus: query.taskStatus === 'unfinished' ? undefined : query.taskStatus || undefined,
+    unfinishedOnly: query.taskStatus === 'unfinished',
     priority: query.priority || undefined,
     dueDateFrom: dueDateFrom || undefined,
     dueDateTo: dueDateTo || undefined,
@@ -159,34 +163,6 @@ async function loadTasks(backgroundController = null) {
   }
 }
 
-async function loadActivity() {
-  const generation = ++activityGeneration
-  activityController?.abort()
-  if (!canReviewQueue.value) return
-  const requestController = new AbortController()
-  activityController = requestController
-  activityLoading.value = true
-  reviewActivityError.value = false
-  const isCurrent = () => !disposed && generation === activityGeneration && !requestController.signal.aborted
-  try {
-    const response = await getMineReviewListPage(
-      { pageNum: 1, pageSize: 6, orderByColumn: 'createTime', isAsc: 'descending' },
-      { signal: requestController.signal }
-    )
-    if (!isCurrent()) return
-    pendingReviews.value = response.rows || []
-    pendingReviewTotal.value = Number(response.total || 0)
-  } catch (error) {
-    if (isCurrent() && error?.code !== 'ERR_CANCELED') {
-      pendingReviews.value = []
-      pendingReviewTotal.value = 0
-      reviewActivityError.value = true
-    }
-  } finally {
-    if (isCurrent()) activityLoading.value = false
-  }
-}
-
 function submitFilters() {
   query.pageNum = 1
   loadTasks()
@@ -202,11 +178,12 @@ function applyOrder() {
 function resetFilters() {
   taskFilterForm.value?.resetFields()
   Object.assign(query, {
+    taskStatus: 'unfinished',
     pageNum: 1,
     pageSize: 20,
-    orderByColumn: 'shotNo',
+    orderByColumn: 'workbench',
     isAsc: 'ascending',
-    orderValue: 'shotNo:ascending'
+    orderValue: 'workbench:ascending'
   })
   loadTasks()
 }
@@ -217,17 +194,32 @@ function changePage(page) {
   loadTasks()
 }
 
-function openTask(task) {
-  router.push(`/tasks/${task.taskId}`)
+function changePageSize(size) {
+  if (size === query.pageSize || loading.value) return
+  query.pageSize = size
+  query.pageNum = 1
+  loadTasks()
 }
 
-onMounted(() => { loadTasks(); loadActivity() })
+function openTask(task) {
+  taskDetailDrawer.value?.open(`/tasks/${task.taskId}`)
+}
+
+function taskActionLabel(task) {
+  if (['completed', 'archived'].includes(task.project?.projectStatus) || task.target?.lifecycleStatus === 'archived') return '查看任务'
+  return { revision: '查看修改意见', in_progress: '继续制作', pending_review: '查看审核进度', completed: '查看成果' }[task.taskStatus] || '查看任务'
+}
+
+function taskActionType(task) {
+  if (['completed', 'archived'].includes(task.project?.projectStatus) || task.target?.lifecycleStatus === 'archived') return 'info'
+  return { revision: 'danger', in_progress: 'primary', pending_review: 'warning', completed: 'success' }[task.taskStatus] || 'info'
+}
+
+onMounted(() => { if (canViewTasks.value) loadTasks() })
 onBeforeUnmount(() => {
   disposed = true
   loadGeneration += 1
-  activityGeneration += 1
   controller?.abort()
-  activityController?.abort()
 })
 </script>
 
@@ -235,60 +227,36 @@ onBeforeUnmount(() => {
   <section class="sg-page workbench-page">
     <div class="workbench-hero">
       <div class="workbench-hero__content">
-        <p class="sg-eyebrow">PRODUCTION DESK</p>
+
         <h2>你好，{{ displayName }}</h2>
-        <p>集中查看跨项目制作任务，跟进版本提交与审核进度。</p>
+        <p>{{ welcomeDescription }}</p>
       </div>
-      <el-tag class="workbench-hero__tag" type="info" size="small" effect="plain" round>{{ total }} 项我的任务</el-tag>
+
     </div>
 
-    <section v-if="canReviewQueue" class="activity-section review-queue" aria-labelledby="review-queue-title" :aria-busy="activityLoading">
-      <el-card class="activity-card activity-card--compact" shadow="never">
-        <template #header>
-          <header>
-            <div><p class="sg-eyebrow">REVIEW QUEUE</p><h3 id="review-queue-title">待我审核</h3></div>
-            <div class="activity-card__actions">
-              <el-tag type="warning" size="small" effect="plain" round>{{ pendingReviewTotal }} 项</el-tag>
-              <el-button v-if="reviewActivityError" link type="primary" @click="loadActivity">重新加载</el-button>
-              <el-button link type="primary" @click="router.push('/reviews')">查看全部</el-button>
-            </div>
-          </header>
-        </template>
-        <el-skeleton v-if="activityLoading" animated :rows="3" />
-        <el-alert v-else-if="reviewActivityError" title="待审核内容加载失败，请稍后重试" type="error" show-icon :closable="false" />
-        <div v-else-if="pendingReviews.length" class="activity-list">
-          <el-button v-for="item in pendingReviews" :key="item.reviewListId" class="activity-entry" text @click="router.push(`/reviews/${item.reviewListId}`)"><span class="activity-entry__content"><strong>{{ item.reviewListName }}</strong><small>{{ item.projectCode }} · {{ item.reviewMode === 'manual_batch' ? `${item.versionCount} 个版本` : item.versionNumber }}</small><el-tag :type="tagTypeFromTone(reviewModeMeta(item.reviewMode).tone)" size="small" effect="plain" round>{{ reviewModeMeta(item.reviewMode).label }}</el-tag></span><el-icon><Right /></el-icon></el-button>
-        </div>
-        <el-alert v-else title="当前没有待审核内容" type="success" show-icon :closable="false" />
-      </el-card>
-    </section>
-
-    <section class="task-workbench" aria-labelledby="my-task-title">
+    <el-tabs v-model="activeTab" class="workbench-tabs">
+    <el-tab-pane v-if="canReviewQueue" label="待审核" name="reviews" lazy>
+      <ReviewQueuePanel />
+    </el-tab-pane>
+    <el-tab-pane v-if="canViewTasks" label="我的任务" name="tasks">
+    <section class="task-workbench" aria-label="我的任务">
       <header class="workbench-section-heading">
         <div>
-          <p class="sg-eyebrow">MY TASKS</p>
-          <h3 id="my-task-title">我的制作任务</h3>
-          <p>统一查看镜头视频与资产图片任务，及时掌握制作、审核和修订进度。</p>
+          <p>查看分配给我的制作任务，跟进制作进度与审核反馈。</p>
         </div>
         <el-button :icon="Refresh" :loading="loading" @click="loadTasks()">刷新</el-button>
       </header>
 
-      <div class="task-stats" aria-label="当前分页任务摘要">
-        <el-card shadow="never"><span>待修改</span><strong>{{ pageSummary.revision }}</strong><small>当前页</small></el-card>
-        <el-card shadow="never" :class="{ 'is-alert': pageSummary.overdue > 0 }"><span>已逾期</span><strong>{{ pageSummary.overdue }}</strong><small>当前页未完成</small></el-card>
-        <el-card shadow="never"><span>制作中</span><strong>{{ pageSummary.inProgress }}</strong><small>当前页</small></el-card>
-        <el-card shadow="never"><span>待审核</span><strong>{{ pageSummary.pendingReview }}</strong><small>当前页</small></el-card>
-      </div>
+      <el-radio-group v-model="query.taskStatus" class="task-status-shortcuts" aria-label="按任务状态筛选" @change="submitFilters">
+        <el-radio-button v-for="option in statusOptions" :key="option.value" :value="option.value">{{ option.label }}</el-radio-button>
+      </el-radio-group>
 
       <el-form ref="taskFilterForm" :model="query" :rules="taskFilterRules" class="task-filters" size="large" label-position="top" aria-label="我的任务筛选">
         <el-form-item class="task-filter-item task-filter-item--search" label="搜索" prop="keyword">
-          <el-input v-model="query.keyword" class="sg-input" :prefix-icon="Search" maxlength="200" clearable placeholder="任务、项目、镜头或资产" aria-label="搜索任务" />
+          <el-input v-model="query.keyword" class="sg-input" :prefix-icon="Search" maxlength="200" clearable placeholder="任务、项目、镜头或资产" aria-label="搜索任务" @keyup.enter="submitFilters" />
         </el-form-item>
         <el-form-item class="task-filter-item" label="任务类型" prop="taskKind">
           <el-select v-model="query.taskKind" class="sg-select" placeholder="全部类型" aria-label="按任务类型筛选" @change="submitFilters"><el-option label="全部类型" value="" /><el-option label="镜头视频" value="shot_video" /><el-option label="资产图片" value="asset_image" /></el-select>
-        </el-form-item>
-        <el-form-item class="task-filter-item" label="任务状态" prop="taskStatus">
-          <el-select v-model="query.taskStatus" class="sg-select" placeholder="全部状态" aria-label="按任务状态筛选" @change="submitFilters"><el-option label="全部状态" value="" /><el-option label="待开工" value="not_started" /><el-option label="目录准备中" value="preparing" /><el-option label="制作中" value="in_progress" /><el-option label="待审核" value="pending_review" /><el-option label="待修改" value="revision" /><el-option label="已完成" value="completed" /></el-select>
         </el-form-item>
         <el-form-item class="task-filter-item" label="优先级" prop="priority">
           <el-select v-model="query.priority" class="sg-select" placeholder="全部优先级" aria-label="按优先级筛选" @change="submitFilters"><el-option label="全部优先级" value="" /><el-option label="紧急" value="urgent" /><el-option label="高" value="high" /><el-option label="普通" value="normal" /><el-option label="低" value="low" /></el-select>
@@ -309,9 +277,9 @@ onBeforeUnmount(() => {
           />
         </el-form-item>
         <el-form-item class="task-filter-item" label="排序" prop="orderValue">
-          <el-select v-model="query.orderValue" class="sg-select" aria-label="任务排序" @change="applyOrder"><el-option label="镜头号由小到大" value="shotNo:ascending" /><el-option label="最近更新" value="updateTime:descending" /><el-option label="截止日期由近到远" value="dueDate:ascending" /><el-option label="优先级由高到低" value="priority:ascending" /><el-option label="最近创建" value="createTime:descending" /></el-select>
+          <el-select v-model="query.orderValue" class="sg-select" aria-label="任务排序" @change="applyOrder"><el-option label="优先处理" value="workbench:ascending" /><el-option label="镜头号由小到大" value="shotNo:ascending" /><el-option label="最近更新" value="updateTime:descending" /><el-option label="截止日期由近到远" value="dueDate:ascending" /><el-option label="优先级由高到低" value="priority:ascending" /><el-option label="最近创建" value="createTime:descending" /></el-select>
         </el-form-item>
-        <el-form-item class="task-filter-actions"><el-button type="primary" :loading="loading" @click="submitFilters">查询</el-button><el-button :disabled="loading" @click="resetFilters">重置</el-button></el-form-item>
+        <el-form-item class="task-filter-actions"><el-button type="primary" :loading="loading" @click="submitFilters">查询</el-button><el-button :icon="RefreshLeft" :disabled="loading" @click="resetFilters">重置</el-button></el-form-item>
       </el-form>
 
       <el-alert v-if="pollingError" :title="pollingError" type="warning" show-icon :closable="false" />
@@ -325,37 +293,44 @@ onBeforeUnmount(() => {
       />
       <el-card v-else-if="loading && !tasks.length" class="task-loading" shadow="never" aria-busy="true"><el-skeleton animated :rows="5" /></el-card>
       <el-empty v-else-if="!tasks.length" class="task-empty" :description="total ? '当前页没有任务' : '当前筛选暂无任务'"><p>任务由项目管理人在镜头或资产制作分项中分配。</p></el-empty>
-      <div v-else class="task-list" :class="{ 'is-refreshing': loading }">
-        <el-button v-for="item in tasks" :key="item.taskId" class="task-row" text @click="openTask(item)">
-          <el-tag class="task-kind-tag" :type="tagTypeFromTone(taskKindMeta(item.taskKind).tone)" size="small"
-                  effect="plain" round>{{ taskKindMeta(item.taskKind).shortLabel }}
-          </el-tag>
-          <span class="task-row__main">
-            <span class="task-row__heading"><strong>{{ item.taskName }}</strong><el-tag
-                :type="tagTypeFromTone(taskStatusMeta(item.taskStatus, item.taskKind).tone)" size="small" effect="dark"
-                round>{{ taskStatusMeta(item.taskStatus, item.taskKind).label }}</el-tag></span>
-            <small>{{ item.project.projectCode }} · {{ item.project.projectName }} / {{
-                item.target.targetName
-              }}</small>
-            <span>{{ item.requirements || '暂无额外制作要求' }}</span>
-          </span>
-          <span class="task-row__meta"><span>{{ taskAssigneeLabel(item.assignee) }}</span><TaskTimeReminder :task="item" :now="currentTime" compact /></span>
-          <span class="task-row__version"><strong>{{
-              item.latestVersion?.versionNumber || '—'
-            }}</strong><small>{{ item.versionCount }} 个版本</small></span>
-          <el-tag class="task-priority-tag" :type="tagTypeFromTone(taskPriorityMeta(item.priority).tone)" size="small"
-                  effect="plain" round>{{ taskPriorityMeta(item.priority).label }}
-          </el-tag>
-          <el-icon class="task-row__arrow">
-            <Right/>
-          </el-icon>
-        </el-button>
-      </div>
+      <el-table v-else v-loading="loading" :data="tasks" row-key="taskId" class="task-list" aria-label="我的制作任务">
+        <el-table-column label="制作任务" min-width="300">
+          <template #default="{ row }">
+            <el-button v-if="hasPermission('shotgrid:task:query')" link type="primary" class="task-title" @click="openTask(row)">{{ row.taskName }}</el-button>
+            <strong v-else>{{ row.taskName }}</strong>
+            <div class="task-context">{{ row.project.projectCode }} · {{ row.project.projectName }} / {{ taskKindMeta(row.taskKind).label }}</div>
+            <div class="task-requirements">{{ row.requirements || row.target.targetDescription || '暂无额外制作要求' }}</div>
+          </template>
+        </el-table-column>
+        <el-table-column label="当前状态" width="140">
+          <template #default="{ row }">
+            <el-tag :type="tagTypeFromTone(taskStatusMeta(row).tone)" size="small" effect="dark" round>{{ taskStatusMeta(row).label }}</el-tag>
+            <small v-if="row.taskStatus === 'not_started'" class="task-context">{{ row.expectedStartTime && row.expectedEndTime ? '等待管理人员确认开工' : '等待管理人员设置排期' }}</small>
+            <small v-else-if="row.taskStatus === 'preparing'" class="task-context">目录就绪后可制作</small>
+            <small v-if="row.project.projectStatus === 'archived' || row.target.lifecycleStatus === 'archived'" class="task-context">已归档 · 只读</small>
+          </template>
+        </el-table-column>
+        <el-table-column label="制作时间" min-width="200"><template #default="{ row }"><TaskTimeReminder :task="row" :now="currentTime" compact /></template></el-table-column>
+        <el-table-column label="最新提交" min-width="135">
+          <template #default="{ row }">
+            <el-button v-if="row.latestVersion && hasPermission('shotgrid:version:query')" link type="primary" @click="taskDetailDrawer?.open(`/versions/${row.latestVersion.versionId}`)">{{ row.latestVersion.versionNumber }}</el-button>
+            <span v-else>{{ row.latestVersion?.versionNumber || '尚未提交' }}</span>
+            <small class="task-context">{{ row.latestVersion ? taskVersionStatusMeta(row.latestVersion.versionStatus).label : '等待首次提交' }} · {{ row.versionCount }} 个版本</small>
+          </template>
+        </el-table-column>
+        <el-table-column label="优先级" width="90"><template #default="{ row }"><el-tag v-if="['urgent', 'high'].includes(row.priority)" :type="tagTypeFromTone(taskPriorityMeta(row.priority).tone)" size="small">{{ taskPriorityMeta(row.priority).label }}</el-tag><span v-else class="task-context">{{ taskPriorityMeta(row.priority).label }}</span></template></el-table-column>
+        <el-table-column label="下一步" width="150" fixed="right"><template #default="{ row }"><el-button v-if="hasPermission('shotgrid:task:query')" :type="taskActionType(row)" size="small" @click="openTask(row)">{{ taskActionLabel(row) }}</el-button><span v-else class="task-context">无详情查看权限</span></template></el-table-column>
+      </el-table>
 
-      <el-pagination v-if="total" class="task-pagination" background layout="prev, pager, next, total" :current-page="query.pageNum" :page-size="query.pageSize" :total="total" :disabled="loading" aria-label="任务分页" @current-change="changePage" />
+      <el-pagination v-if="total" class="task-pagination" background layout="total, sizes, prev, pager, next" :current-page="query.pageNum" :page-size="query.pageSize" :page-sizes="[10, 20, 50]" :total="total" :disabled="loading" aria-label="任务分页" @current-change="changePage" @update:page-size="changePageSize" />
     </section>
 
-    <MySubmissionsPanel v-if="canViewRecentSubmissions" />
+    </el-tab-pane>
+    <el-tab-pane v-if="canViewRecentSubmissions" label="提交记录" name="submissions" lazy>
+      <MySubmissionsPanel />
+    </el-tab-pane>
+    </el-tabs>
+    <RelatedDetailDrawer ref="taskDetailDrawer" @closed="canViewTasks && loadTasks()" />
 
   </section>
 </template>
@@ -369,10 +344,10 @@ onBeforeUnmount(() => {
 .workbench-hero {
   position: relative;
   display: flex;
-  min-height: 112px;
+  min-height: 64px;
   align-items: center;
   justify-content: space-between;
-  padding: 22px clamp(22px, 3vw, 34px);
+  padding: 14px 20px;
   overflow: hidden;
   background: var(--sg-workbench-hero-bg);
   border: 1px solid var(--sg-border);
@@ -400,7 +375,7 @@ onBeforeUnmount(() => {
 
 .workbench-hero h2 {
   margin: 0;
-  font-size: clamp(26px, 3vw, 36px);
+  font-size: 22px;
   font-weight: 600;
   letter-spacing: -.045em;
 }
@@ -426,58 +401,19 @@ onBeforeUnmount(() => {
 .workbench-section-heading {
   display: flex;
   gap: 20px;
-  align-items: flex-end;
+  align-items: center;
   justify-content: space-between;
 }
 
-.workbench-section-heading h3 {
+.workbench-section-heading p {
   margin: 0;
-  font-size: 19px;
-}
-
-.workbench-section-heading p:not(.sg-eyebrow) {
-  margin: 7px 0 0;
   color: var(--sg-text-muted);
   font-size: 12px;
 }
 
-.task-stats {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.task-stats span,
-.task-stats small {
-  color: var(--sg-text-muted);
-  font-size: 10px;
-}
-
-.task-stats strong {
-  grid-row: 1 / 3;
-  grid-column: 2;
-  font-size: 21px;
-}
-
-.task-stats:deep(.el-card) {
-  background: var(--sg-surface);
-  border-color: var(--sg-border);
-}
-
-.task-stats:deep(.el-card.is-alert) {
-  border-color: rgba(255, 107, 107, .28);
-}
-
-.task-stats:deep(.el-card__body) {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 4px 12px;
-  padding: 10px 14px;
-}
-
 .task-filters {
   display: grid;
-  grid-template-columns: 2fr repeat(6, minmax(120px, 1fr)) auto;
+  grid-template-columns: 2fr 1fr 1fr 1fr 1fr 1fr auto;
   gap: 10px;
   align-items: end;
   padding: 16px;
@@ -571,209 +507,17 @@ onBeforeUnmount(() => {
   line-height: 1.7;
 }
 
-.task-list {
-  display: grid;
-  overflow: hidden;
-  background: var(--sg-border);
-  border: 1px solid var(--sg-border);
-  border-radius: var(--sg-radius-md);
-  gap: 1px;
-}
-
-.task-list.is-refreshing {
-  pointer-events: none;
-  opacity: .58;
-}
-
-.task-row {
-  display: grid;
-  min-height: 88px;
-  grid-template-columns: 48px minmax(240px, 2fr) minmax(150px, 1fr) 80px auto auto;
-  gap: 14px;
-  align-items: center;
-  padding: 16px 18px;
-  color: var(--sg-text);
-  text-align: left;
-  cursor: pointer;
-  background: var(--sg-surface);
-  border: 0;
-  margin-left: 0;
-}
-
-.task-row:hover {
-  background: var(--sg-surface-raised);
-}
-
-:deep(.activity-entry > span),
-:deep(.task-row > span) {
-  display: contents;
-}
-
-.task-kind-tag,
-.task-row__due {
-  justify-self: start;
-}
-
-.task-row__main,
-.task-row__meta,
-.task-row__version {
-  display: grid;
-  min-width: 0;
-  gap: 6px;
-}
-
-.task-row__heading {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-}
-
-.task-row__heading strong {
-  overflow: hidden;
-  font-size: 13px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.task-row__main > small,
-.task-row__main > span:not(.task-row__heading),
-.task-row__meta,
-.task-row__version small {
-  overflow: hidden;
-  color: var(--sg-text-muted);
-  font-size: 10px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.task-row__meta > span {
-  color: var(--sg-text-secondary);
-  font-size: 11px;
-}
-
-.task-row__meta {
-  white-space: normal;
-  overflow: visible;
-}
-
-.task-row__meta .el-tag {
-  justify-self: start;
-}
-
-.task-row__version strong {
-  color: var(--sg-accent);
-}
-
-.task-row__arrow {
-  color: var(--sg-text-muted);
-}
+.task-list { border: 1px solid var(--sg-border); border-radius: var(--sg-radius-md); }
+.task-title { max-width: 100%; height: auto; white-space: normal; text-align: left; font-weight: 600; }
+.task-context { display: block; margin-top: 5px; color: var(--sg-text-muted); font-size: 12px; }
+.task-requirements { margin-top: 5px; color: var(--sg-text-secondary); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-status-shortcuts { gap: 6px; }
+.task-status-shortcuts :deep(.el-radio-button__inner) { border: 1px solid var(--sg-border); border-radius: 6px; box-shadow: none; }
+.workbench-tabs { min-width: 0; }
 
 .task-pagination {
   display: flex;
   justify-content: center;
-}
-
-.activity-section {
-  min-width: 0;
-}
-
-.activity-card.el-card {
-  background: var(--sg-surface);
-  border-color: var(--sg-border);
-}
-
-.activity-card header {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 16px;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.activity-card h3 {
-  margin: 3px 0 0;
-  font-size: 16px;
-}
-
-.activity-card__actions {
-  display: flex;
-  gap: 10px;
-  align-items: center;
-}
-
-.activity-card--compact:deep(.el-card__header) {
-  padding: 14px 16px 8px;
-  border-bottom: 0;
-}
-
-.activity-card--compact:deep(.el-card__body) {
-  display: grid;
-  gap: 10px;
-  padding: 0 16px 14px;
-}
-
-.activity-card--compact:deep(.el-alert) {
-  min-height: 42px;
-}
-
-.activity-list {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.activity-entry.el-button {
-  display: flex;
-  width: 100%;
-  height: auto;
-  min-width: 0;
-  gap: 12px;
-  align-items: center;
-  justify-content: space-between;
-  margin: 0;
-  padding: 10px 12px;
-  color: var(--sg-text);
-  text-align: left;
-  white-space: normal;
-  background: var(--sg-surface-soft);
-  border: 1px solid var(--sg-border);
-  border-radius: 9px;
-}
-
-.activity-entry.el-button:hover,
-.activity-entry.el-button:focus-visible {
-  background: var(--sg-surface-raised);
-  border-color: var(--sg-border-strong);
-}
-
-.activity-entry__content {
-  display: grid;
-  min-width: 0;
-  flex: 1;
-  gap: 5px;
-}
-
-.activity-entry__content strong {
-  overflow: hidden;
-  font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.activity-entry__content small {
-  overflow: hidden;
-  color: var(--sg-text-muted);
-  font-size: 9px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.activity-entry__content .el-tag {
-  justify-self: start;
-}
-
-.activity-section:deep(.el-skeleton) {
-  grid-column: 1 / -1;
 }
 
 @media (max-width: 1400px) {
@@ -789,29 +533,7 @@ onBeforeUnmount(() => {
     justify-content: flex-start;
   }
 
-  .task-row {
-    grid-template-columns: 48px minmax(240px, 2fr) minmax(140px, 1fr) 70px auto;
-  }
 
-  .task-row__arrow {
-    display: none;
-  }
-}
-
-@media (max-width: 1000px) {
-  .task-stats,
-  .activity-list {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .task-row {
-    grid-template-columns: 44px minmax(0, 1fr) auto;
-  }
-
-  .task-row__meta,
-  .task-row__version {
-    display: none;
-  }
 }
 
 @media (max-width: 680px) {
@@ -820,7 +542,7 @@ onBeforeUnmount(() => {
   }
 
   .workbench-hero {
-    min-height: 96px;
+    min-height: 64px;
     padding: 18px;
   }
 
@@ -837,8 +559,7 @@ onBeforeUnmount(() => {
     flex-direction: column;
   }
 
-  .task-filters,
-  .activity-list {
+  .task-filters {
     grid-template-columns: 1fr;
   }
 
@@ -851,21 +572,8 @@ onBeforeUnmount(() => {
     width: 100%;
   }
 
-  .task-row {
-    grid-template-columns: 38px minmax(0, 1fr);
-  }
 
-  .task-row > .task-priority-tag {
-    display: none;
-  }
 
-  .task-row__heading {
-    align-items: flex-start;
-    flex-direction: column;
-  }
 
-  .activity-card__actions {
-    gap: 6px;
-  }
 }
 </style>

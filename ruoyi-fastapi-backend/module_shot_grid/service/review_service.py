@@ -56,6 +56,8 @@ from module_shot_grid.entity.vo.review_vo import (
     ShotGridManualReviewListOrderModel,
     ShotGridManualReviewListUpdateModel,
     ShotGridManualReviewListVersionsModel,
+    ShotGridMineReviewQueryModel,
+    ShotGridMineSubmissionProjectModel,
     ShotGridMineVersionQueryModel,
     ShotGridNoteCreateModel,
     ShotGridReviewActionCreateModel,
@@ -66,6 +68,8 @@ from module_shot_grid.entity.vo.review_vo import (
     ShotGridReviewListDetailModel,
     ShotGridReviewListItemModel,
     ShotGridReviewListQueryModel,
+    ShotGridReviewProducerOptionModel,
+    ShotGridReviewProjectOptionModel,
     ShotGridReviewVersionSummaryModel,
     ShotGridVersionAssetProductionModel,
     ShotGridVersionCandidateModel,
@@ -128,8 +132,40 @@ class ShotGridReviewService:
         )
 
     @classmethod
+    async def get_mine_review_producers(
+        cls, db: AsyncSession, project_id: int | None, current_user: CurrentUserModel
+    ) -> list[ShotGridReviewProducerOptionModel]:
+        user_id, _, _, _ = cls._actor(current_user)
+        has_all_scope = bool(
+            current_user.user
+            and (
+                current_user.user.admin
+                or '*:*:*' in current_user.permissions
+                or 'shotgrid:project:all' in current_user.permissions
+            )
+        )
+        rows = await ShotGridReviewDao.get_mine_review_producers(db, user_id, has_all_scope, project_id)
+        return [ShotGridReviewProducerOptionModel.model_validate(row) for row in rows]
+
+    @classmethod
+    async def get_mine_review_projects(
+        cls, db: AsyncSession, current_user: CurrentUserModel
+    ) -> list[ShotGridReviewProjectOptionModel]:
+        user_id, _, _, _ = cls._actor(current_user)
+        has_all_scope = bool(
+            current_user.user
+            and (
+                current_user.user.admin
+                or '*:*:*' in current_user.permissions
+                or 'shotgrid:project:all' in current_user.permissions
+            )
+        )
+        rows = await ShotGridReviewDao.get_mine_review_projects(db, user_id, has_all_scope)
+        return [ShotGridReviewProjectOptionModel.model_validate(row) for row in rows]
+
+    @classmethod
     async def get_mine_review_lists(
-        cls, db: AsyncSession, query: ShotGridReviewListQueryModel, current_user: CurrentUserModel
+        cls, db: AsyncSession, query: ShotGridMineReviewQueryModel, current_user: CurrentUserModel
     ) -> PageModel[ShotGridReviewListItemModel]:
         user_id, _, _, _ = cls._actor(current_user)
         user = current_user.user
@@ -147,6 +183,14 @@ class ShotGridReviewService:
             total=total,
             hasNext=(query.page_num * query.page_size) < total,
         )
+
+    @classmethod
+    async def get_mine_submission_projects(
+        cls, db: AsyncSession, current_user: CurrentUserModel
+    ) -> list[ShotGridMineSubmissionProjectModel]:
+        user_id, _, _, _ = cls._actor(current_user)
+        rows = await ShotGridReviewDao.get_mine_submission_projects(db, user_id)
+        return [ShotGridMineSubmissionProjectModel.model_validate(row) for row in rows]
 
     @classmethod
     async def get_recent_mine_versions(

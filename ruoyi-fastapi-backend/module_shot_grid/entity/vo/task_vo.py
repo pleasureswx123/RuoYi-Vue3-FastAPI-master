@@ -29,13 +29,21 @@ class ShotGridTaskFilterModel(ShotGridPageQueryModel):
     """任务列表共用筛选条件。"""
 
     task_kind: TaskKind | None = Field(default=None, description='任务类型')
-    task_status: TaskStatus | None = Field(default=None, description='任务状态')
+    task_status: (
+        Literal[
+            'pending_schedule', 'not_started', 'preparing', 'in_progress', 'pending_review', 'revision', 'completed'
+        ]
+        | None
+    ) = Field(default=None, description='任务状态')
+    unfinished_only: bool = Field(default=False, description='仅查询未完成任务，与具体状态取交集')
     due_date_from: date | None = Field(default=None, description='截止日期下界')
     due_date_to: date | None = Field(default=None, description='截止日期上界')
     priority: TaskPriority | None = Field(default=None, description='任务优先级')
-    order_by_column: Literal['taskId', 'dueDate', 'priority', 'createTime', 'updateTime', 'shotNo'] = Field(
-        default='updateTime',
-        description='排序字段',
+    order_by_column: Literal['taskId', 'dueDate', 'priority', 'createTime', 'updateTime', 'shotNo', 'workbench'] = (
+        Field(
+            default='updateTime',
+            description='排序字段',
+        )
     )
 
     @model_validator(mode='after')
@@ -182,8 +190,10 @@ class ShotGridTaskStartModel(ShotGridLockVersionModel):
     asset_item_lock_version: int | None = Field(default=None, ge=0)
     start_confirmed: StrictBool = False
     priority: TaskPriority | None = Field(default=None, description='开工时确认的优先级，省略保留原值')
-    expected_start_time: datetime | None = Field(default=None, description='预期开始时间；业务本地时间，仅供展示')
-    expected_end_time: datetime | None = Field(default=None, description='预期结束时间；不限制逾期提交')
+    expected_start_time: datetime | None = Field(
+        default=None, description='旧客户端兼容字段；开工请求不得提交，须先单独保存排期'
+    )
+    expected_end_time: datetime | None = Field(default=None, description='旧客户端兼容字段；开工只读沿用已保存排期')
 
     @model_validator(mode='after')
     def validate_expected_times(self) -> 'ShotGridTaskStartModel':

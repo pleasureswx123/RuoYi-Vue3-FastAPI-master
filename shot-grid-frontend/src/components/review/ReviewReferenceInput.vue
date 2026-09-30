@@ -31,7 +31,7 @@ function formatSize(bytes) {
     <ReviewReferenceFiles v-if="savedFiles.length" :files="savedFiles" compact :removable="!readonly && !disabled" @remove="emit('remove', $event)" />
     <div v-if="localFiles.length" class="issue-reference-pending-list">
       <article v-for="file in localFiles" :key="file.clientKey" class="issue-reference-pending">
-        <el-image v-if="file.previewUrl" class="issue-reference-pending__preview" :src="file.previewUrl" :alt="file.originalName" fit="cover" />
+        <el-image v-if="file.previewUrl" class="issue-reference-pending__preview" :src="file.previewUrl" :alt="file.originalName" :preview-src-list="[file.previewUrl]" preview-teleported fit="cover" />
         <div v-else class="issue-reference-pending__icon" aria-hidden="true"><el-icon><Document /></el-icon></div>
         <div class="issue-reference-pending__info"><strong :title="file.originalName">{{ file.originalName }}</strong><small>{{ formatSize(file.fileSize) }} · {{ file.fileId ? `已上传，待提交${purpose}` : `提交${purpose}时上传` }}</small><el-progress v-if="file.uploadProgress > 0 && file.uploadProgress < 100" :percentage="file.uploadProgress" :stroke-width="4" :show-text="false" /></div>
         <el-button v-if="!readonly" text type="danger" :icon="Delete" :disabled="disabled" :aria-label="`移除参考文件 ${file.originalName}`" @click="emit('remove', file)">移除</el-button>

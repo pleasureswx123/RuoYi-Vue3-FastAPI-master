@@ -1,10 +1,12 @@
 import { flushPromises, mount } from '@vue/test-utils'
-import { ElButton, ElCheckbox, ElDatePicker, ElForm, ElFormItem, ElInput } from 'element-plus'
+import { ElButton, ElDatePicker, ElForm, ElFormItem, ElInput } from 'element-plus'
 import { describe, expect, it, vi } from 'vitest'
 
 import { updateTaskSchedule } from '@/api/shot-grid/schedules'
 import ScheduleEditDialog from '@/views/schedule/components/ScheduleEditDialog.vue'
 import { useScheduleMutation } from '@/views/schedule/useScheduleMutation'
+
+vi.mock('@/api/shot-grid/productionHistory', () => ({ getProductionHistory: vi.fn().mockResolvedValue({ data: { lanes: [], events: [] } }) }))
 
 vi.mock('@/api/shot-grid/schedules', () => ({ updateTaskSchedule: vi.fn() }))
 
@@ -26,7 +28,7 @@ const task = {
 }
 
 describe('排期编辑表单', () => {
-  it('使用 ElForm 显式校验，原因未填不提交，保存中禁用操作', async () => {
+  it('使用 ElForm 显式校验，原因选填仍可提交，保存中禁用操作', async () => {
     const wrapper = mount(ScheduleEditDialog, {
       props: {
         visible: true,
@@ -36,11 +38,10 @@ describe('排期编辑表单', () => {
           expectedEndTime: '2026-09-06T18:00:00',
           operationSource: 'gantt'
         },
-        saving: false,
-        conflictTaskIds: []
+        saving: false
       },
       global: {
-        components: { ElButton, ElCheckbox, ElDatePicker, ElForm, ElFormItem, ElInput },
+        components: { ElButton, ElDatePicker, ElForm, ElFormItem, ElInput },
         stubs: {
           ElDialog: {
             props: ['modelValue'],
@@ -51,22 +52,34 @@ describe('排期编辑表单', () => {
       }
     })
     const form = wrapper.getComponent(ElForm)
-    expect(form.props('model')).toMatchObject({ changeReason: '', overlapAcknowledged: false })
+    expect(form.props('model')).toMatchObject({ changeReason: '' })
     expect(form.props('rules')).toMatchObject({ expectedRange: expect.any(Array), changeReason: expect.any(Array) })
 
     await wrapper.findAllComponents(ElButton).find(button => button.text() === '保存排期').trigger('click')
-    expect(wrapper.emitted('save-request')).toBeUndefined()
+    await flushPromises()
+    expect(wrapper.emitted('save-request').at(-1)[0].changeReason).toBe('')
+
+    expect(wrapper.text()).toContain('原排期')
+    expect(wrapper.text()).toContain('拟调整为')
+    await wrapper.findAllComponents(ElInput).find(input => input.props('type') === 'textarea').setValue('   ')
+    await wrapper.findAllComponents(ElButton).find(button => button.text() === '保存排期').trigger('click')
+    await flushPromises()
+    await flushPromises()
+    expect(wrapper.emitted('save-request').at(-1)[0].changeReason).toBe('')
 
     await wrapper.findAllComponents(ElInput).find(input => input.props('type') === 'textarea').setValue('调整动画制作窗口')
     await wrapper.findAllComponents(ElButton).find(button => button.text() === '保存排期').trigger('click')
     await flushPromises()
-    expect(wrapper.emitted('save-request')[0][0]).toEqual({
+    expect(wrapper.emitted('save-request').at(-1)[0]).toEqual({
       expectedStartTime: '2026-09-02T09:00:00',
       expectedEndTime: '2026-09-06T18:00:00',
       operationSource: 'gantt',
-      changeReason: '调整动画制作窗口',
-      overlapAcknowledged: false
+      changeReason: '调整动画制作窗口'
     })
+
+    await wrapper.setProps({ draft: { expectedStartTime: task.currentStart, expectedEndTime: task.currentEnd } })
+    expect(wrapper.findAllComponents(ElButton).find(button => button.text() === '保存排期').props('disabled')).toBe(true)
+    expect(wrapper.text()).toContain('排期未变更')
 
     await wrapper.setProps({ saving: true })
     expect(
@@ -77,61 +90,35 @@ describe('排期编辑表单', () => {
   })
 })
 
-describe('排期写入与重叠二次确认', () => {
-  it('首次冲突不修改 Store，确认同一冲突快照后用相同幂等键保存服务端结果', async () => {
+describe('排期写入', () => {
+  it('重叠任务一次保存，不发送隐式确认，使用服务端结果更新 Store', async () => {
+    updateTaskSchedule.mockReset()
     const store = { tasks: [{ ...task }], setEditMode: vi.fn() }
     const mutation = useScheduleMutation(store)
-    mutation.open(task, {
-      expectedStartTime: '2026-09-02T09:00:00',
-      expectedEndTime: '2026-09-06T18:00:00',
-      operationSource: 'gantt'
-    })
-    updateTaskSchedule.mockRejectedValueOnce({
-      httpStatus: 409,
-      errorKey: 'SG_TASK_SCHEDULE_OVERLAP',
-      message: '存在重叠',
-      details: {
-        conflictTaskIds: [32, 35],
-        conflicts: [{ taskId: 32, targetName: 'EP001-001-0020', assignee: { userName: '李梅' }, startTime: '2026-09-03T09:00:00', endTime: '2026-09-06T18:00:00' }]
-      }
-    })
-
-    await mutation.save({ changeReason: '调整窗口', overlapAcknowledged: false })
-
-    expect(store.tasks[0].currentStart).toBe(task.currentStart)
-    expect(mutation.conflictTaskIds.value).toEqual([32, 35])
-    expect(mutation.conflicts.value[0]).toMatchObject({ targetName: 'EP001-001-0020', assignee: { userName: '李梅' } })
-    const idempotencyKey = updateTaskSchedule.mock.calls[0][2]
-
-    const saved = { ...task, lockVersion: 9, currentStart: '2026-09-02T09:00:00', currentEnd: '2026-09-06T18:00:00' }
+    mutation.open(task)
+    const saved = { ...task, lockVersion: 9, conflicts: [{ taskId: 32 }] }
     updateTaskSchedule.mockResolvedValueOnce({ data: saved })
-    await mutation.save({ changeReason: '调整窗口', overlapAcknowledged: true })
-
-    expect(updateTaskSchedule.mock.calls[1][1]).toMatchObject({
-      overlapAcknowledged: true,
-      expectedConflictTaskIds: [32, 35]
-    })
-    expect(updateTaskSchedule.mock.calls[1][2]).toBe(idempotencyKey)
+    await mutation.save({ changeReason: '调整窗口' })
+    expect(updateTaskSchedule).toHaveBeenCalledTimes(1)
+    expect(updateTaskSchedule.mock.calls[0][1]).not.toHaveProperty('overlapAcknowledged')
+    expect(updateTaskSchedule.mock.calls[0][1]).not.toHaveProperty('expectedConflictTaskIds')
     expect(store.tasks[0]).toEqual(saved)
     expect(mutation.visible.value).toBe(false)
   })
 
-  it('只读错误退出编辑模式，冲突集合变化要求重新确认', async () => {
+  it('版本冲突刷新后仍需重新保存，只读错误退出编辑模式', async () => {
+    updateTaskSchedule.mockReset()
     const store = { tasks: [{ ...task }], setEditMode: vi.fn() }
-    const mutation = useScheduleMutation(store)
+    const onRefresh = vi.fn()
+    const mutation = useScheduleMutation(store, { onRefresh })
     mutation.open(task)
-    mutation.conflictTaskIds.value = [32]
-    updateTaskSchedule.mockRejectedValueOnce({
-      httpStatus: 409,
-      errorKey: 'SG_TASK_SCHEDULE_OVERLAP',
-      details: { conflictTaskIds: [32, 36] }
-    })
-    await mutation.save({ changeReason: '再次调整', overlapAcknowledged: true })
-    expect(mutation.conflictTaskIds.value).toEqual([32, 36])
-    expect(mutation.overlapAcknowledged.value).toBe(false)
-
+    updateTaskSchedule.mockRejectedValueOnce({ httpStatus: 409, errorKey: 'SG_OPTIMISTIC_LOCK_CONFLICT' })
+    await mutation.save({ changeReason: '再次调整' })
+    expect(onRefresh).toHaveBeenCalledOnce()
+    expect(mutation.visible.value).toBe(true)
+    expect(store.tasks[0].lockVersion).toBe(8)
     updateTaskSchedule.mockRejectedValueOnce({ httpStatus: 409, errorKey: 'SG_TASK_SCHEDULE_READ_ONLY' })
-    await mutation.save({ changeReason: '再次调整', overlapAcknowledged: false })
+    await mutation.save({ changeReason: '再次调整' })
     expect(store.setEditMode).toHaveBeenCalledWith(false)
     expect(mutation.visible.value).toBe(false)
   })

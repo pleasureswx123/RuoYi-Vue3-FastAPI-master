@@ -1292,6 +1292,8 @@ class ShotGridAssetCrudService:
     def _item_status(task: ShotGridTaskSummaryModel | None, has_final_version: bool) -> str:
         if task is None:
             return 'unassigned'
+        if task.task_status == 'not_started' and (not task.expected_start_time or not task.expected_end_time):
+            return 'pending_schedule'
         mapping = {
             'not_started': 'not_started',
             'preparing': 'preparing',
@@ -1309,7 +1311,15 @@ class ShotGridAssetCrudService:
             return 'unassigned'
         if all(status == 'completed' for status in item_statuses):
             return 'completed'
-        for status in ('revision', 'reviewing', 'in_progress', 'preparing', 'unassigned', 'not_started'):
+        for status in (
+            'revision',
+            'reviewing',
+            'in_progress',
+            'preparing',
+            'unassigned',
+            'pending_schedule',
+            'not_started',
+        ):
             if status in item_statuses:
                 return status
         return 'not_started'

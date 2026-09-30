@@ -2,9 +2,11 @@
 import { computed, onBeforeUnmount, ref } from 'vue'
 
 import { ganttScaleFor, rangeChangeRequest, toGanttTasks, toSwimlaneRows } from '@/views/schedule/adapters/svarGanttAdapter'
-import { formatTaskDateTime } from '@/views/task/taskPresentation'
+import { scheduleStatusStyle } from '@/views/schedule/schedulePresentation'
+import { formatTaskDateTime, taskStatusMeta } from '@/views/task/taskPresentation'
 
 const props = defineProps({
+  selectedTaskId: { type: Number, default: null },
   rows: { type: Array, default: () => [] },
   windowStart: { type: String, required: true },
   windowEnd: { type: String, required: true },
@@ -28,7 +30,7 @@ const lanes = computed(() => {
 })
 const groupLabel = computed(() => ({
   assignee: '制作人员',
-  task_kind: '任务类型',
+  task_kind: '制作人员',
   status: '任务状态',
   episode: '集',
   scene: '场次',
@@ -117,7 +119,7 @@ const ticks = computed(() => {
   return result
 })
 const timelineWidth = computed(() => Math.max(720, ticks.value.length * scaleConfig.value.cellWidth))
-const swimlaneMinWidth = computed(() => 170 + timelineWidth.value)
+const swimlaneMinWidth = computed(() => 120 + timelineWidth.value)
 
 function startDrag(event, task, edge = 'move') {
   if (!props.editable || task.readonly || event.button !== 0) return
@@ -177,7 +179,7 @@ function openTask(task) {
 }
 
 function taskTooltipContent(task) {
-  return `${task.text} · 负责人：${task.assigneeName} · 排期：${formatTaskDateTime(task.start)} 至 ${formatTaskDateTime(task.end)}`
+  return `${task.text} · ${taskStatusMeta(task).label} · 负责人：${task.assigneeName} · 排期：${formatTaskDateTime(task.start)} 至 ${formatTaskDateTime(task.end)}`
 }
 
 onBeforeUnmount(() => dragCleanup?.())
@@ -204,15 +206,15 @@ onBeforeUnmount(() => dragCleanup?.())
         >{{ tick.label }}</span>
       </div>
     </div>
+    <template v-for="(lane, index) in lanes" :key="lane.id">
+    <div v-if="groupBy === 'task_kind' && (index === 0 || lanes[index - 1].parentGroupKey !== lane.parentGroupKey)" class="personnel-type-heading"><strong>{{ lane.groupName }}</strong></div>
     <div
-      v-for="lane in lanes"
-      :key="lane.id"
       class="personnel-lane"
       data-testid="personnel-lane"
       :data-track-count="lane.trackCount"
       :style="{ minHeight: `${laneHeight(lane)}px` }"
     >
-      <header><strong>{{ lane.groupName }}</strong><small>{{ lane.tasks.length }} 项任务</small></header>
+      <header><strong>{{ groupBy === 'task_kind' ? lane.assigneeName : lane.groupName }}</strong><small>{{ lane.tasks.length }} 项任务</small></header>
       <div class="personnel-lane__timeline">
         <span v-for="tick in ticks" :key="tick.key" class="personnel-lane__gridline" :style="{ left: tick.left }" aria-hidden="true" />
         <template v-for="task in lane.tasks" :key="task.id">
@@ -224,10 +226,11 @@ onBeforeUnmount(() => dragCleanup?.())
           >
             <el-button
               class="personnel-task"
-              :class="[task.className, `status-${task.taskStatus}`]"
-              :style="taskPositionStyle(task)"
+              :class="[task.className, `status-${task.taskStatus}`, { 'is-selected': task.taskId === selectedTaskId }]"
+              :aria-pressed="task.taskId === selectedTaskId"
+              :style="[taskPositionStyle(task), scheduleStatusStyle(task.taskStatus)]"
               :data-task-id="task.taskId"
-              :aria-label="`${task.text}，${task.assigneeName}`"
+              :aria-label="`${task.text}，${task.assigneeName}，${taskStatusMeta(task).label}`"
               text
               @pointerdown="event => startDrag(event, task, 'move')"
               @click="openTask(task)"
@@ -240,13 +243,16 @@ onBeforeUnmount(() => dragCleanup?.())
         </template>
       </div>
     </div>
+    </template>
   </section>
 </template>
 
 <style scoped>
+.personnel-type-heading { padding: 10px 16px; background: var(--sg-surface-raised); border-bottom: 1px solid var(--sg-border); font-size: 12px; }
+.personnel-type-heading strong { position: sticky; left: 16px; }
 .personnel-swimlane { background: var(--sg-surface); border: 1px solid var(--sg-border); border-radius: var(--sg-radius-md); }
-.personnel-swimlane__header,.personnel-lane { display: grid; grid-template-columns: 170px minmax(var(--personnel-timeline-width),1fr); }
-.personnel-swimlane__header { min-height: 44px; color: var(--sg-text-muted); font-size: 11px; background: var(--sg-surface-raised); border-bottom: 1px solid var(--sg-border); }
+.personnel-swimlane__header,.personnel-lane { display: grid; grid-template-columns: 120px minmax(var(--personnel-timeline-width),1fr); }
+.personnel-swimlane__header { position: sticky; top: 0; z-index: 5; min-height: 44px; color: var(--sg-text-muted); font-size: 11px; background: var(--sg-surface-raised); border-bottom: 1px solid var(--sg-border); }
 .personnel-swimlane__header>strong,.personnel-lane>header { position: sticky; left: 0; z-index: 4; display: flex; padding: 0 16px; align-items: center; background: var(--sg-surface-raised); border-right: 1px solid var(--sg-border); }
 .personnel-swimlane__ticks,.personnel-lane__timeline { position: relative; min-width: 0; }
 .personnel-swimlane__tick { position: absolute; top: 0; bottom: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; white-space: nowrap; border-left: 1px dashed color-mix(in srgb,var(--sg-border) 75%,transparent); }
@@ -255,11 +261,10 @@ onBeforeUnmount(() => dragCleanup?.())
 .personnel-lane>header { z-index: 3; flex-direction: column; align-items: flex-start; justify-content: center; background: var(--sg-surface); }
 .personnel-lane>header small { margin-top: 3px; color: var(--sg-text-muted); font-size: 10px; }
 .personnel-lane__gridline { position: absolute; top: 0; bottom: 0; border-left: 1px dashed color-mix(in srgb,var(--sg-border) 75%,transparent); }
-.personnel-task { position: absolute; z-index: 2; display: block; height: 28px; padding: 0 9px!important; margin-left: 0!important; overflow: hidden; color: var(--sg-text)!important; text-align: left; text-overflow: ellipsis; white-space: nowrap; background: color-mix(in srgb,var(--el-color-primary) 22%,var(--sg-surface-raised))!important; border: 1px solid color-mix(in srgb,var(--el-color-primary) 55%,transparent)!important; border-radius: 6px; }
+.personnel-task { position: absolute; z-index: 2; display: block; height: 28px; padding: 0 9px!important; margin-left: 0!important; overflow: hidden; color: var(--sg-text)!important; text-align: left; text-overflow: ellipsis; white-space: nowrap; background: color-mix(in srgb,var(--sg-schedule-status-color) 18%,var(--sg-surface-raised))!important; border: 1px solid color-mix(in srgb,var(--sg-schedule-status-color) 65%,transparent)!important; border-radius: 6px; }
 .personnel-task__label { display: block; overflow: hidden; text-overflow: ellipsis; }
 .personnel-task__handle { position: absolute; z-index: 3; top: 3px; bottom: 3px; width: 6px; cursor: ew-resize; background: color-mix(in srgb,var(--sg-text) 35%,transparent); border-radius: 3px; }
 .personnel-task__handle.is-start { left: 2px; }.personnel-task__handle.is-end { right: 2px; }
-.personnel-task.status-completed { background: color-mix(in srgb,var(--el-color-success) 18%,var(--sg-surface-raised))!important; border-color: var(--el-color-success)!important; }
-.personnel-task.is-conflicted { border-color: var(--el-color-danger)!important; box-shadow: 0 0 0 1px color-mix(in srgb,var(--el-color-danger) 38%,transparent); }
 .personnel-task__baseline { position: absolute; z-index: 1; height: 4px; background: color-mix(in srgb,var(--el-color-info) 60%,transparent); border: 1px dashed var(--el-color-info); border-radius: 999px; }
+.personnel-task.is-selected { outline: 2px solid var(--sg-accent); outline-offset: 2px; z-index: 3; }
 </style>

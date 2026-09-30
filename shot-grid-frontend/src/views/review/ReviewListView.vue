@@ -1,6 +1,6 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElTable, ElTableColumn } from 'element-plus'
 import 'element-plus/es/components/table/style/css'
 import 'element-plus/es/components/table-column/style/css'
@@ -22,6 +22,7 @@ import {
 } from './reviewPresentation'
 
 const router = useRouter()
+const route = useRoute()
 const sessionStore = useSessionStore()
 const taskDrawer = ref(null)
 const canQueryTask = computed(() => sessionStore.permissions.includes('*:*:*') || sessionStore.permissions.includes('shotgrid:task:query'))
@@ -53,7 +54,7 @@ const projectsError = ref(null)
 const reviewsError = ref(null)
 const manualDialogVisible = ref(false)
 const reviewFilterFormRef = ref(null)
-const query = reactive({ reviewStatus: '', pageNum: 1, pageSize: 20 })
+const query = reactive({ reviewStatus: ['draft', 'active', 'completed', 'archived'].includes(route.query.reviewStatus) ? route.query.reviewStatus : '', pageNum: 1, pageSize: 20 })
 let projectsController = null
 let reviewsController = null
 
@@ -87,7 +88,8 @@ async function loadProjects() {
     if (projectsController !== controller) return
     projects.value = response.rows || []
     if (!projects.value.some(item => String(item.projectId) === selectedProjectId.value)) {
-      selectedProjectId.value = projects.value[0] ? String(projects.value[0].projectId) : ''
+      const preferred = projects.value.find(item => String(item.projectId) === String(route.query.projectId)) || projects.value[0]
+      selectedProjectId.value = preferred ? String(preferred.projectId) : ''
     }
   } catch (error) {
     if (error?.code !== 'ERR_CANCELED') projectsError.value = reviewErrorState(error, '项目范围加载失败')

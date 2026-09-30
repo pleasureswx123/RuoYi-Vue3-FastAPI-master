@@ -323,7 +323,7 @@ describe('版本审核页面', () => {
     expect(wrapper.text()).toContain('播放并检查 V003_01')
     expect(wrapper.text()).not.toContain('尚未选择')
     const headingTags = wrapper.find('.heading-actions').findAllComponents(ElTag)
-    expect(headingTags.map(tag => tag.text())).toEqual(['自动单版', '待审核'])
+    expect(headingTags.map(tag => tag.text())).toEqual(['单版本审核', '待审核'])
     expect(headingTags[0].props()).toMatchObject({ type: 'primary', effect: 'plain', size: 'small', round: true })
     expect(headingTags[1].props()).toMatchObject({ type: 'warning', effect: 'light', size: 'small', round: true })
 

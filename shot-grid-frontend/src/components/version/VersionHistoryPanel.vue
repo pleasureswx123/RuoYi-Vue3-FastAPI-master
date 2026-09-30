@@ -19,6 +19,7 @@ import { formatVersionDateTime, versionErrorState, versionStatusMeta } from './v
 
 const props = defineProps({
   taskId: { type: Number, required: true },
+  currentReviewVersionId: { type: Number, default: null },
   operationGeneration: { type: Number, default: 0 },
   refreshKey: { type: [Number, String], default: 0 },
   pageSize: { type: Number, default: 10 },
@@ -667,7 +668,7 @@ defineExpose({ focusIssue })
       <ElTabs v-if="versions.length" :model-value="selectedVersionId" type="border-card" class="version-tabs" :aria-busy="loading" @tab-change="selectVersion">
         <ElTabPane v-for="version in versions" :key="version.versionId" :name="Number(version.versionId)">
           <template #label>
-            <span class="version-tab-label"><strong>{{ version.versionNumber }}</strong><el-tag size="small" effect="plain" round :type="tagTypeFromTone(versionStatusMeta(version.versionStatus).tone)">{{ versionStatusMeta(version.versionStatus).label }}</el-tag></span>
+            <span class="version-tab-label"><strong>{{ version.versionNumber }}</strong><el-tag v-if="Number(version.versionId) === currentReviewVersionId" size="small" type="primary" effect="dark">当前审核版</el-tag><el-tag size="small" effect="plain" round :type="tagTypeFromTone(versionStatusMeta(version.versionStatus).tone)">{{ versionStatusMeta(version.versionStatus).label }}</el-tag></span>
           </template>
       <main v-if="selectedVersionId === Number(version.versionId)" class="history-detail">
         <div class="version-tab-meta"><span>{{ version.submitterName || `用户 #${version.submittedBy}` }} · {{ formatVersionDateTime(version.submittedTime) }}</span><span>{{ version.changelog }}</span></div>

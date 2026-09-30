@@ -38,6 +38,7 @@ from module_shot_grid.entity.vo.shot_crud_vo import (
     ShotGridShotUpdateModel,
 )
 from module_shot_grid.exceptions import ShotGridDomainException, shot_grid_error
+from module_shot_grid.service.shot_reference_service import ShotGridShotReferenceService
 from module_shot_grid.service.shot_task_rules import missing_shot_assignment_fields
 from module_shot_grid.service.task_reference_service import ShotGridTaskReferenceService
 from module_shot_grid.shot_number import format_shot_code
@@ -97,8 +98,15 @@ class ShotGridShotCrudService:
         references = await ShotGridTaskReferenceService.map_files(
             db, [model.task_id for model in models if model.task_id]
         )
+        shot_references = await ShotGridShotReferenceService.map_files(
+            db, project_id, [model.shot_id for model in models]
+        )
         for model in models:
-            model.reference_files = references.get(model.task_id, [])
+            model.shot_reference_files = shot_references.get(model.shot_id, [])
+            model.reference_files = [*model.shot_reference_files, *references.get(model.task_id, [])]
+            model.reference_description = (
+                '\n\n'.join(filter(None, [model.shot_reference_description, model.reference_description])) or None
+            )
         return PageModel[ShotGridShotListItemModel](
             rows=models,
             pageNum=query.page_num,
@@ -125,6 +133,11 @@ class ShotGridShotCrudService:
         detail = cls._build_detail(row, assets, projection_map.get(shot_id), current_user, access)
         if detail.task_id:
             detail.reference_files = await ShotGridTaskReferenceService.list_files(db, detail.task_id)
+        detail.shot_reference_files = await ShotGridShotReferenceService.list_files(db, project_id, shot_id)
+        detail.reference_files = [*detail.shot_reference_files, *detail.reference_files]
+        detail.reference_description = (
+            '\n\n'.join(filter(None, [detail.shot_reference_description, detail.reference_description])) or None
+        )
         return detail
 
     @classmethod
@@ -161,6 +174,7 @@ class ShotGridShotCrudService:
                     camera_movement=command.camera_movement,
                     focal_length=command.focal_length,
                     description=command.description,
+                    reference_description=command.reference_description,
                     dialogue=command.dialogue,
                     sound_effect=command.sound_effect,
                     color_reference=command.color_reference,
@@ -175,6 +189,10 @@ class ShotGridShotCrudService:
                     del_flag='0',
                 ),
             )
+            if command.reference_file_ids:
+                await ShotGridShotReferenceService.replace_files(
+                    db, shot.shot_id, command.reference_file_ids, actor_user_id, actor_name
+                )
             await ShotGridShotCrudDao.sync_shot_assets(
                 db,
                 project_id=project_id,
@@ -196,6 +214,13 @@ class ShotGridShotCrudService:
                     'sceneId': scene.scene_id,
                     'shotNo': command.shot_no,
                     'assetIds': command.asset_ids,
+                    'referenceFields': sorted(
+                        command.model_fields_set & {'reference_description', 'reference_file_ids'}
+                    ),
+                    'referenceDescription': ShotGridShotReferenceService.audit_description(
+                        command.reference_description
+                    ),
+                    'referenceFileIds': command.reference_file_ids,
                 },
                 result={
                     'directoryStatus': 'not_created',
@@ -281,6 +306,11 @@ class ShotGridShotCrudService:
                     'camera_movement': command.camera_movement,
                     'focal_length': command.focal_length,
                     'description': command.description,
+                    **(
+                        {'reference_description': command.reference_description}
+                        if 'reference_description' in command.model_fields_set
+                        else {}
+                    ),
                     'dialogue': command.dialogue,
                     'sound_effect': command.sound_effect,
                     'color_reference': command.color_reference,
@@ -292,6 +322,10 @@ class ShotGridShotCrudService:
             )
             if new_lock_version is None:
                 raise shot_grid_error(409, 'SG_OPTIMISTIC_LOCK_CONFLICT', '镜头已被其他用户修改')
+            if 'reference_file_ids' in command.model_fields_set:
+                await ShotGridShotReferenceService.replace_files(
+                    db, shot_id, command.reference_file_ids, actor_user_id, actor_name
+                )
             await ShotGridShotCrudDao.sync_shot_assets(
                 db,
                 project_id=project_id,
@@ -314,6 +348,13 @@ class ShotGridShotCrudService:
                     'sceneId': command.scene_id,
                     'sequencePosition': command.sequence_position,
                     'assetIds': command.asset_ids,
+                    'referenceFields': sorted(
+                        command.model_fields_set & {'reference_description', 'reference_file_ids'}
+                    ),
+                    'referenceDescription': ShotGridShotReferenceService.audit_description(
+                        command.reference_description
+                    ),
+                    'referenceFileIds': command.reference_file_ids,
                 },
                 result={'lockVersion': new_lock_version},
             )
@@ -1070,6 +1111,11 @@ class ShotGridShotCrudService:
         detail = cls._build_detail(row, assets, projection_map.get(shot_id), current_user, access)
         if detail.task_id:
             detail.reference_files = await ShotGridTaskReferenceService.list_files(db, detail.task_id)
+        detail.shot_reference_files = await ShotGridShotReferenceService.list_files(db, project_id, shot_id)
+        detail.reference_files = [*detail.shot_reference_files, *detail.reference_files]
+        detail.reference_description = (
+            '\n\n'.join(filter(None, [detail.shot_reference_description, detail.reference_description])) or None
+        )
         return detail
 
     @classmethod

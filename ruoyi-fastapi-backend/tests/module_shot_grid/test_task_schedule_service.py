@@ -253,71 +253,47 @@ async def test_reschedule_preserves_frozen_baseline_and_derives_move(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_overlap_requires_current_exact_snapshot_before_save(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize('acknowledged, snapshot', [(False, []), (True, [99])])
+async def test_overlap_saves_once_and_records_actual_overlap_without_confirmation(
+    monkeypatch: pytest.MonkeyPatch, acknowledged: bool, snapshot: list[int]
+) -> None:
     task = _task()
-    mocks = _wire_success(monkeypatch, task, overlaps=[CONFLICT_TASK_ID])
+    mocks = _wire_success(monkeypatch, task, overlaps=[99, 100])
     db = AsyncMock()
-    db.add = Mock()
-
-    with pytest.raises(ShotGridDomainException) as exc_info:
-        await ShotGridTaskScheduleService.update_schedule(
-            db, TASK_ID, _command(), 'schedule-command-3', _current_user()
-        )
-
-    assert exc_info.value.error_key == 'SG_TASK_SCHEDULE_OVERLAP'
-    assert exc_info.value.details['conflictTaskIds'] == [CONFLICT_TASK_ID]
-    assert exc_info.value.details['conflicts'][0] == {
-        'taskId': CONFLICT_TASK_ID,
-        'targetName': 'EP001-001-0010',
-        'assignee': {'userId': ASSIGNEE_ID, 'userName': 'creator', 'nickName': '制作人'},
-        'startTime': '2026-09-02T09:00:00',
-        'endTime': '2026-09-04T18:00:00',
-    }
-    assert task.expected_start_time is None
-    mocks['add_change'].assert_not_awaited()
-    db.rollback.assert_awaited_once()
-
-    db.reset_mock()
     result = await ShotGridTaskScheduleService.update_schedule(
         db,
         TASK_ID,
-        _command(overlap_acknowledged=True, expected_conflicts=[CONFLICT_TASK_ID]),
-        'schedule-command-4',
+        _command(overlap_acknowledged=acknowledged, expected_conflicts=snapshot),
+        'schedule-command-overlap',
         _current_user(),
     )
-    assert result.conflicts[0].task_id == CONFLICT_TASK_ID
-    assert mocks['add_change'].await_args.args[1].overlap_task_ids == [CONFLICT_TASK_ID]
+    assert [item.task_id for item in result.conflicts] == [99, 100]
+    change = mocks['add_change'].await_args.args[1]
+    assert change.overlap_task_ids == [99, 100]
+    assert change.overlap_acknowledged is acknowledged
+    assert task.lock_version == LOCK_VERSION + 1
+    db.commit.assert_awaited_once()
+    db.rollback.assert_not_awaited()
+    mocks['audit'].assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_overlap_snapshot_change_and_lock_conflict_fail_closed(monkeypatch: pytest.MonkeyPatch) -> None:
-    task = _task()
-    _wire_success(monkeypatch, task, overlaps=[99, 100])
+async def test_overlap_does_not_bypass_lock_conflict(monkeypatch: pytest.MonkeyPatch) -> None:
+    task = _task(lock_version=LOCK_VERSION + 1)
+    mocks = _wire_success(monkeypatch, task, overlaps=[99, 100])
     db = AsyncMock()
-    db.add = Mock()
-
-    with pytest.raises(ShotGridDomainException) as overlap_error:
-        await ShotGridTaskScheduleService.update_schedule(
-            db,
-            TASK_ID,
-            _command(overlap_acknowledged=True, expected_conflicts=[99]),
-            'schedule-command-5',
-            _current_user(),
-        )
-    assert overlap_error.value.error_key == 'SG_TASK_SCHEDULE_OVERLAP'
-    assert overlap_error.value.details['conflictTaskIds'] == [99, 100]
-    assert [item['taskId'] for item in overlap_error.value.details['conflicts']] == [99, 100]
-
-    task.lock_version = LOCK_VERSION + 1
     with pytest.raises(ShotGridDomainException) as lock_error:
         await ShotGridTaskScheduleService.update_schedule(
             db,
             TASK_ID,
             _command(),
-            'schedule-command-6',
+            'schedule-command-lock',
             _current_user(),
         )
     assert lock_error.value.error_key == 'SG_OPTIMISTIC_LOCK_CONFLICT'
+    mocks['add_change'].assert_not_awaited()
+    db.commit.assert_not_awaited()
+    db.rollback.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -544,3 +520,52 @@ async def test_schedule_changes_creator_can_only_read_own_task(monkeypatch: pyte
         current_user=_current_user(user_id=ASSIGNEE_ID),
     )
     assert result.total == 0
+
+
+@pytest.mark.asyncio
+async def test_unchanged_schedule_does_not_append_history(monkeypatch: pytest.MonkeyPatch) -> None:
+    task = _task(current_start=START_TIME, current_end=END_TIME)
+    mocks = _wire_success(monkeypatch, task)
+    db = AsyncMock()
+    with pytest.raises(ShotGridDomainException) as error:
+        await ShotGridTaskScheduleService.update_schedule(db, TASK_ID, _command(), 'unchanged-command', _current_user())
+    assert error.value.error_key == 'SG_TASK_SCHEDULE_UNCHANGED'
+    assert task.lock_version == LOCK_VERSION
+    mocks['add_change'].assert_not_awaited()
+    db.commit.assert_not_awaited()
+    db.rollback.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('initial', [True, False])
+async def test_blank_reason_persists_explicit_placeholder_without_starting_task(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    initial: bool,
+) -> None:
+    task = (
+        _task()
+        if initial
+        else _task(
+            current_start=BASELINE_START,
+            current_end=BASELINE_END,
+            baseline_start=BASELINE_START,
+            baseline_end=BASELINE_END,
+        )
+    )
+    mocks = _wire_success(monkeypatch, task)
+    db = AsyncMock()
+    db.add = Mock()
+    payload = _command().model_dump(by_alias=True)
+    payload['changeReason'] = '   '
+    await ShotGridTaskScheduleService.update_schedule(
+        db,
+        TASK_ID,
+        ShotGridScheduleUpdateModel.model_validate(payload),
+        'optional-reason',
+        _current_user(),
+    )
+    change = mocks['add_change'].await_args.args[1]
+    assert change.change_reason == '未填写'
+    assert task.task_status == 'not_started'
+    db.commit.assert_awaited_once()

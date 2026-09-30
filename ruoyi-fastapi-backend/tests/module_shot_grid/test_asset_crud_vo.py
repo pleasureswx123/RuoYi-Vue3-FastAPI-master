@@ -14,7 +14,7 @@ from module_shot_grid.entity.vo.asset_crud_vo import (
 SQL_BIGINT_MAX = 9_223_372_036_854_775_807
 
 
-def test_asset_status_counts_keep_all_seven_snake_case_keys_and_reject_negative_values() -> None:
+def test_asset_status_counts_keep_all_eight_snake_case_keys_and_reject_negative_values() -> None:
     payload = {
         'assetId': 1,
         'projectId': 1,
@@ -36,6 +36,7 @@ def test_asset_status_counts_keep_all_seven_snake_case_keys_and_reject_negative_
     model = ShotGridAssetListItemModel.model_validate(payload)
     assert model.model_dump(by_alias=True)['itemStatusCounts'] == {
         'unassigned': 0,
+        'pending_schedule': 0,
         'not_started': 1,
         'preparing': 1,
         'in_progress': 1,

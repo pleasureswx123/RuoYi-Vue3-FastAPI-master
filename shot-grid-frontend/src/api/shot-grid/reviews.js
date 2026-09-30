@@ -11,7 +11,7 @@ function idempotencyHeaders(idempotencyKey) {
 
 function assertReferenceDownloadUrl(value) {
   const normalized = typeof value === 'string' ? value.trim() : ''
-  if (!/^\/shot-grid\/(?:(?:issue-drafts|issues|projects)\/\d+|tasks\/\d+(?:\/project)?)\/reference-files\/[0-9a-f-]{36}\/download$/i.test(normalized)) {
+  if (!/^\/shot-grid\/(?:(?:issue-drafts|issues)\/\d+|projects\/\d+(?:\/shots\/\d+)?|tasks\/\d+(?:\/(?:project|shot))?)\/reference-files\/[0-9a-f-]{36}\/download$/i.test(normalized)) {
     throw new TypeError('参考文件下载地址无效')
   }
   return normalized
@@ -239,4 +239,16 @@ export function submitBatchFeedback(projectId, data) {
     url: `/shot-grid/projects/${assertPositiveId(projectId, '项目')}/review-overall-feedback/batch`,
     method: 'post', data, silentError: true
   })
+}
+
+export function getMineSubmissionProjects(options = {}) {
+  return request({ url: '/shot-grid/versions/mine/projects', method: 'get', signal: options.signal, silentError: true })
+}
+
+export function getMineReviewProjects(options = {}) {
+  return request({ url: '/shot-grid/review-lists/mine/projects', method: 'get', signal: options.signal, silentError: true })
+}
+
+export function getMineReviewProducers(params = {}, options = {}) {
+  return request({ url: '/shot-grid/review-lists/mine/producers', method: 'get', params, signal: options.signal, silentError: true })
 }

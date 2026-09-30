@@ -3,6 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 from sqlalchemy.sql import Subquery
 
+from module_shot_grid.dao.shot_phase import missing_shot_content_expression
 from module_shot_grid.entity.do.asset_do import ShotGridAsset, ShotGridAssetItem
 from module_shot_grid.entity.do.project_do import (
     ShotGridEpisode,
@@ -53,7 +54,12 @@ class ShotGridProjectOverviewDao:
                 .filter(shot_task.task_status == 'pending_review')
                 .label('pending_review_shots'),
                 func.count(ShotGridShot.shot_id).filter(shot_task.task_status == 'revision').label('revision_shots'),
-                func.count(ShotGridShot.shot_id).filter(shot_task.task_id.is_(None)).label('unassigned_shots'),
+                func.count(ShotGridShot.shot_id)
+                .filter(and_(shot_task.task_id.is_(None), missing_shot_content_expression(ShotGridShot)))
+                .label('pending_info_shots'),
+                func.count(ShotGridShot.shot_id)
+                .filter(and_(shot_task.task_id.is_(None), ~missing_shot_content_expression(ShotGridShot)))
+                .label('unassigned_shots'),
             )
             .outerjoin(
                 shot_task,
@@ -174,6 +180,7 @@ class ShotGridProjectOverviewDao:
                 func.coalesce(shot_metrics.c.revision_shots, 0).label('revision_shots'),
                 func.coalesce(asset_metrics.c.revision_assets, 0).label('revision_assets'),
                 func.coalesce(asset_metrics.c.revision_asset_items, 0).label('revision_asset_items'),
+                func.coalesce(shot_metrics.c.pending_info_shots, 0).label('pending_info_shots'),
                 func.coalesce(shot_metrics.c.unassigned_shots, 0).label('unassigned_shots'),
                 func.coalesce(asset_metrics.c.unassigned_assets, 0).label('unassigned_assets'),
                 func.coalesce(asset_metrics.c.unassigned_asset_items, 0).label('unassigned_asset_items'),

@@ -26,15 +26,19 @@ import { createMemoryHistory, createRouter } from 'vue-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { getMineTaskPage, getTaskDetail, startTask, updateTask } from '@/api/shot-grid/tasks'
-import { getMineReviewListPage, getRecentMineVersions } from '@/api/shot-grid/reviews'
+import { getMineReviewListPage, getMineReviewProjects, getMineReviewProducers, getRecentMineVersions } from '@/api/shot-grid/reviews'
 import { createApiError } from '@/utils/apiError'
 import { useSessionStore } from '@/store/modules/session'
-import { buttonLabel, completeTaskStartForm, expectedTaskTimes, setElSelectValue } from '../helpers/elementPlus'
+import { buttonLabel, expectedTaskTimes, setElSelectValue } from '../helpers/elementPlus'
 import TaskDetailView from '@/views/task/TaskDetailView.vue'
 import TaskEditDialog from '@/views/task/components/TaskEditDialog.vue'
+import ScheduleEditDialog from '@/views/schedule/components/ScheduleEditDialog.vue'
+import { updateTaskSchedule } from '@/api/shot-grid/schedules'
 import TaskStartDialog from '@/views/task/components/TaskStartDialog.vue'
 import WorkbenchView from '@/views/workbench/WorkbenchView.vue'
 
+vi.mock('@/api/shot-grid/schedules', () => ({ updateTaskSchedule: vi.fn() }))
+vi.mock('@/api/shot-grid/productionHistory', () => ({ getProductionHistory: vi.fn().mockResolvedValue({ data: { lanes: [], events: [] } }) }))
 vi.mock('@/api/shot-grid/tasks', () => ({
   getMineTaskPage: vi.fn(),
   getProjectTaskPage: vi.fn(),
@@ -44,7 +48,10 @@ vi.mock('@/api/shot-grid/tasks', () => ({
 }))
 vi.mock('@/api/shot-grid/reviews', () => ({
   getMineReviewListPage: vi.fn(),
-  getRecentMineVersions: vi.fn()
+  getMineReviewProducers: vi.fn(),
+  getMineReviewProjects: vi.fn().mockResolvedValue({ data: [{ projectId: 8, projectName: '罗刹夫人', projectCode: 'LCFR' }] }),
+  getRecentMineVersions: vi.fn(),
+  getMineSubmissionProjects: vi.fn().mockResolvedValue({ data: [] })
 }))
 
 const pageComponents = {
@@ -136,12 +143,14 @@ function installSession(permissions = []) {
   return pinia
 }
 
-async function mountWorkbench(permissions = ['shotgrid:task:list', 'shotgrid:version:list']) {
+async function mountWorkbench(permissions = ['shotgrid:task:list', 'shotgrid:task:query', 'shotgrid:version:list'], roles = []) {
   const pinia = installSession(permissions)
+  useSessionStore().roles = roles
   const router = createRouter({
     history: createMemoryHistory(),
     routes: [
       { path: '/workbench', component: WorkbenchView },
+      { path: '/reviews/:reviewListId', component: { template: '<div>审核详情</div>' } },
       { path: '/tasks/:taskId', component: { template: '<div>任务详情</div>' } },
       { path: '/projects', component: { template: '<div>项目</div>' } },
       { path: '/shots', component: { template: '<div>镜头</div>' } }
@@ -150,7 +159,9 @@ async function mountWorkbench(permissions = ['shotgrid:task:list', 'shotgrid:ver
   await router.push('/workbench')
   await router.isReady()
   const wrapper = mount(WorkbenchView, {
-    global: { plugins: [pinia, router], components: pageComponents }
+    global: { plugins: [pinia, router], components: pageComponents,
+      stubs: { RelatedDetailDrawer: { name: 'RelatedDetailDrawer', data: () => ({ target: '' }), methods: { open(target) { this.target = target } }, template: '<div data-testid="detail-drawer">{{ target }}</div>' } }
+    }
   })
   await flushPromises()
   return { wrapper, router }
@@ -199,6 +210,8 @@ async function mountDetail(path = '/tasks/31', permissions = ['shotgrid:task:que
 describe('真实任务工作台', () => {
   beforeEach(() => {
     getMineTaskPage.mockResolvedValue({ rows: [taskFixture()], total: 1, hasNext: false })
+    getMineReviewProducers.mockResolvedValue({ data: [{ userId: 7, userName: '制作人甲', nickName: '甲' }] })
+    getMineReviewProjects.mockResolvedValue({ data: [{ projectId: 8, projectName: '罗刹夫人', projectCode: 'LCFR' }] })
     getMineReviewListPage.mockResolvedValue({ rows: [], total: 0 })
     getRecentMineVersions.mockResolvedValue({ rows: [], total: 0 })
   })
@@ -211,15 +224,15 @@ describe('真实任务工作台', () => {
     })], total: 1 })
     const { wrapper } = await mountWorkbench()
     try {
-      expect(wrapper.find('.task-row').text()).toContain('时间：正常')
+      expect(wrapper.find('.el-table__row').text()).toContain('时间：正常')
       await vi.advanceTimersByTimeAsync(30000)
-      expect(wrapper.find('.task-row').text()).toContain('时间：临近结束')
-      expect(wrapper.find('.task-row').text()).toContain('请优先处理这个任务')
+      expect(wrapper.find('.el-table__row').text()).toContain('时间：临近结束')
+      expect(wrapper.find('.el-table__row').text()).toContain('请优先处理这个任务')
       vi.setSystemTime(new Date('2026-08-30T18:00:00'))
       await vi.advanceTimersByTimeAsync(30000)
-      expect(wrapper.find('.task-row').text()).toContain('时间：已延期')
-      expect(wrapper.find('.task-row').text()).toContain('仍可提交作品')
-      expect(wrapper.find('.task-row').text()).toContain('制作中')
+      expect(wrapper.find('.el-table__row').text()).toContain('时间：已延期')
+      expect(wrapper.find('.el-table__row').text()).toContain('仍可提交作品')
+      expect(wrapper.find('.el-table__row').text()).toContain('制作中')
     } finally { wrapper.unmount(); vi.useRealTimers() }
   })
 
@@ -230,15 +243,15 @@ describe('真实任务工作台', () => {
       .mockResolvedValue({ rows: [taskFixture(31, { taskStatus: 'in_progress' })], total: 1 })
     const { wrapper } = await mountWorkbench()
     try {
-      expect(wrapper.find('.task-row').text()).toContain('待开工')
+      expect(wrapper.find('.el-table__row').text()).toContain('待排期')
       const calls = getMineTaskPage.mock.calls.length
       await vi.advanceTimersByTimeAsync(5000)
       await flushPromises()
-      expect(wrapper.find('.task-row').text()).toContain('目录准备中')
+      expect(wrapper.find('.el-table__row').text()).toContain('目录准备中')
       await vi.advanceTimersByTimeAsync(1500)
       await flushPromises()
-      expect(wrapper.find('.task-row').text()).toContain('制作中')
-      expect(wrapper.findAll('.task-stats strong')[2].text()).toBe('1')
+      expect(wrapper.find('.el-table__row').text()).toContain('制作中')
+      expect(wrapper.find('.el-table__row').text()).toContain('制作中')
       expect(getMineTaskPage).toHaveBeenCalledTimes(calls + 2)
       await vi.advanceTimersByTimeAsync(10000)
       expect(getMineTaskPage).toHaveBeenCalledTimes(calls + 2)
@@ -257,13 +270,13 @@ describe('真实任务工作台', () => {
       await vi.advanceTimersByTimeAsync(25000)
       await flushPromises()
       expect(getMineTaskPage).toHaveBeenCalledTimes(calls + retries)
-      expect(wrapper.find('.task-row').text()).toContain('待开工')
+      expect(wrapper.find('.el-table__row').text()).toContain('待排期')
       expect(wrapper.text()).toContain('状态自动刷新已暂停')
       getMineTaskPage.mockResolvedValue({ rows: [taskFixture(31, { taskStatus: 'in_progress' })], total: 1 })
       await wrapper.find('.workbench-section-heading').findComponent(ElButton).trigger('click')
       await flushPromises()
       expect(wrapper.text()).not.toContain('状态自动刷新已暂停')
-      expect(wrapper.find('.task-row').text()).toContain('制作中')
+      expect(wrapper.find('.el-table__row').text()).toContain('制作中')
     } finally {
       wrapper.unmount()
       vi.useRealTimers()
@@ -280,7 +293,7 @@ describe('真实任务工作台', () => {
       await flushPromises()
       expect(getMineTaskPage).toHaveBeenCalledTimes(calls + 80)
       expect(wrapper.text()).toContain('目录准备时间较长')
-      expect(wrapper.find('.task-row').text()).toContain('目录准备中')
+      expect(wrapper.find('.el-table__row').text()).toContain('目录准备中')
     } finally {
       wrapper.unmount()
       vi.useRealTimers()
@@ -293,7 +306,7 @@ describe('真实任务工作台', () => {
     const { wrapper } = await mountWorkbench()
     try {
       const calls = getMineTaskPage.mock.calls.length
-      expect(wrapper.find('.task-row').text()).toContain('待开工')
+      expect(wrapper.find('.el-table__row').text()).toContain('待排期')
       await vi.advanceTimersByTimeAsync(10000)
       expect(getMineTaskPage).toHaveBeenCalledTimes(calls + 2)
       getMineTaskPage.mockResolvedValueOnce({ rows: [assetTaskFixture(31, { taskStatus: 'preparing' })], total: 1 })
@@ -302,7 +315,7 @@ describe('真实任务工作台', () => {
       await flushPromises()
       await vi.advanceTimersByTimeAsync(1500)
       await flushPromises()
-      expect(wrapper.find('.task-row').text()).toContain('制作中')
+      expect(wrapper.find('.el-table__row').text()).toContain('制作中')
       expect(startTask).not.toHaveBeenCalled()
     } finally {
       wrapper.unmount()
@@ -343,25 +356,25 @@ describe('真实任务工作台', () => {
   it('展示跨项目真实任务，并提交服务端分页筛选', async () => {
     getMineReviewListPage.mockClear()
     const { wrapper, router } = await mountWorkbench()
-    expect(wrapper.text()).toContain('我的制作任务')
+    expect(wrapper.find('section[aria-label="我的任务"]').exists()).toBe(true)
     expect(wrapper.text()).not.toContain('其他可访问模块')
     expect(wrapper.text()).not.toContain('待我审核')
     expect(wrapper.find('.review-queue').exists()).toBe(false)
-    expect(wrapper.find('.recent-submissions').exists()).toBe(true)
-    expect(wrapper.find('.task-workbench').element.nextElementSibling).toBe(wrapper.find('.recent-submissions').element)
+    expect(wrapper.find('.recent-submissions').exists()).toBe(false)
+    expect(getRecentMineVersions).not.toHaveBeenCalled()
     expect(getMineReviewListPage).not.toHaveBeenCalled()
     expect(wrapper.text()).toContain('罗刹夫人')
-    expect(wrapper.find('.task-row').text()).toContain('杨景锋')
-    expect(wrapper.find('.task-row').text()).not.toContain('YJF')
+    expect(wrapper.find('.el-table__row').text()).not.toContain('杨景锋')
+    expect(wrapper.find('.el-table__row').text()).not.toContain('YJF')
 
     const filterForm = wrapper.findComponent(ElForm)
     expect(filterForm.props('model')).toMatchObject({
       keyword: '',
       taskKind: '',
-      taskStatus: '',
+      taskStatus: 'unfinished',
       priority: '',
       dueDateRange: [],
-      orderValue: 'shotNo:ascending'
+      orderValue: 'workbench:ascending'
     })
     expect(filterForm.props('rules')).toMatchObject({
       dueDateRange: [expect.objectContaining({ trigger: 'change' })]
@@ -369,7 +382,6 @@ describe('真实任务工作台', () => {
     expect(filterForm.findAllComponents(ElFormItem).map(item => item.props('prop'))).toEqual([
       'keyword',
       'taskKind',
-      'taskStatus',
       'priority',
       'dueDateRange',
       'orderValue',
@@ -381,8 +393,8 @@ describe('真实任务工作台', () => {
     await form.find('input[placeholder="任务、项目、镜头或资产"]').setValue('动力舱')
     const selects = form.findAllComponents({ name: 'ElSelect' })
     await setElSelectValue(selects[0], 'shot_video')
-    await setElSelectValue(selects[1], 'revision')
-    await setElSelectValue(selects[2], 'urgent')
+    await wrapper.find('input[type=radio][value=revision]').setValue()
+    await setElSelectValue(selects[1], 'urgent')
     await queryButton.trigger('click')
     await flushPromises()
 
@@ -392,13 +404,195 @@ describe('真实任务工作台', () => {
       taskStatus: 'revision',
       priority: 'urgent',
       pageNum: 1,
-      orderByColumn: 'shotNo',
+      orderByColumn: 'workbench',
       isAsc: 'ascending'
     }), expect.anything())
 
-    await wrapper.find('.task-row').trigger('click')
+    await wrapper.find('.task-title').trigger('click')
     await flushPromises()
-    expect(router.currentRoute.value.path).toBe('/tasks/31')
+    expect(router.currentRoute.value.path).toBe('/workbench')
+    expect(wrapper.find('[data-testid=detail-drawer]').text()).toBe('/tasks/31')
+    wrapper.unmount()
+  })
+
+  it('任务分页调整每页条数后回到第一页并保留筛选', async () => {
+    getMineTaskPage.mockResolvedValue({ rows: [taskFixture()], total: 60 })
+    const { wrapper } = await mountWorkbench()
+    await wrapper.find('input[type=radio][value=revision]').setValue()
+    await flushPromises()
+    const pagination = wrapper.findComponent(ElPagination)
+    expect(pagination.props('pageSizes')).toEqual([10, 20, 50])
+    pagination.vm.$emit('current-change', 2)
+    await flushPromises()
+    expect(getMineTaskPage).toHaveBeenLastCalledWith(expect.objectContaining({ pageNum: 2, pageSize: 20 }), expect.anything())
+    getMineTaskPage.mockClear()
+    await setElSelectValue(pagination.findComponent(ElSelect), 50)
+    await flushPromises()
+    expect(getMineTaskPage).toHaveBeenCalledTimes(1)
+    expect(getMineTaskPage).toHaveBeenLastCalledWith(expect.objectContaining({ pageNum: 1, pageSize: 50, taskStatus: 'revision' }), expect.anything())
+    expect(pagination.props('currentPage')).toBe(1)
+    expect(pagination.props('pageSize')).toBe(50)
+    wrapper.unmount()
+  })
+
+  it('标签切换保留筛选，只在首次打开提交记录时加载历史', async () => {
+    const { wrapper } = await mountWorkbench()
+    expect(getMineTaskPage).toHaveBeenLastCalledWith(expect.objectContaining({ unfinishedOnly: true, orderByColumn: 'workbench' }), expect.anything())
+    await wrapper.find('input[type=radio][value=revision]').setValue()
+    await flushPromises()
+    expect(getMineTaskPage).toHaveBeenLastCalledWith(expect.objectContaining({ taskStatus: 'revision', unfinishedOnly: false }), expect.anything())
+    await wrapper.find('#tab-submissions').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('#tab-submissions').attributes('aria-selected')).toBe('true')
+    expect(getRecentMineVersions).toHaveBeenLastCalledWith(expect.objectContaining({ orderByColumn: 'submittedTime', isAsc: 'descending', groupByTask: true }), expect.anything())
+    await wrapper.find('#tab-tasks').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('input[type=radio][value=revision]').element.checked).toBe(true)
+    expect(getRecentMineVersions).toHaveBeenCalledTimes(1)
+    expect(wrapper.find('.task-stats').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('纯管理审核人默认进入审核队列，筛选分页和审核抽屉可用', async () => {
+    getMineTaskPage.mockClear()
+    getMineReviewListPage.mockResolvedValue({ rows: [{ reviewListId: 101, reviewListName: '审核首版', projectName: '罗刹夫人', projectCode: 'LCFR', reviewMode: 'auto_single', versionNumber: 'V001', versionNo: 1, autoVersionId: 71, taskName: '首版任务', submittedByName: '制作人甲' }], total: 31 })
+    const { wrapper, router } = await mountWorkbench(['shotgrid:task:list', 'shotgrid:version:list', 'shotgrid:reviewList:list', 'shotgrid:reviewList:query', 'shotgrid:version:review', 'shotgrid:version:query'])
+    expect(wrapper.find('#tab-reviews').attributes('aria-selected')).toBe('true')
+    expect(wrapper.find('#tab-tasks').exists()).toBe(false)
+    expect(wrapper.find('#tab-submissions').exists()).toBe(false)
+    expect(getMineTaskPage).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('管理范围内')
+    const queue = wrapper.find('.review-queue')
+    const form = queue.findComponent(ElForm)
+    await setElSelectValue(form.findComponent(ElSelect), 8)
+    await flushPromises()
+    expect(getMineReviewListPage).toHaveBeenLastCalledWith(expect.objectContaining({ projectId: 8, isAsc: 'ascending' }), expect.anything())
+    await form.find('input[placeholder="搜索镜头号、任务或审核单"]').setValue('首版')
+    await form.find('input[placeholder="搜索镜头号、任务或审核单"]').trigger('keydown', { key: 'Enter' })
+    await flushPromises()
+    expect(getMineReviewListPage).toHaveBeenLastCalledWith(expect.objectContaining({ projectId: 8, keyword: '首版', pageNum: 1 }), expect.anything())
+    await queue.find('input[type=radio][value=asset_image]').setValue()
+    await flushPromises()
+    expect(getMineReviewListPage).toHaveBeenLastCalledWith(expect.objectContaining({ taskKind: 'asset_image', projectId: 8 }), expect.anything())
+    const pager = queue.findComponent(ElPagination)
+    pager.vm.$emit('current-change', 2)
+    await flushPromises()
+    expect(getMineReviewListPage).toHaveBeenLastCalledWith(expect.objectContaining({ pageNum: 2 }), expect.anything())
+    pager.vm.$emit('update:page-size', 20)
+    await flushPromises()
+    expect(getMineReviewListPage).toHaveBeenLastCalledWith(expect.objectContaining({ pageNum: 1, pageSize: 20 }), expect.anything())
+    await form.find('input[placeholder="搜索镜头号、任务或审核单"]').setValue('a'.repeat(201))
+    const calls = getMineReviewListPage.mock.calls.length
+    await form.findAllComponents(ElButton).find(button => button.text() === '搜索').trigger('click')
+    await flushPromises()
+    expect(getMineReviewListPage).toHaveBeenCalledTimes(calls)
+    await vi.waitFor(() => expect(form.text()).toContain('不能超过 200'))
+    await form.findAllComponents(ElButton).find(button => button.text() === '重置').trigger('click')
+    await flushPromises()
+    expect(getMineReviewListPage).toHaveBeenLastCalledWith(expect.not.objectContaining({ projectId: 8 }), expect.anything())
+    await queue.findAllComponents(ElButton).find(button => button.text() === '进入审核').trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.path).toBe('/workbench')
+    expect(queue.find('[data-testid=detail-drawer]').text()).toBe('/reviews/101')
+    const workButton = queue.findAllComponents(ElButton).find(button => button.text() === '查看作品')
+    expect(workButton.props()).toMatchObject({ type: 'primary', plain: true, size: 'small' })
+    await workButton.trigger('click')
+    expect(queue.find('[data-testid=detail-drawer]').text()).toBe('/versions/71')
+    expect(queue.text()).toContain('制作人甲')
+    const order = form.findAllComponents(ElSelect)[1]
+    await setElSelectValue(order, 'shotNo:ascending')
+    await flushPromises()
+    expect(getMineReviewListPage).toHaveBeenLastCalledWith(expect.objectContaining({ orderByColumn: 'shotNo' }), expect.anything())
+    expect(queue.find('.el-collapse').exists()).toBe(false)
+    expect(form.findAllComponents(ElSelect)[3].isVisible()).toBe(true)
+    await setElSelectValue(form.findAllComponents(ElSelect)[3], 7)
+    await setElSelectValue(form.findAllComponents(ElSelect)[2], 'auto_single')
+    await flushPromises()
+    expect(getMineReviewListPage).toHaveBeenLastCalledWith(expect.objectContaining({ submittedBy: 7, reviewMode: 'auto_single' }), expect.anything())
+
+    const drawer = queue.findComponent({ name: 'RelatedDetailDrawer' })
+    drawer.vm.$emit('closed')
+    await flushPromises()
+    expect(getMineReviewListPage).toHaveBeenLastCalledWith(expect.objectContaining({ pageNum: 1, pageSize: 20 }), expect.anything())
+    wrapper.unmount()
+  })
+
+  it('审核队列错误可重试，空态与权限显隐正确，卸载取消请求', async () => {
+    getMineReviewListPage.mockRejectedValueOnce(new Error('加载失败'))
+    const { wrapper } = await mountWorkbench(['shotgrid:reviewList:list', 'shotgrid:version:review'])
+    expect(wrapper.find('.review-queue').text()).toContain('待审核内容加载失败')
+    getMineReviewListPage.mockResolvedValueOnce({ rows: [], total: 0 })
+    await wrapper.findAllComponents(ElButton).find(button => button.text() === '重新加载').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.review-empty').exists()).toBe(true)
+    getMineReviewListPage.mockResolvedValueOnce({ rows: [{ reviewListId: 1, reviewListName: '无详情权限', reviewMode: 'auto_single' }], total: 1 })
+    await wrapper.findAllComponents(ElButton).find(button => button.text() === '刷新').trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('无查看权限')
+    let resolveLate
+    getMineReviewListPage.mockImplementationOnce(() => new Promise(resolve => { resolveLate = resolve }))
+    await wrapper.findAllComponents(ElButton).find(button => button.text() === '刷新').trigger('click')
+    const signal = getMineReviewListPage.mock.lastCall[1].signal
+    expect(wrapper.find('.review-queue').attributes('aria-busy')).toBe('true')
+    wrapper.unmount()
+    expect(signal.aborted).toBe(true)
+    resolveLate({ rows: [], total: 0 })
+    await flushPromises()
+  })
+
+  it('审核项目选项失败可重试，快速切换类型不会被旧请求覆盖', async () => {
+    getMineReviewProjects.mockRejectedValueOnce(new Error('选项失败'))
+    const { wrapper } = await mountWorkbench(['shotgrid:reviewList:list', 'shotgrid:version:review'])
+    expect(wrapper.text()).toContain('项目选项加载失败')
+    await wrapper.findAllComponents(ElButton).find(button => button.text() === '重试项目选项').trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).not.toContain('项目选项加载失败')
+    let resolveOld
+    getMineReviewListPage.mockImplementationOnce(() => new Promise(resolve => { resolveOld = resolve }))
+    await wrapper.find('input[type=radio][value=asset_image]').setValue()
+    await flushPromises()
+    const signal = getMineReviewListPage.mock.lastCall[1].signal
+    getMineReviewListPage.mockResolvedValueOnce({ rows: [{ reviewListId: 7, reviewListName: '单版新结果', reviewMode: 'auto_single' }], total: 1 })
+    await wrapper.find('input[type=radio][value=shot_video]').setValue()
+    await flushPromises()
+    expect(signal.aborted).toBe(true)
+    resolveOld({ rows: [{ reviewListId: 9, reviewListName: '迟到批量结果', reviewMode: 'manual_batch' }], total: 1 })
+    await flushPromises()
+    expect(wrapper.text()).toContain('单版新结果')
+    expect(wrapper.text()).not.toContain('迟到批量结果')
+    const order = wrapper.find('.review-filters').findAllComponents(ElSelect)[1]
+    await setElSelectValue(order, 'submittedTime:descending')
+    await flushPromises()
+    expect(getMineReviewListPage).toHaveBeenLastCalledWith(expect.objectContaining({ isAsc: 'descending', pageNum: 1 }), expect.anything())
+    wrapper.unmount()
+  })
+
+  it('制作人来自项目成员，切换项目清空选择并隔离旧选项，加载失败可重试', async () => {
+    const { wrapper } = await mountWorkbench(['shotgrid:reviewList:list', 'shotgrid:version:review'])
+    const selects = wrapper.find('.review-filters').findAllComponents(ElSelect)
+    await setElSelectValue(selects[3], 7)
+    await flushPromises()
+    expect(getMineReviewListPage).toHaveBeenLastCalledWith(expect.objectContaining({ submittedBy: 7 }), expect.anything())
+    let resolveOld
+    getMineReviewProducers.mockImplementationOnce(() => new Promise(resolve => { resolveOld = resolve }))
+    await setElSelectValue(selects[0], 8)
+    await flushPromises()
+    expect(getMineReviewProducers).toHaveBeenLastCalledWith({ projectId: 8 }, expect.anything())
+    expect(selects[3].props('modelValue')).toBe('')
+    expect(selects[3].props('disabled')).toBe(true)
+    const signal = getMineReviewProducers.mock.lastCall[1].signal
+    getMineReviewProducers.mockRejectedValueOnce(new Error('项目成员加载失败'))
+    await setElSelectValue(selects[0], '')
+    await flushPromises()
+    expect(signal.aborted).toBe(true)
+    resolveOld({ data: [{ userId: 99, userName: '旧项目成员' }] })
+    await flushPromises()
+    expect(wrapper.text()).toContain('制作人选项加载失败')
+    await wrapper.findAllComponents(ElButton).find(button => button.text() === '重试制作人选项').trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).not.toContain('制作人选项加载失败')
+    expect(selects[3].props('disabled')).toBe(false)
+    expect(selects[3].findAllComponents(ElOption).map(item => item.props('value'))).toEqual([7])
     wrapper.unmount()
   })
 
@@ -428,19 +622,19 @@ describe('真实任务工作台', () => {
       'shotgrid:version:list',
       'shotgrid:reviewList:list',
       'shotgrid:version:review'
-    ])
-    expect(findTag(wrapper, '1 项我的任务').props()).toMatchObject({ type: 'info', size: 'small', effect: 'plain', round: true })
-    expect(findTag(wrapper, '资产').props()).toMatchObject({ type: 'primary', size: 'small', effect: 'plain', round: true })
+    ], ['shotgrid_creator'])
+    expect(wrapper.find('#tab-reviews').attributes('aria-selected')).toBe('true')
+    expect(wrapper.find('.task-list .el-table__row').text()).toContain('资产')
     expect(findTag(wrapper, '待修改').props()).toMatchObject({ type: 'danger', effect: 'dark', round: true })
     expect(findTag(wrapper, '时间：已延期').props()).toMatchObject({ type: 'danger', effect: 'light', round: true })
-    expect(findTag(wrapper, '紧急').props()).toMatchObject({ type: 'danger', effect: 'plain', round: true })
+    expect(findTag(wrapper, '紧急').props()).toMatchObject({ type: 'danger' })
+    await wrapper.find('#tab-submissions').trigger('click')
+    await flushPromises()
     expect(findTag(wrapper, '最终版本').props()).toMatchObject({ type: 'success', effect: 'plain', round: true })
-    expect(findTag(wrapper, '人工批量').props()).toMatchObject({ type: 'primary', size: 'small', effect: 'plain', round: true })
-    expect(wrapper.find('.review-queue').text()).toContain('LCFR · 3 个版本')
+    expect(findTag(wrapper, '人工批量').props()).toMatchObject({ type: 'info', size: 'small', effect: 'plain' })
+    expect(wrapper.find('.review-queue').text()).toContain('3 个版本')
     expect(wrapper.find('.recent-submissions').text()).toContain('V001')
-    expect(wrapper.find('.recent-submissions').text()).toContain('完成首版')
-    expect(wrapper.find('.review-queue').element.nextElementSibling).toBe(wrapper.find('.task-workbench').element)
-    expect(wrapper.find('.task-workbench').element.nextElementSibling).toBe(wrapper.find('.recent-submissions').element)
+    expect(wrapper.find('.recent-submissions').text()).not.toContain('完成首版')
     expect(wrapper.find('.task-row__kind').exists()).toBe(false)
     expect(wrapper.find('.status-chip').exists()).toBe(false)
     expect(wrapper.find('.priority-chip').exists()).toBe(false)
@@ -469,11 +663,11 @@ describe('真实任务工作台', () => {
     await flushPromises()
     expect(getMineTaskPage).toHaveBeenLastCalledWith(expect.objectContaining({ taskKind: 'shot_video', pageNum: 1 }), expect.anything())
 
-    await setElSelectValue(selects[1], 'revision')
+    await wrapper.find('input[type=radio][value=revision]').setValue()
     await flushPromises()
     expect(getMineTaskPage).toHaveBeenLastCalledWith(expect.objectContaining({ taskStatus: 'revision', pageNum: 1 }), expect.anything())
 
-    await setElSelectValue(selects[2], 'urgent')
+    await setElSelectValue(selects[1], 'urgent')
     await flushPromises()
     expect(getMineTaskPage).toHaveBeenLastCalledWith(expect.objectContaining({ priority: 'urgent', pageNum: 1 }), expect.anything())
 
@@ -485,7 +679,7 @@ describe('真实任务工作台', () => {
       pageNum: 1
     }), expect.anything())
 
-    await setElSelectValue(selects[3], 'dueDate:ascending')
+    await setElSelectValue(selects[2], 'dueDate:ascending')
     await flushPromises()
     expect(getMineTaskPage).toHaveBeenLastCalledWith(expect.objectContaining({ orderByColumn: 'dueDate', isAsc: 'ascending', pageNum: 1 }), expect.anything())
 
@@ -494,19 +688,20 @@ describe('真实任务工作台', () => {
     expect(filterForm.props('model')).toMatchObject({
       keyword: '',
       taskKind: '',
-      taskStatus: '',
+      taskStatus: 'unfinished',
       priority: '',
       dueDateRange: [],
-      orderValue: 'shotNo:ascending',
+      orderValue: 'workbench:ascending',
       pageNum: 1
     })
     expect(getMineTaskPage).toHaveBeenLastCalledWith(expect.objectContaining({
       taskKind: undefined,
       taskStatus: undefined,
+      unfinishedOnly: true,
       priority: undefined,
       dueDateFrom: undefined,
       dueDateTo: undefined,
-      orderByColumn: 'shotNo',
+      orderByColumn: 'workbench',
       isAsc: 'ascending',
       pageNum: 1
     }), expect.anything())
@@ -771,7 +966,7 @@ describe('任务详情、状态动作与异步上下文', () => {
     const { wrapper } = await mountDetail()
     expect(wrapper.text()).toContain('动力舱主视角')
     expect(wrapper.findAllComponents(ElButton).map(button => button.text())).not.toContain('开始任务')
-    expect(wrapper.text()).toContain('等待管理人员确认开工')
+    expect(wrapper.text()).toContain('等待管理人员设置计划起止时间')
     expect(wrapper.text()).toContain('该制作分项')
     expect(wrapper.text()).toContain('编辑任务')
     expect(startTask).not.toHaveBeenCalled()
@@ -959,108 +1154,68 @@ describe('任务详情、状态动作与异步上下文', () => {
 })
 
 
-describe('开工时间表单', () => {
-  function mountStart(validateContext = () => true, contextOverrides = {}) {
+describe('先排期再确认开工', () => {
+  const button = (wrapper, name) => wrapper.findAllComponents(ElButton).find(item => buttonLabel(item) === name)
+  function open(overrides = {}) {
     return mount(TaskStartDialog, {
-      props: { context: {
-        taskId: 71, name: '动力舱 · 主视角', assigneeName: '杨景锋',
-        asset: { assetName: '动力舱', description: '共有要求' },
-        item: { productionItem: '主视角', description: '视角要求' },
-        task: { priority: 'high' }, command: { lockVersion: 4, assetLockVersion: 2, assetItemLockVersion: 3, startConfirmed: true },
-        validateContext, ...contextOverrides
-      } }, global: { components: pageComponents }
+      props: { context: { taskId: 71, name: '测试任务', assigneeName: '甲', asset: {}, item: {},
+        task: { priority: 'high', ...expectedTaskTimes }, canSchedule: true,
+        command: { lockVersion: 4, assetLockVersion: 2, assetItemLockVersion: 3, startConfirmed: true },
+        validateContext: () => true, ...overrides } },
+      global: { components: pageComponents, stubs: { ScheduleEditDialog: true } }
     })
   }
-
-  it.each([
-    ['资产', {}],
-    ['镜头', { shot: { shotCode: 'S001', description: '镜头制作内容' }, command: { lockVersion: 4, shotLockVersion: 2, assetsConfirmed: true } }]
-  ])('%s开工默认勾选且不显示时间说明，取消勾选后仍阻断提交', async (_kind, contextOverrides) => {
+  it('未排期不能开工；单独保存后使用新版本开工且不重复提交时间', async () => {
     startTask.mockReset().mockResolvedValue({ data: { taskStatus: 'preparing' } })
-    const wrapper = mountStart(() => true, contextOverrides)
+    updateTaskSchedule.mockResolvedValue({ data: { taskId: 71, lockVersion: 5, currentStart: expectedTaskTimes.expectedStartTime, currentEnd: expectedTaskTimes.expectedEndTime } })
+    const saved = vi.fn()
+    const wrapper = open({ task: { priority: 'high' }, onScheduleSaved: saved })
     try {
       await flushPromises()
-      const checkbox = wrapper.findComponent(ElCheckbox).find('input')
-      expect(checkbox.element.checked).toBe(true)
-      expect(document.body.textContent).not.toContain('仅用于告知制作人预期时间')
+      expect(button(wrapper, '确认开工').props('disabled')).toBe(true)
+      await button(wrapper, '设置排期').trigger('click')
+      const dialog = wrapper.findComponent(ScheduleEditDialog)
+      expect(dialog.props('visible')).toBe(true)
+      dialog.vm.$emit('save-request', { expectedStartTime: expectedTaskTimes.expectedStartTime, expectedEndTime: expectedTaskTimes.expectedEndTime, changeReason: '安排制作', operationSource: 'dialog' })
+      await flushPromises()
+      expect(updateTaskSchedule).toHaveBeenCalledWith(71, expect.objectContaining({ lockVersion: 4, changeReason: '安排制作' }), expect.any(String))
       expect(startTask).not.toHaveBeenCalled()
-      wrapper.findComponent(ElDatePicker).vm.$emit('update:modelValue', [expectedTaskTimes.expectedStartTime, expectedTaskTimes.expectedEndTime])
-      await checkbox.setValue(false)
-      const submit = () => wrapper.findAllComponents(ElButton).find(button => buttonLabel(button) === '确认开工').trigger('click')
-      await submit(); await flushPromises()
-      await vi.waitFor(() => expect(document.body.textContent).toContain('请先确认开工条件'))
-      expect(startTask).not.toHaveBeenCalled()
-      await checkbox.setValue(true)
-      await submit(); await flushPromises()
-      expect(startTask).toHaveBeenCalledTimes(1)
-      expect(startTask).toHaveBeenCalledWith(71, expect.objectContaining(contextOverrides.command || { startConfirmed: true }))
+      expect(saved).toHaveBeenCalledOnce()
+      expect(button(wrapper, '调整排期')).toBeDefined()
+      await button(wrapper, '确认开工').trigger('click'); await flushPromises()
+      expect(startTask).toHaveBeenCalledWith(71, { lockVersion: 5, assetLockVersion: 2, assetItemLockVersion: 3, startConfirmed: true, priority: 'high' })
     } finally { wrapper.unmount() }
   })
-
-  it('过去时间与倒置范围阻断提交，修正后携带双时间和三份版本保存', async () => {
-    startTask.mockReset().mockResolvedValue({ data: { taskStatus: 'preparing' } })
-    const wrapper = mountStart()
+  it('取消改期或保存失败保留原排期和版本', async () => {
+    startTask.mockReset().mockResolvedValue({ data: {} })
+    updateTaskSchedule.mockRejectedValue({ httpStatus: 409, message: '版本冲突' })
+    const wrapper = open()
     try {
       await flushPromises()
-      await wrapper.findComponent(ElCheckbox).find('input').setValue(true)
-      const picker = wrapper.findComponent(ElDatePicker)
-      const submit = () => wrapper.findAllComponents(ElButton).find(button => buttonLabel(button) === '确认开工').trigger('click')
-      picker.vm.$emit('update:modelValue', ['2000-01-01T09:00:00', '2099-09-02T18:00:00'])
-      await submit(); await flushPromises()
-      await vi.waitFor(() => expect(document.body.textContent).toContain('开始时间不能早于当前时间'))
+      await button(wrapper, '调整排期').trigger('click')
+      const dialog = wrapper.findComponent(ScheduleEditDialog)
+      dialog.vm.$emit('save-request', { changeReason: '测试' }); await flushPromises()
+      expect(dialog.props('error').message).toBe('版本冲突')
       expect(startTask).not.toHaveBeenCalled()
-      picker.vm.$emit('update:modelValue', ['2099-09-03T09:00:00', '2099-09-02T18:00:00'])
-      await submit(); await flushPromises()
-      await vi.waitFor(() => expect(document.body.textContent).toContain('结束时间必须晚于开始时间'))
-      expect(startTask).not.toHaveBeenCalled()
-      await completeTaskStartForm(wrapper)
-      expect(startTask).toHaveBeenCalledWith(71, { lockVersion: 4, assetLockVersion: 2, assetItemLockVersion: 3, startConfirmed: true, ...expectedTaskTimes })
-      expect(wrapper.emitted('started')[0][0].data.taskStatus).toBe('preparing')
+      dialog.vm.$emit('cancel'); await flushPromises()
+      await button(wrapper, '确认开工').trigger('click'); await flushPromises()
+      expect(startTask.mock.calls[0][1].lockVersion).toBe(4)
+      expect(startTask.mock.calls[0][1]).not.toHaveProperty('expectedStartTime')
     } finally { wrapper.unmount() }
   })
-
-  it('已有排期在开工时只读沿用，即使开始时间已过去也不重复提交时间字段', async () => {
-    startTask.mockReset().mockResolvedValue({ data: { taskStatus: 'preparing' } })
-    const existingTimes = {
-      expectedStartTime: '2026-08-28T09:00:00',
-      expectedEndTime: '2026-08-30T18:00:00'
-    }
-    const wrapper = mountStart(() => true, {
-      task: { priority: 'high', ...existingTimes }
-    })
-    try {
-      await flushPromises()
-      expect(wrapper.findComponent(ElDatePicker).props('disabled')).toBe(true)
-      expect(document.body.textContent).toContain('任务已有正式排期')
-      await wrapper.findAllComponents(ElButton).find(button => buttonLabel(button) === '确认开工').trigger('click')
-      await flushPromises()
-      expect(startTask).toHaveBeenCalledWith(71, {
-        lockVersion: 4,
-        assetLockVersion: 2,
-        assetItemLockVersion: 3,
-        startConfirmed: true,
-        priority: 'high'
-      })
-    } finally {
-      wrapper.unmount()
-    }
-  })
-
-  it('旧上下文不提交；服务端时间校验失败后保留输入允许修正', async () => {
+  it('无排期权限隐藏改期入口，未确认条件及失效上下文不能开工', async () => {
     startTask.mockReset()
-    const stale = mountStart(() => false)
+    const wrapper = open({ canSchedule: false, validateContext: () => false })
     try {
-      await completeTaskStartForm(stale)
+      await flushPromises()
+      expect(button(wrapper, '调整排期')).toBeUndefined()
+      await wrapper.findComponent(ElCheckbox).find('input').setValue(false)
+      await button(wrapper, '确认开工').trigger('click'); await flushPromises()
       expect(startTask).not.toHaveBeenCalled()
-      expect(stale.emitted('failed')[0][0].httpStatus).toBe(409)
-    } finally { stale.unmount() }
-    const wrapper = mountStart()
-    startTask.mockRejectedValue({ httpStatus: 422, message: '预期开始时间不能早于当前时间，请重新选择' })
-    try {
-      await completeTaskStartForm(wrapper)
-      expect(document.body.textContent).toContain('预期开始时间不能早于当前时间')
-      expect(wrapper.findComponent(ElDatePicker).props('modelValue')).toEqual([expectedTaskTimes.expectedStartTime, expectedTaskTimes.expectedEndTime])
-      expect(wrapper.emitted('started')).toBeUndefined()
+      await wrapper.findComponent(ElCheckbox).find('input').setValue(true)
+      await button(wrapper, '确认开工').trigger('click'); await flushPromises()
+      expect(startTask).not.toHaveBeenCalled()
+      expect(wrapper.emitted('failed')[0][0].httpStatus).toBe(409)
     } finally { wrapper.unmount() }
   })
 })

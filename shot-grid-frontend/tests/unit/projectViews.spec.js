@@ -415,10 +415,10 @@ describe('项目管理页面', () => {
           lockVersion: 1
         }
       },
-      global: { components: formComponents, stubs: { ProjectModal: projectModalStub } }
+      global: { components: formComponents, stubs: { ElDrawer: { template: '<section><slot /><slot name="footer" /></section>' } } }
     })
     const form = wrapper.findComponent(ElForm)
-    const submitButton = buttonByText(form, '保存修改')
+    const submitButton = buttonByText(wrapper, '保存修改')
     form.props('model').projectName = '   '
     await nextTick()
     await submitButton.trigger('click')
@@ -434,13 +434,35 @@ describe('项目管理页面', () => {
     wrapper.unmount()
   })
 
+  it('资料抽屉只显示资料字段，校验失败不保存，成功携带原项目版本锁', async () => {
+    const wrapper = mount(ProjectEditDialog, {
+      props: { project: { ...projectRow, lockVersion: 4 }, referencesOnly: true },
+      global: { components: formComponents, stubs: { ElDrawer: { template: '<section><slot /><slot name="footer" /></section>' }, ReviewReferenceInput: true } }
+    })
+    const form = wrapper.findComponent(ElForm)
+    expect(wrapper.text()).not.toContain('项目名称')
+    expect(wrapper.text()).not.toContain('当前阶段')
+    form.props('model').referenceDescription = '字'.repeat(10001)
+    await nextTick()
+    await buttonByText(wrapper, '保存资料').trigger('click')
+    await flushPromises()
+    expect(updateProject).not.toHaveBeenCalled()
+    form.props('model').referenceDescription = '新版资料说明'
+    await nextTick()
+    await buttonByText(wrapper, '保存资料').trigger('click')
+    await flushPromises()
+    expect(updateProject).toHaveBeenCalledWith(8, expect.objectContaining({ projectName: projectRow.projectName, referenceDescription: '新版资料说明', lockVersion: 4 }))
+    expect(wrapper.emitted('saved')).toHaveLength(1)
+    wrapper.unmount()
+  })
+
   it('项目资料上传失败不保存，重试保留已成功文件，保存包含说明与完整附件列表', async () => {
     const first = '11111111-1111-4111-8111-111111111111'
     const second = '22222222-2222-4222-8222-222222222222'
     uploadReviewReferenceFile.mockResolvedValueOnce({ fileId: first }).mockRejectedValueOnce(new Error('上传失败')).mockResolvedValueOnce({ fileId: second })
     const wrapper = mount(ProjectEditDialog, {
       props: { project: { ...projectRow, lockVersion: 1 } },
-      global: { components: formComponents, stubs: { ProjectModal: projectModalStub, ReviewReferenceInput: true } }
+      global: { components: formComponents, stubs: { ElDrawer: { template: '<section><slot /><slot name="footer" /></section>' }, ReviewReferenceInput: true } }
     })
     const input = wrapper.findComponent(ReviewReferenceInput)
     input.vm.$emit('add', { raw: new File(['a'], '剧本.pdf', { type: 'application/pdf' }) })
@@ -462,7 +484,7 @@ describe('项目管理页面', () => {
     const file = { fileId: '11111111-1111-4111-8111-111111111111', originalName: '剧本.pdf', fileSize: 12, downloadUrl: '/shot-grid/projects/8/reference-files/11111111-1111-4111-8111-111111111111/download' }
     const options = {
       props: { project: { ...projectRow, lockVersion: 1, referenceDescription: '原剧本', referenceFiles: [file] } },
-      global: { components: formComponents, stubs: { ProjectModal: projectModalStub, ReviewReferenceInput: true } }
+      global: { components: formComponents, stubs: { ElDrawer: { template: '<section><slot /><slot name="footer" /></section>' }, ReviewReferenceInput: true } }
     }
     let wrapper = mount(ProjectEditDialog, options)
     expect(wrapper.findComponent(ElForm).props('model').referenceDescription).toBe('原剧本')

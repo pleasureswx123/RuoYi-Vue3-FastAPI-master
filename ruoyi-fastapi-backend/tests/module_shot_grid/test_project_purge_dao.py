@@ -42,6 +42,7 @@ async def test_prepare_exclusive_files_removes_every_candidate_temporary_referen
         _ScalarRows([]),
         _ScalarRows([]),
         _ScalarRows([]),
+        _ScalarRows([]),
         _ScalarRows(
             [
                 SimpleNamespace(
@@ -65,7 +66,7 @@ async def test_prepare_exclusive_files_removes_every_candidate_temporary_referen
     reference_deletes = [
         statement for statement in statements if statement.startswith('DELETE FROM sys_file_reference')
     ]
-    expected_reference_delete_count = 4
+    expected_reference_delete_count = 5
 
     assert len(reference_deletes) == expected_reference_delete_count
     assert "business_type = 'shotgrid_version'" in reference_deletes[0]
@@ -74,10 +75,12 @@ async def test_prepare_exclusive_files_removes_every_candidate_temporary_referen
     assert 'file_id IN (' in reference_deletes[1]
     assert "'file-a'" in reference_deletes[1]
     assert "'file-b'" in reference_deletes[1]
-    assert "business_type = 'shotgrid_project_reference'" in reference_deletes[2]
-    assert "business_id = '9'" in reference_deletes[2]
-    assert "business_type = 'shotgrid_task_reference'" in reference_deletes[3]
-    assert 'sg_task.project_id = 9' in reference_deletes[3]
+    assert "business_type = 'shotgrid_project_reference'" in reference_deletes[3]
+    assert "business_id = '9'" in reference_deletes[3]
+    assert "business_type = 'shotgrid_task_reference'" in reference_deletes[4]
+    assert 'sg_task.project_id = 9' in reference_deletes[4]
+    assert "business_type = 'shotgrid_shot_reference'" in reference_deletes[2]
+    assert 'sg_shot.project_id = 9' in reference_deletes[2]
     assert [item['fileId'] for item in result] == ['file-a', 'file-b']
 
 

@@ -572,7 +572,18 @@ onBeforeUnmount(() => {
   cleanupMedia(compareMedia)
 })
 
-defineExpose({ exitAutomaticComparison, clearDraft, loadDraft, seekToDraft, seekToNote })
+function compareWithVersion(historyVersion) {
+  if (!props.canCompare || Number(historyVersion?.taskId) !== Number(props.version?.taskId)
+    || !historyVersion?.versionId || versionOrder(historyVersion) >= versionOrder(props.version)) return false
+  if (!comparisonVersions.value.some(item => Number(item.versionId) === Number(historyVersion.versionId))) {
+    comparisonVersions.value.push(historyVersion)
+  }
+  manualComparison.value = true
+  comparisonVersionId.value = String(historyVersion.versionId)
+  return true
+}
+
+defineExpose({ compareWithVersion, exitAutomaticComparison, clearDraft, loadDraft, seekToDraft, seekToNote })
 </script>
 
 <template>

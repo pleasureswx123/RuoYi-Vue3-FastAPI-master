@@ -3,6 +3,7 @@ import { ElTooltip } from 'element-plus'
 import { describe, expect, it } from 'vitest'
 
 import PersonnelSwimlane from '@/views/schedule/components/PersonnelSwimlane.vue'
+import ScheduleGanttTaskTemplate from '@/views/schedule/components/ScheduleGanttTaskTemplate.vue'
 
 const task = {
   taskId: 31,
@@ -22,6 +23,34 @@ const task = {
 }
 
 describe('人员泳道任务条', () => {
+  it.each([
+    ['not_started', '待开工', 'not-started'],
+    ['preparing', '目录准备中', 'preparing'],
+    ['in_progress', '制作中', 'in-progress'],
+    ['pending_review', '待审核', 'reviewing'],
+    ['revision', '待修改', 'revision'],
+    ['completed', '已完成', 'completed']
+  ])('%s 在泳道和甘特图使用一致的状态色及文字', (taskStatus, label, token) => {
+    const wrapper = mount(PersonnelSwimlane, {
+      props: {
+        rows: [{ ...task, taskStatus }],
+        windowStart: '2026-08-30T00:00:00',
+        windowEnd: '2026-09-03T00:00:00'
+      }
+    })
+    const gantt = mount(ScheduleGanttTaskTemplate, {
+      props: { data: { text: task.target.code, taskStatus } }
+    })
+    const bar = wrapper.get('.personnel-task')
+    const ganttBar = gantt.get('[data-testid="schedule-current-bar"]')
+    expect(bar.element.style.getPropertyValue('--sg-schedule-status-color')).toBe(`var(--sg-shot-status-${token})`)
+    expect(ganttBar.element.style.getPropertyValue('--sg-schedule-status-color')).toBe(`var(--sg-shot-status-${token})`)
+    expect(bar.attributes('aria-label')).toContain(label)
+    expect(ganttBar.attributes('title')).toContain(label)
+    wrapper.unmount()
+    gantt.unmount()
+  })
+
   it('日视图为时间窗口中的每个自然日生成独立日期格', () => {
     const wrapper = mount(PersonnelSwimlane, {
       props: {
@@ -55,7 +84,7 @@ describe('人员泳道任务条', () => {
     expect(swimlane.attributes('style')).toContain(
       '--personnel-timeline-width: 11016px'
     )
-    expect(swimlane.element.style.minWidth).toBe('11186px')
+    expect(swimlane.element.style.minWidth).toBe('11136px')
   })
 
   it('短时间窗口铺满父容器并保留时间轴最小宽度', () => {
@@ -70,7 +99,7 @@ describe('人员泳道任务条', () => {
 
     const swimlane = wrapper.get('[data-testid="personnel-swimlane"]')
     expect(swimlane.element.style.width).toBe('100%')
-    expect(swimlane.element.style.minWidth).toBe('890px')
+    expect(swimlane.element.style.minWidth).toBe('840px')
   })
 
   it.each([
@@ -215,7 +244,7 @@ describe('人员泳道任务条', () => {
 
     expect(width).toBeCloseTo(4.1667, 3)
     expect(tooltip.props('content')).toBe(
-      'EP001-002-0002 · 负责人：庞晓亮 · 排期：2026/08/30 09:00 至 2026/09/01 09:00'
+      'EP001-002-0002 · 制作中 · 负责人：庞晓亮 · 排期：2026/08/30 09:00 至 2026/09/01 09:00'
     )
   })
 

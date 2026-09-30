@@ -117,15 +117,7 @@ class ShotGridProductionAdjustmentService:
                 )
                 if ids:
                     conflicts.append({'taskId': task.task_id, 'conflictTaskIds': sorted(ids)})
-            expected = sorted(
-                [item.model_dump(by_alias=True) for item in command.expected_conflicts], key=lambda item: item['taskId']
-            )
-            if (conflicts and not command.overlap_acknowledged) or (
-                command.overlap_acknowledged and conflicts != expected
-            ):
-                raise shot_grid_error(
-                    422, 'SG_ADJUST_OVERLAP', '调整后的人员排期存在重叠，请核对并确认', details={'conflicts': conflicts}
-                )
+            # 允许人员排期重叠，实际重叠任务仍写入排期历史。
             batch_id = str(uuid4())
             now = datetime.now()
             for item, task, shot, before, schedule_before in locked:

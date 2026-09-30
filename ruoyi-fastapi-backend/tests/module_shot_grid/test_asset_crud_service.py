@@ -961,3 +961,16 @@ def test_asset_and_item_allowed_actions_are_server_side_state_mirrors() -> None:
         )
         == []
     )
+
+
+def test_unscheduled_item_phase_and_asset_rollup() -> None:
+    task = SimpleNamespace(task_status='not_started', expected_start_time=None, expected_end_time=None)
+    assert ShotGridAssetCrudService._item_status(task, False) == 'pending_schedule'
+    task.expected_start_time = datetime(2026, 9, 30)
+    assert ShotGridAssetCrudService._item_status(task, False) == 'pending_schedule'
+    task.expected_end_time = datetime(2026, 10, 7)
+    assert ShotGridAssetCrudService._item_status(task, False) == 'not_started'
+    assert task.task_status == 'not_started'
+    assert ShotGridAssetCrudService._aggregate_asset_status(['not_started', 'pending_schedule']) == 'pending_schedule'
+    assert ShotGridAssetCrudService._aggregate_asset_status(['unassigned', 'pending_schedule']) == 'unassigned'
+    assert ShotGridAssetCrudService._aggregate_asset_status(['in_progress', 'pending_schedule']) == 'in_progress'

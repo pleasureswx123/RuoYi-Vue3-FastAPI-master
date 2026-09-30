@@ -1,5 +1,8 @@
+import { taskStage } from '@/views/task/taskStage'
 const STATUS_META = {
+  pending_info: { label: '待完善', tone: 'info' },
   unassigned: { label: '待分配', tone: 'warning' },
+  pending_schedule: { label: '待排期', tone: 'warning' },
   not_started: { label: '待开工', tone: 'muted' },
   preparing: { label: '目录准备中', tone: 'info' },
   in_progress: { label: '制作中', tone: 'primary' },
@@ -16,10 +19,11 @@ const DIRECTORY_META = {
 }
 
 export function shotStatusMeta(status) {
-  return STATUS_META[status] || { label: '未知镜头状态', tone: 'muted' }
+  return STATUS_META[taskStage(status)] || { label: '未知镜头状态', tone: 'muted' }
 }
 
 export function shotStatusTagClass(status) {
+  status = taskStage(status)
   return `shot-status-tag--${Object.hasOwn(STATUS_META, status) ? status : 'unknown'}`
 }
 

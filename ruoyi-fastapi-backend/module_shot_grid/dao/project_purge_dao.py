@@ -202,6 +202,14 @@ class ShotGridProjectPurgeDao:
                     SysFileReference.business_id.in_([str(submission_id) for submission_id in submission_ids]),
                 )
             )
+        # 解除镜头参考资料引用，独占文件进入原有清理队列。
+        shot_reference_scope = (
+            SysFileReference.business_type == 'shotgrid_shot_reference'
+        ) & SysFileReference.business_id.in_(
+            select(cast(ShotGridShot.shot_id, String)).where(ShotGridShot.project_id == project_id)
+        )
+        file_ids.update(await db.scalars(select(SysFileReference.file_id).where(shot_reference_scope)))
+        await db.execute(delete(SysFileReference).where(shot_reference_scope))
         # 解除项目资料引用，共享给其他业务的文件继续保留。
         project_reference_scope = (SysFileReference.business_type == 'shotgrid_project_reference') & (
             SysFileReference.business_id == str(project_id)

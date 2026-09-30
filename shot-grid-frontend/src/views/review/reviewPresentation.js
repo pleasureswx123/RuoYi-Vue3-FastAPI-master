@@ -6,8 +6,8 @@ const REVIEW_STATUS = Object.freeze({
 })
 
 const REVIEW_MODE = Object.freeze({
-  auto_single: { label: '自动单版', tone: 'info' },
-  manual_batch: { label: '人工批量', tone: 'primary' }
+  auto_single: { label: '单版本审核', tone: 'info' },
+  manual_batch: { label: '批量审核', tone: 'primary' }
 })
 
 const MEDIA_DERIVATION_STATUS = Object.freeze({

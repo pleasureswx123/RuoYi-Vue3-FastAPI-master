@@ -382,7 +382,7 @@ const { pollingError } = useTaskStatePolling({
       showImport.value || showRequirements.value || showEdit.value || editingAssetId.value || showBatchAssign.value ||
       assigning.value || deleting.value || itemActionBusy.value || appliedAssetQuery.value !== currentAssetQueryKey()) return null
     if (assets.value.some(asset => Number(asset?.itemStatusCounts?.preparing) > 0)) return 1500
-    return assets.value.some(asset => Number(asset?.itemStatusCounts?.not_started) > 0) ? 5000 : null
+    return assets.value.some(asset => (Number(asset?.itemStatusCounts?.not_started) > 0 || Number(asset?.itemStatusCounts?.pending_schedule) > 0)) ? 5000 : null
   },
   refresh: controller => loadAssets(controller, true)
 })
@@ -721,7 +721,7 @@ onBeforeUnmount(() => {
             <el-select v-model="query.assetType" class="sg-select" placeholder="全部类型" aria-label="按资产类型筛选" @change="submitFilters"><el-option label="全部类型" value="" /><el-option label="角色" value="Character" /><el-option label="场景" value="Environment" /><el-option label="道具" value="Prop" /></el-select>
           </el-form-item>
           <el-form-item class="asset-filter-item" prop="assetStatus">
-            <el-select v-model="query.assetStatus" class="sg-select" placeholder="全部状态" aria-label="按资产状态筛选" @change="submitFilters"><el-option label="全部状态" value="" /><el-option v-for="status in ['unassigned','not_started','preparing','in_progress','reviewing','revision','completed']" :key="status" :label="assetStatusMeta(status).label" :value="status" /></el-select>
+            <el-select v-model="query.assetStatus" class="sg-select" placeholder="全部状态" aria-label="按资产状态筛选" @change="submitFilters"><el-option label="全部状态" value="" /><el-option v-for="status in ['unassigned','pending_schedule','not_started','preparing','in_progress','reviewing','revision','completed']" :key="status" :label="assetStatusMeta(status).label" :value="status" /></el-select>
           </el-form-item>
           <el-form-item class="asset-filter-item" prop="assigneeUserId">
             <el-select v-model="query.assigneeUserId" class="sg-select" placeholder="全部制作人" aria-label="按制作人筛选" @change="submitFilters"><el-option label="全部制作人" value="" /><el-option v-for="member in members" :key="member.userId" :label="memberLabel(member)" :value="String(member.userId)" /></el-select>

@@ -42,12 +42,12 @@ describe('甘特自然时间刻度适配', () => {
     expect(ganttScaleFor('month').scales[0].format(new Date(2026, 8, 3))).toBe('2026年')
   })
 
-  it('只保留任务名称和年月日格式的开始日期', () => {
+  it('只保留任务名称和起止日期，日期格式为年月日', () => {
     const columns = svarGanttAdapter.ganttColumns?.()
 
     expect(columns?.map(column => ({ id: column.id, header: column.header }))).toEqual([
       { id: 'text', header: '任务名称' },
-      { id: 'start', header: '开始日期' }
+      { id: 'start', header: '起止日期' }
     ])
     expect(columns?.[1].template(new Date(2026, 7, 30, 18, 0, 0))).toBe('2026-08-30')
   })
@@ -186,6 +186,24 @@ describe('甘特范围修改请求', () => {
 })
 
 describe('人员泳道重叠堆叠', () => {
+  it('按任务类型分组时每位制作人独立成泳道且不同类型不合并', () => {
+    const tasks = [
+      { taskId: 1, groupKey: 'shot', groupName: '镜头任务', assigneeUserId: 7, assigneeName: '甲' },
+      { taskId: 2, groupKey: 'shot', groupName: '镜头任务', assigneeUserId: 9, assigneeName: '乙' },
+      { taskId: 3, groupKey: 'asset', groupName: '资产任务', assigneeUserId: 7, assigneeName: '甲' },
+      { taskId: 4, groupKey: 'shot', groupName: '镜头任务', assigneeUserId: 7, assigneeName: '甲' }
+    ].map(task => ({ ...task, id: `task:${task.taskId}`, start: new Date('2026-09-01'), end: new Date('2026-09-02') }))
+    const rows = toSwimlaneRows(tasks, { groupBy: 'task_kind' })
+
+    expect(rows).toHaveLength(3)
+    expect(rows.find(row => row.id === 'shot:assignee:7')).toMatchObject({
+      parentGroupKey: 'shot', groupName: '镜头任务', assigneeName: '甲', trackCount: 2
+    })
+    expect(rows.find(row => row.id === 'shot:assignee:7').tasks.map(task => task.taskId)).toEqual([1, 4])
+    expect(rows.find(row => row.id === 'shot:assignee:9').tasks.map(task => task.taskId)).toEqual([2])
+    expect(rows.find(row => row.id === 'asset:assignee:7').tasks.map(task => task.taskId)).toEqual([3])
+  })
+
   it('同负责人重叠任务分层且首尾相接可复用同层', () => {
     const rows = toSwimlaneRows([
       { id: 'task:1', taskId: 1, assigneeUserId: 7, assigneeName: '杨景锋', start: new Date('2026-09-01T09:00:00'), end: new Date('2026-09-05T18:00:00') },

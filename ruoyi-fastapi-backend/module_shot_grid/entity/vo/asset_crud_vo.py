@@ -10,7 +10,9 @@ from module_shot_grid.entity.vo.common_vo import (
 )
 
 AssetType = Literal['Character', 'Environment', 'Prop']
-AssetWorkStatus = Literal['unassigned', 'not_started', 'preparing', 'in_progress', 'reviewing', 'revision', 'completed']
+AssetWorkStatus = Literal[
+    'unassigned', 'pending_schedule', 'not_started', 'preparing', 'in_progress', 'reviewing', 'revision', 'completed'
+]
 ASSET_ITEM_STATUSES = get_args(AssetWorkStatus)
 DirectoryStatus = Literal['not_created', 'pending', 'ready', 'failed']
 LifecycleStatus = Literal['active', 'archived']
@@ -273,6 +275,7 @@ class ShotGridAssetItemStatusCountsModel(BaseModel):
     """活动制作分项数量；键使用状态字面量，不转换为 camelCase。"""
 
     unassigned: int = Field(default=0, ge=0)
+    pending_schedule: int = Field(default=0, ge=0)
     not_started: int = Field(default=0, ge=0)
     preparing: int = Field(default=0, ge=0)
     in_progress: int = Field(default=0, ge=0)

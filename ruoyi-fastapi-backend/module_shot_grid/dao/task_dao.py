@@ -1,12 +1,13 @@
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import String, and_, asc, case, cast, desc, exists, func, or_, select
+from sqlalchemy import DateTime, String, and_, asc, case, cast, desc, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 from sqlalchemy.sql import Select
 
 from module_admin.entity.do.user_do import SysUser
+from module_shot_grid.dao.schedule_phase import task_phase_expression
 from module_shot_grid.entity.do.asset_do import ShotGridAsset, ShotGridAssetItem
 from module_shot_grid.entity.do.project_do import (
     ShotGridEpisode,
@@ -136,6 +137,7 @@ class ShotGridTaskDao:
                 ShotGridShot.storage_dir_name.label('shot_storage_dir_name'),
                 ShotGridShot.duration_ms.label('shot_duration_ms'),
                 ShotGridShot.description.label('shot_description'),
+                ShotGridShot.reference_description.label('shot_reference_description'),
                 ShotGridShot.shot_size.label('shot_size'),
                 ShotGridShot.camera_position.label('shot_camera_position'),
                 ShotGridShot.camera_movement.label('shot_camera_movement'),
@@ -243,7 +245,14 @@ class ShotGridTaskDao:
         if query.task_kind is not None:
             statement = statement.where(ShotGridTask.task_kind == query.task_kind)
         if query.task_status is not None:
-            statement = statement.where(ShotGridTask.task_status == query.task_status)
+            phase = (
+                task_phase_expression(ShotGridTask)
+                if query.task_status in {'pending_schedule', 'not_started'}
+                else ShotGridTask.task_status
+            )
+            statement = statement.where(phase == query.task_status)
+        if query.unfinished_only:
+            statement = statement.where(ShotGridTask.task_status != 'completed')
         if query.priority is not None:
             statement = statement.where(ShotGridTask.priority == query.priority)
         if query.due_date_from is not None:
@@ -258,6 +267,11 @@ class ShotGridTaskDao:
         if mine_user_id is None and assignee_user_id is not None:
             statement = statement.where(ShotGridTask.assignee_user_id == assignee_user_id)
 
+        return cls._order_task_statement(statement, query)
+
+    @staticmethod
+    def _order_task_statement(statement: Select, query: ShotGridTaskFilterModel) -> Select:
+        """为分页查询应用稳定的业务排序。"""
         priority_order = case(
             (ShotGridTask.priority == 'urgent', 0),
             (ShotGridTask.priority == 'high', 1),
@@ -272,6 +286,22 @@ class ShotGridTaskDao:
             'updateTime': ShotGridTask.update_time,
         }
         direction = asc if query.is_asc == 'ascending' else desc
+        if query.order_by_column == 'workbench':
+            # 工作台按下一步可处理顺序排列，分页前完成排序，空截止时间放最后。
+            status_order = case(
+                (ShotGridTask.task_status == 'revision', 0),
+                (ShotGridTask.task_status == 'in_progress', 1),
+                (ShotGridTask.task_status == 'pending_review', 2),
+                (ShotGridTask.task_status == 'not_started', 3),
+                (ShotGridTask.task_status == 'preparing', 4),
+                else_=5,
+            )
+            return statement.order_by(
+                status_order.asc(),
+                func.coalesce(ShotGridTask.expected_end_time, cast(ShotGridTask.due_date, DateTime)).asc().nulls_last(),
+                priority_order.asc(),
+                ShotGridTask.task_id.asc(),
+            )
         if query.order_by_column == 'shotNo':
             return statement.order_by(
                 ShotGridTask.project_id.asc(),

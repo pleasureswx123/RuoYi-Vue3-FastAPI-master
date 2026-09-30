@@ -1,9 +1,14 @@
+import { taskStage } from '@/views/task/taskStage'
 import { tagTypeFromTone } from '@/utils/tag'
 
-export const PRODUCTION_HISTORY_STEPS = Object.freeze(['创建/导入', '委派', '制作', '提交版本', '审核', '完成'])
+export const PRODUCTION_HISTORY_STEPS = Object.freeze(['创建/导入', '完善信息', '分配制作人', '排期', '确认开工', '制作', '提交版本', '审核', '完成'])
 
 const STAGE_META = Object.freeze({
+  pending_info: Object.freeze({ label: '待完善', tone: 'warning' }),
+  unassigned: Object.freeze({ label: '待分配', tone: 'info' }),
   created: Object.freeze({ label: '已创建', tone: 'neutral' }),
+  pending_schedule: Object.freeze({ label: '待排期', tone: 'warning' }),
+  not_started: Object.freeze({ label: '待开工', tone: 'neutral' }),
   assigned: Object.freeze({ label: '已委派', tone: 'info' }),
   production: Object.freeze({ label: '制作中', tone: 'warning' }),
   review: Object.freeze({ label: '待审核', tone: 'warning' }),
@@ -27,7 +32,8 @@ const VERSION_STATUS_META = Object.freeze({
 })
 
 const WORKFLOW_STATUS_LABEL = Object.freeze({
-  not_started: '未开始',
+  pending_schedule: '待排期',
+  not_started: '未开工',
   preparing: '目录准备中',
   in_progress: '制作中',
   pending_review: '待审核',
@@ -66,17 +72,27 @@ const VERIFICATION_META = Object.freeze({
 
 const FALLBACK_META = Object.freeze({ label: '未知', tone: 'neutral' })
 
+export function productionHistoryStage(value) {
+  if (value?.currentStage === 'assigned' && value.task) return taskStage(value.task)
+  return value?.currentStage || 'created'
+}
+
 export function historyStageMeta(value) {
+  if (value && typeof value === 'object') value = productionHistoryStage(value)
   return STAGE_META[value] || FALLBACK_META
 }
 
 export function productionHistoryActiveStep(stage, fallbackValue) {
   const stageStep = {
     created: 0,
-    assigned: 1,
-    production: 2,
-    review: 4,
-    revision: 2,
+    pending_info: 1,
+    unassigned: 2,
+    assigned: 2,
+    pending_schedule: 3,
+    not_started: 4,
+    production: 5,
+    review: 7,
+    revision: 5,
     final: PRODUCTION_HISTORY_STEPS.length
   }[stage]
   if (Number.isInteger(stageStep)) return stageStep
@@ -138,15 +154,18 @@ export function currentProductionHandoff(lane) {
   const producer = `制作人：${assigneeDisplayName(lane.task?.assignee)}`
   // 当前处理方由任务状态确定，不使用历史审核人推断本轮待办归属。
   const states = {
-    not_started: { stage: '待确认开工', owner: '项目管理人员', next: `由管理人员确认开工；受派${producer}。`, type: 'warning' },
+    pending_info: { stage: '待完善', owner: '项目管理人员', next: '请先完善制作内容，再分配制作人。', type: 'warning' },
+    unassigned: { stage: '待分配', owner: '项目管理人员', next: '制作内容已填写，请分配制作人。', type: 'info' },
+    pending_schedule: { stage: '待排期', owner: '项目管理人员', next: `先设置计划起止时间，再确认开工；受派${producer}。`, type: 'warning' },
+    not_started: { stage: '待开工', owner: '项目管理人员', next: `由管理人员确认开工；受派${producer}。`, type: 'warning' },
     preparing: { stage: '目录准备中', owner: '系统正在准备', next: `等待制作目录就绪，再由${producer}开始制作。`, type: 'info' },
     in_progress: { stage: '制作中', owner: producer, next: '完成制作并提交版本，交由项目审核人员审核。', type: 'warning' },
     pending_review: { stage: '待审核', owner: '项目审核人员', next: '由具备审核权限的项目人员审阅本轮文件并给出结论。', type: 'warning' },
     revision: { stage: '返修中', owner: producer, next: '按修改意见返修，逐条填写处理说明后提交新版本。', type: 'error' },
     completed: { stage: '已完成', owner: '本任务无待处理环节', next: '最终版本已确认，交付状态请查看版本详情。', type: 'success' }
   }
-  return states[lane.task?.taskStatus] || {
-    stage: '待委派', owner: '项目管理人员', next: '分配制作人并确认开工后进入制作。', type: 'info'
+  return states[taskStage(lane.task) || lane.currentStage] || {
+    stage: '待分配', owner: '项目管理人员', next: '先分配制作人，再设置排期并确认开工。', type: 'info'
   }
 }
 

@@ -22,7 +22,9 @@ import MemberCandidateSelect from './MemberCandidateSelect.vue'
 import ProjectModal from './ProjectModal.vue'
 import ProjectStatePanel from './ProjectStatePanel.vue'
 
+const emit = defineEmits(['show-all'])
 const props = defineProps({
+  compact: { type: Boolean, default: false },
   projectId: { type: Number, required: true },
   canManage: { type: Boolean, default: false },
   permissions: { type: Array, default: () => [] }
@@ -284,7 +286,8 @@ onBeforeUnmount(() => {
   <el-card class="detail-panel member-panel" shadow="never">
     <template #header>
       <header class="detail-panel__heading">
-        <div><p class="sg-eyebrow">MEMBERS</p><h2>项目成员</h2><span>项目角色决定成员在当前项目中的访问与操作权限。</span></div>
+        <div><h2>项目成员</h2><span>项目角色决定成员在当前项目中的访问与操作权限。</span></div>
+        <el-button v-if="compact" type="primary" plain size="small" @click="emit('show-all')">完整列表</el-button>
         <el-button :icon="Refresh" circle aria-label="刷新成员和角色配置" :loading="loading || roleOptionsLoading" @click="refreshPanel" />
       </header>
     </template>
@@ -303,20 +306,20 @@ onBeforeUnmount(() => {
       </el-card>
       <el-skeleton v-if="loading && !members.length" :rows="4" animated />
       <el-empty v-else-if="!members.length" :image-size="72" description="项目当前没有可展示的活动成员" />
-      <el-table v-else class="member-table" :data="members" row-key="userId" v-loading="loading" empty-text="项目当前没有可展示的活动成员">
-        <el-table-column label="成员" min-width="170" fixed="left">
+      <el-table v-else class="member-table" :class="{ 'is-compact': compact }" :data="members" row-key="userId" v-loading="loading" empty-text="项目当前没有可展示的活动成员">
+        <el-table-column label="成员" :min-width="compact ? 100 : 170" show-overflow-tooltip fixed="left">
           <template #default="{ row }"><strong>{{ row.nickName || row.userName }}</strong><small>{{ row.userName }}</small></template>
         </el-table-column>
-        <el-table-column label="项目角色" min-width="130">
+        <el-table-column label="项目角色" :width="compact ? 120 : undefined" :min-width="compact ? 120 : 130">
           <template #default="{ row }"><el-tag size="small" effect="plain" round :type="projectRoleMeta(row.projectRole).type">{{ projectRoleMeta(row.projectRole).label }}</el-tag></template>
         </el-table-column>
-        <el-table-column label="部门" min-width="130"><template #default="{ row }">{{ row.deptName || '—' }}</template></el-table-column>
-        <el-table-column label="加入时间" min-width="170"><template #default="{ row }">{{ formatDateTime(row.joinedTime) }}</template></el-table-column>
-        <el-table-column v-if="canEdit || canRemove" label="操作" width="200" fixed="right">
+        <el-table-column v-if="!compact" label="部门" min-width="130"><template #default="{ row }">{{ row.deptName || '—' }}</template></el-table-column>
+        <el-table-column v-if="!compact" label="加入时间" min-width="170"><template #default="{ row }">{{ formatDateTime(row.joinedTime) }}</template></el-table-column>
+        <el-table-column v-if="canEdit || canRemove" label="操作" :width="compact ? 136 : 200" fixed="right">
           <template #default="{ row }">
             <div class="member-actions">
-              <el-button v-if="canEdit" text type="primary" @click="openEdit(row)">编辑</el-button>
-              <el-button v-if="canRemove" text type="danger" :disabled="mutationBusy" @click="removeMember(row)">移除</el-button>
+              <el-button v-if="canEdit" :size="compact ? 'small' : 'default'" text type="primary" @click="openEdit(row)">编辑</el-button>
+              <el-button v-if="canRemove" :size="compact ? 'small' : 'default'" text type="danger" :disabled="mutationBusy" @click="removeMember(row)">移除</el-button>
             </div>
           </template>
         </el-table-column>
@@ -366,6 +369,8 @@ onBeforeUnmount(() => {
 .member-table strong { color:var(--sg-text); font-size:13px; }
 .member-table small { margin-top:3px; color:var(--sg-text-muted); }
 .member-actions { display:flex; gap:4px; align-items:center; }
+.member-table.is-compact .member-actions { gap:8px; flex-wrap:nowrap; }
+.member-table.is-compact .member-actions :deep(.el-button) { margin-left:0; flex-shrink:0; padding:6px 8px; }
 .member-form { display:grid; gap:18px; }
 .member-form :deep(.el-form-item) { margin-bottom:0; }
 .member-form :deep(.el-select) { width:100%; }

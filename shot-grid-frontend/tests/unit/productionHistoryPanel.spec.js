@@ -369,12 +369,12 @@ describe('制作履历面板', () => {
     getProductionHistory.mockResolvedValue({ data: shotHistory() })
   })
 
-  it('用六步总览和版本主节点展示真实审核闭环，并提供任务、版本与审核单深链', async () => {
+  it('用包含排期和开工的九步总览和版本主节点展示真实审核闭环，并提供任务、版本与审核单深链', async () => {
     const { wrapper, router } = await mountPanel()
 
     expect(getProductionHistory).toHaveBeenCalledWith(8, 'shot', 41, expect.objectContaining({ signal: expect.any(AbortSignal) }))
-    expect(wrapper.findAllComponents(ElStep).map(step => step.props('title'))).toEqual(['创建/导入', '委派', '制作', '提交版本', '审核', '完成'])
-    expect(wrapper.findComponent(ElSteps).props()).toMatchObject({ active: 2, alignCenter: true, finishStatus: 'success' })
+    expect(wrapper.findAllComponents(ElStep).map(step => step.props('title'))).toEqual(['创建/导入', '完善信息', '分配制作人', '排期', '确认开工', '制作', '提交版本', '审核', '完成'])
+    expect(wrapper.findComponent(ElSteps).props()).toMatchObject({ active: 5, alignCenter: true, finishStatus: 'success' })
     expect(wrapper.findComponent(ElSteps).attributes('aria-label')).toBe('制作阶段')
     expect(wrapper.findAllComponents(ElTimelineItem).every(item => item.props('size') === 'large')).toBe(true)
     const timelineItems = wrapper.findAllComponents(ElTimelineItem)

@@ -1,4 +1,5 @@
 from typing import Annotated
+from uuid import UUID
 
 from fastapi import Path, Query, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,7 +28,9 @@ from module_shot_grid.entity.vo.shot_crud_vo import (
     ShotGridShotUpdateModel,
 )
 from module_shot_grid.service.shot_crud_service import ShotGridShotCrudService
+from module_shot_grid.service.shot_reference_service import ShotGridShotReferenceService
 from utils.response_util import ResponseUtil
+from utils.upload_util import UploadUtil
 
 SQL_BIGINT_MAX = 9_223_372_036_854_775_807
 
@@ -230,3 +233,28 @@ async def archive_shot_grid_shot(
         access,
     )
     return ResponseUtil.success(data=result)
+
+
+@shot_crud_controller.get(
+    '/{shotId}/reference-files/{fileId}/download',
+    dependencies=[UserInterfaceAuthDependency('shotgrid:shot:query')],
+)
+async def download_shot_reference(
+    request: Request,
+    project_id: Annotated[int, Path(alias='projectId', gt=0, le=SQL_BIGINT_MAX)],
+    shot_id: Annotated[int, Path(alias='shotId', gt=0, le=SQL_BIGINT_MAX)],
+    file_id: Annotated[UUID, Path(alias='fileId')],
+    query_db: Annotated[AsyncSession, DBSessionDependency()],
+    access: Annotated[ShotGridProjectAccessModel, ProjectAccessDependency()],
+    current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
+) -> Response:
+    await ShotGridShotCrudService.get_shot_detail(query_db, project_id, shot_id, current_user, access)
+    result = await ShotGridShotReferenceService.download(
+        request, query_db, current_user, project_id, shot_id, str(file_id)
+    )
+    return ResponseUtil.streaming(
+        data=result.data,
+        headers=UploadUtil.build_download_headers(result.filename, result.byte_range, result.accept_ranges),
+        media_type='application/octet-stream',
+        status_code=206 if result.byte_range.is_partial else 200,
+    )

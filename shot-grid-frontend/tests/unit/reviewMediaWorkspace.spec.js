@@ -32,6 +32,22 @@ const version = { versionId: 33, taskId: 21, versionNumber: 'V003', changelog: '
 const components = { ElAlert, ElButton, ElIcon, ElOption, ElSelect, ElSkeleton, ElTag }
 
 describe('审核媒体工作区', () => {
+  it('历史记录对比拒绝其他任务及新版本，保留当前播放器与批注草稿', async () => {
+    const wrapper = mount(ReviewMediaWorkspace, {
+      props: { version, canDownload: true, canCompare: true }, global: { components }
+    })
+    await flushPromises()
+    const currentImage = wrapper.get('img').element
+    expect(wrapper.vm.compareWithVersion({ ...version, taskId: 99, versionId: 32, versionNumber: 'V002' })).toBe(false)
+    expect(wrapper.vm.compareWithVersion({ ...version, versionId: 34, versionNumber: 'V004' })).toBe(false)
+    expect(wrapper.vm.compareWithVersion({ ...version, versionId: 32, versionNumber: 'V002' })).toBe(true)
+    await flushPromises()
+    expect(wrapper.find('.has-comparison').exists()).toBe(true)
+    expect(wrapper.get('img').element).toBe(currentImage)
+    expect(wrapper.props('version').versionId).toBe(33)
+    expect(wrapper.emitted('annotation-change')).toBeUndefined()
+    wrapper.unmount()
+  })
   beforeEach(() => {
     vi.restoreAllMocks()
     Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: vi.fn(() => 'blob:review-media') })

@@ -238,12 +238,7 @@ class ShotGridTaskScheduleService:
                 start_time=command.expected_start_time,
                 end_time=command.expected_end_time,
             )
-            conflict_changed = overlap_task_ids != command.expected_conflict_task_ids and (
-                command.overlap_acknowledged or command.expected_conflict_task_ids
-            )
-            if conflict_changed or (overlap_task_ids and not command.overlap_acknowledged):
-                conflict_rows = await ShotGridTaskScheduleDao.get_task_rows_by_ids(db, project_id, overlap_task_ids)
-                raise cls._overlap_error(overlap_task_ids, cls._build_conflicts(conflict_rows))
+            # 排期允许重叠，仅记录实际重叠任务用于查询与审计，不要求二次确认。
 
             from_start = task.expected_start_time
             from_end = task.expected_end_time
@@ -251,6 +246,9 @@ class ShotGridTaskScheduleService:
                 raise shot_grid_error(409, 'SG_TASK_SCHEDULE_READ_ONLY', '任务当前排期数据不完整，请先修复数据')
             if (task.baseline_start_time is None) != (task.baseline_end_time is None):
                 raise shot_grid_error(409, 'SG_TASK_SCHEDULE_READ_ONLY', '任务首版排期数据不完整，请先修复数据')
+
+            if from_start == command.expected_start_time and from_end == command.expected_end_time:
+                raise shot_grid_error(409, 'SG_TASK_SCHEDULE_UNCHANGED', '排期未变更，请调整时间后再保存')
 
             before_lock_version = task.lock_version
             if task.baseline_start_time is None and task.baseline_end_time is None:
@@ -403,21 +401,6 @@ class ShotGridTaskScheduleService:
         item = await ShotGridTaskDao.lock_asset_item(db, task.project_id, task.asset_item_id)
         if asset is None or item is None:
             raise shot_grid_error(409, 'SG_TASK_SCHEDULE_READ_ONLY', '资产或制作分项已归档、删除或不可见')
-
-    @staticmethod
-    def _overlap_error(
-        overlap_task_ids: list[int],
-        conflicts: list[ShotGridScheduleConflictModel],
-    ) -> ShotGridDomainException:
-        return shot_grid_error(
-            409,
-            'SG_TASK_SCHEDULE_OVERLAP',
-            '当前排期与同一负责人其他任务重叠，请确认最新冲突清单',
-            details={
-                'conflictTaskIds': overlap_task_ids,
-                'conflicts': [item.model_dump(by_alias=True, mode='json') for item in conflicts],
-            },
-        )
 
     @staticmethod
     def _derive_change_type(

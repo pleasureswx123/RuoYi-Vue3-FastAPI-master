@@ -130,6 +130,7 @@ class ShotGridVersionListQueryModel(ShotGridPageQueryModel):
 class ShotGridMineVersionQueryModel(ShotGridVersionListQueryModel):
     """本人提交记录筛选，日期范围包含首尾两天。"""
 
+    project_id: int | None = Field(default=None, gt=0, le=SQL_BIGINT_MAX)
     project_keyword: str | None = Field(default=None, max_length=200)
     task_keyword: str | None = Field(default=None, max_length=240)
     order_by_column: Literal['versionNo', 'submittedTime', 'shotNo'] = 'submittedTime'
@@ -142,6 +143,15 @@ class ShotGridMineVersionQueryModel(ShotGridVersionListQueryModel):
         if self.submitted_from and self.submitted_to and self.submitted_from > self.submitted_to:
             raise ValueError('提交日期起点不能晚于终点')
         return self
+
+
+class ShotGridMineSubmissionProjectModel(ShotGridApiModel):
+    """本人可访问历史提交所属项目，包括归档项目。"""
+
+    project_id: int
+    project_name: str
+    project_code: str
+    project_status: str
 
 
 class ShotGridVersionFileModel(ShotGridApiModel):
@@ -273,15 +283,54 @@ class ShotGridVersionDetailModel(ShotGridVersionListItemModel):
     final_delivery: ShotGridFinalDeliveryModel | None = None
 
 
+class ShotGridReviewProducerOptionModel(ShotGridApiModel):
+    """审核范围内的活动制作成员。"""
+
+    user_id: int
+    user_name: str
+    nick_name: str | None = None
+
+
+class ShotGridReviewProducerQueryModel(ShotGridApiModel):
+    project_id: int | None = Field(default=None, gt=0, le=SQL_BIGINT_MAX)
+
+
+class ShotGridReviewProjectOptionModel(ShotGridApiModel):
+    """本人审核范围内有活动审核单的项目。"""
+
+    project_id: int
+    project_name: str
+    project_code: str
+
+
 class ShotGridReviewListQueryModel(ShotGridPageQueryModel):
     """项目审核单分页查询。"""
 
+    project_id: int | None = Field(default=None, gt=0, le=SQL_BIGINT_MAX)
+    project_keyword: str | None = Field(default=None, max_length=200, description='本人审核队列的项目名称或编号')
     review_status: ReviewListStatus | None = Field(default=None)
     group_by_task: bool = False
     review_mode: ReviewListMode | None = Field(default=None)
     task_id: int | None = Field(default=None, gt=0, le=SQL_BIGINT_MAX)
     version_id: int | None = Field(default=None, gt=0, le=SQL_BIGINT_MAX)
     order_by_column: Literal['createTime', 'reviewDate', 'shotNo'] = Field(default='createTime')
+
+
+class ShotGridMineReviewQueryModel(ShotGridReviewListQueryModel):
+    """工作台审核队列筛选，不改变项目审核列表的查询契约。"""
+
+    task_kind: Literal['shot_video', 'asset_image'] | None = None
+    submitted_by: int | None = Field(default=None, gt=0, le=SQL_BIGINT_MAX)
+    submitter_keyword: str | None = Field(default=None, max_length=100)
+    submitted_from: date | None = None
+    submitted_to: date | None = None
+    order_by_column: Literal['createTime', 'submittedTime', 'shotNo'] = 'createTime'
+
+    @model_validator(mode='after')
+    def validate_submission_range(self) -> 'ShotGridMineReviewQueryModel':
+        if self.submitted_from and self.submitted_to and self.submitted_from > self.submitted_to:
+            raise ValueError('提交时间起点不能晚于终点')
+        return self
 
 
 class ShotGridReviewListItemModel(ShotGridApiModel):
@@ -299,6 +348,9 @@ class ShotGridReviewListItemModel(ShotGridApiModel):
     auto_version_id: int | None = None
     task_id: int | None = None
     task_name: str | None = None
+    task_kind: Literal['shot_video', 'asset_image'] | None = None
+    submitted_by_name: str | None = None
+    submitted_time: datetime | None = None
     version_no: int | None = None
     version_number: str | None = None
     version_status: VersionStatus | None = None

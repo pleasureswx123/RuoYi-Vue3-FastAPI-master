@@ -1,5 +1,5 @@
 import { mount, flushPromises, DOMWrapper } from '@vue/test-utils'
-import { ElButton, ElCheckboxGroup, ElRadioGroup, ElSteps } from 'element-plus'
+import { ElButton, ElCheckboxGroup, ElRadioGroup, ElSteps, ElDrawer } from 'element-plus'
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 import ProductionAdjustmentDialog from '@/views/shot/components/ProductionAdjustmentDialog.vue'
 import ReviewReferenceInput from '@/components/review/ReviewReferenceInput.vue'
@@ -24,8 +24,8 @@ const stage = () => wrapper.getComponent(ElSteps).props('active')
 async function choose(keys) {
   wrapper.getComponent(ElCheckboxGroup).vm.$emit('update:modelValue', keys)
   await flushPromises()
-  await click('下一步：填写新值')
 }
+
 async function setValue(key, value, index = 0) {
   wrapper.findAllComponents(ProductionAdjustmentField).filter(item => item.props('field').key === key)[index].vm.$emit('update:modelValue', value)
   await flushPromises()
@@ -49,11 +49,11 @@ describe('制作任务调整', () => {
     await choose(['referenceFileIds'])
     await reason()
     await click('下一步：核对修改')
-    expect(stage()).toBe(1)
+    expect(stage()).toBe(0)
     wrapper.getComponent(ReviewReferenceInput).vm.$emit('add', { raw: new File(['参考'], '参考.pdf', { type: 'application/pdf' }) })
     await flushPromises()
     await click('下一步：核对修改')
-    expect(stage()).toBe(2)
+    expect(stage()).toBe(1)
     expect(document.body.textContent).toContain('参考.pdf')
     uploadReviewReferenceFile.mockRejectedValueOnce(new Error('上传失败'))
     await click('确认保存（2）')
@@ -70,37 +70,35 @@ describe('制作任务调整', () => {
     await open(); await choose(['referenceFileIds']); await reason()
     wrapper.getComponent(ReviewReferenceInput).vm.$emit('add', { raw: new File(['参考'], '参考.pdf') })
     await flushPromises(); await click('下一步：核对修改')
-    expect(stage()).toBe(1)
+    expect(stage()).toBe(0)
     await vi.waitFor(() => expect(document.body.textContent).toContain('超过 5 个'))
     expect(adjustShotProduction).not.toHaveBeenCalled()
   })
   it('参考字段放在最后，纯文字说明可批量追加并进入核对', async () => {
     await open()
-    expect(wrapper.getComponent(ElCheckboxGroup).text().endsWith('参考内容（可选）')).toBe(true)
+    expect(wrapper.getComponent(ElDrawer).props('direction')).toBe('rtl')
+    expect(wrapper.getComponent(ElCheckboxGroup).text()).toContain('参考内容（可选）')
     await choose(['referenceFileIds']); await reason()
     await new DOMWrapper(document.body).get('textarea[aria-label="参考说明"]').setValue('参考影片的暖色光线')
     await click('下一步：核对修改')
-    expect(stage()).toBe(2)
+    expect(stage()).toBe(1)
     expect(document.body.textContent).toContain('参考影片的暖色光线')
     await click('确认保存（2）')
     expect(adjustShotProduction.mock.calls[0][1].items.every(item => item.changes.referenceDescription === '参考影片的暖色光线' && !('referenceFileIds' in item.changes))).toBe(true)
   })
-  it('默认不修改任何字段，校验原因后预览；明确清空且只发送勾选字段', async () => {
+  it('默认不修改任何字段，原因选填直接预览；明确清空且只发送勾选字段', async () => {
     await open()
-    await click('下一步：填写新值')
+    await click('下一步：核对修改')
     expect(stage()).toBe(0)
     await choose(['priority', 'description'])
     await setValue('priority', 'high')
     await setValue('description', '')
     await click('下一步：核对修改')
     expect(stage()).toBe(1)
-    await reason()
-    await click('下一步：核对修改')
-    expect(stage()).toBe(2)
     expect(document.body.textContent).toContain('内容1')
-    expect(document.body.textContent).toContain('（清空）')
+    expect(document.body.textContent).toContain('将清空')
     await click('确认保存（2）')
-    expect(adjustShotProduction).toHaveBeenCalledWith(8, { reason: '已与制作人沟通', overlapAcknowledged: false, expectedConflicts: [], items: shots.map(shot => ({ taskId: shot.taskId, shotId: shot.shotId, lockVersion: 3, shotLockVersion: 2, changes: { priority: 'high', description: null } })) })
+    expect(adjustShotProduction).toHaveBeenCalledWith(8, { reason: '', items: shots.map(shot => ({ taskId: shot.taskId, shotId: shot.shotId, lockVersion: 3, shotLockVersion: 2, changes: { priority: 'high', description: null } })) })
     expect(wrapper.emitted('close')).toEqual([[{ saved: true }]])
   })
   it('逐镜头填写不同制作内容，前后切换保留；重置清空选择', async () => {
@@ -114,7 +112,7 @@ describe('制作任务调整', () => {
     await click('下一步：核对修改')
     expect(document.body.textContent).toContain('新内容甲')
     expect(document.body.textContent).toContain('新内容乙')
-    await click('上一步')
+    await click('返回编辑')
     expect(wrapper.findAllComponents(ProductionAdjustmentField).map(item => item.props('modelValue'))).toEqual(['新内容甲', '新内容乙'])
     await click('下一步：核对修改')
     await click('确认保存（2）')
@@ -128,22 +126,20 @@ describe('制作任务调整', () => {
     await setValue('expectedRange', ['2026-09-28T12:00:00', '2026-09-28T10:00:00'])
     await reason()
     await click('下一步：核对修改')
-    expect(stage()).toBe(1)
+    expect(stage()).toBe(0)
     await click('重置')
     expect(stage()).toBe(0)
     expect(wrapper.getComponent(ElCheckboxGroup).props('modelValue')).toEqual([])
   })
-  it('返回精确冲突后须显式确认，提交同一冲突快照', async () => {
-    const conflicts = [{ taskId: 11, conflictTaskIds: [12] }]
-    adjustShotProduction.mockRejectedValueOnce({ errorKey: 'SG_ADJUST_OVERLAP', details: { conflicts }, httpStatus: 422 })
+  it('调整制作人可直接保存，不要求额外确认重叠', async () => {
     await open()
     await choose(['assigneeUserId'])
     await setValue('assigneeUserId', 8)
     await reason(); await click('下一步：核对修改'); await click('确认保存（2）')
-    expect(button('确认保存（2）').props('disabled')).toBe(true)
-    await new DOMWrapper(document.body).get('input[type="checkbox"]').setValue(true)
-    await click('确认保存（2）')
-    expect(adjustShotProduction.mock.calls[1][1]).toMatchObject({ expectedConflicts: conflicts, overlapAcknowledged: true })
+    expect(adjustShotProduction).toHaveBeenCalledTimes(1)
+    expect(adjustShotProduction.mock.calls[0][1]).not.toHaveProperty('overlapAcknowledged')
+    expect(document.body.textContent).not.toContain('已核对，仍按此安排保存')
+    expect(wrapper.emitted('close')).toEqual([[{ saved: true }]])
   })
   it.each([409, 0])('冲突或未知提交结果 %s 禁止直接重发', async status => {
     adjustShotProduction.mockRejectedValue({ httpStatus: status, message: '任务已变化' })
@@ -155,9 +151,9 @@ describe('制作任务调整', () => {
   it('单条入口共用流程，双锁号不一致时阻止填写', async () => {
     getShotDetail.mockResolvedValue({ data: { lockVersion: 9, task: { taskId: 11, lockVersion: 3 }, allowedActions: ['task.adjust'] } })
     await open({ shots: [shots[0]] })
-    expect(document.body.textContent).toContain('调整制作任务')
+    expect(document.body.textContent).toContain('编辑制作任务 · ')
     expect(document.body.textContent).toContain('制作信息已变化')
-    expect(button('下一步：填写新值')).toBeUndefined()
+    expect(button('下一步：核对修改')).toBeUndefined()
   })
   it('加载中卸载取消读取，不能继续其他镜头', async () => {
     let complete
