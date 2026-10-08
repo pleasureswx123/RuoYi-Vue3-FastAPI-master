@@ -112,6 +112,8 @@
 </template>
 
 <script setup>
+import { copyTextToClipboard } from "@/utils/clipboard"
+
 const { proxy } = getCurrentInstance()
 
 const props = defineProps({
@@ -136,18 +138,9 @@ function formatJson(str) {
   try { return JSON.stringify(JSON.parse(str), null, 2) } catch { return str }
 }
 
-function copyText(str) {
-  const text = formatJson(str)
-  if (navigator.clipboard) {
-    navigator.clipboard.writeText(text).then(() => ElMessage({ message: '已复制', type: 'success', duration: 1500 }))
-  } else {
-    const ta = document.createElement('textarea')
-    ta.value = text
-    document.body.appendChild(ta)
-    ta.select()
-    document.execCommand('copy')
-    document.body.removeChild(ta)
-    ElMessage({ message: '已复制', type: 'success', duration: 1500 })
-  }
+async function copyText(str) {
+  const copied = await copyTextToClipboard(formatJson(str))
+  ElMessage({ message: copied ? '已复制' : '复制失败，请手动选择文本复制', type: copied ? 'success' : 'error', duration: 1500 })
 }
+
 </script>

@@ -89,13 +89,12 @@ describe('文件与 NAS 一级页', () => {
     expect(toolbarForm.findAll('.el-form-item')).toHaveLength(3)
     expect(toolbarFormComponent.props('labelPosition')).toBe('top')
     expect(filterForm.classes()).toContain('el-form')
-    expect(filterForm.findAll('.el-form-item')).toHaveLength(4)
+    expect(filterForm.findAll('.el-form-item')).toHaveLength(3)
     const roleOptionValues = filterForm.findAllComponents({ name: 'ElOption' }).map(option => option.props('value'))
     expect(roleOptionValues).not.toContain('thumbnail')
     expect(roleOptionValues).not.toContain('proxy_media')
     expect(getProjectFilePage).toHaveBeenCalledWith('8', expect.objectContaining({
       pageNum: 1,
-      fileRole: undefined,
       orderByColumn: 'submittedTime'
     }), expect.objectContaining({ signal: expect.any(AbortSignal) }))
     expect(wrapper.text()).toContain('LCFR_EP001_001_S001_YJF_V003_1786.mp4')
@@ -162,19 +161,17 @@ describe('文件与 NAS 一级页', () => {
     const filterForm = wrapper.findAllComponents(ElForm).find(form => form.classes().includes('file-filters'))
     await toolbarForm.find('input[aria-label="搜索业务文件"]').setValue('动力舱')
     const filterSelects = filterForm.findAllComponents({ name: 'ElSelect' })
-    await setElSelectValue(filterSelects[0], 'review_media')
-    await setElSelectValue(filterSelects[1], 'shot_video')
-    await setElSelectValue(filterSelects[2], 'pending_review')
+    await setElSelectValue(filterSelects[0], 'shot_video')
+    await setElSelectValue(filterSelects[1], 'pending_review')
     getProjectFilePage.mockClear()
 
     await filterForm.findAllComponents(ElButton).find(button => button.text() === '重置').trigger('click')
     await flushPromises()
 
     expect(toolbarForm.props('model')).toMatchObject({ projectId: '8', keyword: '' })
-    expect(filterForm.props('model')).toMatchObject({ fileRole: '', taskKind: '', versionStatus: '', pageNum: 1 })
+    expect(filterForm.props('model')).toMatchObject({ taskKind: '', versionStatus: '', pageNum: 1 })
     expect(getProjectFilePage).toHaveBeenLastCalledWith('8', expect.objectContaining({
       keyword: undefined,
-      fileRole: undefined,
       taskKind: undefined,
       versionStatus: undefined,
       pageNum: 1

@@ -420,6 +420,7 @@ import {
   saveUserChatConfig,
   cancelChatRun,
 } from "../../api/chat";
+import { copyTextToClipboard } from "@/utils/clipboard";
 import { getToken } from "@/utils/auth";
 import AiMessage from "./components/AiMessage.vue";
 import { Picture, DocumentCopy } from "@element-plus/icons-vue";
@@ -727,19 +728,16 @@ function clearChat() {
   currentSessionAgentData.value = null;
 }
 
-function copyText(text) {
+async function copyText(text) {
   if (!text) {
     proxy.$modal.msgWarning("内容为空，无法复制");
     return;
   }
-  navigator.clipboard
-    .writeText(text)
-    .then(() => {
-      proxy.$modal.msgSuccess("复制成功");
-    })
-    .catch(() => {
-      proxy.$modal.msgError("复制失败");
-    });
+  if (await copyTextToClipboard(text)) {
+    proxy.$modal.msgSuccess("复制成功");
+  } else {
+    proxy.$modal.msgError("复制失败，请手动选择文本复制");
+  }
 }
 
 function triggerImageUpload() {

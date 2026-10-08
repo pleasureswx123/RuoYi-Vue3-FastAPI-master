@@ -3,7 +3,33 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createIdempotencyState } from '@/utils/idempotency'
 
 describe('幂等键状态', () => {
-  afterEach(() => vi.restoreAllMocks())
+  afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals() })
+
+  it('HTTP 缺少 randomUUID 时使用安全随机数组，重试复用且新载荷不复用', () => {
+    let value = 0
+    const getRandomValues = vi.fn(array => array.fill(++value))
+    vi.stubGlobal('crypto', { getRandomValues })
+    const state = createIdempotencyState('http')
+    const first = state.forPayload({ n: 1 })
+    expect(state.forPayload({ n: 1 })).toBe(first)
+    expect(state.forPayload({ n: 2 })).not.toBe(first)
+    expect(getRandomValues).toHaveBeenCalledTimes(2)
+  })
+
+  it.each([undefined, {}])('安全随机源缺失时明确失败，不生成固定键', crypto => {
+    vi.stubGlobal('crypto', crypto)
+    expect(() => createIdempotencyState('missing').forPayload({})).toThrow('无法生成安全的请求标识')
+  })
+
+  it('随机源暂时失败不会把新载荷绑定到旧键，恢复后可重试', () => {
+    const randomUUID = vi.fn().mockReturnValueOnce('first').mockImplementationOnce(() => { throw new Error('随机源失败') }).mockReturnValueOnce('second')
+    vi.stubGlobal('crypto', { randomUUID })
+    const state = createIdempotencyState('retry')
+    const first = state.forPayload({ n: 1 })
+    expect(() => state.forPayload({ n: 2 })).toThrow('随机源失败')
+    expect(state.forPayload({ n: 1 })).toBe(first)
+    expect(state.forPayload({ n: 2 })).toBe('retry:second')
+  })
 
   it('同一业务载荷重试复用同一键，载荷变化后生成新键', () => {
     vi.spyOn(globalThis.crypto, 'randomUUID')

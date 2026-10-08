@@ -12,12 +12,15 @@ function stableSerialize(value) {
 }
 
 function randomPart() {
-  if (globalThis.crypto?.randomUUID) {
+  if (typeof globalThis.crypto?.randomUUID === 'function') {
     return globalThis.crypto.randomUUID()
   }
+  if (typeof globalThis.crypto?.getRandomValues !== 'function') {
+    throw new Error('当前浏览器无法生成安全的请求标识，请更换浏览器后重试')
+  }
   const values = new Uint32Array(4)
-  globalThis.crypto?.getRandomValues?.(values)
-  return Array.from(values, item => item.toString(16).padStart(8, '0')).join('') || `${Date.now()}`
+  globalThis.crypto.getRandomValues(values)
+  return Array.from(values, item => item.toString(16).padStart(8, '0')).join('')
 }
 
 export function createIdempotencyState(scope) {
@@ -29,8 +32,9 @@ export function createIdempotencyState(scope) {
     forPayload(payload) {
       const nextSignature = stableSerialize(payload)
       if (signature !== nextSignature || !key) {
+        const nextKey = `${normalizedScope}:${randomPart()}`.slice(0, 100)
         signature = nextSignature
-        key = `${normalizedScope}:${randomPart()}`.slice(0, 100)
+        key = nextKey
       }
       return key
     },

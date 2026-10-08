@@ -27,11 +27,13 @@ import ProjectStatePanel from './ProjectStatePanel.vue'
 
 const props = defineProps({
   projectId: { type: Number, required: true },
+  collapseOperations: { type: Boolean, default: false },
   showOperations: { type: Boolean, default: true },
   canDiagnose: { type: Boolean, default: false },
   canRetryProject: { type: Boolean, default: false },
   canRetryOperation: { type: Boolean, default: false }
 })
+const expandedOperations = ref(props.collapseOperations ? [] : ['operations'])
 const storage = ref(null)
 const operations = ref([])
 const total = ref(0)
@@ -214,15 +216,18 @@ onBeforeUnmount(() => { storageController?.abort(); operationsController?.abort(
     <el-empty v-else :image-size="64" description="当前项目尚无存储信息" />
 
     <template v-if="showOperations">
-    <template v-if="canDiagnose">
-      <el-form ref="operationFilterFormRef" :model="filters" class="operation-toolbar" size="large" inline aria-label="目录操作筛选">
-        <strong>目录操作记录</strong>
-        <el-form-item prop="operationStatus">
+    <el-collapse v-if="canDiagnose" v-model="expandedOperations" class="operation-collapse">
+      <el-collapse-item name="operations">
+        <template #title>
+          <div class="operation-heading"><strong>目录操作记录</strong><span>查看目录创建结果，排查存储问题</span></div>
+        </template>
+      <el-form ref="operationFilterFormRef" :model="filters" class="operation-toolbar" size="default" label-position="top" aria-label="目录操作筛选">
+        <el-form-item label="执行状态" prop="operationStatus">
           <el-select v-model="filters.operationStatus" class="sg-select" placeholder="全部状态" aria-label="目录操作状态" @change="filters.pageNum = 1; loadOperations()">
             <el-option label="全部状态" value="" /><el-option label="等待执行" value="pending" /><el-option label="执行中" value="processing" /><el-option label="成功" value="succeeded" /><el-option label="等待重试" value="retry_wait" /><el-option label="失败" value="failed" /><el-option label="等待恢复" value="compensation_pending" /><el-option label="已恢复" value="compensated" /><el-option label="恢复失败" value="compensation_failed" />
           </el-select>
         </el-form-item>
-        <el-form-item prop="operationType">
+        <el-form-item label="操作类型" prop="operationType">
           <el-select v-model="filters.operationType" class="sg-select" placeholder="全部类型" aria-label="目录操作类型" @change="filters.pageNum = 1; loadOperations()">
             <el-option label="全部类型" value="" /><el-option label="项目初始化" value="initialize_project" /><el-option label="集目录" value="ensure_episode_directory" /><el-option label="镜头目录" value="ensure_shot_directory" /><el-option label="资产目录" value="ensure_asset_directory" /><el-option label="目录核验" value="reconcile_directory" />
           </el-select>
@@ -241,7 +246,8 @@ onBeforeUnmount(() => { storageController?.abort(); operationsController?.abort(
         </el-table>
         <el-pagination v-if="total > filters.pageSize" class="operation-pagination" background layout="total, prev, pager, next" :current-page="filters.pageNum" :page-size="filters.pageSize" :total="total" :disabled="operationsLoading" @current-change="changePage" />
       </template>
-    </template>
+      </el-collapse-item>
+    </el-collapse>
     <el-alert v-else class="diagnostic-note" title="目录操作记录仅对项目管理人或跨项目管理员开放" type="info" show-icon :closable="false" />
     </template>
 
@@ -280,10 +286,20 @@ onBeforeUnmount(() => { storageController?.abort(); operationsController?.abort(
 .detail-panel__heading span { display:block; margin-top:6px; color:var(--sg-text-muted); font-size:12px; }
 .storage-summary { background:rgba(255,255,255,.025); border-color:var(--sg-border); border-radius:12px; }.storage-summary :deep(.el-card__body){display:grid;gap:14px;padding:16px}
 .storage-path { display:flex; gap:12px; align-items:center; justify-content:space-between; }.storage-path code{overflow-wrap:anywhere;color:var(--sg-text-secondary);font-size:12px}
-.operation-toolbar { display:flex; gap:10px; align-items:center; margin-top:8px; }.operation-toolbar strong{margin-right:auto}.operation-toolbar .sg-select{width:180px}.operation-toolbar :deep(.el-form-item){margin:0}
+.operation-collapse{border:1px solid var(--sg-border);border-radius:12px;overflow:hidden;--el-collapse-header-bg-color:var(--sg-surface-soft);--el-collapse-content-bg-color:var(--sg-surface);--el-collapse-border-color:var(--sg-border)}
+.operation-collapse :deep(.el-collapse-item__header){height:auto;min-height:64px;padding:12px 16px;line-height:1.5}
+.operation-heading{display:flex;flex-direction:column;gap:4px;text-align:left}
+.operation-heading strong{font-size:14px;font-weight:600;color:var(--sg-text)}
+.operation-heading span{font-size:12px;font-weight:400;color:var(--sg-text-muted)}
+.operation-collapse :deep(.el-collapse-item__wrap){border-bottom:0}
+.operation-collapse :deep(.el-collapse-item__content){padding:16px}
+.operation-toolbar{display:flex;flex-wrap:wrap;gap:12px;margin:0 0 16px;padding:12px;background:var(--sg-surface-soft);border:1px solid var(--sg-border);border-radius:10px}
+.operation-toolbar :deep(.el-form-item){flex:0 1 180px;min-width:0;margin:0}
+.operation-toolbar :deep(.el-form-item__label){height:auto;margin-bottom:6px;padding:0;color:var(--sg-text-muted);font-size:12px;line-height:18px}
+.operation-toolbar .sg-select{width:100%}
 .operation-table{--el-table-text-color:var(--sg-text-secondary);--el-table-header-text-color:var(--sg-text-muted);--el-table-border-color:var(--sg-border);width:100%}
 .operation-pagination{justify-content:flex-end}.diagnostic-note{margin-top:2px}
 .retry-form{display:grid;gap:18px}.retry-form :deep(.el-form-item){margin-bottom:0}.retry-form :deep(.el-textarea__inner){resize:vertical}.retry-form footer{display:flex;gap:10px;justify-content:flex-end}
 .operation-detail{width:100%}
-@media(max-width:680px){.operation-toolbar,.storage-path{align-items:stretch;flex-direction:column}.operation-toolbar strong{margin-right:0}.operation-toolbar .sg-select{width:100%}}
+@media(max-width:680px){.operation-toolbar,.storage-path{align-items:stretch;flex-direction:column}.operation-toolbar :deep(.el-form-item){flex:0 0 auto;width:100%}.operation-toolbar .sg-select{width:100%}}
 </style>
