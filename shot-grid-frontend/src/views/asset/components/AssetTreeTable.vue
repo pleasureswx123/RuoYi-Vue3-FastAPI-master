@@ -1,4 +1,6 @@
 <script setup>
+import { versionSummaryLabel } from '@/components/version/versionPresentation'
+import { assetColumnWidths } from '../useAssetTablePresentation'
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { View } from '@element-plus/icons-vue'
 
@@ -9,22 +11,32 @@ import { tagTypeFromTone } from '@/utils/tag'
 import TableActionButton from '@/components/TableActionButton.vue'
 import ProtectedAssetThumbnail from './ProtectedAssetThumbnail.vue'
 import AssetDescriptionCell from './AssetDescriptionCell.vue'
-import { assetAssigneeSummary, assetDirectoryStatusMeta, assetErrorState, assetItemStatusEntries, assetItemTimeEntries, assetStatusMeta, assetStatusTagClass, assetTypeMeta, memberUserName, resolveAssetThumbnail } from '../assetPresentation'
+import { assetCompletionSummary, assetAssigneeSummary, assetDirectoryStatusMeta, assetErrorState, assetItemStatusEntries, assetItemTimeEntries, assetStatusMeta, assetStatusTagClass, assetTypeMeta, memberUserName, resolveAssetThumbnail } from '../assetPresentation'
 
 const props = defineProps({
+  itemStatus: { type: String, default: '' },
+  visibleColumns: { type: Array, default: () => ['thumbnail', 'description', 'plan', 'assignee', 'status'] },
+  columnWidths: { type: Object, default: () => ({}) },
   assets: { type: Array, required: true },
   projectId: { type: Number, required: true },
   contextKey: { type: String, required: true },
   members: { type: Array, default: () => [] },
   selectedAssetIds: { type: Set, required: true },
   selectable: { type: Function, required: true },
+  selectedItemIds: { type: Set, default: () => new Set() },
+  itemSelectable: { type: Function, default: () => false },
   canQuery: { type: Boolean, default: false },
   loading: { type: Boolean, default: false },
   selectionDisabled: { type: Boolean, default: false },
   backgroundRefresh: { type: Boolean, default: false }
 })
-const emit = defineEmits(['selection-change', 'open-item'])
+const emit = defineEmits(['available-width', 'header-dragend', 'selection-change', 'item-selection-change', 'open-item'])
 const table = ref(null)
+const tableContainer = ref(null)
+let widthObserver = null
+function updateAvailableWidth() {
+  emit('available-width', tableContainer.value?.getBoundingClientRect().width || 0)
+}
 const currentTime = useCurrentTime()
 const tableGeneration = ref(0)
 const errors = reactive(new Map())
@@ -50,28 +62,47 @@ const rows = computed(() => props.assets.map(asset => ({
 })))
 
 function canSelect(row) {
-  return row.rowKind === 'asset' && props.selectable(row)
+  if (row.rowKind === 'asset') return props.selectable(row)
+  const asset = assetById.value.get(Number(row.assetId))
+  return row.rowKind === 'item' && (!props.itemStatus || row.assetStatus === props.itemStatus) && asset && props.canQuery && props.itemSelectable(asset, row)
 }
 
 function selectionChanged(selection) {
-  if (!restoringSelection) emit('selection-change', selection.filter(canSelect))
+  if (restoringSelection) return
+  const valid = selection.filter(canSelect)
+  emit('selection-change', valid.filter(row => row.rowKind === 'asset'))
+  emit('item-selection-change', valid.filter(row => row.rowKind === 'item'))
+}
+
+// 严格树选择不会自动全选懒加载子行，用公开实例方法补齐已加载分项。
+function selectAll(selection) {
+  if (props.selectionDisabled || !table.value) return
+  const checked = selection.some(row => row.rowKind === 'asset' && canSelect(row))
+  restoringSelection = true
+  for (const children of childrenCache.values()) {
+    for (const row of children) if (canSelect(row)) table.value.toggleRowSelection(row, checked, false)
+  }
+  restoringSelection = false
+  selectionChanged(table.value.getSelectionRows())
 }
 
 function restoreSelection() {
   if (!table.value) return
   restoringSelection = true
-  const currentRows = new Map(rows.value.map(row => [row.rowKey, row]))
+  const availableRows = [...rows.value, ...[...childrenCache.values()].flat().filter(row => assetById.value.has(Number(row.assetId)))]
+  const currentRows = new Map(availableRows.map(row => [row.rowKey, row]))
+  const isSelected = row => row.rowKind === 'asset' ? props.selectedAssetIds.has(Number(row.assetId)) : props.selectedItemIds.has(Number(row.assetItemId))
   const selection = table.value.getSelectionRows()
   const selected = new Set(selection.map(row => row.rowKey))
   for (const row of selection) {
     const currentRow = currentRows.get(row.rowKey)
-    if (!currentRow || !canSelect(currentRow) || !props.selectedAssetIds.has(Number(currentRow.assetId))) {
+    if (!currentRow || !canSelect(currentRow) || !isSelected(currentRow)) {
       table.value.toggleRowSelection(row, false, true)
       selected.delete(row.rowKey)
     }
   }
-  for (const row of rows.value) {
-    const shouldSelect = canSelect(row) && props.selectedAssetIds.has(Number(row.assetId))
+  for (const row of availableRows) {
+    const shouldSelect = canSelect(row) && isSelected(row)
     if (selected.has(row.rowKey) !== shouldSelect) table.value.toggleRowSelection(row, shouldSelect, false)
   }
   restoringSelection = false
@@ -106,7 +137,7 @@ async function fetchChildren(row) {
         Number(item.projectId) !== props.projectId || Number(item.assetId) !== Number(row.assetId))) {
         throw new Error('分项数据与当前资产不一致，请刷新后重试')
       }
-      const children = response.data.filter(item => item.lifecycleStatus === 'active')
+      const children = response.data.filter(item => item.lifecycleStatus === 'active' && (!props.itemStatus || item.assetStatus === props.itemStatus))
         .sort((left, right) => left.sortOrder - right.sortOrder || left.assetItemId - right.assetItemId)
         .map(item => ({ ...item, rowKind: 'item', rowKey: `item:${props.projectId}:${item.assetItemId}`, hasChildren: false }))
       childrenCache.set(row.rowKey, children)
@@ -140,6 +171,8 @@ async function load(row, _treeNode, resolve) {
   if (children !== null && !disposed && requestGeneration === generation && branchExists) {
     resolve(children)
     if (children.length) initializedKeys.add(row.rowKey)
+    await nextTick()
+    if (!restoringSelection) restoreSelection()
   }
 }
 
@@ -168,7 +201,11 @@ async function refreshLoadedChildren() {
     // 首次 resolve([]) 不建立原生懒加载映射；只有空分支新增分项时才需要重建入口。
     else if (children.length) needsRebuild = true
   }))
-  if (needsRebuild && !disposed && generation === requestGeneration) await rebuildTable(false)
+  if (disposed || generation !== requestGeneration) return
+  if (needsRebuild) await rebuildTable(false)
+  restoreSelection()
+  const selectedIds = props.selectedItemIds
+  emit('item-selection-change', [...childrenCache.values()].flat().filter(row => selectedIds.has(Number(row.assetItemId)) && canSelect(row)))
 }
 
 async function rebuildTable(clearCache = true, clearExpansion = false) {
@@ -192,13 +229,14 @@ async function rebuildTable(clearCache = true, clearExpansion = false) {
   tableGeneration.value += 1
   await nextTick()
   if (disposed || generation !== requestGeneration) return
-  restoreSelection()
   for (const row of rows.value) {
     if (expandedKeys.has(row.rowKey)) table.value?.toggleRowExpansion(row, true)
   }
   await Promise.all([...pending.values()].map(entry => entry.promise))
   await nextTick()
   if (disposed || generation !== requestGeneration) return
+  restoreSelection()
+  emit('item-selection-change', [...childrenCache.values()].flat().filter(row => props.selectedItemIds.has(Number(row.assetItemId)) && canSelect(row)))
   table.value?.setScrollTop(scrollTop)
   table.value?.setScrollLeft(scrollLeft)
 }
@@ -226,8 +264,8 @@ function itemTimeState(row) {
   return taskTimeReminder({ taskStatus: row.task?.taskStatus, expectedEndTime: row.task?.expectedEndTime }, currentTime.value)
 }
 
-watch([() => props.assets, () => props.contextKey, () => props.canQuery], (next, previous) => {
-  if (props.backgroundRefresh && next[1] === previous[1] && next[2] === previous[2]) {
+watch([() => props.assets, () => props.contextKey, () => props.canQuery, () => props.itemStatus], (next, previous) => {
+  if (props.backgroundRefresh && next[1] === previous[1] && next[2] === previous[2] && next[3] === previous[3]) {
     const validKeys = new Set(rows.value.filter(row => row.hasChildren).map(row => row.rowKey))
     // 父查询发出后仍可展开；父响应失效的分支须单独取消，不能干扰其他慢请求。
     for (const [key, entry] of pending) {
@@ -238,9 +276,9 @@ watch([() => props.assets, () => props.contextKey, () => props.canQuery], (next,
     }
     return
   }
-  rebuildTable(true, next[1] !== previous[1] || !next[2])
+  rebuildTable(true, next[1] !== previous[1] || next[3] !== previous[3] || !next[2])
 })
-watch(() => props.selectedAssetIds, restoreSelection, { flush: 'post' })
+watch([() => props.selectedAssetIds, () => props.selectedItemIds], restoreSelection, { flush: 'post' })
 watch(() => props.loading, loading => {
   if (loading) {
     cancelRequests()
@@ -248,8 +286,18 @@ watch(() => props.loading, loading => {
     errors.clear()
   }
 })
-onMounted(restoreSelection)
+onMounted(() => {
+  restoreSelection()
+  updateAvailableWidth()
+  if (typeof ResizeObserver !== 'undefined') {
+    widthObserver = new ResizeObserver(updateAvailableWidth)
+    widthObserver.observe(tableContainer.value)
+  }
+  window.addEventListener('resize', updateAvailableWidth)
+})
 onBeforeUnmount(() => {
+  widthObserver?.disconnect()
+  window.removeEventListener('resize', updateAvailableWidth)
   disposed = true
   cancelRequests()
 })
@@ -257,13 +305,13 @@ defineExpose({ waitForLoads, refreshLoadedChildren })
 </script>
 
 <template>
-  <div class="asset-table-wrap">
+  <div ref="tableContainer" class="asset-table-wrap">
     <el-table ref="table" :key="tableGeneration" class="asset-data-table" :data="rows"
               row-key="rowKey" lazy :load="load" :tree-props="treeProps" :indent="20"
               max-height="620" v-loading="loading" empty-text="当前筛选没有资产"
-              @selection-change="selectionChanged" @expand-change="expansionChanged">
+              @header-dragend="(...args) => emit('header-dragend', ...args)" @selection-change="selectionChanged" @select-all="selectAll" @expand-change="expansionChanged">
       <el-table-column type="selection" width="48" fixed="left" :selectable="row => !selectionDisabled && canSelect(row)" :reserve-selection="true" />
-      <el-table-column label="资产 / 制作分项" min-width="240" fixed="left">
+      <el-table-column column-key="identity" :min-width="columnWidths.identity || assetColumnWidths.identity" label="资产 / 制作分项" fixed="left">
         <template #default="{ row }">
           <div class="asset-identity">
             <div class="asset-identity-meta">
@@ -280,51 +328,52 @@ defineExpose({ waitForLoads, refreshLoadedChildren })
           </div>
         </template>
       </el-table-column>
-      <el-table-column label="缩略图" width="104">
+      <el-table-column column-key="thumbnail" :width="columnWidths.thumbnail || assetColumnWidths.thumbnail" v-if="visibleColumns.includes('thumbnail')" label="缩略图">
         <template #default="{ row }">
           <div class="asset-thumbnail-cell">
             <ProtectedAssetThumbnail class="asset-thumb--small" :thumbnail="resolveAssetThumbnail(row)" :alt="`${row.assetName || row.productionItem || '未命名制作分项'} 缩略图`" />
-            <small v-if="row.rowKind === 'item'">{{ row.latestVersion ? `V${String(row.latestVersion.versionNo).padStart(3, '0')}` : '暂无版本' }}</small>
+            <small v-if="row.rowKind === 'item'">{{ versionSummaryLabel(row.latestVersion) }}</small>
           </div>
         </template>
       </el-table-column>
-      <el-table-column label="说明" min-width="300">
+      <el-table-column column-key="description" :min-width="columnWidths.description || assetColumnWidths.description" v-if="visibleColumns.includes('description')" label="说明">
         <template #default="{ row }">
           <AssetDescriptionCell :common-description="row.rowKind === 'asset' ? row.description : assetById.get(Number(row.assetId))?.description"
                                 :show-common-description="row.rowKind === 'asset'"
                                 :item-description="row.rowKind === 'item' ? row.description : ''" :is-item="row.rowKind === 'item'" />
         </template>
       </el-table-column>
-      <el-table-column prop="task.expectedStartTime" label="开始时间" width="150" class-name="task-expected-start">
-        <template #default="{ row }"><span class="task-date-cell">{{ formatTaskDateTime(row.rowKind === 'item' ? row.task?.expectedStartTime : null) }}</span></template>
-      </el-table-column>
-      <el-table-column prop="task.expectedEndTime" label="结束时间" width="150" class-name="task-expected-end">
-        <template #default="{ row }"><span class="task-date-cell">{{ formatTaskDateTime(row.rowKind === 'item' ? row.task?.expectedEndTime : null) }}</span></template>
-      </el-table-column>
-      <el-table-column label="时间状态" fixed="right" width="200" class-name="task-time-state">
+      <el-table-column column-key="plan" :width="columnWidths.plan || assetColumnWidths.plan" v-if="visibleColumns.includes('plan')" label="计划时间">
         <template #default="{ row }">
-          <el-tag v-if="row.rowKind === 'item'" :type="tagTypeFromTone(itemTimeState(row).tone)" size="small" effect="light" round>{{ itemTimeState(row).label }}</el-tag>
-          <div v-else-if="timeEntriesByAssetId.get(Number(row.assetId))?.length" class="asset-time-summary">
-            <el-tag v-for="entry in timeEntriesByAssetId.get(Number(row.assetId))" :key="entry.state" :type="tagTypeFromTone(entry.tone)" size="small" effect="light" round>{{ entry.label }} {{ entry.count }}</el-tag>
+          <div class="asset-plan">
+            <span><small>起</small> <span class="task-date-cell task-expected-start">{{ formatTaskDateTime(row.rowKind === 'item' ? row.task?.expectedStartTime : null) }}</span></span>
+            <span><small>止</small> <span class="task-date-cell task-expected-end">{{ formatTaskDateTime(row.rowKind === 'item' ? row.task?.expectedEndTime : null) }}</span></span>
+            <div class="task-time-state">
+              <el-tag v-if="row.rowKind === 'item'" :type="tagTypeFromTone(itemTimeState(row).tone)" size="small" effect="light" round>{{ itemTimeState(row).label }}</el-tag>
+              <div v-else-if="timeEntriesByAssetId.get(Number(row.assetId))?.length" class="asset-time-summary">
+                <el-tag v-for="entry in timeEntriesByAssetId.get(Number(row.assetId))" :key="entry.state" :type="tagTypeFromTone(entry.tone)" size="small" effect="light" round>{{ entry.label }} {{ entry.count }}</el-tag>
+              </div>
+              <span v-else>—</span>
+            </div>
           </div>
-          <span v-else>—</span>
         </template>
       </el-table-column>
-      <el-table-column label="制作人" fixed="right" width="112">
+      <el-table-column column-key="assignee" :width="columnWidths.assignee || assetColumnWidths.assignee" v-if="visibleColumns.includes('assignee')" label="制作人">
         <template #default="{ row }"><span class="asset-assignee sg-table-assignee" :class="{ 'is-unassigned': row.rowKind === 'asset' ? !row.assigneeUserIds?.length : !row.task?.assigneeUserId }">{{ assigneeName(row) }}</span></template>
       </el-table-column>
-      <el-table-column label="状态" fixed="right" width="200">
+      <el-table-column column-key="status" :width="columnWidths.status || assetColumnWidths.status" v-if="visibleColumns.includes('status')" label="状态">
         <template #default="{ row }">
           <div class="asset-status">
-            <template v-if="statusEntries(row).length">
+            <span v-if="row.rowKind === 'asset'" class="asset-completion-summary">{{ assetCompletionSummary(row) }}</span>
+            <el-tag v-if="row.rowKind === 'item'" class="asset-status-tag" :class="assetStatusTagClass(row.assetStatus)" :type="tagTypeFromTone(assetStatusMeta(row.assetStatus).tone)" size="small" effect="light" round>{{ assetStatusMeta(row.assetStatus).label }}</el-tag>
+            <div v-if="statusEntries(row).length" class="asset-status-summary" aria-label="分项状态汇总">
               <el-tag v-for="entry in statusEntries(row)" :key="entry.status" class="asset-status-tag" :class="assetStatusTagClass(entry.status)" size="small" effect="light" round :type="tagTypeFromTone(assetStatusMeta(entry.status).tone)">{{ entry.label }} {{ entry.count }}</el-tag>
-            </template>
-            <el-tag v-else class="asset-status-tag" :class="assetStatusTagClass(row.assetStatus)" :type="tagTypeFromTone(assetStatusMeta(row.assetStatus).tone)" size="small" effect="light" round>{{ assetStatusMeta(row.assetStatus).label }}</el-tag>
+            </div>
             <el-tag v-if="row.rowKind === 'asset' && row.directoryStatus === 'failed'" class="asset-status-tag asset-status-tag--directory-failed" type="danger" size="small" effect="light" round>{{ assetDirectoryStatusMeta(row.directoryStatus).label }}</el-tag>
           </div>
         </template>
       </el-table-column>
-      <el-table-column label="操作" fixed="right" width="480">
+      <el-table-column column-key="actions" :width="columnWidths.actions || assetColumnWidths.actions" label="操作" fixed="right">
         <template #default="{ row }">
           <slot v-if="row.rowKind === 'asset'" name="asset-actions" :row="row" />
           <slot v-else-if="row.rowKind === 'item'" name="item-actions" :row="row" :asset="assetById.get(Number(row.assetId))">
@@ -346,7 +395,10 @@ defineExpose({ waitForLoads, refreshLoadedChildren })
 .asset-identity strong, .asset-assignee, .asset-items-error { white-space: normal; overflow-wrap: anywhere; }
 .asset-thumbnail-cell { display: grid; justify-items: center; gap: 4px; }
 .asset-thumb--small { width: 78px; height: 52px; border-radius: 7px; }
-.asset-status { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
+.asset-status { display: flex; flex-direction: column; align-items: flex-start; gap: 5px; }
+.asset-status-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
+.asset-plan { display: grid; gap: 4px; }
+.asset-plan small { color: var(--sg-text-muted); }
 .asset-time-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
 .asset-items-error { display: grid; gap: 4px; margin-top: 6px; color: var(--el-color-danger); }
 .asset-items-error .el-button { justify-self: start; }

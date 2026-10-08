@@ -94,7 +94,6 @@ function closeDialog() {
       <el-form-item label="排序" prop="sortOrder"><el-input-number v-model="form.sortOrder" :min="0" :step="1" step-strictly controls-position="right" :disabled="saving" /></el-form-item>
       <el-form-item label="备注" prop="remark"><el-input v-model="form.remark" type="textarea" :rows="2" maxlength="500" show-word-limit :disabled="saving" /></el-form-item>
       <el-alert v-if="item?.task" title="该分项已有任务" description="如需更换负责人，请使用“改派任务”；编辑分项信息不会变更负责人。" type="info" show-icon :closable="false" />
-      <el-alert v-else title="保存后状态：未分配" description="保存制作分项不会创建任务；请通过分项对应的“分配任务”完成委派。" type="info" show-icon :closable="false" />
       <footer><el-button :disabled="saving" @click="closeDialog">取消</el-button><el-button type="primary" :loading="saving" @click="submit">{{ isEdit ? '保存分项' : '新增分项' }}</el-button></footer>
     </el-form>
   </ProjectModal>

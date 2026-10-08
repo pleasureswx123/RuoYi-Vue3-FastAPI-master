@@ -797,6 +797,14 @@ describe('任务详情、状态动作与异步上下文', () => {
     wrapper.unmount()
   })
 
+  it('只有任务查看权限的制作人也能查看资产分项参考资料', async () => {
+    getTaskDetail.mockResolvedValue({ data: assetTaskFixture(31, { referenceDescription: '角色服装参考', referenceFiles: [{ fileId: '11111111-1111-4111-8111-111111111111', originalName: '角色参考.pdf', contentType: 'application/pdf', fileSize: 100, downloadUrl: '/shot-grid/tasks/31/reference-files/11111111-1111-4111-8111-111111111111/download' }] }) })
+    const { wrapper } = await mountDetail('/tasks/31', ['shotgrid:task:query'])
+    expect(wrapper.get('[aria-label="分项参考资料"]').text()).toContain('角色服装参考')
+    expect(wrapper.get('[aria-label="分项参考资料"]').text()).toContain('角色参考.pdf')
+    wrapper.unmount()
+  })
+
   it('制作人任务详情完整展示镜头制作信息，并区分任务补充要求', async () => {
     getTaskDetail.mockResolvedValue({ data: taskFixture(31, { referenceDescription: '参考影片暖色光线', referenceFiles: [{ fileId: '11111111-1111-4111-8111-111111111111', originalName: '制作参考.pdf', contentType: 'application/pdf', fileSize: 100, downloadUrl: '/shot-grid/tasks/31/reference-files/11111111-1111-4111-8111-111111111111/download' }] }) })
     const { wrapper } = await mountDetail()

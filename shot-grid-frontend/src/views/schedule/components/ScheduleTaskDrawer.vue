@@ -158,7 +158,7 @@ onBeforeUnmount(() => {
           <el-button link type="primary" @click="loadActions">重试</el-button>
         </el-alert>
         <ShotActionButtons v-else-if="actions.length" :actions="actions" />
-        <TableActionButton v-if="canEdit" element-palette :round="false" label="调整排期" type="warning" :icon="Edit" @click="emit('edit', task)" />
+        <TableActionButton v-if="canEdit && !actions.some(action => action.key === 'schedule')" element-palette :round="false" label="调整排期" type="warning" :icon="Edit" @click="emit('edit', task)" />
       </div>
     </template>
   </el-drawer>

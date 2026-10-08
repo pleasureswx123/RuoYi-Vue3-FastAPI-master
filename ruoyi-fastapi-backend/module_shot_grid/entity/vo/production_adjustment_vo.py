@@ -112,3 +112,61 @@ class ShotGridProductionAdjustmentModel(ShotGridApiModel):
         if len(ids) != len(set(ids)) or not set(ids) <= {item.task_id for item in self.items}:
             raise ValueError('冲突快照必须对应本次任务且不能重复')
         return self
+
+
+class ShotGridAssetProductionChanges(ShotGridProductionChanges):
+    """分项身份保持不变，只调整制作要求、描述、备注和任务安排。"""
+
+    requirements: str | None = Field(default=None, max_length=10000)
+    remark: str | None = Field(default=None, max_length=500)
+
+    @field_validator('requirements', mode='before')
+    @classmethod
+    def normalize_requirements(cls, value: object) -> str | None:
+        return _strip_optional_text(value)
+
+    @model_validator(mode='after')
+    def validate_asset_fields(self) -> 'ShotGridAssetProductionChanges':
+        allowed = {
+            'requirements',
+            'description',
+            'remark',
+            'reference_description',
+            'reference_file_ids',
+            'assignee_user_id',
+            'priority',
+            'expected_start_time',
+            'expected_end_time',
+        }
+        if self.model_fields_set - allowed:
+            raise ValueError('资产调整不支持镜头参数或分项身份字段')
+        return self
+
+
+class ShotGridAssetProductionAdjustmentItem(ShotGridLockVersionModel):
+    model_config = ConfigDict(extra='forbid')
+    task_id: int = Field(gt=0, le=SQL_BIGINT_MAX)
+    asset_id: int = Field(gt=0, le=SQL_BIGINT_MAX)
+    asset_item_id: int = Field(gt=0, le=SQL_BIGINT_MAX)
+    asset_lock_version: int = Field(ge=0)
+    asset_item_lock_version: int = Field(ge=0)
+    changes: ShotGridAssetProductionChanges
+
+
+class ShotGridAssetProductionAdjustmentModel(ShotGridApiModel):
+    model_config = ConfigDict(extra='forbid')
+    reason: str = Field(default='未填写', max_length=500)
+    items: list[ShotGridAssetProductionAdjustmentItem] = Field(min_length=1, max_length=100)
+    overlap_acknowledged: bool = False
+
+    @field_validator('reason', mode='before')
+    @classmethod
+    def trim_reason(cls, value: object) -> object:
+        return (value.strip() or '未填写') if isinstance(value, str) else value
+
+    @model_validator(mode='after')
+    def validate_unique(self) -> 'ShotGridAssetProductionAdjustmentModel':
+        for field in ('task_id', 'asset_item_id'):
+            if len({getattr(item, field) for item in self.items}) != len(self.items):
+                raise ValueError('任务及资产分项不能重复')
+        return self

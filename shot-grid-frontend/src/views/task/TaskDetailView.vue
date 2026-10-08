@@ -433,7 +433,14 @@ onBeforeUnmount(() => {
               <p>{{ task.requirements }}</p>
             </section>
           </template>
-          <p v-else class="task-requirements">{{ task.requirements || '暂无额外制作要求。' }}</p>
+          <template v-else>
+            <p class="task-requirements">{{ task.requirements || '暂无额外制作要求。' }}</p>
+            <section v-if="task.referenceDescription || task.referenceFiles?.length" class="task-additional-requirements" aria-label="分项参考资料">
+              <strong>参考资料</strong>
+              <p v-if="task.referenceDescription" class="task-requirements">{{ task.referenceDescription }}</p>
+              <ReviewReferenceFiles v-if="task.referenceFiles?.length" :files="task.referenceFiles" />
+            </section>
+          </template>
           <el-descriptions class="task-fields" :column="4" border>
             <el-descriptions-item label="主制作人">{{ taskAssigneeLabel(task.assignee) }}</el-descriptions-item>
             <el-descriptions-item label="计划起止时间" :span="2"><TaskTimeReminder :task="task" :now="currentTime" /></el-descriptions-item>

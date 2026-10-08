@@ -11,7 +11,15 @@ from module_shot_grid.entity.vo.common_vo import (
 
 AssetType = Literal['Character', 'Environment', 'Prop']
 AssetWorkStatus = Literal[
-    'unassigned', 'pending_schedule', 'not_started', 'preparing', 'in_progress', 'reviewing', 'revision', 'completed'
+    'pending_info',
+    'unassigned',
+    'pending_schedule',
+    'not_started',
+    'preparing',
+    'in_progress',
+    'reviewing',
+    'revision',
+    'completed',
 ]
 ASSET_ITEM_STATUSES = get_args(AssetWorkStatus)
 DirectoryStatus = Literal['not_created', 'pending', 'ready', 'failed']
@@ -25,7 +33,7 @@ class ShotGridAssetListQueryModel(ShotGridPageQueryModel):
     """资产分页查询。"""
 
     asset_type: AssetType | None = Field(default=None, description='资产类型')
-    asset_status: AssetWorkStatus | None = Field(default=None, description='聚合制作状态')
+    asset_status: AssetWorkStatus | None = Field(default=None, description='制作分项状态，任一活动分项命中即返回资产')
     assignee_user_id: int | None = Field(
         default=None,
         gt=0,
@@ -97,13 +105,19 @@ class ShotGridAssetCreateModel(ShotGridApiModel):
 
 
 class ShotGridAssetUpdateModel(ShotGridLockVersionModel):
-    """修改资产非身份主数据；类型、名称、目录和聚合状态均不可普通编辑。"""
+    """修改资产名称与主数据；类型、目录快照和聚合状态不可普通编辑。"""
 
     model_config = ConfigDict(extra='forbid')
 
+    asset_name: str | None = Field(default=None, min_length=1, max_length=200, description='资产名称，省略保留')
     description: str | None = Field(default=None, description='资产说明')
     sort_order: int = Field(default=0, ge=0, le=SQL_INTEGER_MAX, description='项目内排序')
     remark: str | None = Field(default=None, max_length=500, description='备注')
+
+    @field_validator('asset_name', mode='before')
+    @classmethod
+    def normalize_asset_name(cls, value: object) -> object:
+        return ShotGridAssetCreateModel.normalize_asset_name(value)
 
     @field_validator('description', 'remark', mode='before')
     @classmethod
@@ -274,6 +288,7 @@ class ShotGridAssetItemModel(ShotGridApiModel):
 class ShotGridAssetItemStatusCountsModel(BaseModel):
     """活动制作分项数量；键使用状态字面量，不转换为 camelCase。"""
 
+    pending_info: int = Field(default=0, ge=0)
     unassigned: int = Field(default=0, ge=0)
     pending_schedule: int = Field(default=0, ge=0)
     not_started: int = Field(default=0, ge=0)

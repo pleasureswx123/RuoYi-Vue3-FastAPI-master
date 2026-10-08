@@ -18,10 +18,11 @@ from module_shot_grid.entity.do.version_do import (
 from module_shot_grid.entity.vo.asset_crud_vo import ASSET_ITEM_STATUSES, ShotGridAssetListQueryModel
 
 ACTIVE_TASK_STATUSES = ('not_started', 'preparing', 'in_progress', 'pending_review', 'revision')
-STATUS_RANK_REVISION = 7
-STATUS_RANK_REVIEWING = 6
-STATUS_RANK_IN_PROGRESS = 5
-STATUS_RANK_PREPARING = 4
+STATUS_RANK_REVISION = 8
+STATUS_RANK_REVIEWING = 7
+STATUS_RANK_IN_PROGRESS = 6
+STATUS_RANK_PREPARING = 5
+STATUS_RANK_PENDING_INFO = 4
 STATUS_RANK_UNASSIGNED = 3
 STATUS_RANK_PENDING_SCHEDULE = 2
 
@@ -38,6 +39,19 @@ class ShotGridAssetCrudDao:
             .subquery('asset_final_versions')
         )
         item_state = case(
+            (
+                ShotGridTask.task_id.is_(None)
+                & (
+                    func.length(
+                        func.btrim(
+                            func.coalesce(ShotGridAssetItem.production_item, ''),
+                            ' \t\n\r\v\f\x1c\x1d\x1e\x1f\x85\xa0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000',
+                        )
+                    )
+                    == 0
+                ),
+                'pending_info',
+            ),
             (ShotGridTask.task_id.is_(None), 'unassigned'),
             (ShotGridTask.task_status == 'revision', 'revision'),
             (ShotGridTask.task_status == 'pending_review', 'reviewing'),
@@ -58,6 +72,8 @@ class ShotGridAssetCrudDao:
                 item_state,
                 and_(
                     ShotGridTask.task_status == 'not_started',
+                    ShotGridTask.expected_start_time.is_not(None),
+                    ShotGridTask.expected_end_time.is_not(None),
                     func.length(func.trim(ShotGridAssetItem.production_item)) > 0,
                     cls._assignee_valid_expression(),
                 ).label('startable'),
@@ -98,6 +114,7 @@ class ShotGridAssetCrudDao:
                         (item_state.c.item_status == 'reviewing', STATUS_RANK_REVIEWING),
                         (item_state.c.item_status == 'in_progress', STATUS_RANK_IN_PROGRESS),
                         (item_state.c.item_status == 'preparing', STATUS_RANK_PREPARING),
+                        (item_state.c.item_status == 'pending_info', STATUS_RANK_PENDING_INFO),
                         (item_state.c.item_status == 'unassigned', STATUS_RANK_UNASSIGNED),
                         (item_state.c.item_status == 'pending_schedule', STATUS_RANK_PENDING_SCHEDULE),
                         (item_state.c.item_status == 'not_started', 1),
@@ -114,6 +131,7 @@ class ShotGridAssetCrudDao:
             (rollup.c.priority_rank == STATUS_RANK_REVIEWING, 'reviewing'),
             (rollup.c.priority_rank == STATUS_RANK_IN_PROGRESS, 'in_progress'),
             (rollup.c.priority_rank == STATUS_RANK_PREPARING, 'preparing'),
+            (rollup.c.priority_rank == STATUS_RANK_PENDING_INFO, 'pending_info'),
             (rollup.c.priority_rank == STATUS_RANK_UNASSIGNED, 'unassigned'),
             (rollup.c.priority_rank == STATUS_RANK_PENDING_SCHEDULE, 'pending_schedule'),
             else_='not_started',
@@ -183,7 +201,11 @@ class ShotGridAssetCrudDao:
         if query.asset_type:
             statement = statement.where(ShotGridAsset.asset_type == query.asset_type)
         if query.asset_status:
-            statement = statement.where(effective_status == query.asset_status)
+            # 按活动分项状态匹配，避免父级优先状态遮蔽其他分项。
+            status_match = func.coalesce(rollup.c[f'{query.asset_status}_count'], 0) > 0
+            if query.asset_status == 'unassigned':
+                status_match = or_(status_match, func.coalesce(rollup.c.item_count, 0) == 0)
+            statement = statement.where(status_match)
         if query.assignee_user_id:
             assigned = exists(
                 select(1)
@@ -616,6 +638,26 @@ class ShotGridAssetCrudDao:
                 )
             ).scalar_one()
         )
+
+    @classmethod
+    async def get_asset_tasks_for_update(
+        cls, db: AsyncSession, project_id: int, asset_id: int
+    ) -> list[tuple[ShotGridTask, str | None]]:
+        """在项目协调锁内锁定资产任务，供名称同步使用。"""
+        rows = await db.execute(
+            select(ShotGridTask, ShotGridAssetItem.production_item)
+            .join(ShotGridAssetItem, ShotGridTask.asset_item_id == ShotGridAssetItem.asset_item_id)
+            .where(
+                ShotGridTask.project_id == project_id,
+                ShotGridTask.del_flag == '0',
+                ShotGridAssetItem.project_id == project_id,
+                ShotGridAssetItem.asset_id == asset_id,
+                ShotGridAssetItem.del_flag == '0',
+            )
+            .order_by(ShotGridTask.task_id)
+            .with_for_update(of=ShotGridTask)
+        )
+        return [(task, production_item) for task, production_item in rows.all()]
 
     @classmethod
     async def asset_name_or_path_exists(

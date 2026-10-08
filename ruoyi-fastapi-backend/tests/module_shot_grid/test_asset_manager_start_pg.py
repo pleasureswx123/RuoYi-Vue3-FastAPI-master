@@ -88,6 +88,7 @@ ARCHIVED_ITEM_INDEX = 4
 DELETED_ITEM_INDEX = 5
 SessionFactory = async_sessionmaker[AsyncSession]
 EXPECTED_COUNTS = {
+    'pending_info': 0,
     'unassigned': 1,
     'not_started': 2,
     'preparing': 1,
@@ -1342,3 +1343,189 @@ async def test_list_and_detail_hide_start_when_not_authorized(pg_sessions: Sessi
     assert 'task.start' not in detail.allowed_actions
     assert all('task.start' not in item.allowed_actions for item in detail.items)
     assert 'task.start' not in task.allowed_actions
+
+
+@pytest.mark.parametrize('case', ['rename', 'conflict', 'audit_failure'])
+async def test_asset_rename_keeps_frozen_directory_and_updates_tasks_atomically(
+    pg_sessions: SessionFactory, case: str
+) -> None:
+    user = _user(permissions=['shotgrid:asset:query', 'shotgrid:asset:edit'])
+    async with pg_sessions() as db:
+        await db.execute(
+            update(ShotGridTask).where(ShotGridTask.task_id == FIRST_TASK_ID).values(task_status='in_progress')
+        )
+        if case == 'conflict':
+            db.add(
+                ShotGridAsset(
+                    asset_id=ASSET_ID + 1,
+                    project_id=PROJECT_ID,
+                    asset_type='Prop',
+                    asset_name='纠正名称',
+                    asset_name_key='纠正名称',
+                    storage_dir_name='other_asset',
+                    storage_path_key=r'asset\prop\other_asset',
+                )
+            )
+        if case == 'audit_failure':
+            # 仅在隔离库故障注入，核对资产与任务修改整体回滚。
+            await db.execute(
+                text(
+                    'CREATE FUNCTION reject_rename_audit() RETURNS trigger LANGUAGE plpgsql AS $$ '
+                    "BEGIN RAISE EXCEPTION 'PG_RENAME_AUDIT_REJECTED'; END $$"
+                )
+            )
+            await db.execute(
+                text(
+                    'CREATE TRIGGER reject_rename_audit BEFORE INSERT ON sys_oper_log '
+                    'FOR EACH ROW EXECUTE FUNCTION reject_rename_audit()'
+                )
+            )
+        await db.commit()
+        asset = await db.get(ShotGridAsset, ASSET_ID)
+        original_name = asset.asset_name
+        original_directory = (asset.storage_dir_name, asset.storage_path_key)
+        original_lock = asset.lock_version
+        tasks_before = (
+            await db.execute(
+                select(
+                    ShotGridTask.task_id, ShotGridTask.task_name, ShotGridTask.lock_version, ShotGridTask.task_status
+                ).order_by(ShotGridTask.task_id)
+            )
+        ).all()
+        access = await ShotGridProjectAccessService.resolve_access(db, user, PROJECT_ID)
+        command = ShotGridAssetUpdateModel(assetName=' 纠正名称 ', lockVersion=original_lock)
+        if case == 'rename':
+            result = await ShotGridAssetCrudService.update_asset(db, PROJECT_ID, ASSET_ID, command, user, access)
+            assert result.asset_name == '纠正名称'
+            assert result.description_locked is True
+        else:
+            error_type = DBAPIError if case == 'audit_failure' else ShotGridDomainException
+            with pytest.raises(error_type) as caught:
+                await ShotGridAssetCrudService.update_asset(db, PROJECT_ID, ASSET_ID, command, user, access)
+            if case == 'conflict':
+                assert caught.value.error_key == 'SG_ASSET_NAME_CONFLICT'
+
+    async with pg_sessions() as db:
+        asset = await db.get(ShotGridAsset, ASSET_ID)
+        tasks_after = (
+            await db.execute(
+                select(
+                    ShotGridTask.task_id, ShotGridTask.task_name, ShotGridTask.lock_version, ShotGridTask.task_status
+                ).order_by(ShotGridTask.task_id)
+            )
+        ).all()
+        assert (asset.storage_dir_name, asset.storage_path_key) == original_directory
+        if case == 'rename':
+            assert asset.asset_name == asset.asset_name_key == '纠正名称'
+            assert asset.lock_version == original_lock + 1
+            for index, (before, after) in enumerate(zip(tasks_before, tasks_after, strict=True)):
+                assert after.task_name == f'纠正名称 - 分项{index}'
+                assert after.lock_version == before.lock_version + 1
+                assert after.task_status == before.task_status
+        else:
+            assert asset.asset_name == asset.asset_name_key == original_name
+            assert asset.lock_version == original_lock
+            assert tasks_after == tasks_before
+
+
+@pytest.mark.parametrize('name', [None, ' \t\n\u3000'])
+async def test_pending_info_filter_counts_and_detail_agree_in_postgresql(
+    pg_sessions: SessionFactory, name: str | None
+) -> None:
+    """真实 SQL 在分页前筛选待完善，补齐后同步变为待分配。"""
+    unnamed_id = FIRST_ITEM_ID + 3
+    async with pg_sessions() as db:
+        await db.execute(
+            update(ShotGridAssetItem)
+            .where(ShotGridAssetItem.asset_item_id == unnamed_id)
+            .values(production_item=name, production_item_key=name)
+        )
+        await db.commit()
+        user = _user(
+            permissions=['shotgrid:asset:list', 'shotgrid:asset:query', 'shotgrid:asset:edit', 'shotgrid:task:assign']
+        )
+        access = await ShotGridProjectAccessService.resolve_access(db, user, PROJECT_ID)
+        page = await ShotGridAssetCrudService.get_asset_page(
+            db, PROJECT_ID, ShotGridAssetListQueryModel(assetStatus='pending_info', pageSize=1), user, access
+        )
+        detail = await ShotGridAssetCrudService.get_asset_detail(db, PROJECT_ID, ASSET_ID, user, access)
+        assert page.total == 1
+        assert page.rows[0].asset_status == detail.asset_status == 'pending_info'
+        assert page.rows[0].item_status_counts == detail.item_status_counts
+        assert detail.item_status_counts.pending_info == 1
+        item = next(item for item in detail.items if item.asset_item_id == unnamed_id)
+        assert item.asset_status == 'pending_info'
+        assert 'assetItem.edit' in item.allowed_actions
+        assert 'task.assign' not in item.allowed_actions
+        await db.execute(
+            update(ShotGridAssetItem)
+            .where(ShotGridAssetItem.asset_item_id == unnamed_id)
+            .values(production_item='补齐的分项', production_item_key='补齐的分项')
+        )
+        await db.commit()
+        page = await ShotGridAssetCrudService.get_asset_page(
+            db, PROJECT_ID, ShotGridAssetListQueryModel(assetStatus='pending_info'), user, access
+        )
+        assert page.total == 0
+        detail = await ShotGridAssetCrudService.get_asset_detail(db, PROJECT_ID, ASSET_ID, user, access)
+        item = next(item for item in detail.items if item.asset_item_id == unnamed_id)
+        assert detail.asset_status == item.asset_status == 'unassigned'
+        assert detail.item_status_counts.pending_info == 0
+        assert 'task.assign' in item.allowed_actions
+
+
+@pytest.mark.parametrize(('has_start', 'has_end'), [(False, False), (True, True)])
+async def test_asset_start_actions_require_complete_schedule(
+    pg_sessions: SessionFactory, *, has_start: bool, has_end: bool
+) -> None:
+    """父级 SQL 与详情动作一致：未排期不可开工，已排期才可开工。"""
+    async with pg_sessions() as db:
+        await db.execute(
+            update(ShotGridTask)
+            .where(ShotGridTask.task_id == FIRST_TASK_ID)
+            .values(
+                expected_start_time=datetime(2099, 1, 1) if has_start else None,
+                expected_end_time=datetime(2099, 1, 2) if has_end else None,
+            )
+        )
+        await db.commit()
+        access = await ShotGridProjectAccessService.resolve_access(db, _user(), PROJECT_ID)
+        page = await ShotGridAssetCrudService.get_asset_page(
+            db, PROJECT_ID, ShotGridAssetListQueryModel(), _user(), access
+        )
+        detail = await ShotGridAssetCrudService.get_asset_detail(db, PROJECT_ID, ASSET_ID, _user(), access)
+        item = next(item for item in detail.items if item.asset_item_id == FIRST_ITEM_ID)
+        can_start = has_start and has_end
+        assert ('task.start' in item.allowed_actions) is can_start
+        assert ('task.start' in detail.allowed_actions) is can_start
+        assert ('task.start' in page.rows[0].allowed_actions) is can_start
+        assert item.asset_status == ('not_started' if can_start else 'pending_schedule')
+        assert (
+            'task.start'
+            not in next(item for item in detail.items if item.asset_item_id == FIRST_ITEM_ID + 1).allowed_actions
+        )
+
+
+async def test_mixed_asset_is_found_by_each_item_status(pg_sessions: SessionFactory) -> None:
+    """待修改优先级不应遮蔽同资产的待审核与制作中分项。"""
+    async with pg_sessions() as db:
+        for index, status in enumerate(['revision', 'pending_review', 'in_progress']):
+            await db.execute(
+                update(ShotGridTask).where(ShotGridTask.task_id == FIRST_TASK_ID + index).values(task_status=status)
+            )
+        await db.commit()
+        access = await ShotGridProjectAccessService.resolve_access(db, _user(), PROJECT_ID)
+        for status in ['revision', 'reviewing', 'in_progress']:
+            page = await ShotGridAssetCrudService.get_asset_page(
+                db, PROJECT_ID, ShotGridAssetListQueryModel(assetStatus=status, pageSize=1), _user(), access
+            )
+            assert page.total == 1
+            assert len(page.rows) == 1
+            assert page.rows[0].asset_id == ASSET_ID
+            assert page.rows[0].asset_status == 'revision'
+            assert page.rows[0].item_status_counts.reviewing == 1
+            assert page.rows[0].item_status_counts.revision == 1
+        page = await ShotGridAssetCrudService.get_asset_page(
+            db, PROJECT_ID, ShotGridAssetListQueryModel(assetStatus='completed'), _user(), access
+        )
+        assert page.total == 0

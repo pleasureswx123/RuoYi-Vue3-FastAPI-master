@@ -81,7 +81,6 @@ function closeDialog() {
       <el-form-item label="唯一主制作人" prop="assigneeUserId"><el-select v-model="form.assigneeUserId" class="sg-select" placeholder="请选择" :disabled="saving"><el-option label="请选择" value="" /><el-option v-for="member in members" :key="member.userId" :label="memberLabel(member)" :value="String(member.userId)" /></el-select></el-form-item>
       <el-form-item label="任务要求" prop="taskDescription"><el-input v-model="form.taskDescription" type="textarea" :rows="4" :disabled="saving" placeholder="说明图片交付要求" /></el-form-item>
       <AssetProductionInfo :asset="asset" :item="item" />
-      <el-alert v-if="isReassign" title="改派限制" description="仅待排期或待开工任务可改派。目录准备中及后续状态均不可普通改派；存在待处理版本提交时也不能改派。" type="warning" show-icon :closable="false" />
       <footer><el-button :disabled="saving" @click="closeDialog">取消</el-button><el-button type="primary" :loading="saving" @click="submit">{{ isReassign ? '确认改派' : '确认分配' }}</el-button></footer>
     </el-form>
   </ProjectModal>

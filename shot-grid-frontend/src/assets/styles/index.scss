@@ -529,4 +529,5 @@ input:focus-visible,
 .shot-detail-drawer { max-width: none; }
 
 .shot-status-tag--pending_schedule.el-tag,
+.asset-status-tag--pending_info.el-tag,
 .asset-status-tag--pending_schedule.el-tag { --sg-shot-status-color: var(--el-color-warning); }

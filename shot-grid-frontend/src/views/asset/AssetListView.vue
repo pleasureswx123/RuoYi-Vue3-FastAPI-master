@@ -1,7 +1,16 @@
 <script setup>
+import { assetOptionalColumns, useAssetTablePresentation } from './useAssetTablePresentation'
+import AssetReviewEntry from './components/AssetReviewEntry.vue'
+import ProductionHistoryPanel from '@/components/production-history/ProductionHistoryPanel.vue'
+import ProjectDrawer from '@/views/project/components/ProjectDrawer.vue'
+import AssetStartDrawer from './components/AssetStartDrawer.vue'
+import AssetProductionAdjustmentDialog from './components/AssetProductionAdjustmentDialog.vue'
+import AssetItemScheduleDialog from '@/views/asset/components/AssetItemScheduleDialog.vue'
+import AssetItemBatchWorkspace from '@/views/asset/components/AssetItemBatchWorkspace.vue'
+import RelatedDetailDrawer from '@/components/RelatedDetailDrawer.vue'
 import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElCheckboxGroup, ElPopover, ElMessage, ElMessageBox } from 'element-plus'
 import { Box, Calendar, Clock, Collection, Delete, Edit, Grid, List, Plus, Refresh, RefreshLeft, Search, Switch, Upload, User, VideoPlay, View } from '@element-plus/icons-vue'
 
 import { archiveAsset, batchAssignAssetItemTasks, batchDeleteAssets, getAssetDetail, getAssetPage, listAssetAssignees } from '@/api/shot-grid/assets'
@@ -9,17 +18,17 @@ import { assertPositiveId, getProjectDetail, getProjectPage } from '@/api/shot-g
 import { useTaskStatePolling } from '@/composables/useTaskStatePolling'
 import { useSessionStore } from '@/store/modules/session'
 import { tagTypeFromTone } from '@/utils/tag'
-import TableActionButton from '@/components/TableActionButton.vue'
+import AssetActionButtons from '@/views/asset/components/AssetActionButtons.vue'
 import ProjectStatePanel from '@/views/project/components/ProjectStatePanel.vue'
 import AssetFormDialog from '@/views/asset/components/AssetFormDialog.vue'
 import AssetTreeTable from '@/views/asset/components/AssetTreeTable.vue'
 import AssetItemOperationHost from '@/views/asset/components/AssetItemOperationHost.vue'
-import { canAssetItemAction } from '@/views/asset/assetItemActions'
+import { canScheduleAssetItem, assetItemScheduleLabel, canAssetItemAction, prioritizeAssetItemActions } from '@/views/asset/assetItemActions'
 import AssetImportDialog from '@/views/asset/components/AssetImportDialog.vue'
 import AssetRequirementDialog from '@/views/asset/components/AssetRequirementDialog.vue'
 import AssetDetailView from '@/views/asset/AssetDetailView.vue'
 import ProtectedAssetThumbnail from '@/views/asset/components/ProtectedAssetThumbnail.vue'
-import { assetErrorState, assetItemStatusEntries, assetStatusMeta, assetStatusTagClass, assetTypeMeta, memberLabel, memberUserName, resolveAssetThumbnail } from '@/views/asset/assetPresentation'
+import { assetCompletionSummary, assetErrorState, assetItemStatusEntries, assetStatusMeta, assetStatusTagClass, assetTypeMeta, memberLabel, memberUserName, resolveAssetThumbnail } from '@/views/asset/assetPresentation'
 import { projectRoleMeta, storageMeta } from '@/views/project/projectPresentation'
 
 const ScheduleBoard = defineAsyncComponent(() => import('@/views/schedule/ScheduleBoard.vue'))
@@ -27,6 +36,9 @@ const ScheduleBoard = defineAsyncComponent(() => import('@/views/schedule/Schedu
 const route = useRoute()
 const router = useRouter()
 const sessionStore = useSessionStore()
+const tableAvailableWidth = ref(0)
+const tablePresentationForm = ref(null)
+const { mode: tableMode, visibleColumns, widths: columnWidths, setColumns, saveWidth, resetPresentation } = useAssetTablePresentation(computed(() => sessionStore.user?.userId), tableAvailableWidth)
 const projects = ref([])
 const project = ref(null)
 const members = ref([])
@@ -36,7 +48,16 @@ const total = ref(0)
 const projectsLoading = ref(false)
 const assetsLoading = ref(false)
 const assetTable = ref(null)
+const startDrawer = ref(null)
+const adjustmentContext = ref(null)
 const itemOperations = ref(null)
+const scheduleDialog = ref(null)
+const batchWorkspace = ref(null)
+const batchWorkspaceOpen = ref(false)
+const scheduleBoard = ref(null)
+const taskDrawer = ref(null)
+const reviewEntry = ref(null)
+const scheduleBusy = ref(false)
 const itemActionBusy = ref(false)
 const backgroundAssetRefresh = ref(false)
 const projectsError = ref(null)
@@ -59,10 +80,12 @@ const batchAssignForm = reactive({ assigneeUserId: '' })
 const showDetail = ref(false)
 const detailAssetId = ref(null)
 const detailAssetItemId = ref(null)
+const historyTarget = ref(null)
 const createContext = ref(null)
 const importContext = ref(null)
 const assetFilterForm = ref(null)
 const appliedAssetQuery = ref('')
+const appliedItemStatus = computed(() => JSON.parse(appliedAssetQuery.value || '{}').assetStatus || '')
 const query = reactive({
   keyword: '',
   assetType: '',
@@ -129,7 +152,7 @@ const scheduleInitialFilters = computed(() => ({
   keyword: query.keyword.trim(),
   assigneeUserIds: query.assigneeUserId ? [Number(query.assigneeUserId)] : [],
   assetTypes: query.assetType ? [query.assetType] : [],
-  taskStatuses: query.assetStatus && query.assetStatus !== 'unassigned'
+  taskStatuses: query.assetStatus && !['pending_info', 'unassigned'].includes(query.assetStatus)
     ? [query.assetStatus === 'reviewing' ? 'pending_review' : query.assetStatus]
     : []
 }))
@@ -138,6 +161,8 @@ const groupedAssets = computed(() => ['Character', 'Environment', 'Prop'].map(ty
   assets: assets.value.filter(asset => asset.assetType === type)
 })))
 const creatorMembers = computed(() => members.value.filter(member => member.projectRole === 'creator'))
+const selectedItems = ref([])
+const selectedItemIds = computed(() => new Set(selectedItems.value.map(row => Number(row.assetItemId))))
 const selectedAssets = computed(() => assets.value.filter(asset => selectedAssetIds.value.has(Number(asset.assetId))))
 const hasAssignedSelection = computed(() => selectedAssets.value.some(asset => (asset.assigneeUserIds || []).length))
 const batchAssignLabel = computed(() => hasAssignedSelection.value ? '批量重新分配' : '批量分配')
@@ -149,8 +174,27 @@ function itemStatusEntries(asset) {
   return assetItemStatusEntries(asset?.itemStatusCounts).filter(entry => entry.count > 0)
 }
 
+function canReviewAssets(asset) {
+  return asset?.lifecycleStatus === 'active' && project.value && !['completed', 'archived'].includes(project.value.projectStatus) &&
+    (project.value.myProjectRole === 'director' || hasPermission('shotgrid:project:all')) &&
+    ['shotgrid:asset:query', 'shotgrid:version:query', 'shotgrid:reviewList:query', 'shotgrid:version:review'].every(hasPermission)
+}
+function matchesItemStatus(status) {
+  return !appliedItemStatus.value || appliedItemStatus.value === status
+}
+function canOpenAssetReview(asset) {
+  if (!matchesItemStatus('reviewing')) return false
+  return canReviewAssets(asset) && (Number(asset.itemStatusCounts?.reviewing) > 0 || asset.assetStatus === 'reviewing')
+}
+function assetStartLabel(asset) {
+  const count = Number(asset.itemStatusCounts?.not_started) || 0
+  return asset.assetStatus === 'not_started' && count === 1 ? '确认开工' : `选择分项开工（${count}）`
+}
 function canOpenItemStart(asset) {
-  return hasPermission('shotgrid:task:start') && (asset?.allowedActions || []).includes('task.start')
+  if (!matchesItemStatus('not_started')) return false
+  return hasPermission('shotgrid:task:start') && hasPermission('shotgrid:asset:query') &&
+    (asset?.allowedActions || []).includes('task.start') &&
+    (Number(asset?.itemStatusCounts?.not_started) > 0 || asset?.assetStatus === 'not_started')
 }
 
 function handleScheduleQueryChange({ mode }) {
@@ -170,7 +214,92 @@ function canAssignAsset(asset) {
 }
 
 function canSelectAsset(asset) {
-  return canAssignAsset(asset) || canDeleteAsset(asset)
+  return canAssignAsset(asset) || canDeleteAsset(asset) || canManageItemWorkspace(asset)
+}
+
+function canManageItemWorkspace(asset) {
+  return isDirector.value && projectAllowsWrites.value && asset?.lifecycleStatus === 'active' && hasPermission('shotgrid:asset:query') &&
+    (hasPermission('shotgrid:task:assign') || hasPermission('shotgrid:task:schedule') || hasPermission('shotgrid:task:edit') || (hasPermission('shotgrid:version:review') && hasPermission('shotgrid:note:add')))
+}
+function canSelectItem(asset, row) {
+  return canManageItemWorkspace(asset) && (
+    itemCan(asset, row, 'task.assign') || canScheduleAssetItem(asset, row, canSchedule.value) ||
+    ['adjust', 'review', 'appendIssue'].some(action => canItemWorkspace(asset, row, action))
+  )
+}
+function openSelectedItems(action = '') {
+  if (batchWorkspaceOpen.value || assetsLoading.value || assigning.value || deleting.value || itemActionBusy.value || scheduleBusy.value) return
+  const rows = selectedItems.value
+  const parents = assets.value.filter(asset => rows.some(row => Number(row.assetId) === Number(asset.assetId)))
+  if (!rows.length || rows.length > 100 || rows.some(row => !parents.some(asset => Number(asset.assetId) === Number(row.assetId) && canSelectItem(asset, row)))) return
+  batchWorkspace.value.open(parents, rows.map(row => row.assetItemId), action)
+}
+watch(viewMode, () => { selectedItems.value = [] })
+
+function canItemWorkspace(asset, row, action) {
+  const permission = { adjust: 'shotgrid:task:edit', review: 'shotgrid:version:review', appendIssue: 'shotgrid:version:review' }[action]
+  return canManageItemWorkspace(asset) && row.lifecycleStatus === 'active' && row.allowedActions?.includes(`task.${action}`) && hasPermission(permission) &&
+    (action === 'adjust' ? hasPermission('shotgrid:task:query') : hasPermission('shotgrid:note:add') && hasPermission('shotgrid:version:query'))
+}
+async function refreshWorkspace() {
+  await loadAssets()
+  await scheduleBoard.value?.refresh?.()
+}
+async function loadAssetScheduleTarget(task, options) {
+  const id = currentProjectId.value
+  if (!hasPermission('shotgrid:asset:query') || Number(task.projectId) !== id || task.target?.targetKind !== 'asset_item') return null
+  const { data: asset } = await getAssetDetail(id, task.target.parentId, options)
+  const row = asset.items.find(row => Number(row.assetItemId) === Number(task.target.targetId))
+  if (Number(asset.projectId) !== id || Number(row?.task?.taskId) !== Number(task.taskId)) throw new Error('分项任务已变化，请刷新排期后重新打开')
+  return { asset, row }
+}
+function assetScheduleActions(target) {
+  if (!target) return []
+  return assetItemTableActions(target.asset, target.row).filter(action => !['edit', 'delete'].includes(action.key))
+}
+function assetTableActions(row) {
+  const actions = []
+  const disabled = assetsLoading.value || deleting.value || assigning.value || itemActionBusy.value || editingAssetId.value !== null
+  const add = (key, allowed, button, run) => { if (allowed) actions.push({ key, button, run }) }
+  const counts = row.itemStatusCounts || {}
+  add('review', canOpenAssetReview(row), { label: Number(counts.reviewing) > 1 ? `选择审核（${counts.reviewing}）` : '审核任务', type: 'primary', plain: false, icon: View, disabled }, () => reviewEntry.value.open(row))
+  add('complete', matchesItemStatus('pending_info') && (row.assetStatus === 'pending_info' || counts.pending_info > 0) && canEditAsset(row) && hasPermission('shotgrid:asset:query'), { label: '完善信息', type: 'warning', plain: false, icon: Edit, disabled }, () => openAsset(row))
+  add('assign', matchesItemStatus('unassigned') && (row.assetStatus === 'unassigned' || counts.unassigned > 0) && canAssignAsset(row) && canManageItemWorkspace(row), { label: '分配制作人', type: 'primary', plain: false, icon: User, disabled }, () => batchWorkspace.value.open([row], [], 'assign'))
+  add('schedule', matchesItemStatus('pending_schedule') && (row.assetStatus === 'pending_schedule' || counts.pending_schedule > 0) && canSchedule.value && canManageItemWorkspace(row), { label: '设置排期', type: 'primary', plain: false, icon: Clock, disabled }, () => batchWorkspace.value.open([row], [], 'schedule'))
+  add('start', canOpenItemStart(row), { label: assetStartLabel(row), type: 'success', plain: false, icon: VideoPlay, disabled }, () => openAssetItemStart(row))
+  add('detail', true, { label: '详情', type: 'primary', icon: View }, () => openAsset(row))
+  add('edit', canEditAsset(row), { label: '编辑资产', type: 'warning', icon: Edit, loading: editingAssetId.value === Number(row.assetId), disabled }, () => handleAssetCommand('edit', row))
+  add('delete', canDeleteAsset(row), { label: '删除资产', type: 'danger', icon: Delete, disabled }, () => handleAssetCommand('delete', row))
+  return actions
+}
+watch(currentProjectId, () => { historyTarget.value = null })
+function openItemAdjustment(asset, row) {
+  if (!canItemWorkspace(asset, row, 'adjust')) return
+  const projectId = currentProjectId.value
+  adjustmentContext.value = { projectId, targets: [{ ...row, asset, displayLabel: `${asset.assetName} · ${row.productionItem}` }], permissions: [...sessionStore.permissions], validateContext: () => currentProjectId.value === projectId && canItemWorkspace(asset, row, 'adjust') }
+}
+function closeItemAdjustment(result) { adjustmentContext.value = null; if (result?.saved) refreshWorkspace() }
+watch(currentProjectId, () => { adjustmentContext.value = null })
+function assetItemTableActions(asset, row) {
+  const actions = []
+  const disabled = assetsLoading.value || itemActionBusy.value || scheduleBusy.value || assigning.value || deleting.value || batchWorkspaceOpen.value
+  const add = (key, allowed, button, run) => { if (allowed) actions.push({ key, button: { disabled, ...button }, run }) }
+  add('start', itemCan(asset, row, 'task.start'), { label: '确认开工', type: 'success', plain: false, icon: VideoPlay }, () => itemOperations.value.run('task.start', asset, row))
+  const complete = Boolean(String(row.productionItem || '').trim())
+  add('edit', itemCan(asset, row, 'assetItem.edit'), { label: complete ? '编辑分项' : '完善信息', type: 'warning', plain: false, icon: Edit }, () => itemOperations.value.run('assetItem.edit', asset, row))
+  add('schedule', canScheduleAssetItem(asset, row, canSchedule.value), { label: assetItemScheduleLabel(row), type: 'primary', plain: false, icon: Clock }, () => scheduleDialog.value.open(asset, row))
+  add('assign', itemCan(asset, row, 'task.assign'), { label: row.task ? '改派制作人' : '分配制作人', type: row.task ? 'warning' : 'primary', plain: Boolean(row.task), icon: row.task ? Switch : User }, () => itemOperations.value.run('task.assign', asset, row))
+  const canWork = row.task?.taskId && row.allowedActions?.includes('task.work') && hasPermission('shotgrid:task:query') && hasPermission('shotgrid:version:add')
+  const workStatus = row.task?.taskStatus
+  add('work', canWork && ['in_progress', 'revision', 'pending_review'].includes(workStatus), { label: workStatus === 'revision' ? '去修改' : workStatus === 'pending_review' ? '追加审核文件' : '去做任务', type: workStatus === 'revision' ? 'warning' : 'primary', plain: workStatus === 'pending_review', icon: workStatus === 'pending_review' ? Upload : Edit }, () => taskDrawer.value.open(`/tasks/${row.task.taskId}`))
+  add('task', row.task?.taskId && hasPermission('shotgrid:task:query'), { label: '查看任务', type: 'primary', icon: View }, () => taskDrawer.value.open(`/tasks/${row.task.taskId}`))
+  add('history', hasPermission('shotgrid:asset:query'), { label: '制作履历', color: '#159b94', icon: Clock }, () => { historyTarget.value = { projectId: currentProjectId.value, assetId: asset.assetId, itemId: row.assetItemId, title: `${asset.assetName} · ${row.productionItem || '未命名分项'}` } })
+  add('detail', true, { label: '分项详情', color: '#159b94', icon: Clock }, () => openAsset(row))
+  add('adjust', canItemWorkspace(asset, row, 'adjust'), { label: '调整制作资料', type: 'warning', icon: Edit }, () => openItemAdjustment(asset, row))
+  add('review', canReviewAssets(asset) && row.allowedActions?.includes('task.review') && row.task?.taskStatus === 'pending_review' && row.latestVersion?.versionId, { label: '审核任务', type: 'primary', plain: false, icon: View }, () => reviewEntry.value.open(asset, row.assetItemId))
+  add('append', canItemWorkspace(asset, row, 'appendIssue'), { label: '追加问题', type: 'warning', icon: Edit }, () => batchWorkspace.value.open([asset], [row.assetItemId], 'append'))
+  add('delete', itemCan(asset, row, 'assetItem.delete'), { label: '删除分项', type: 'danger', icon: Delete }, () => itemOperations.value.run('assetItem.delete', asset, row))
+  return prioritizeAssetItemActions(actions, row)
 }
 
 function assetQueryParams() {
@@ -240,6 +369,7 @@ async function loadProjectContext(preserveList = false) {
     members.value = []
     assets.value = []
     selectedAssetIds.value = new Set()
+    selectedItems.value = []
     total.value = 0
   }
   assetsError.value = null
@@ -294,6 +424,10 @@ async function loadAssets(existingController = null, background = false) {
     selectedAssetIds.value = background
       ? new Set(loadedAssets.filter(asset => selectedAssetIds.value.has(Number(asset.assetId)) && canSelectAsset(asset)).map(asset => Number(asset.assetId)))
       : new Set()
+    selectedItems.value = background ? selectedItems.value.filter(row => {
+      const asset = loadedAssets.find(asset => Number(asset.assetId) === Number(row.assetId))
+      return asset && canSelectItem(asset, row)
+    }) : []
     total.value = Number(response.total || 0)
     await nextTick()
     // 父级状态结束轮询时仍更新本轮已加载分支；新的人工请求或项目切换会使本轮失效。
@@ -305,6 +439,7 @@ async function loadAssets(existingController = null, background = false) {
     if (error?.code !== 'ERR_CANCELED') {
       assets.value = []
       selectedAssetIds.value = new Set()
+      selectedItems.value = []
       total.value = 0
       assetsError.value = assetErrorState(error, '资产列表加载失败')
     }
@@ -350,7 +485,7 @@ function openAsset(asset) {
 
 function openAssetItemStart(asset) {
   if (!canOpenItemStart(asset)) return
-  openAsset(asset)
+  startDrawer.value.open(asset)
 }
 
 function closeDetailDrawer() {
@@ -380,7 +515,7 @@ const { pollingError } = useTaskStatePolling({
   getDelay: () => {
     if (!currentProjectId.value || assetsLoading.value || assetsError.value || showDetail.value || showCreate.value ||
       showImport.value || showRequirements.value || showEdit.value || editingAssetId.value || showBatchAssign.value ||
-      assigning.value || deleting.value || itemActionBusy.value || appliedAssetQuery.value !== currentAssetQueryKey()) return null
+      assigning.value || deleting.value || itemActionBusy.value || batchWorkspaceOpen.value || appliedAssetQuery.value !== currentAssetQueryKey()) return null
     if (assets.value.some(asset => Number(asset?.itemStatusCounts?.preparing) > 0)) return 1500
     return assets.value.some(asset => (Number(asset?.itemStatusCounts?.not_started) > 0 || Number(asset?.itemStatusCounts?.pending_schedule) > 0)) ? 5000 : null
   },
@@ -407,6 +542,11 @@ function handleAssetCommand(command, asset) {
 
 function openBatchAssignDialog() {
   if (!selectedAssets.value.length || assigning.value || deleting.value) return
+  // 有筛选时通过明确选择分项的工作区分配，避免整资产分配隐藏分项。
+  if (appliedItemStatus.value) {
+    batchWorkspace.value.open(selectedAssets.value, [], 'assign')
+    return
+  }
   batchAssignForm.assigneeUserId = ''
   batchAssignFormRef.value?.clearValidate()
   showBatchAssign.value = true
@@ -470,6 +610,7 @@ async function confirmBatchAssign() {
       showBatchAssign.value = false
       batchAssignForm.assigneeUserId = ''
       selectedAssetIds.value = new Set()
+      selectedItems.value = []
       await loadAssets()
     }
   } catch (error) {
@@ -562,6 +703,7 @@ async function deleteSelectedAssets() {
     if (currentProjectId.value === targetProjectId) {
       if (targets.some(asset => Number(asset.assetId) === detailAssetId.value)) closeDetailDrawer()
       selectedAssetIds.value = new Set()
+      selectedItems.value = []
       await loadAssets()
     }
   } catch (error) {
@@ -720,8 +862,8 @@ onBeforeUnmount(() => {
           <el-form-item class="asset-filter-item" label="资产类型" prop="assetType">
             <el-select v-model="query.assetType" placeholder="全部类型" aria-label="按资产类型筛选" @change="submitFilters"><el-option label="全部类型" value="" /><el-option label="角色" value="Character" /><el-option label="场景" value="Environment" /><el-option label="道具" value="Prop" /></el-select>
           </el-form-item>
-          <el-form-item class="asset-filter-item" label="资产状态" prop="assetStatus">
-            <el-select v-model="query.assetStatus" placeholder="全部状态" aria-label="按资产状态筛选" @change="submitFilters"><el-option label="全部状态" value="" /><el-option v-for="status in ['unassigned','pending_schedule','not_started','preparing','in_progress','reviewing','revision','completed']" :key="status" :label="assetStatusMeta(status).label" :value="status" /></el-select>
+          <el-form-item class="asset-filter-item" label="分项状态" prop="assetStatus">
+            <el-select v-model="query.assetStatus" placeholder="全部状态" aria-label="按资产分项状态筛选" @change="submitFilters"><el-option label="全部状态" value="" /><el-option v-for="status in ['pending_info','unassigned','pending_schedule','not_started','in_progress','reviewing','revision','completed']" :key="status" :label="assetStatusMeta(status).label" :value="status" /></el-select>
           </el-form-item>
           <el-form-item class="asset-filter-item" label="制作人" prop="assigneeUserId">
             <el-select v-model="query.assigneeUserId" placeholder="全部制作人" aria-label="按制作人筛选" @change="submitFilters"><el-option label="全部制作人" value="" /><el-option v-for="member in members" :key="member.userId" :label="memberLabel(member)" :value="String(member.userId)" /></el-select>
@@ -733,40 +875,40 @@ onBeforeUnmount(() => {
           </el-form-item>
         </el-form>
 
-        <section class="asset-toolbar"><div class="asset-toolbar__summary"><strong>{{ total }}</strong><span>个资产</span><template v-if="selectedAssets.length"><el-button v-if="canAssign" text type="primary" :loading="assigning" @click="openBatchAssignDialog">{{ batchAssignLabel }}（{{ selectedAssets.length }}）</el-button><el-button v-if="canDelete" text type="danger" :icon="Delete" :loading="deleting" :disabled="!canDeleteSelection" @click="deleteSelectedAssets">批量删除（{{ selectedAssets.length }}）</el-button></template></div><el-radio-group v-model="viewMode" class="view-switch" size="small" aria-label="资产视图"><el-radio-button value="table"><el-icon><List /></el-icon>表格</el-radio-button><el-radio-button value="card"><el-icon><Grid /></el-icon>卡片</el-radio-button><el-radio-button value="type"><el-icon><Box /></el-icon>类型看板</el-radio-button><el-radio-button value="swimlane"><el-icon><Clock /></el-icon>人员泳道</el-radio-button><el-radio-button value="gantt"><el-icon><Calendar /></el-icon>任务甘特</el-radio-button></el-radio-group></section>
+        <section class="asset-toolbar"><div class="asset-toolbar__summary"><strong>{{ total }}</strong><span>个资产</span><template v-if="selectedAssets.length"><el-text>已选 {{ selectedAssets.length }} 个资产</el-text><el-button v-if="canAssign && matchesItemStatus('unassigned')" text type="primary" :loading="assigning" @click="openBatchAssignDialog">{{ batchAssignLabel }}（{{ selectedAssets.length }}）</el-button><el-button v-if="canDelete" text type="danger" :icon="Delete" :loading="deleting" :disabled="!canDeleteSelection" @click="deleteSelectedAssets">批量删除资产（{{ selectedAssets.length }}）</el-button></template></div><el-popover v-if="viewMode === 'table'" placement="bottom-end" :width="280" trigger="click">
+          <template #reference><el-button size="small" aria-label="资产表格列设置">列设置</el-button></template>
+          <el-form ref="tablePresentationForm" :model="{ mode: tableMode, columns: visibleColumns }" label-position="top">
+            <el-form-item label="显示方式" prop="mode"><el-select v-model="tableMode" aria-label="资产表格显示方式"><el-option label="自动适应" value="auto" /><el-option label="完整列" value="full" /><el-option label="精简列" value="compact" /><el-option label="自定义列" value="custom" /></el-select></el-form-item>
+            <el-form-item label="信息列" prop="columns"><el-checkbox-group :model-value="visibleColumns" @update:model-value="setColumns"><el-checkbox v-for="column in assetOptionalColumns" :key="column.key" :value="column.key">{{ column.label }}</el-checkbox></el-checkbox-group></el-form-item>
+            <p>名称与操作列始终保留。隐藏信息可在详情中查看，拖动表头边界可调整列宽。</p>
+            <el-button text type="primary" @click="resetPresentation">恢复自动布局</el-button>
+          </el-form>
+        </el-popover><el-radio-group v-model="viewMode" class="view-switch" size="small" aria-label="资产视图"><el-radio-button value="table"><el-icon><List /></el-icon>表格</el-radio-button><el-radio-button value="card"><el-icon><Grid /></el-icon>卡片</el-radio-button><el-radio-button value="type"><el-icon><Box /></el-icon>类型看板</el-radio-button><el-radio-button value="swimlane"><el-icon><Clock /></el-icon>人员泳道</el-radio-button><el-radio-button value="gantt"><el-icon><Calendar /></el-icon>任务甘特</el-radio-button></el-radio-group></section>
 
+        <div v-if="selectedAssets.length && selectedAssets.every(canManageItemWorkspace)" class="asset-toolbar__summary"><el-button type="primary" plain :disabled="batchWorkspaceOpen || assigning || deleting || assetsLoading" @click="batchWorkspace.open(selectedAssets)">选择分项批量操作（{{ selectedAssets.length }} 个资产）</el-button><el-text size="small" type="info">展开并明确勾选制作分项，再分配、排期或反馈。</el-text></div>
+        <div v-if="selectedItems.length" class="asset-toolbar__summary" aria-label="已选制作分项操作"><el-text>已选 {{ selectedItems.length }} 个制作分项</el-text><el-button type="primary" :disabled="batchWorkspaceOpen || assigning || deleting || assetsLoading || itemActionBusy || scheduleBusy || selectedItems.length > 100" @click="openSelectedItems()">操作所选分项（{{ selectedItems.length }}）</el-button><el-text size="small" type="info">仅操作勾选分项，不包含其他分项或整资产删除。</el-text></div>
+        <el-text v-if="viewMode === 'table'" size="small" type="info">全选范围：当前页可操作资产及已加载的可操作分项；未展开资产的分项请先展开再选择。</el-text>
         <Suspense v-if="['swimlane', 'gantt'].includes(viewMode) && currentProjectId">
-          <ScheduleBoard :project-id="currentProjectId" target-kind="asset_item" :initial-mode="viewMode" :initial-filters="scheduleInitialFilters" :editable-allowed="canSchedule" @query-change="handleScheduleQueryChange" />
+          <ScheduleBoard ref="scheduleBoard" :project-id="currentProjectId" target-kind="asset_item" :initial-mode="viewMode" :initial-filters="scheduleInitialFilters" :editable-allowed="canSchedule" :action-loader="loadAssetScheduleTarget" :action-factory="assetScheduleActions" @query-change="handleScheduleQueryChange" />
           <template #fallback><el-card class="asset-context-loading" shadow="never"><el-skeleton :rows="8" animated /></el-card></template>
         </Suspense>
         <ProjectStatePanel v-else-if="assetsError" :title="assetsError.title" :message="assetsError.message" :retryable="assetsError.retryable" @retry="loadProjectContext" />
         <el-empty v-else-if="!assetsLoading && !assets.length" class="asset-empty" description="当前筛选没有资产"><template #image><el-icon><Box /></el-icon></template><p>调整筛选条件，或在存储就绪的活动项目中新建/导入资产。</p></el-empty>
 
-        <AssetTreeTable v-else-if="viewMode === 'table'" ref="assetTable" :assets="assets" :project-id="currentProjectId"
+        <AssetTreeTable v-else-if="viewMode === 'table'" ref="assetTable" :assets="assets" :item-status="appliedItemStatus" :visible-columns="visibleColumns" :column-widths="columnWidths" @header-dragend="saveWidth" @available-width="tableAvailableWidth = $event" :project-id="currentProjectId"
                         :context-key="`${currentProjectId}:${appliedAssetQuery}`" :members="members"
-                        :selected-asset-ids="selectedAssetIds" :selectable="canSelectAsset"
+                        :selected-asset-ids="selectedAssetIds" :selectable="canSelectAsset" :selected-item-ids="selectedItemIds" :item-selectable="canSelectItem"
                         :can-query="hasPermission('shotgrid:asset:query')" :loading="assetsLoading" :background-refresh="backgroundAssetRefresh" :selection-disabled="assigning || deleting || itemActionBusy"
-                        @selection-change="updateAssetSelection" @open-item="openAsset">
+                        @selection-change="updateAssetSelection" @item-selection-change="selectedItems = $event" @open-item="openAsset">
           <template #asset-actions="{ row }">
-            <div class="asset-row-actions">
-              <TableActionButton v-if="canOpenItemStart(row)" label="选择分项开工" type="primary" :plain="false" :icon="VideoPlay" @click="openAssetItemStart(row)" />
-              <TableActionButton label="详情" :icon="View" @click="openAsset(row)" />
-              <TableActionButton v-if="canEditAsset(row)" label="编辑资产" :icon="Edit" :loading="editingAssetId === Number(row.assetId)" :disabled="deleting || assigning || editingAssetId !== null" @click="handleAssetCommand('edit', row)" />
-              <TableActionButton v-if="canDeleteAsset(row)" label="删除资产" type="danger" :icon="Delete" :disabled="deleting || assigning || editingAssetId !== null" @click="handleAssetCommand('delete', row)" />
-            </div>
+            <AssetActionButtons :actions="assetTableActions(row)" />
           </template>
           <template #item-actions="{ row, asset }">
-            <div class="asset-row-actions">
-              <TableActionButton v-if="itemCan(asset, row, 'task.start')" label="开始任务" type="primary" :plain="false" :icon="VideoPlay" :disabled="assetsLoading || itemActionBusy || assigning || deleting" @click="itemOperations.run('task.start', asset, row)" />
-              <TableActionButton v-if="itemCan(asset, row, 'task.assign')" :label="row.task ? '改派任务' : '分配任务'" type="info" :icon="row.task ? Switch : User" :disabled="assetsLoading || itemActionBusy || assigning || deleting" @click="itemOperations.run('task.assign', asset, row)" />
-              <TableActionButton v-if="itemCan(asset, row, 'assetItem.edit')" :label="String(row.productionItem || '').trim() ? '编辑分项' : '补齐制作分项'" :icon="Edit" :type="String(row.productionItem || '').trim() ? '' : 'warning'" :dashed="!String(row.productionItem || '').trim()" :disabled="assetsLoading || itemActionBusy || assigning || deleting" @click="itemOperations.run('assetItem.edit', asset, row)" />
-              <TableActionButton v-if="itemCan(asset, row, 'assetItem.delete')" label="删除分项" type="danger" :icon="Delete" :disabled="assetsLoading || itemActionBusy || assigning || deleting" @click="itemOperations.run('assetItem.delete', asset, row)" />
-              <TableActionButton label="分项详情" :icon="View" :disabled="itemActionBusy" @click="openAsset(row)" />
-            </div>
+            <AssetActionButtons :actions="assetItemTableActions(asset, row)" />
           </template>
         </AssetTreeTable>
 
-        <div v-else-if="viewMode === 'card'" class="asset-grid" v-loading="assetsLoading"><el-card v-for="asset in assets" :key="asset.assetId" class="asset-card" shadow="hover" tabindex="0" @click="openAsset(asset)" @keydown.enter="openAsset(asset)"><ProtectedAssetThumbnail class="asset-thumb" :thumbnail="resolveAssetThumbnail(asset)" :alt="`${asset.assetName} 缩略图`" /><header><el-tag size="small" effect="plain" round :type="tagTypeFromTone(assetTypeMeta(asset.assetType).tone)">{{ assetTypeMeta(asset.assetType).label }}</el-tag><el-tag class="asset-status-tag" :class="assetStatusTagClass(asset.assetStatus)" size="small" effect="light" round :type="tagTypeFromTone(assetStatusMeta(asset.assetStatus).tone)">{{ assetStatusMeta(asset.assetStatus).label }}</el-tag></header><h3>{{ asset.assetName }}</h3><p>{{ asset.description || '暂无资产描述' }}</p><div v-if="itemStatusEntries(asset).length" class="asset-item-status-counts asset-item-status-counts--card"><el-tag v-for="entry in itemStatusEntries(asset)" :key="entry.status" size="small" effect="plain" round :type="tagTypeFromTone(assetStatusMeta(entry.status).tone)">{{ entry.label }} {{ entry.count }}</el-tag></div><footer><span>{{ asset.itemCount }} 个制作分项</span><span>{{ asset.usageShotCount }} 个使用镜头</span><el-button v-if="canOpenItemStart(asset)" size="small" type="primary" :icon="VideoPlay" @click.stop="openAssetItemStart(asset)">选择分项开工</el-button></footer></el-card></div>
+        <div v-else-if="viewMode === 'card'" class="asset-grid" v-loading="assetsLoading"><el-card v-for="asset in assets" :key="asset.assetId" class="asset-card" shadow="hover" tabindex="0" @click="openAsset(asset)" @keydown.enter="openAsset(asset)"><ProtectedAssetThumbnail class="asset-thumb" :thumbnail="resolveAssetThumbnail(asset)" :alt="`${asset.assetName} 缩略图`" /><header><el-tag size="small" effect="plain" round :type="tagTypeFromTone(assetTypeMeta(asset.assetType).tone)">{{ assetTypeMeta(asset.assetType).label }}</el-tag></header><h3>{{ asset.assetName }}</h3><p>{{ asset.description || '暂无资产描述' }}</p><div v-if="itemStatusEntries(asset).length" class="asset-item-status-counts asset-item-status-counts--card"><el-tag v-for="entry in itemStatusEntries(asset)" :key="entry.status" size="small" effect="plain" round :type="tagTypeFromTone(assetStatusMeta(entry.status).tone)">{{ entry.label }} {{ entry.count }}</el-tag></div><footer><span>{{ assetCompletionSummary(asset) }} · {{ asset.itemCount }} 个制作分项</span><el-button v-if="canOpenAssetReview(asset)" size="small" type="primary" @click.stop="reviewEntry.open(asset)">审核任务</el-button><el-button v-if="canOpenItemStart(asset)" size="small" type="primary" :icon="VideoPlay" @click.stop="openAssetItemStart(asset)">{{ assetStartLabel(asset) }}</el-button></footer></el-card></div>
 
         <div v-else class="type-board" v-loading="assetsLoading">
           <el-card v-for="group in groupedAssets" :key="group.type" class="type-board__column" shadow="never">
@@ -796,7 +938,7 @@ onBeforeUnmount(() => {
                     </span>
                   </span>
                 </el-button>
-                <el-button v-if="canOpenItemStart(asset)" class="type-board__start" size="small" type="primary" :icon="VideoPlay" @click="openAssetItemStart(asset)">选择分项开工</el-button>
+                <el-button v-if="canOpenAssetReview(asset)" size="small" type="primary" @click.stop="reviewEntry.open(asset)">审核任务</el-button><el-button v-if="canOpenItemStart(asset)" class="type-board__start" size="small" type="primary" :icon="VideoPlay" @click="openAssetItemStart(asset)">{{ assetStartLabel(asset) }}</el-button>
               </div>
             </div>
             <el-empty v-else :image-size="48" :description="`本页暂无${assetTypeMeta(group.type).label}资产`" />
@@ -816,6 +958,15 @@ onBeforeUnmount(() => {
       <el-form ref="batchAssignFormRef" :model="batchAssignForm" :rules="batchAssignRules" class="asset-batch-assign-dialog" size="large" label-position="top" aria-label="资产批量分配表单"><p>将所选 {{ selectedAssets.length }} 个资产的全部活动制作分项分配给同一位制作人；已有任务会执行改派。</p><el-form-item label="制作人" prop="assigneeUserId"><el-select v-model="batchAssignForm.assigneeUserId" class="sg-select" placeholder="请选择制作人" :disabled="assigning"><el-option v-for="member in creatorMembers" :key="member.userId" :label="memberLabel(member)" :value="String(member.userId)" /></el-select></el-form-item></el-form>
       <template #footer><el-button size="large" :disabled="assigning" @click="closeBatchAssignDialog">取消</el-button><el-button size="large" type="primary" :loading="assigning" @click="confirmBatchAssign">确认{{ batchAssignLabel }}</el-button></template>
     </el-dialog>
+    <ProjectDrawer v-if="historyTarget" title="制作履历" :description="historyTarget.title" wide @close="historyTarget = null">
+      <ProductionHistoryPanel :project-id="historyTarget.projectId" :subject-id="historyTarget.assetId" subject-type="asset" :initial-lane-id="historyTarget.itemId" />
+    </ProjectDrawer>
+    <AssetReviewEntry :key="currentProjectId" ref="reviewEntry" :project-id="currentProjectId || 0" @changed="refreshWorkspace" />
+    <AssetStartDrawer ref="startDrawer" :project-id="currentProjectId || 0" :context-key="`${currentProjectId}:${appliedAssetQuery}`" :members="members" @active-change="itemActionBusy = $event" @changed="refreshWorkspace" />
+    <AssetProductionAdjustmentDialog v-if="adjustmentContext" :context="adjustmentContext" @close="closeItemAdjustment" />
+    <AssetItemBatchWorkspace ref="batchWorkspace" :item-status="appliedItemStatus" :project-id="currentProjectId || 0" :context-key="`${currentProjectId}:${appliedItemStatus}`" @changed="refreshWorkspace" @active-change="batchWorkspaceOpen = $event" />
+    <AssetItemScheduleDialog ref="scheduleDialog" :project-id="currentProjectId || 0" :context-key="`${currentProjectId}:${appliedItemStatus}`" @changed="refreshWorkspace" @busy-change="scheduleBusy = $event" />
+    <RelatedDetailDrawer ref="taskDrawer" @closed="loadAssets" />
     <el-drawer v-model="showDetail" class="sg-detail-drawer asset-detail-drawer" modal-class="sg-detail-drawer-mask" header-class="sg-detail-drawer__header" body-class="sg-detail-drawer__body" :title="detailDrawerTitle" direction="rtl" size="72%" resizable append-to-body destroy-on-close @closed="clearDetailDrawer">
       <AssetDetailView v-if="detailAssetId && currentProjectId" embedded :target-project-id="currentProjectId" :target-asset-id="detailAssetId" :target-asset-item-id="detailAssetItemId" @changed="handleDetailChanged" @deleted="handleDetailDeleted" />
     </el-drawer>
@@ -880,7 +1031,7 @@ onBeforeUnmount(() => {
 .asset-pagination { justify-content: center; }
 @media (max-width: 1100px) { .asset-filters { grid-template-columns: 1fr 1fr 1fr; } .type-board { grid-template-columns: 1fr; } }
 @media (max-width: 700px) { .asset-heading { flex-direction: column; } .asset-filters { grid-template-columns: 1fr; } .project-context__meta { justify-content: flex-start; } .asset-grid { grid-template-columns: 1fr; } }
-.asset-toolbar{gap:12px}.asset-toolbar__summary{display:flex!important;gap:8px!important;align-items:center!important;flex-wrap:wrap}.asset-row-actions{display:flex;align-items:center;flex-wrap:wrap;gap:4px}.asset-row-actions :deep(.el-button){margin-left:0}.asset-batch-assign-dialog{display:grid;gap:16px}.asset-batch-assign-dialog p{margin:0;color:var(--sg-text-secondary);font-size:12px;line-height:1.65}.asset-batch-assign-dialog:deep(.el-form-item){margin-bottom:0}.asset-batch-assign-dialog:deep(.el-form-item__label){color:var(--sg-text-muted);font-size:11px}.asset-batch-assign-dialog:deep(.el-select){width:100%}
+.asset-toolbar{gap:12px}.asset-toolbar__summary{display:flex!important;gap:8px!important;align-items:center!important;flex-wrap:wrap}.asset-batch-assign-dialog{display:grid;gap:16px}.asset-batch-assign-dialog p{margin:0;color:var(--sg-text-secondary);font-size:12px;line-height:1.65}.asset-batch-assign-dialog:deep(.el-form-item){margin-bottom:0}.asset-batch-assign-dialog:deep(.el-form-item__label){color:var(--sg-text-muted);font-size:11px}.asset-batch-assign-dialog:deep(.el-select){width:100%}
 .project-context:deep(.el-form-item){min-width:240px;margin:0}.project-context:deep(.el-form-item__label){height:auto;padding-bottom:6px;color:var(--sg-text-muted);font-size:10px;line-height:1}.asset-filters .asset-search{padding:0;background:transparent;border:0}.view-switch{padding:0;background:transparent}.view-switch:deep(.el-radio-button__inner){display:flex;gap:6px;align-items:center;color:var(--sg-text-muted);background:var(--sg-surface);border-color:var(--sg-border);box-shadow:none}.view-switch:deep(.el-radio-button__original-radio:checked+.el-radio-button__inner){color:var(--sg-accent);background:var(--sg-accent-soft);border-color:rgba(255,182,87,.32);box-shadow:-1px 0 0 0 rgba(255,182,87,.32)}.asset-card:deep(.el-card__body){padding:0}.asset-card>.asset-thumb,.asset-card:deep(.el-card__body>.asset-thumb){height:150px}.asset-pagination{margin-top:2px}.asset-pagination:deep(.el-pager li),.asset-pagination:deep(button){background:var(--sg-surface)!important}.asset-pagination:deep(.is-active){color:#17130d!important;background:var(--sg-accent)!important}
 .asset-filters{grid-template-columns:minmax(220px,1fr) repeat(3,minmax(130px,180px)) auto}
 .asset-filters:deep(.el-form-item){min-width:0;margin-bottom:0}

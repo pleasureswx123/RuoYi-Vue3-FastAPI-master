@@ -336,6 +336,17 @@ function deferred() {
 }
 
 describe('制作履历面板', () => {
+  it('分项入口直接选中对应履历，切换目标和失效目标正确回退', async () => {
+    getProductionHistory.mockResolvedValue({ data: assetHistory() })
+    const { wrapper } = await mountPanel({ projectId: 8, subjectId: 31, subjectType: 'asset', initialLaneId: 1002 })
+    expect(wrapper.getComponent(ElTabs).props('modelValue')).toBe('1002')
+    await wrapper.setProps({ initialLaneId: 1001 })
+    expect(wrapper.getComponent(ElTabs).props('modelValue')).toBe('1001')
+    await wrapper.setProps({ initialLaneId: 9999 })
+    expect(wrapper.getComponent(ElTabs).props('modelValue')).toBe('all')
+    wrapper.unmount()
+  })
+
   it('提交与每次审核按真实时间拆分，未审核不生成审核节点', () => {
     const cycle = versionCycle()
     const source = { eventId: 'version:91', versionCycle: cycle }

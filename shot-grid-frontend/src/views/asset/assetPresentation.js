@@ -7,6 +7,7 @@ const TYPE_META = {
 }
 
 const STATUS_META = {
+  pending_info: { label: '待完善', tone: 'warning' },
   unassigned: { label: '待分配', tone: 'warning' },
   pending_schedule: { label: '待排期', tone: 'warning' },
   not_started: { label: '待开工', tone: 'muted' },
@@ -32,8 +33,15 @@ export function assetStatusMeta(status) {
   return STATUS_META[status] || { label: '未知资产状态', tone: 'muted' }
 }
 
+export function assetCompletionSummary(asset) {
+  const total = Math.max(0, Number(asset?.itemCount) || 0)
+  if (!total) return '暂无制作分项'
+  const completed = Math.min(total, Math.max(0, Number(asset?.itemStatusCounts?.completed) || 0))
+  return `已完成 ${completed}/${total}`
+}
+
 export function assetItemStatusEntries(counts = {}) {
-  return ['unassigned', 'pending_schedule', 'not_started', 'preparing', 'in_progress', 'reviewing', 'revision', 'completed']
+  return ['pending_info', 'unassigned', 'pending_schedule', 'not_started', 'preparing', 'in_progress', 'reviewing', 'revision', 'completed']
     .map(status => ({
       status,
       label: assetStatusMeta(status).label,

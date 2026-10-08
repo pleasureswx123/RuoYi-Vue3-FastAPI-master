@@ -36,6 +36,7 @@ def test_asset_status_counts_keep_all_eight_snake_case_keys_and_reject_negative_
     model = ShotGridAssetListItemModel.model_validate(payload)
     assert model.model_dump(by_alias=True)['itemStatusCounts'] == {
         'unassigned': 0,
+        'pending_info': 0,
         'pending_schedule': 0,
         'not_started': 1,
         'preparing': 1,
@@ -80,7 +81,6 @@ def test_asset_create_normalizes_text_without_creating_task_input() -> None:
             {'assetType': 'Environment', 'assetName': '场景', 'items': [], 'assetStatus': 'completed'},
         ),
         (ShotGridAssetUpdateModel, {'assetType': 'Environment', 'lockVersion': 0}),
-        (ShotGridAssetUpdateModel, {'assetName': '场景', 'lockVersion': 0}),
         (ShotGridAssetUpdateModel, {'lifecycleStatus': 'archived', 'lockVersion': 0}),
         (ShotGridAssetArchiveModel, {'reason': '归档', 'lockVersion': 0, 'delFlag': '2'}),
         (ShotGridAssetItemDeleteModel, {'reason': '误建', 'lockVersion': 0, 'delFlag': '2'}),
@@ -89,6 +89,14 @@ def test_asset_create_normalizes_text_without_creating_task_input() -> None:
 def test_asset_write_models_reject_state_or_delete_fields(model: type, payload: dict[str, object]) -> None:
     with pytest.raises(ValidationError):
         model.model_validate(payload)
+
+
+def test_asset_update_accepts_optional_name_but_rejects_empty_null_and_oversized_name() -> None:
+    assert ShotGridAssetUpdateModel(lockVersion=0).asset_name is None
+    assert ShotGridAssetUpdateModel(assetName=' 新名称 ', lockVersion=0).asset_name == '新名称'
+    for value in [None, '', '   ', 123, '名' * 201]:
+        with pytest.raises(ValidationError):
+            ShotGridAssetUpdateModel(assetName=value, lockVersion=0)
 
 
 def test_asset_create_rejects_duplicate_named_items() -> None:

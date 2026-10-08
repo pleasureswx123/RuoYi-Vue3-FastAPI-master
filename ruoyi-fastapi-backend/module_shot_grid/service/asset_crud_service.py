@@ -253,6 +253,21 @@ class ShotGridAssetCrudService:
             asset = await cls._lock_active_asset(db, project_id, asset_id)
             cls._require_lock_version(asset.lock_version, command.lock_version)
 
+            old_asset_name = asset.asset_name
+            asset_name, asset_name_key = asset.asset_name, asset.asset_name_key
+            if command.asset_name is not None:
+                # 共用创建时的名称规范与安全校验，但不改写已冻结的目录身份。
+                asset_name, asset_name_key, *_ = cls._asset_identity(asset.asset_type, command.asset_name)
+                if await ShotGridAssetCrudDao.asset_name_or_path_exists(
+                    db,
+                    project_id,
+                    asset_type=asset.asset_type,
+                    asset_name_key=asset_name_key,
+                    storage_path_key=asset.storage_path_key,
+                    exclude_asset_id=asset_id,
+                ):
+                    raise shot_grid_error(409, 'SG_ASSET_NAME_CONFLICT', '同类型资产名称已经存在')
+
             # 与开工共用项目协调锁；开工只递增任务锁号，不能仅依赖资产乐观锁。
             description_locked = await ShotGridAssetCrudDao.has_started_tasks_for_asset(db, project_id, asset_id)
             stored_description = (asset.description or '').strip() or None
@@ -260,11 +275,20 @@ class ShotGridAssetCrudService:
                 raise shot_grid_error(
                     409,
                     'SG_ASSET_DESCRIPTION_LOCKED',
-                    '已有制作分项开工，资产描述已锁定；仍可修改排序和内部备注。',
+                    '已有制作分项开工，资产描述已锁定；仍可修改名称、排序和内部备注。',
                 )
 
             now = datetime.now().replace(microsecond=0)
             new_lock_version = asset.lock_version + 1
+            if asset_name != old_asset_name:
+                tasks = await ShotGridAssetCrudDao.get_asset_tasks_for_update(db, project_id, asset_id)
+                for task, production_item in tasks:
+                    task.task_name = f'{asset_name} - {production_item or "待补制作分项"}'[:MAX_TASK_NAME_LENGTH]
+                    task.update_by = actor_name
+                    task.update_time = now
+                    task.lock_version += 1
+            asset.asset_name = asset_name
+            asset.asset_name_key = asset_name_key
             if not description_locked:
                 asset.description = command.description
             asset.sort_order = command.sort_order
@@ -286,7 +310,13 @@ class ShotGridAssetCrudService:
                     'assetId': asset_id,
                     **command.model_dump(mode='json', by_alias=True),
                 },
-                result={'projectId': project_id, 'assetId': asset_id, 'lockVersion': new_lock_version},
+                result={
+                    'projectId': project_id,
+                    'assetId': asset_id,
+                    'lockVersion': new_lock_version,
+                    'oldAssetName': old_asset_name,
+                    'assetName': asset_name,
+                },
             )
             result = await cls._build_asset_detail(db, asset, current_user, access)
             await db.commit()
@@ -843,7 +873,7 @@ class ShotGridAssetCrudService:
                 selected_version = cls._selected_version_row(version_rows_by_task.get(task_id, []))
                 thumbnail = cls._thumbnail(selected_version)
             final_version = next((version for version in versions if version.version_status == 'final'), None)
-            item_status = cls._item_status(task, final_version is not None)
+            item_status = cls._item_status(task, final_version is not None, row['production_item'])
             result.append(
                 ShotGridAssetItemModel(
                     assetItemId=row['asset_item_id'],
@@ -872,6 +902,8 @@ class ShotGridAssetCrudService:
                         task_status=row['task_status'],
                         has_uncommitted_submission=bool(row.get('has_uncommitted_submission')),
                         assignee_valid=bool(row.get('assignee_valid')),
+                        assignee_user_id=row.get('assignee_user_id'),
+                        has_schedule=bool(task and task.expected_start_time and task.expected_end_time),
                     ),
                     lockVersion=row['lock_version'],
                     createTime=row['create_time'],
@@ -1041,7 +1073,29 @@ class ShotGridAssetCrudService:
         task_status: str | None,
         has_uncommitted_submission: bool,
         assignee_valid: bool = False,
+        has_schedule: bool = False,
+        assignee_user_id: int | None = None,
     ) -> list[str]:
+        actions: list[str] = []
+        user = current_user.user
+        if (
+            user is not None
+            and user.user_id is not None
+            and access.project_id == project_id
+            and access.user_id == user.user_id
+            and access.project_role == 'creator'
+            and assignee_user_id == user.user_id
+            and assignee_valid
+            and project_status not in {'completed', 'archived'}
+            and storage_status == 'ready'
+            and asset_lifecycle_status == 'active'
+            and item_lifecycle_status == 'active'
+            and is_asset_production_item_ready(production_item)
+            and task_status in {'in_progress', 'revision', 'pending_review'}
+            and cls._has_permission(current_user, 'shotgrid:task:query')
+            and cls._has_permission(current_user, 'shotgrid:version:add')
+        ):
+            actions.append('task.work')
         if (
             not cls._can_manage_assets(
                 current_user,
@@ -1053,9 +1107,29 @@ class ShotGridAssetCrudService:
             or asset_lifecycle_status != 'active'
             or item_lifecycle_status != 'active'
         ):
-            return []
-
-        actions: list[str] = []
+            return actions
+        if (
+            task_status in {'not_started', 'in_progress', 'revision'}
+            and not has_uncommitted_submission
+            and is_asset_production_item_ready(production_item)
+            and cls._has_permission(current_user, 'shotgrid:task:edit')
+        ):
+            actions.append('task.adjust')
+        if (
+            task_status == 'pending_review'
+            and not has_uncommitted_submission
+            and cls._has_permission(current_user, 'shotgrid:version:review')
+            and cls._has_permission(current_user, 'shotgrid:version:query')
+            and cls._has_permission(current_user, 'shotgrid:reviewList:query')
+        ):
+            actions.append('task.review')
+        if (
+            task_status == 'revision'
+            and not has_uncommitted_submission
+            and cls._has_permission(current_user, 'shotgrid:version:review')
+            and cls._has_permission(current_user, 'shotgrid:note:add')
+        ):
+            actions.append('task.appendIssue')
         if (
             not has_versions
             and task_status in EDITABLE_ASSET_ITEM_TASK_STATUSES
@@ -1083,6 +1157,7 @@ class ShotGridAssetCrudService:
             actions.append('task.assign')
         if (
             task_status == 'not_started'
+            and has_schedule
             and assignee_valid
             and is_asset_production_item_ready(production_item)
             and cls._has_permission(current_user, 'shotgrid:task:start')
@@ -1289,9 +1364,11 @@ class ShotGridAssetCrudService:
         )
 
     @staticmethod
-    def _item_status(task: ShotGridTaskSummaryModel | None, has_final_version: bool) -> str:
+    def _item_status(
+        task: ShotGridTaskSummaryModel | None, has_final_version: bool, production_item: str | None
+    ) -> str:
         if task is None:
-            return 'unassigned'
+            return 'unassigned' if is_asset_production_item_ready(production_item) else 'pending_info'
         if task.task_status == 'not_started' and (not task.expected_start_time or not task.expected_end_time):
             return 'pending_schedule'
         mapping = {
@@ -1316,6 +1393,7 @@ class ShotGridAssetCrudService:
             'reviewing',
             'in_progress',
             'preparing',
+            'pending_info',
             'unassigned',
             'pending_schedule',
             'not_started',

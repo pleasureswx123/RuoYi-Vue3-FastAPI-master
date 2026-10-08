@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   assetAssigneeSummary,
+  assetCompletionSummary,
   assetDirectoryStatusMeta,
   assetErrorState,
   assetItemStatusEntries,
@@ -17,6 +18,15 @@ import {
 } from '@/views/asset/assetPresentation'
 
 describe('资产展示模型', () => {
+  it('父级提醒与独立分项状态分离，并显示完成进度', () => {
+    expect(assetStatusMeta('revision').label).toBe('待修改')
+    expect(assetStatusMeta('revision').label).toBe('待修改')
+    expect(assetStatusMeta('reviewing').label).toBe('待审核')
+    expect(assetStatusMeta('completed').label).toBe('已完成')
+    expect(assetCompletionSummary({ itemCount: 4, itemStatusCounts: { revision: 1, reviewing: 1, in_progress: 1, completed: 1 } })).toBe('已完成 1/4')
+    expect(assetCompletionSummary({ itemCount: 0 })).toBe('暂无制作分项')
+  })
+
   it('稳定映射三种资产类型、状态和延迟目录状态', () => {
     expect(assetTypeMeta('Character').label).toBe('角色')
     expect(assetTypeMeta('Environment').label).toBe('场景')
@@ -34,6 +44,7 @@ describe('资产展示模型', () => {
 
   it('固定展示八类制作分项状态数量，并忽略异常计数', () => {
     expect(assetItemStatusEntries({ not_started: 2, preparing: 1, in_progress: -4, unknown: 9 })).toEqual([
+      { status: 'pending_info', label: '待完善', count: 0 },
       { status: 'unassigned', label: '待分配', count: 0 },
       { status: 'pending_schedule', label: '待排期', count: 0 },
       { status: 'not_started', label: '待开工', count: 2 },

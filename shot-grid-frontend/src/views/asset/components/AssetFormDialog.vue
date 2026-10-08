@@ -19,7 +19,7 @@ const descriptionLocked = computed(() => isEdit.value && (
   descriptionLockedByConflict.value || props.asset?.descriptionLocked !== false
 ))
 const descriptionLockHint = computed(() => descriptionLockedByConflict.value || props.asset?.descriptionLocked === true
-  ? '已有制作分项开工，资产描述已锁定；仍可调整排序和备注。'
+  ? '已有制作分项开工，资产描述已锁定；仍可修改名称、排序和备注。'
   : '暂无法确认资产描述是否可编辑，请刷新后重试。')
 const operationContext = Object.freeze({
   projectId: Number(props.projectId),
@@ -44,7 +44,7 @@ const assetFormRules = {
   assetType: [{ required: true, message: '请选择资产类型', trigger: 'change' }],
   assetName: [{
     validator: (_rule, value, callback) => {
-      if (!isEdit.value && !String(value || '').trim()) {
+      if (!String(value || '').trim()) {
         callback(new Error('资产名称不能为空'))
         return
       }
@@ -145,6 +145,7 @@ async function submit() {
     if (!isValid || disposed) return
     const response = isEdit.value
       ? await updateAsset(operationContext.projectId, operationContext.assetId, {
+          assetName: form.assetName.trim(),
           description: optionalText(descriptionLocked.value ? originalDescription : form.description),
           sortOrder: Number(form.sortOrder),
           remark: optionalText(form.remark),
@@ -174,13 +175,13 @@ function closeDialog() {
 </script>
 
 <template>
-  <ProjectModal :title="isEdit ? `编辑资产 · ${asset.assetName}` : '新建资产'" :description="isEdit ? '资产类型和名称创建后不可直接修改；资产描述仅在全部分项未开工时可改，排序和备注仍可编辑。' : '先创建未分配资产及制作分项；保存后再通过“分配任务”完成委派。'" :busy="saving" wide @close="closeDialog">
+  <ProjectModal :title="isEdit ? `编辑资产 · ${asset.assetName}` : '新建资产'" :description="isEdit ? '名称可修改，已有 NAS 目录及文件保留原名称；资产类型只读，资产描述仅在全部分项未开工时可改。' : '先创建未分配资产及制作分项；保存后再通过“分配任务”完成委派。'" :busy="saving" wide @close="closeDialog">
     <el-form ref="assetForm" :model="form" :rules="assetFormRules" class="asset-form" size="large" label-position="top" aria-label="资产信息表单">
       <el-alert v-if="requestError" :title="requestError.title" type="error" show-icon :closable="false"><span>{{ requestError.message }}</span><el-button v-if="requestError.status === 409" link type="danger" @click="emit('refresh')">刷新后重试</el-button></el-alert>
 
       <section class="asset-form__grid">
         <el-form-item label="资产类型" prop="assetType"><el-select v-model="form.assetType" class="sg-select" :disabled="isEdit || saving"><el-option label="角色" value="Character" /><el-option label="场景" value="Environment" /><el-option label="道具" value="Prop" /></el-select></el-form-item>
-        <el-form-item label="资产名称" prop="assetName"><el-input v-model="form.assetName" maxlength="200" show-word-limit :disabled="isEdit || saving" placeholder="例如：动力舱室内" /></el-form-item>
+        <el-form-item label="资产名称" prop="assetName"><el-input v-model="form.assetName" maxlength="200" show-word-limit :disabled="saving" placeholder="例如：动力舱室内" /></el-form-item>
         <el-form-item label="项目内排序" prop="sortOrder"><el-input-number v-model="form.sortOrder" :min="0" :step="1" step-strictly controls-position="right" :disabled="saving" /></el-form-item>
         <el-form-item class="asset-form__wide" label="资产描述" prop="description">
           <el-input v-model="form.description" type="textarea" :rows="3" :readonly="descriptionLocked" :disabled="saving" placeholder="填写所有制作分项共用的资产描述" />

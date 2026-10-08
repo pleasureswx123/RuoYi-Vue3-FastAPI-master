@@ -4,6 +4,7 @@ from module_shot_grid.controller.task_controller import task_controller
 TASK_CONTROLLER_ORDER = 47
 
 EXPECTED_ROUTES = {
+    ('POST', '/shot-grid/projects/{projectId}/asset-items/production-adjustments'): 'shotgrid:task:edit',
     ('GET', '/shot-grid/tasks/{taskId}/shot/reference-files/{fileId}/download'): 'shotgrid:task:query',
     ('POST', '/shot-grid/projects/{projectId}/shots/production-adjustments'): 'shotgrid:task:edit',
     ('GET', '/shot-grid/tasks/{taskId}/project/reference-files/{fileId}/download'): 'shotgrid:task:query',

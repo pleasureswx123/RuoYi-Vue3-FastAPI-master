@@ -35,7 +35,8 @@ const props = defineProps({
     required: true,
     validator: value => ['shot', 'asset'].includes(value)
   },
-  refreshKey: { type: [Number, String], default: 0 }
+  refreshKey: { type: [Number, String], default: 0 },
+  initialLaneId: { type: [Number, String], default: null }
 })
 
 const navigate = useDetailNavigation()
@@ -86,7 +87,7 @@ function syncLaneSelection({ reset = false } = {}) {
     return
   }
   const currentExists = !reset && lanes.value.some(lane => String(lane.laneId) === selectedLaneKey.value)
-  if (!currentExists) selectedLaneKey.value = 'all'
+  if (!currentExists) selectedLaneKey.value = lanes.value.some(lane => String(lane.laneId) === String(props.initialLaneId)) ? String(props.initialLaneId) : 'all'
 }
 
 async function loadHistory({ resetLane = false } = {}) {
@@ -200,6 +201,8 @@ watch(
   handleContextChange,
   { immediate: true }
 )
+
+watch(() => props.initialLaneId, () => syncLaneSelection({ reset: true }))
 
 onBeforeUnmount(() => {
   disposed = true

@@ -13,6 +13,10 @@ function assetItemUrl(projectId, assetItemId, suffix = '') {
   return `${projectUrl(projectId, '/asset-items')}/${assertPositiveId(assetItemId, '资产制作分项')}${suffix}`
 }
 
+export function adjustAssetProduction(projectId, data) {
+  return request({ url: projectUrl(projectId, '/asset-items/production-adjustments'), method: 'post', data, silentError: true })
+}
+
 function idempotencyHeaders(idempotencyKey) {
   const normalized = typeof idempotencyKey === 'string' ? idempotencyKey.trim() : ''
   if (!normalized || normalized.length > 100) {

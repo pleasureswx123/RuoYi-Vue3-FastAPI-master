@@ -102,7 +102,7 @@ async function send() {
   <ProjectModal title="批量追加发送问题" :description="`已选择 ${rows.length} 个待修改任务`" :busy="busy" wide @close="close">
     <el-alert title="同一份问题将逐项追加到所选版本并立即发送给制作人，任务保持待修改。已发送项会保留；制作人已提交下一版的任务不能再追加。" type="info" show-icon :closable="false" />
     <el-table v-loading="loading" :data="rows" row-key="versionId" max-height="300" class="batch-issue-targets">
-      <el-table-column label="镜头 / 版本" prop="label" min-width="220" />
+      <el-table-column label="任务 / 版本" prop="label" min-width="220" />
       <el-table-column label="发送结果" prop="result" min-width="260" />
     </el-table>
     <el-alert v-if="error" :title="error" type="error" show-icon :closable="false" />

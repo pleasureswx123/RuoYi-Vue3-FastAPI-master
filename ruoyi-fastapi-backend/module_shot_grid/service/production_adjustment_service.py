@@ -10,7 +10,10 @@ from module_shot_grid.dao.project_audit_dao import ShotGridProjectAuditDao
 from module_shot_grid.dao.task_dao import ShotGridTaskDao
 from module_shot_grid.dao.task_schedule_dao import ShotGridTaskScheduleDao
 from module_shot_grid.entity.do.task_schedule_change_do import ShotGridTaskScheduleChange
-from module_shot_grid.entity.vo.production_adjustment_vo import ShotGridProductionAdjustmentModel
+from module_shot_grid.entity.vo.production_adjustment_vo import (
+    ShotGridAssetProductionAdjustmentModel,
+    ShotGridProductionAdjustmentModel,
+)
 from module_shot_grid.exceptions import shot_grid_error
 from module_shot_grid.service.project_access_service import ShotGridProjectAccessService
 from module_shot_grid.service.project_service import ShotGridProjectService
@@ -24,17 +27,21 @@ TASK_STORAGE_FIELDS = TASK_FIELDS | {'reference_description'}
 
 
 class ShotGridProductionAdjustmentService:
-    """制作中镜头的受控变更，单项和批量遵循同一事务门禁。"""
+    """镜头与资产分项的受控变更，单项和批量遵循同一事务门禁。"""
 
     @classmethod
     async def adjust(  # noqa: PLR0912, PLR0915 - 批量锁后门禁、最终排期与审计必须保持同一事务
         cls,
         db: AsyncSession,
         project_id: int,
-        command: ShotGridProductionAdjustmentModel,
+        command: ShotGridProductionAdjustmentModel | ShotGridAssetProductionAdjustmentModel,
         current_user: CurrentUserModel,
     ) -> dict:
         actor_id, actor_name, dept_name = ShotGridProjectService._actor(current_user)
+        asset_mode = isinstance(command, ShotGridAssetProductionAdjustmentModel)
+        task_fields = TASK_FIELDS | ({'requirements'} if asset_mode else set())
+        storage_fields = TASK_STORAGE_FIELDS | ({'requirements'} if asset_mode else set())
+        resource = 'asset-items' if asset_mode else 'shots'
         try:
             cls._permission(current_user, 'shotgrid:task:edit')
             access = await ShotGridProjectAccessService.resolve_access(db, current_user, project_id)
@@ -49,22 +56,51 @@ class ShotGridProductionAdjustmentService:
             locked = []
             for item in sorted(command.items, key=lambda item: item.task_id):
                 task = await ShotGridTaskService._lock_task(db, project_id, item.task_id)
-                if task.task_kind != 'shot_video' or task.shot_id != item.shot_id or task.task_status != 'in_progress':
-                    raise shot_grid_error(409, 'SG_ADJUST_STATE', '仅允许调整所选镜头正在制作中的任务，请刷新核对')
-                target = await ShotGridTaskDao.lock_shot_target(db, project_id, item.shot_id)
-                if target is None:
-                    raise shot_grid_error(409, 'SG_ADJUST_STATE', '镜头、集或场次已停用')
-                shot = target[0]
+                if asset_mode:
+                    if (
+                        task.task_kind != 'asset_image'
+                        or task.asset_item_id != item.asset_item_id
+                        or task.task_status not in {'not_started', 'in_progress', 'revision'}
+                    ):
+                        raise shot_grid_error(409, 'SG_ADJUST_STATE', '只允许调整待开工、制作中或待修改的所选分项任务')
+                    asset = await ShotGridTaskDao.lock_asset(db, project_id, item.asset_id)
+                    shot = await ShotGridTaskDao.lock_asset_item(db, project_id, item.asset_item_id)
+                    if (
+                        asset is None
+                        or shot is None
+                        or shot.asset_id != item.asset_id
+                        or asset.lifecycle_status != 'active'
+                        or shot.lifecycle_status != 'active'
+                        or not str(shot.production_item or '').strip()
+                    ):
+                        raise shot_grid_error(409, 'SG_ADJUST_STATE', '资产或制作分项已变化、停用或缺少名称')
+                    ShotGridTaskService._require_lock_version(asset.lock_version, item.asset_lock_version)
+                    ShotGridTaskService._require_lock_version(shot.lock_version, item.asset_item_lock_version)
+                else:
+                    if (
+                        task.task_kind != 'shot_video'
+                        or task.shot_id != item.shot_id
+                        or task.task_status != 'in_progress'
+                    ):
+                        raise shot_grid_error(409, 'SG_ADJUST_STATE', '仅允许调整所选镜头正在制作中的任务，请刷新核对')
+                    target = await ShotGridTaskDao.lock_shot_target(db, project_id, item.shot_id)
+                    if target is None:
+                        raise shot_grid_error(409, 'SG_ADJUST_STATE', '镜头、集或场次已停用')
+                    shot = target[0]
+                    ShotGridTaskService._require_lock_version(shot.lock_version, item.shot_lock_version)
                 ShotGridTaskService._require_lock_version(task.lock_version, item.lock_version)
-                ShotGridTaskService._require_lock_version(shot.lock_version, item.shot_lock_version)
                 if await ShotGridTaskDao.get_uncommitted_submission_for_update(db, task.task_id) is not None:
                     raise shot_grid_error(
                         409, 'SG_SUBMISSION_CONFLICT', '存在待完成或失败待重试的版本提交，请处理后再调整'
                     )
                 changes = item.changes.model_dump(exclude_unset=True)
-                if set(changes) - TASK_FIELDS:
-                    cls._permission(current_user, 'shotgrid:shot:edit')
+                if set(changes) - task_fields:
+                    cls._permission(current_user, 'shotgrid:asset:edit' if asset_mode else 'shotgrid:shot:edit')
                 if 'assignee_user_id' in changes:
+                    if asset_mode and task.task_status != 'not_started':
+                        raise shot_grid_error(
+                            409, 'SG_ADJUST_STATE', '已开工分项禁止普通改派，待修改任务请通过修改交接更换制作人'
+                        )
                     cls._permission(current_user, 'shotgrid:task:assign')
                 if 'expected_start_time' in changes:
                     cls._permission(current_user, 'shotgrid:task:schedule')
@@ -74,7 +110,7 @@ class ShotGridProductionAdjustmentService:
                 if member is None or not member.get('producer_code'):
                     raise shot_grid_error(422, 'SG_ASSIGNEE_INVALID', '制作人必须是项目内有效且已配置制作人编码的人员')
                 reference_ids = changes.pop('reference_file_ids', None)
-                before = {key: getattr(task if key in TASK_STORAGE_FIELDS else shot, key) for key in changes}
+                before = {key: getattr(task if key in storage_fields else shot, key) for key in changes}
                 if reference_ids is not None:
                     old_refs, _ = await ShotGridTaskReferenceService.append_files(
                         db, task.task_id, reference_ids, actor_id, actor_name
@@ -91,7 +127,7 @@ class ShotGridProductionAdjustmentService:
                 schedule_before = (task.expected_start_time, task.expected_end_time)
                 for key, value in changes.items():
                     setattr(
-                        task if key in TASK_STORAGE_FIELDS else shot,
+                        task if key in storage_fields else shot,
                         key,
                         '' if key == 'description' and value is None else value,
                     )
@@ -123,7 +159,11 @@ class ShotGridProductionAdjustmentService:
             for item, task, shot, before, schedule_before in locked:
                 task.lock_version += 1
                 task.update_by, task.update_time = actor_name, now
-                if item.changes.model_fields_set - TASK_FIELDS:
+                if (
+                    item.changes.model_fields_set - storage_fields - {'reference_file_ids'}
+                    if asset_mode
+                    else item.changes.model_fields_set - TASK_FIELDS
+                ):
                     shot.lock_version += 1
                     shot.update_by, shot.update_time = actor_name, now
                 if 'expected_start_time' in item.changes.model_fields_set:
@@ -164,7 +204,7 @@ class ShotGridProductionAdjustmentService:
                             )
                         )
                 after = {
-                    key: getattr(task if key in TASK_STORAGE_FIELDS else shot, key)
+                    key: getattr(task if key in storage_fields else shot, key)
                     for key in before
                     if key != 'reference_file_ids'
                 }
@@ -186,8 +226,12 @@ class ShotGridProductionAdjustmentService:
                         request_method='POST',
                         oper_name=actor_name,
                         dept_name=dept_name,
-                        oper_url=f'/shot-grid/projects/{project_id}/shots/production-adjustments',
-                        oper_param={'taskId': task.task_id, 'shotId': shot.shot_id, 'lockVersion': item.lock_version},
+                        oper_url=f'/shot-grid/projects/{project_id}/{resource}/production-adjustments',
+                        oper_param={
+                            'taskId': task.task_id,
+                            'targetId': shot.asset_item_id if asset_mode else shot.shot_id,
+                            'lockVersion': item.lock_version,
+                        },
                         result={'adjustmentId': batch_id, 'part': index + 1, 'parts': len(parts), 'snapshot': part},
                     )
             await db.commit()

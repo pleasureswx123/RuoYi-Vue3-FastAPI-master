@@ -61,10 +61,25 @@ describe('排期详情抽屉', () => {
     expect(conflictTag).toBeUndefined()
     expect(wrapper.text()).not.toContain('EP001-001-0020')
     expect(wrapper.text()).toContain('当前开始')
-    expect(wrapper.text()).toContain('首版基线')
+    expect(wrapper.text()).toContain('最初排期')
     expect(wrapper.text()).toContain('最近排期变更')
     expect(wrapper.text()).toContain('调整排期')
   })
+  it('快捷操作已提供排期时只显示一个入口，并执行该入口', async () => {
+    getTaskScheduleChanges.mockResolvedValue({ rows: [] })
+    const run = vi.fn()
+    wrapper = mount(ScheduleTaskDrawer, {
+      props: { visible: true, task, canEdit: true, actionLoader: vi.fn().mockResolvedValue({ taskId: 31 }), actionFactory: target => target ? [{ key: 'schedule', button: { label: '调整排期' }, run }] : [] },
+      global: { plugins: [createPinia()], stubs: { teleport: true } }
+    })
+    await flushPromises()
+    const buttons = wrapper.findAll('.el-drawer__footer button').filter(button => button.text() === '调整排期')
+    expect(buttons).toHaveLength(1)
+    await buttons[0].trigger('click')
+    expect(run).toHaveBeenCalledTimes(1)
+    expect(wrapper.emitted('edit')).toBeUndefined()
+  })
+
   it('权限读取完成后显示底部操作，打开业务入口时保留排期详情', async () => {
     getTaskScheduleChanges.mockResolvedValue({ rows: [] })
     const run = vi.fn()

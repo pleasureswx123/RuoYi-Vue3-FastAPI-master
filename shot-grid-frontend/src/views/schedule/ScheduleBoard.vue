@@ -29,6 +29,8 @@ const props = defineProps({
   actionFactory: { type: Function, default: null }
 })
 
+defineExpose({ refresh })
+
 const emit = defineEmits(['query-change'])
 const store = useScheduleStore()
 const mutation = useScheduleMutation(store, { onSaved: revealSavedTask, onRefresh: refresh })

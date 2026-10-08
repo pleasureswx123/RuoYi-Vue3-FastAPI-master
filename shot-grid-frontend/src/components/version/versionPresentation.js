@@ -126,3 +126,11 @@ export function acceptedToSubmissionStatus(data) {
 }
 
 export const submissionStatusOrder = Object.freeze(['pending', 'publishing', 'published', 'committing', 'committed'])
+
+// 镜头摘要提供 versionNumber，资产分项摘要提供数字 versionNo。
+export function versionSummaryLabel(version) {
+  if (!version) return '暂无版本'
+  if (typeof version.versionNumber === 'string' && version.versionNumber.trim()) return version.versionNumber.trim()
+  if (Number.isSafeInteger(version.versionNo) && version.versionNo > 0) return `V${String(version.versionNo).padStart(3, '0')}`
+  return '版本号未知'
+}

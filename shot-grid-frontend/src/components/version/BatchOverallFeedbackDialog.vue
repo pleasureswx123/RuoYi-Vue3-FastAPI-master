@@ -1,4 +1,5 @@
 <script setup>
+import { versionSummaryLabel } from '@/components/version/versionPresentation'
 import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import 'element-plus/es/components/collapse-item/style/css'
@@ -44,8 +45,8 @@ const disabled = computed(() => loading.value || busy.value || navigating.value 
 const stageTitles = ['先确认已有问题的状态', '再补充本次反馈', '核对后统一发送']
 const stageDescriptions = [
   '制作人的处理说明供你参考；请逐条确认“已解决”或“仍需修改”，完成后再补充新反馈。',
-  '核对已有草稿，再按需补充适用于全部所选镜头的新意见。已有待修改问题时，新反馈可不填。',
-  '请核对每个镜头的复核结论和意见。确认后发送给制作人，并将这些任务统一退回修改。'
+  '核对已有草稿，再按需补充适用于全部所选任务的新意见。已有待修改问题时，新反馈可不填。',
+  '请核对每个任务的复核结论和意见。确认后发送给制作人，并将这些任务统一退回修改。'
 ]
 const rules = {
   content: [{ validator: (_rule, value, done) => {
@@ -92,7 +93,7 @@ async function open(project, shots, isCurrent = () => true) {
   expandedDrafts.value = []
   form.targets = shots.map(shot => ({
     versionId: shot.latestVersion.versionId,
-    label: [shot.episodeCode, shot.sceneCode, shot.shotCode].filter(Boolean).join(' / ') + ' · ' + shot.latestVersion.versionNumber,
+    label: (shot.displayLabel || [shot.episodeCode, shot.sceneCode, shot.shotCode].filter(Boolean).join(' / ')) + ' · ' + versionSummaryLabel(shot.latestVersion),
     shot, lockVersion: null, issues: [], drafts: [], currentIssues: [], draftsConfirmed: false, loaded: false
   }))
   activeVersionId.value = form.targets[0]?.versionId ?? null
@@ -145,7 +146,7 @@ function issueError(issue) {
 function feedbackError(row) {
   if (row.drafts.length && !row.draftsConfirmed) return '请核对并确认发送已有草稿'
   if (!form.content.trim() && !row.drafts.length && !row.currentIssues.length && !row.issues.some(issue => issue.result === 'still_present')) {
-    return '无待修改内容；如无新意见，请关闭弹窗，取消选择此镜头后转单镜头审核通过'
+    return '无待修改内容；如无新意见，请关闭弹窗，取消选择此任务后转单任务审核通过'
   }
   return ''
 }
@@ -172,7 +173,7 @@ async function locateIssue(row, issue) {
   workspaceRef.value?.querySelector(`[data-issue-id="${issue.issueId}"] ${input}`)?.focus({ preventScroll: true })
 }
 async function nextUnreviewed() {
-  // 优先补齐当前镜头，再转到其他镜头，避免原因未填时跳走。
+  // 优先补齐当前任务，再转到其他任务，避免原因未填时跳走。
   const targets = [...form.targets.slice(activeIndex.value), ...form.targets.slice(0, activeIndex.value)]
   const row = targets.find(target => target.issues.some(issue => issueError(issue)))
   if (row) await locateIssue(row, row.issues.find(issue => issueError(issue)))
@@ -278,8 +279,8 @@ async function save(nextAction) {
     await submitBatchFeedback(project, payload)
     if (!current(token)) return
     ElMessage.success(nextAction === 'save_draft'
-      ? '已为 ' + form.targets.length + ' 个镜头保存共同反馈草稿，未发送，未提交复核结论'
-      : '已为 ' + form.targets.length + ' 个镜头发送反馈并退回修改')
+      ? '已为 ' + form.targets.length + ' 个任务保存共同反馈草稿，未发送，未提交复核结论'
+      : '已为 ' + form.targets.length + ' 个任务发送反馈并退回修改')
     emit('saved', { projectId: project })
     visible.value = false
   } catch (failure) {
@@ -301,7 +302,7 @@ defineExpose({ open })
     <template #header="{ titleId, titleClass }">
       <div class="batch-feedback-heading">
         <h2 :id="titleId" :class="titleClass">批量反馈与复核</h2>
-        <span class="batch-feedback-meta">已选 {{ form.targets.length }} 个镜头 · 复核结论在最终发送时提交</span>
+        <span class="batch-feedback-meta">已选 {{ form.targets.length }} 个任务 · 复核结论在最终发送时提交</span>
       </div>
       <el-steps :active="step" finish-status="success" simple class="batch-feedback-steps" aria-label="批量反馈步骤">
         <el-step title="复核已有问题" />
@@ -315,10 +316,10 @@ defineExpose({ open })
       <p>{{ stageDescriptions[step] }}</p>
     </div>
     <el-form ref="formRef" :model="form" :rules="rules" :scroll-into-view-options="{ block: 'nearest' }" label-position="top" :disabled="disabled" class="batch-feedback-form">
-      <!-- 总体门禁始终挂载，覆盖未显示镜头和最后一步；字段错误在对应步骤定位。 -->
+      <!-- 总体门禁始终挂载，覆盖未显示任务和最后一步；字段错误在对应步骤定位。 -->
       <el-form-item v-show="step === 0" prop="reviewReady" class="batch-feedback-gate">
         <div class="batch-feedback-progress" aria-live="polite">
-          <span v-if="loading">正在读取所选镜头的审核信息…</span>
+          <span v-if="loading">正在读取所选任务的审核信息…</span>
           <template v-else>
             <span>已有问题已复核 <strong>{{ issueCount - remainingCount }} / {{ issueCount }}</strong> 条</span>
             <el-tag :type="remainingCount ? 'warning' : 'success'" size="small">{{ remainingCount ? '待完成 ' + remainingCount + ' 条' : '复核完成，可以进入下一步' }}</el-tag>
@@ -328,10 +329,10 @@ defineExpose({ open })
         </div>
       </el-form-item>
       <el-form-item v-show="step === 1" prop="feedbackReady" class="batch-feedback-gate">
-        <span aria-live="polite">{{ unconfirmedDraftCount ? '还有 ' + unconfirmedDraftCount + ' 个镜头的草稿待确认' : draftTargets.length ? '已有草稿已核对 · 请按需补充新意见' : '无已有草稿 · 请按需补充新意见' }}</span>
+        <span aria-live="polite">{{ unconfirmedDraftCount ? '还有 ' + unconfirmedDraftCount + ' 个任务的草稿待确认' : draftTargets.length ? '已有草稿已核对 · 请按需补充新意见' : '无已有草稿 · 请按需补充新意见' }}</span>
       </el-form-item>
       <div v-if="step === 0" v-loading="loading" class="batch-feedback-review">
-        <nav class="batch-feedback-nav" aria-label="镜头复核导航">
+        <nav class="batch-feedback-nav" aria-label="任务复核导航">
           <el-menu :default-active="String(activeVersionId)" @select="selectTarget">
             <el-menu-item v-for="row in form.targets" :key="row.versionId" :index="String(row.versionId)" :disabled="busy || loading || navigating">
               <span class="batch-feedback-nav__label">{{ row.label }}</span>
@@ -341,14 +342,14 @@ defineExpose({ open })
             </el-menu-item>
           </el-menu>
         </nav>
-        <section v-if="activeTarget" class="batch-feedback-review__detail" aria-label="当前镜头问题">
+        <section v-if="activeTarget" class="batch-feedback-review__detail" aria-label="当前任务问题">
           <div class="batch-feedback-workspace-heading">
-            <div><strong>{{ activeTarget.label }}</strong><p class="batch-feedback-meta">当前镜头：{{ reviewedCount(activeTarget) }} / {{ activeTarget.issues.length }} 条已复核 · 勾选多条可批量设置结论</p></div>
+            <div><strong>{{ activeTarget.label }}</strong><p class="batch-feedback-meta">当前任务：{{ reviewedCount(activeTarget) }} / {{ activeTarget.issues.length }} 条已复核 · 勾选多条可批量设置结论</p></div>
             <el-button v-if="activeTarget.shot.canInspect" :disabled="disabled" link type="primary" @click="emit('review', activeTarget.shot)">查看当前版本画面</el-button>
           </div>
           <div v-if="selectedIssues.length" class="batch-feedback-bulk">
             <div class="batch-feedback-actions">
-              <strong>已选当前镜头 {{ selectedIssues.length }} 条问题</strong>
+              <strong>已选当前任务 {{ selectedIssues.length }} 条问题</strong>
               <el-button size="small" :disabled="disabled" @click="applyBulk('resolved')">批量标记已解决</el-button>
               <el-button size="small" :disabled="disabled" @click="bulkEditing = true">批量标记仍需修改</el-button>
               <el-button size="small" link :disabled="disabled" @click="clearSelection">取消选择</el-button>
@@ -390,19 +391,19 @@ defineExpose({ open })
                 </template>
               </el-table-column>
             </el-table>
-            <el-empty v-else-if="!loading" :image-size="72" description="此镜头没有历史问题，无需复核" />
+            <el-empty v-else-if="!loading" :image-size="72" description="此任务没有历史问题，无需复核" />
           </div>
           <div class="batch-feedback-next-target">
-            <el-text size="small" :type="remainingCount ? 'info' : 'success'">{{ remainingCount ? '切换镜头保留填写内容；选“仍需修改”后需补充原因' : '所有问题已复核，点击右下角“下一步”继续' }}</el-text>
+            <el-text size="small" :type="remainingCount ? 'info' : 'success'">{{ remainingCount ? '切换任务保留填写内容；选“仍需修改”后需补充原因' : '所有问题已复核，点击右下角“下一步”继续' }}</el-text>
             <el-button v-if="remainingCount" :disabled="disabled" type="primary" plain @click="nextUnreviewed">定位下一条待复核问题</el-button>
           </div>
         </section>
-        <el-empty v-else description="没有可复核的镜头" />
+        <el-empty v-else description="没有可复核的任务" />
       </div>
       <div v-else-if="step === 1" class="batch-feedback-scroll batch-feedback-feedback">
         <section v-if="draftTargets.length" class="batch-feedback-section">
           <h4>已有草稿 · 发送前请核对</h4>
-          <p class="batch-feedback-meta">这些是尚未发出的意见，将随本次反馈一并发送；请逐个镜头确认。</p>
+          <p class="batch-feedback-meta">这些是尚未发出的意见，将随本次反馈一并发送；请逐个任务确认。</p>
           <el-collapse v-model="expandedDrafts">
             <el-collapse-item v-for="row in draftTargets" :key="row.versionId" :name="row.versionId">
               <template #title><span class="batch-feedback-collapse-title">{{ row.label }} · {{ row.drafts.length }} 条草稿 <el-tag size="small" :type="row.draftsConfirmed ? 'success' : 'warning'">{{ row.draftsConfirmed ? '已确认发送' : '待确认' }}</el-tag></span></template>
@@ -420,20 +421,20 @@ defineExpose({ open })
         </section>
         <section class="batch-feedback-section">
           <div class="batch-feedback-workspace-heading"><h4>本次新增反馈</h4><el-button link :disabled="disabled || (!form.content && !referenceAttachments.length)" @click="resetContent">清空新增反馈</el-button></div>
-          <el-alert :title="'以下新增反馈将发送给全部 ' + form.targets.length + ' 个镜头'" type="info" :closable="false" show-icon />
+          <el-alert :title="'以下新增反馈将发送给全部 ' + form.targets.length + ' 个任务'" type="info" :closable="false" show-icon />
           <el-form-item label="共同整体反馈（按需填写）" prop="content" class="batch-feedback-gap">
-            <el-input v-model="form.content" type="textarea" :rows="4" maxlength="10000" show-word-limit placeholder="填写适用于全部所选镜头的新反馈；已有待修改问题时可不填" />
+            <el-input v-model="form.content" type="textarea" :rows="4" maxlength="10000" show-word-limit placeholder="填写适用于全部所选任务的新反馈；已有待修改问题时可不填" />
           </el-form-item>
           <el-form-item label="参考内容（可选）" prop="referenceFiles">
             <ReviewReferenceInput :files="referenceAttachments" :disabled="disabled" @add="addReferenceFile" @remove="removeReferenceFile" />
           </el-form-item>
-          <p class="batch-feedback-meta">参考内容会随共同反馈用于全部所选镜头，添加后请填写文字说明。保存草稿会暂存文字和参考内容，不发送意见，也不保存第一步的复核结论。</p>
+          <p class="batch-feedback-meta">参考内容会随共同反馈用于全部所选任务，添加后请填写文字说明。保存草稿会暂存文字和参考内容，不发送意见，也不保存第一步的复核结论。</p>
         </section>
         <el-alert v-for="row in form.targets.filter(target => showFeedbackErrors && feedbackError(target))" :key="row.versionId" :title="row.label + '：' + feedbackError(row)" type="warning" :closable="false" show-icon class="batch-feedback-gap" />
       </div>
       <div v-else class="batch-feedback-scroll batch-feedback-confirm">
-        <el-alert title="整批提交：全部成功后统一退回修改；任一镜头校验失败，本批均不提交。" type="info" :closable="false" show-icon />
-        <div v-if="form.content.trim()" class="batch-feedback-section"><h4>发送给全部 {{ form.targets.length }} 个镜头的新增反馈</h4><p class="batch-feedback-text">{{ form.content.trim() }}</p></div>
+        <el-alert title="整批提交：全部成功后统一退回修改；任一任务校验失败，本批均不提交。" type="info" :closable="false" show-icon />
+        <div v-if="form.content.trim()" class="batch-feedback-section"><h4>发送给全部 {{ form.targets.length }} 个任务的新增反馈</h4><p class="batch-feedback-text">{{ form.content.trim() }}</p></div>
         <section v-if="referenceAttachments.length" class="batch-feedback-section"><h4>共同参考内容（{{ referenceAttachments.length }} 个）</h4><ReviewReferenceInput :files="referenceAttachments" readonly /></section>
         <el-table :data="form.targets" row-key="versionId" class="batch-feedback-gap">
           <el-table-column type="expand">
@@ -458,14 +459,14 @@ defineExpose({ open })
               </div>
             </template>
           </el-table-column>
-          <el-table-column prop="label" label="镜头 / 版本" min-width="230" />
+          <el-table-column prop="label" label="任务 / 版本" min-width="230" />
           <el-table-column label="已解决" width="90"><template #default="{ row }">{{ resultCount(row, 'resolved') }} 条</template></el-table-column>
           <el-table-column label="仍需修改" width="100"><template #default="{ row }">{{ resultCount(row, 'still_present') }} 条</template></el-table-column>
           <el-table-column label="待发布意见" width="115"><template #default="{ row }">{{ row.drafts.length + (form.content.trim() ? 1 : 0) }} 条</template></el-table-column>
           <el-table-column label="本轮已发布" width="115"><template #default="{ row }">{{ row.currentIssues.length }} 条</template></el-table-column>
           <el-table-column label="发送后" width="100"><template #default><el-tag type="warning" size="small">待修改</el-tag></template></el-table-column>
         </el-table>
-        <p class="batch-feedback-meta">展开镜头可查看逐条意见；需要调整时，返回上一步，填写内容会保留。</p>
+        <p class="batch-feedback-meta">展开任务可查看逐条意见；需要调整时，返回上一步，填写内容会保留。</p>
       </div>
     </el-form>
     <template #footer>
@@ -474,7 +475,7 @@ defineExpose({ open })
       <el-button v-if="step > 0" :disabled="busy || navigating" @click="changeStep(step - 1)">上一步</el-button>
       <el-button v-if="step === 1" :disabled="disabled" :loading="busy && action === 'save_draft'" @click="save('save_draft')">保存新增反馈草稿</el-button>
       <el-button v-if="step < 2" type="primary" :disabled="disabled || !form.targets.length" :loading="navigating" @click="advance">{{ step === 0 ? '下一步：补充反馈' : '下一步：确认发送' }}</el-button>
-      <el-button v-else type="primary" :disabled="disabled" :loading="busy && action === 'reject'" @click="save('reject')">确认发送并退回修改（{{ form.targets.length }} 个镜头）</el-button>
+      <el-button v-else type="primary" :disabled="disabled" :loading="busy && action === 'reject'" @click="save('reject')">确认发送并退回修改（{{ form.targets.length }} 个任务）</el-button>
     </template>
   </el-dialog>
 </template>

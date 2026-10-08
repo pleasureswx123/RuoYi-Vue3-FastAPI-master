@@ -216,3 +216,15 @@ async def test_active_task_asset_projection_matches_archive_guard() -> None:
     assert (
         "sg_task.task_status IN ('not_started', 'preparing', 'in_progress', 'pending_review', 'revision')" in compiled
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('status', ['reviewing', 'revision', 'completed', 'pending_info', 'unassigned'])
+async def test_asset_status_filter_matches_item_counts_before_pagination(status: str) -> None:
+    db = _SequenceDb([_ScalarResult(0), _MappingResult([])])
+    await ShotGridAssetCrudDao.get_asset_page(db, 10, ShotGridAssetListQueryModel(assetStatus=status))  # type: ignore[arg-type]
+    for statement in db.statements:
+        compiled = _sql(statement)
+        assert f'coalesce(asset_status_rollup.{status}_count, 0) > 0' in compiled
+        assert 'sg_asset.project_id = 10' in compiled
+        assert f"coalesce(asset_status_rollup.asset_status, 'unassigned') = '{status}'" not in compiled

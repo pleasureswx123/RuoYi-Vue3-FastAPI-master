@@ -161,12 +161,12 @@ onBeforeUnmount(() => {
           class="preview-thumbnail"
           :src="preview.url"
           :preview-src-list="[preview.url]"
-          :alt="`${version.versionNumber} 版本缩略图`"
-          fit="cover"
+          :alt="`${version.versionNumber} 版本预览图`"
+          fit="contain"
           hide-on-click-modal
           preview-teleported
         />
-        <div class="preview-hint"><strong>点击查看大图</strong><span>支持缩放、旋转，也可以点击遮罩或按 Esc 关闭。</span></div>
+        <div class="preview-hint"><strong>点击查看大图</strong><span>可缩放、旋转 · Esc 关闭</span></div>
       </template>
       <video v-else-if="kind === 'video'" :src="preview.url" :poster="preview.posterUrl || undefined" controls playsinline preload="metadata" @error="handlePlaybackError">
         当前浏览器不支持视频预览。
@@ -177,23 +177,20 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped lang="scss">
-.version-preview { margin: 20px 0; overflow: hidden; background: #0b0f14; border: 1px solid var(--sg-border); border-radius: 12px; }
+.version-preview { margin: 20px 0; overflow: hidden; background: #0b0f14; color: #e5eaf3; border: 1px solid var(--sg-border); border-radius: 12px; }
 .version-preview > header { display: flex; min-height: 48px; align-items: center; justify-content: space-between; padding: 0 14px; background: rgba(255, 255, 255, 0.025); border-bottom: 1px solid var(--sg-border); gap: 14px; }
 .version-preview > header div { min-width: 0; }
 .version-preview > header strong,
 .version-preview > header span { display: block; }
-.version-preview > header strong { font-size: 12px; }
-.version-preview > header span { margin-top: 3px; overflow: hidden; color: var(--sg-text-muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.version-preview > header strong { color: #e5eaf3; font-size: 12px; }
+.version-preview > header span { margin-top: 3px; overflow: hidden; color: #a8b3c4; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .preview-stage { position: relative; display: grid; min-height: 320px; max-height: 520px; place-items: center; }
 .preview-stage video { display: block; width: 100%; max-width: 100%; height: 100%; max-height: 520px; object-fit: contain; background: #070a0e; }
 .preview-stage video { min-height: 320px; }
-.preview-stage--image { min-height: 0; max-height: none; justify-content: start; padding: 16px; grid-template-columns: auto minmax(0, 1fr); gap: 16px; }
-.preview-thumbnail { width: 160px; height: 160px; overflow: hidden; cursor: zoom-in; background: #070a0e; border: 1px solid var(--sg-border); border-radius: 10px; }
-.preview-hint { min-width: 0; align-self: center; }
-.preview-hint strong,
-.preview-hint span { display: block; }
-.preview-hint strong { font-size: 12px; }
-.preview-hint span { margin-top: 7px; color: var(--sg-text-muted); font-size: 10px; line-height: 1.6; }
+.preview-stage--image { min-height: 0; max-height: none; padding: 16px; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+.preview-thumbnail { display: block; width: 100%; height: clamp(240px, 46vh, 480px); overflow: hidden; cursor: zoom-in; background: #070a0e; border-radius: 8px; }
+.preview-hint { display: flex; justify-content: center; align-items: center; flex-wrap: wrap; gap: 6px 12px; color: #a8b3c4; font-size: 12px; line-height: 1.6; }
+.preview-hint strong { color: #e5eaf3; font-weight: 500; }
 .preview-media-tag { position: absolute; top: 12px; right: 12px; pointer-events: none; }
 .preview-media-tag .el-icon { margin-right: 4px; }
 .preview-state { min-height: 230px; padding: 28px; color: var(--sg-text-muted); }
@@ -202,7 +199,7 @@ onBeforeUnmount(() => {
 @media (max-width: 760px) {
   .preview-stage,
   .preview-stage video { min-height: 220px; }
-  .preview-stage--image { min-height: 0; }
-  .preview-thumbnail { width: 120px; height: 120px; }
+  .preview-stage--image { min-height: 0; padding: 10px; }
+  .preview-thumbnail { height: clamp(220px, 40vh, 360px); }
 }
 </style>

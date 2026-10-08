@@ -30,7 +30,7 @@ CONFLICT_STATUS = 409
 
 def test_preparing_item_and_mixed_asset_status_keep_directory_preparation_visible() -> None:
     task = SimpleNamespace(task_status='preparing')
-    assert ShotGridAssetCrudService._item_status(task, False) == 'preparing'
+    assert ShotGridAssetCrudService._item_status(task, False, '主视角') == 'preparing'
     assert ShotGridAssetCrudService._aggregate_asset_status(['unassigned', 'not_started', 'preparing']) == 'preparing'
     assert ShotGridAssetCrudService._aggregate_asset_status(['preparing', 'in_progress']) == 'in_progress'
 
@@ -57,8 +57,9 @@ def test_item_time_groups_compress_equal_task_inputs_without_changing_time_or_st
         ('director', True, False, False),
     ],
 )
+@pytest.mark.parametrize('has_schedule', [False, True])
 def test_asset_item_start_action_requires_manager_permission_and_valid_assignee(
-    role: str, *, permitted: bool, valid_assignee: bool, can_start: bool
+    role: str, *, permitted: bool, valid_assignee: bool, can_start: bool, has_schedule: bool
 ) -> None:
     user = _current_user()
     user.user = UserInfoModel(userId=9, userName='director')
@@ -79,8 +80,9 @@ def test_asset_item_start_action_requires_manager_permission_and_valid_assignee(
         task_status='not_started',
         has_uncommitted_submission=False,
         assignee_valid=valid_assignee,
+        has_schedule=has_schedule,
     )
-    assert ('task.start' in actions) is can_start
+    assert ('task.start' in actions) is (can_start and has_schedule)
 
 
 def test_asset_parent_start_action_only_opens_selection_when_a_startable_item_exists() -> None:
@@ -229,12 +231,14 @@ def test_asset_write_service_revalidates_project_role_and_scope() -> None:
 
 
 @pytest.mark.asyncio
-async def test_asset_update_changes_only_non_identity_metadata(
+@pytest.mark.parametrize('case', ['omitted', 'rename', 'started', 'conflict', 'stale', 'audit_failure'])
+async def test_asset_update_name_preserves_storage_and_obeys_transaction_guards(
     monkeypatch: pytest.MonkeyPatch,
+    case: str,
 ) -> None:
     monkeypatch.setattr(
         'module_shot_grid.service.asset_crud_service.ShotGridAssetCrudDao.has_started_tasks_for_asset',
-        AsyncMock(return_value=False),
+        AsyncMock(return_value=case == 'started'),
     )
     asset = SimpleNamespace(
         asset_id=ASSET_ID,
@@ -268,27 +272,69 @@ async def test_asset_update_changes_only_non_identity_metadata(
         AsyncMock(return_value=detail),
     )
     db = AsyncMock()
+    task = SimpleNamespace(task_name='动力舱室内 - 主视角', lock_version=2, task_status='in_progress')
+    tasks = AsyncMock(return_value=[(task, '主视角')])
+    conflict = AsyncMock(return_value=case == 'conflict')
+    monkeypatch.setattr(ShotGridAssetCrudDao, 'get_asset_tasks_for_update', tasks)
+    monkeypatch.setattr(ShotGridAssetCrudDao, 'asset_name_or_path_exists', conflict)
+    if case == 'audit_failure':
+        monkeypatch.setattr(ShotGridAssetCrudService, '_audit', AsyncMock(side_effect=RuntimeError('审计失败')))
+    payload = {} if case == 'omitted' else {'assetName': ' 新场景 '}
+    command = ShotGridAssetUpdateModel(
+        **payload,
+        description='旧描述' if case == 'started' else '新描述',
+        sortOrder=UPDATED_SORT_ORDER,
+        lockVersion=1 if case == 'stale' else 0,
+    )
+
+    if case in {'conflict', 'stale', 'audit_failure'}:
+        expected_exception = RuntimeError if case == 'audit_failure' else ShotGridDomainException
+        with pytest.raises(expected_exception) as error:
+            await ShotGridAssetCrudService.update_asset(db, PROJECT_ID, ASSET_ID, command, _current_user(), _access())
+        if case == 'conflict':
+            assert error.value.error_key == 'SG_ASSET_NAME_CONFLICT'
+            assert asset.asset_name == '动力舱室内'
+            tasks.assert_not_awaited()
+        if case == 'stale':
+            conflict.assert_not_awaited()
+            tasks.assert_not_awaited()
+        db.commit.assert_not_awaited()
+        db.rollback.assert_awaited_once()
+        return
 
     result = await ShotGridAssetCrudService.update_asset(
         db,
         PROJECT_ID,
         ASSET_ID,
-        ShotGridAssetUpdateModel(
-            description='新描述',
-            sortOrder=UPDATED_SORT_ORDER,
-            lockVersion=0,
-        ),
+        command,
         _current_user(),
         _access(),
     )
 
     assert result is detail
     assert asset.asset_type == 'Environment'
-    assert asset.asset_name == '动力舱室内'
+    assert asset.asset_name == ('动力舱室内' if case == 'omitted' else '新场景')
+    assert asset.asset_name_key == asset.asset_name
     assert asset.storage_dir_name == '动力舱室内'
     assert asset.storage_path_key == 'asset\\environment\\动力舱室内'
-    assert asset.description == '新描述'
+    assert asset.description == ('旧描述' if case == 'started' else '新描述')
     assert asset.sort_order == UPDATED_SORT_ORDER
+    assert asset.lock_version == 1
+    assert task.task_status == 'in_progress'
+    if case == 'omitted':
+        tasks.assert_not_awaited()
+        conflict.assert_not_awaited()
+    else:
+        assert task.task_name == '新场景 - 主视角'
+        assert task.lock_version == RENAMED_TASK_LOCK_VERSION
+        conflict.assert_awaited_once_with(
+            db,
+            PROJECT_ID,
+            asset_type='Environment',
+            asset_name_key='新场景',
+            storage_path_key='asset\\environment\\动力舱室内',
+            exclude_asset_id=ASSET_ID,
+        )
     db.commit.assert_awaited_once()
 
 
@@ -888,6 +934,26 @@ def test_item_assignment_action_is_only_available_before_start(task_status: str 
     assert ('task.assign' in actions) is can_assign
 
 
+@pytest.mark.parametrize('status', ['in_progress', 'pending_review', 'revision'])
+def test_pending_submission_blocks_asset_item_adjustment_and_feedback(status: str) -> None:
+    user = _current_user()
+    user.permissions.extend(['shotgrid:version:review', 'shotgrid:note:add'])
+    actions = ShotGridAssetCrudService._item_allowed_actions(
+        user,
+        _access(),
+        project_id=PROJECT_ID,
+        project_status='active',
+        storage_status='ready',
+        asset_lifecycle_status='active',
+        item_lifecycle_status='active',
+        production_item='主视角',
+        has_versions=True,
+        task_status=status,
+        has_uncommitted_submission=True,
+    )
+    assert not {'task.adjust', 'task.review', 'task.appendIssue'} & set(actions)
+
+
 def test_asset_and_item_allowed_actions_are_server_side_state_mirrors() -> None:
     asset_actions = ShotGridAssetCrudService._asset_allowed_actions(
         _current_user(),
@@ -915,22 +981,19 @@ def test_asset_and_item_allowed_actions_are_server_side_state_mirrors() -> None:
 
     assert asset_actions == ['asset.edit', 'asset.archive', 'assetItem.add', 'task.assign']
     assert item_actions == ['assetItem.edit', 'assetItem.archive', 'assetItem.delete', 'task.assign']
-    assert (
-        ShotGridAssetCrudService._item_allowed_actions(
-            _current_user(),
-            _access(),
-            project_id=PROJECT_ID,
-            project_status='active',
-            storage_status='ready',
-            asset_lifecycle_status='active',
-            item_lifecycle_status='active',
-            production_item='主视角',
-            has_versions=False,
-            task_status='in_progress',
-            has_uncommitted_submission=False,
-        )
-        == []
-    )
+    assert ShotGridAssetCrudService._item_allowed_actions(
+        _current_user(),
+        _access(),
+        project_id=PROJECT_ID,
+        project_status='active',
+        storage_status='ready',
+        asset_lifecycle_status='active',
+        item_lifecycle_status='active',
+        production_item='主视角',
+        has_versions=False,
+        task_status='in_progress',
+        has_uncommitted_submission=False,
+    ) == ['task.adjust']
 
     assert (
         ShotGridAssetCrudService._asset_allowed_actions(
@@ -965,12 +1028,95 @@ def test_asset_and_item_allowed_actions_are_server_side_state_mirrors() -> None:
 
 def test_unscheduled_item_phase_and_asset_rollup() -> None:
     task = SimpleNamespace(task_status='not_started', expected_start_time=None, expected_end_time=None)
-    assert ShotGridAssetCrudService._item_status(task, False) == 'pending_schedule'
+    assert ShotGridAssetCrudService._item_status(task, False, '主视角') == 'pending_schedule'
     task.expected_start_time = datetime(2026, 9, 30)
-    assert ShotGridAssetCrudService._item_status(task, False) == 'pending_schedule'
+    assert ShotGridAssetCrudService._item_status(task, False, '主视角') == 'pending_schedule'
     task.expected_end_time = datetime(2026, 10, 7)
-    assert ShotGridAssetCrudService._item_status(task, False) == 'not_started'
+    assert ShotGridAssetCrudService._item_status(task, False, '主视角') == 'not_started'
     assert task.task_status == 'not_started'
     assert ShotGridAssetCrudService._aggregate_asset_status(['not_started', 'pending_schedule']) == 'pending_schedule'
     assert ShotGridAssetCrudService._aggregate_asset_status(['unassigned', 'pending_schedule']) == 'unassigned'
     assert ShotGridAssetCrudService._aggregate_asset_status(['in_progress', 'pending_schedule']) == 'in_progress'
+
+
+@pytest.mark.parametrize('name', [None, '', '   ', '\t\n'])
+def test_unnamed_unassigned_item_needs_info_without_rewinding_existing_task(name: str | None) -> None:
+    assert ShotGridAssetCrudService._item_status(None, False, name) == 'pending_info'
+    assert ShotGridAssetCrudService._item_status(None, False, '主视角') == 'unassigned'
+    assert (
+        ShotGridAssetCrudService._item_status(SimpleNamespace(task_status='in_progress'), False, name) == 'in_progress'
+    )
+    assert ShotGridAssetCrudService._aggregate_asset_status(['unassigned', 'pending_info']) == 'pending_info'
+    assert ShotGridAssetCrudService._aggregate_asset_status(['in_progress', 'pending_info']) == 'in_progress'
+
+
+@pytest.mark.parametrize('status', ['in_progress', 'revision', 'pending_review'])
+@pytest.mark.parametrize(
+    'case',
+    [
+        'owner',
+        'other',
+        'director',
+        'no_query',
+        'no_add',
+        'inactive',
+        'archived',
+        'storage',
+        'unassigned',
+        'wrong_project',
+    ],
+)
+def test_item_work_action_is_only_for_current_active_creator(status: str, case: str) -> None:
+    user = _current_user()
+    user.user = UserInfoModel(userId=9, userName='creator')
+    user.permissions = ['shotgrid:task:query', 'shotgrid:version:add']
+    access = _access(role='director' if case == 'director' else 'creator')
+    access.user_id = 9
+    if case == 'no_query':
+        user.permissions.remove('shotgrid:task:query')
+    if case == 'no_add':
+        user.permissions.remove('shotgrid:version:add')
+    actions = ShotGridAssetCrudService._item_allowed_actions(
+        user,
+        access,
+        project_id=999 if case == 'wrong_project' else PROJECT_ID,
+        project_status='archived' if case == 'archived' else 'active',
+        storage_status='pending' if case == 'storage' else 'ready',
+        asset_lifecycle_status='active',
+        item_lifecycle_status='active',
+        production_item='主视角',
+        has_versions=True,
+        task_status='not_started' if case == 'unassigned' else status,
+        has_uncommitted_submission=False,
+        assignee_valid=case != 'inactive',
+        assignee_user_id=2 if case == 'other' else 9,
+    )
+    assert ('task.work' in actions) is (case == 'owner')
+
+
+@pytest.mark.parametrize(
+    'missing', [None, 'shotgrid:version:review', 'shotgrid:version:query', 'shotgrid:reviewList:query']
+)
+@pytest.mark.parametrize('role', ['director', 'creator'])
+def test_asset_review_entry_matches_shot_review_permissions(missing: str | None, role: str) -> None:
+    user = _current_user()
+    user.user = UserInfoModel(userId=9, userName='reviewer')
+    user.permissions = ['shotgrid:version:review', 'shotgrid:version:query', 'shotgrid:reviewList:query']
+    if missing:
+        user.permissions.remove(missing)
+    access = _access(role=role)
+    access.user_id = 9
+    actions = ShotGridAssetCrudService._item_allowed_actions(
+        user,
+        access,
+        project_id=PROJECT_ID,
+        project_status='active',
+        storage_status='ready',
+        asset_lifecycle_status='active',
+        item_lifecycle_status='active',
+        production_item='主视角',
+        has_versions=True,
+        task_status='pending_review',
+        has_uncommitted_submission=False,
+    )
+    assert ('task.review' in actions) is (role == 'director' and missing is None)

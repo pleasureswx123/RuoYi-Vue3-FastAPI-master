@@ -12,7 +12,10 @@ from common.vo import DataResponseModel, PageResponseModel
 from module_admin.entity.vo.user_vo import CurrentUserModel
 from module_shot_grid.dependencies.project_access import ProjectAccessDependency, ProjectRoleDependency
 from module_shot_grid.entity.vo.access_vo import ShotGridProjectAccessModel
-from module_shot_grid.entity.vo.production_adjustment_vo import ShotGridProductionAdjustmentModel
+from module_shot_grid.entity.vo.production_adjustment_vo import (
+    ShotGridAssetProductionAdjustmentModel,
+    ShotGridProductionAdjustmentModel,
+)
 from module_shot_grid.entity.vo.task_vo import (
     ShotGridAssetItemTaskBatchAssignModel,
     ShotGridAssetItemTaskBatchAssignResultModel,
@@ -46,6 +49,22 @@ task_controller = APIRouterPro(
 
 
 # 静态 /tasks/mine 必须先于 /tasks/{taskId} 注册，避免被动态路径捕获。
+@task_controller.post(
+    '/projects/{projectId}/asset-items/production-adjustments',
+    summary='单条或批量调整资产制作分项任务',
+    dependencies=[UserInterfaceAuthDependency('shotgrid:task:edit')],
+)
+async def adjust_shot_grid_asset_production(
+    request: Request,
+    project_id: Annotated[int, Path(alias='projectId', gt=0, le=SQL_BIGINT_MAX)],
+    command: ShotGridAssetProductionAdjustmentModel,
+    query_db: Annotated[AsyncSession, DBSessionDependency()],
+    current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
+) -> Response:
+    result = await ShotGridProductionAdjustmentService.adjust(query_db, project_id, command, current_user)
+    return ResponseUtil.success(data=result)
+
+
 @task_controller.get(
     '/tasks/mine',
     summary='跨项目查询我的任务',

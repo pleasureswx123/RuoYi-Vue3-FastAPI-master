@@ -6,7 +6,7 @@ import BatchOverallFeedbackDialog from '@/components/version/BatchOverallFeedbac
 import { getVersionReviewContext, submitBatchFeedback, uploadReviewReferenceFile } from '@/api/shot-grid/reviews'
 vi.mock('@/api/shot-grid/reviews', () => ({ uploadReviewReferenceFile: vi.fn(), getVersionReviewContext: vi.fn(), submitBatchFeedback: vi.fn() }))
 
-const shots = [31, 32].map(versionId => ({ shotCode: '镜头' + versionId, latestVersion: { versionId, versionNumber: 'V002' }, canInspect: true }))
+const shots = [31, 32].map(versionId => ({ shotCode: '任务' + versionId, latestVersion: { versionId, versionNumber: 'V002' }, canInspect: true }))
 const issue = id => ({ issueId: id, content: '原始问题' + id, originVersionNumber: 'V001', currentVersionResponse: { responseText: '已经调整，请复核' } })
 const context = (id, overrides = {}) => ({ data: {
   currentVersion: { versionId: id, versionStatus: 'pending_review', lockVersion: 3 },
@@ -23,7 +23,7 @@ const button = label => wrapper.findAllComponents(ElButton).find(item => item.te
 async function click(label) { await button(label).trigger('click'); await flushPromises() }
 const toFeedback = () => click('下一步：补充反馈')
 const toConfirm = () => click('下一步：确认发送')
-const sendLabel = '确认发送并退回修改（2 个镜头）'
+const sendLabel = '确认发送并退回修改（2 个任务）'
 const send = () => click(sendLabel)
 const commonText = () => wrapper.get('textarea[placeholder^="填写适用于"]')
 const stage = () => wrapper.getComponent(ElSteps).props('active')
@@ -63,7 +63,16 @@ afterEach(() => {
 })
 
 describe('批量反馈三步向导', () => {
-  it('参考文件跨步骤保留，汇总只读；一次上传后用于全部镜头', async () => {
+  it('资产数字版本号同时正确显示在导航和复核标题中', async () => {
+    wrapper = mount(BatchOverallFeedbackDialog, { attachTo: document.body, global: { stubs: { teleport: true } } })
+    wrapper.vm.open(8, [{ displayLabel: '空间站 · 概念设计', latestVersion: { versionId: 31, versionNo: 1 }, canInspect: true }])
+    await flushPromises()
+    expect(wrapper.find('.batch-feedback-nav__label').text()).toBe('空间站 · 概念设计 · V001')
+    expect(wrapper.find('.batch-feedback-workspace-heading strong').text()).toBe('空间站 · 概念设计 · V001')
+    expect(wrapper.text()).not.toContain('undefined')
+  })
+
+  it('参考文件跨步骤保留，汇总只读；一次上传后用于全部任务', async () => {
     await open()
     await toFeedback()
     wrapper.getComponent(ReviewReferenceInput).vm.$emit('add', { raw: new File(['ref'], '参考.pdf') })
@@ -143,7 +152,7 @@ describe('批量反馈三步向导', () => {
     })
     expect(wrapper.emitted('saved')).toEqual([[{ projectId: 8 }]])
   })
-  it('默认未复核；门禁定位漏项镜头，全部完成前不能补充新反馈', async () => {
+  it('默认未复核；门禁定位漏项任务，全部完成前不能补充新反馈', async () => {
     getVersionReviewContext.mockImplementation(id => Promise.resolve(context(id, { carriedIssues: [issue(id)] })))
     await open()
     expect(wrapper.text()).toContain('制作人处理说明')
@@ -162,7 +171,7 @@ describe('批量反馈三步向导', () => {
       [{ issueId: 31, result: 'resolved', comment: null }], [{ issueId: 32, result: 'resolved', comment: null }]
     ])
   })
-  it('仍需修改必须补原因；切换镜头和前后步骤保持结论与反馈', async () => {
+  it('仍需修改必须补原因；切换任务和前后步骤保持结论与反馈', async () => {
     getVersionReviewContext.mockImplementation(id => Promise.resolve(context(id, { carriedIssues: [issue(id)] })))
     await open()
     await mark('still_present')
@@ -203,7 +212,7 @@ describe('批量反馈三步向导', () => {
     await selectShot(32)
     expect(wrapper.findAllComponents(ElRadioGroup).map(group => group.props('modelValue'))).toEqual(['', ''])
   })
-  it('选择仍需修改聚焦原因，定位漏项优先保留当前镜头，填写后才计入完成', async () => {
+  it('选择仍需修改聚焦原因，定位漏项优先保留当前任务，填写后才计入完成', async () => {
     getVersionReviewContext.mockImplementation(id => Promise.resolve(context(id, { carriedIssues: [issue(id)] })))
     await open()
     await mark('still_present')
@@ -218,7 +227,7 @@ describe('批量反馈三步向导', () => {
     expect(issueTable().props('data')[0].issueId).toBe(32)
     expect(submitBatchFeedback).not.toHaveBeenCalled()
   })
-  it('切换镜头清除勾选而保留复核状态，避免批量操作误改隐藏镜头', async () => {
+  it('切换任务清除勾选而保留复核状态，避免批量操作误改隐藏任务', async () => {
     getVersionReviewContext.mockImplementation(id => Promise.resolve(context(id, { carriedIssues: [issue(id)] })))
     await open()
     await mark('resolved')
@@ -247,14 +256,14 @@ describe('批量反馈三步向导', () => {
     expect(submitBatchFeedback.mock.calls[0][1].items[0].drafts).toEqual([{ draftId: 131, lockVersion: 2 }])
     expect(submitBatchFeedback.mock.calls[0][1].content).toBe('')
   })
-  it('全部旧问题解决且无新意见时提示单镜头审核通过，不能空退回', async () => {
+  it('全部旧问题解决且无新意见时提示单任务审核通过，不能空退回', async () => {
     getVersionReviewContext.mockImplementation(id => Promise.resolve(context(id, { carriedIssues: [issue(id)] })))
     await open()
     await resolveAll()
     await toFeedback()
     await toConfirm()
     expect(stage()).toBe(1)
-    expect(wrapper.text()).toContain('转单镜头审核通过')
+    expect(wrapper.text()).toContain('转单任务审核通过')
     expect(submitBatchFeedback).not.toHaveBeenCalled()
   })
   it('仍有修改问题时可不填共同意见，预览能展开查看原因', async () => {
@@ -344,7 +353,7 @@ describe('批量反馈三步向导', () => {
     await flushPromises()
     expect(wrapper.emitted('saved')).toBeUndefined()
   })
-  it('查看画面复用当前镜头审核入口', async () => {
+  it('查看画面复用当前任务审核入口', async () => {
     await open()
     await click('查看当前版本画面')
     expect(wrapper.emitted('review')).toEqual([[shots[0]]])

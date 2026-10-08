@@ -1,3 +1,6 @@
+import AssetActionButtons from '@/views/asset/components/AssetActionButtons.vue'
+import ProductionHistoryPanel from '@/components/production-history/ProductionHistoryPanel.vue'
+import AssetStartDrawer from '@/views/asset/components/AssetStartDrawer.vue'
 import { ElAlert, ElButton, ElCard, ElDatePicker, ElDescriptions, ElDescriptionsItem, ElDialog, ElDrawer, ElDropdown, ElEmpty, ElForm, ElFormItem, ElIcon, ElInput, ElInputNumber, ElLoading, ElMessageBox, ElOption, ElPagination, ElRadioButton, ElRadioGroup, ElSelect, ElTable, ElTableColumn, ElTag, ElText } from 'element-plus'
 import { createPinia, setActivePinia } from 'pinia'
 import { flushPromises, mount } from '@vue/test-utils'
@@ -25,7 +28,7 @@ import { getProjectDetail, getProjectPage } from '@/api/shot-grid/projects'
 import { startTask } from '@/api/shot-grid/tasks'
 import { useSessionStore } from '@/store/modules/session'
 import { useThemeStore } from '@/store/modules/theme'
-import { buttonLabel, completeTaskStartForm, expectedTaskTimes, setElSelectValue } from '../helpers/elementPlus'
+import { buttonLabel, expectedTaskTimes, setElSelectValue } from '../helpers/elementPlus'
 import AssetDetailView from '@/views/asset/AssetDetailView.vue'
 import AssetListView from '@/views/asset/AssetListView.vue'
 import AssetArchiveDialog from '@/views/asset/components/AssetArchiveDialog.vue'
@@ -40,7 +43,7 @@ import AssetRequirementDialog from '@/views/asset/components/AssetRequirementDia
 vi.mock('@/views/schedule/ScheduleBoard.vue', () => ({
   default: {
     name: 'ScheduleBoard',
-    props: ['projectId', 'targetKind', 'initialMode', 'initialFilters', 'editableAllowed'],
+    props: ['projectId', 'targetKind', 'initialMode', 'initialFilters', 'editableAllowed', 'actionLoader', 'actionFactory'],
     template: '<section data-testid="schedule-board-entry" :data-target-kind="targetKind" :data-mode="initialMode" />'
   }
 }))
@@ -78,6 +81,13 @@ vi.mock('@/api/shot-grid/assets', () => ({
   updateAssetItem: vi.fn()
 }))
 vi.mock('@/api/shot-grid/tasks', () => ({ startTask: vi.fn() }))
+
+async function completeTaskStartForm(wrapper, action = 'confirm') {
+  const dialog = wrapper.findComponent({ name: 'TaskStartDialog' })
+  if (action === 'confirm') await setElSelectValue(dialog.findComponent(ElSelect), 'normal')
+  await dialog.findAllComponents(ElButton).find(button => buttonLabel(button) === (action === 'confirm' ? '确认开工' : '暂不开工')).trigger('click')
+  await flushPromises()
+}
 
 const projectRow = { projectId: 8, projectCode: 'LCFR', projectName: '罗刹夫人' }
 const memberRow = { userId: 7, userName: '杨景锋', nickName: 'YJF', producerCode: 'YJF' }
@@ -121,7 +131,7 @@ const assetItem = {
 }
 const scheduleBoardStub = {
   name: 'ScheduleBoard',
-  props: ['projectId', 'targetKind', 'initialMode', 'initialFilters', 'editableAllowed'],
+  props: ['projectId', 'targetKind', 'initialMode', 'initialFilters', 'editableAllowed', 'actionLoader', 'actionFactory'],
   template: '<section data-testid="schedule-board-entry" :data-target-kind="targetKind" :data-mode="initialMode" />'
 }
 
@@ -237,7 +247,149 @@ describe('资产管理真实列表页', () => {
     getAssetItems.mockReset().mockResolvedValue({ data: [assetItem] })
   })
 
-  it('资产树表收起即汇总时间状态，展开仍按分项显示双时间', async () => {
+  it.each(['swimlane', 'gantt'])('%s 通过真实分项加载快捷动作并拒绝跨项目目标', async mode => {
+    const target = { ...assetItem, task: { taskId: 61, taskStatus: 'not_started', lockVersion: 3 }, allowedActions: [] }
+    getAssetDetail.mockResolvedValue({ data: { ...assetDetail(), items: [target] } })
+    const { wrapper } = await mountList(['shotgrid:asset:list', 'shotgrid:asset:query', 'shotgrid:task:schedule', 'shotgrid:task:query'])
+    try {
+      wrapper.getComponent(ElRadioGroup).vm.$emit('update:modelValue', mode)
+      await flushPromises()
+      const board = wrapper.getComponent({ name: 'ScheduleBoard' })
+      const task = { taskId: 61, projectId: 8, target: { targetKind: 'asset_item', parentId: 31, targetId: 41 } }
+      const result = await board.props('actionLoader')(task)
+      expect(board.props('actionFactory')(result).map(action => action.key)).toEqual(['schedule', 'task', 'history', 'detail'])
+      getAssetDetail.mockClear()
+      expect(await board.props('actionLoader')({ ...task, projectId: 9 })).toBeNull()
+      expect(getAssetDetail).not.toHaveBeenCalled()
+    } finally { wrapper.unmount() }
+  })
+
+  it('制作履历按钮打开对应分项的履历抽屉', async () => {
+    const { wrapper } = await mountList(['shotgrid:asset:list', 'shotgrid:asset:query'])
+    try {
+      await wrapper.find('.el-table__expand-icon').trigger('click'); await flushPromises()
+      const row = wrapper.find('.el-table__row--level-1')
+      await row.findAll('button').find(button => buttonLabel(button) === '制作履历').trigger('click')
+      await flushPromises()
+      expect(wrapper.getComponent(ProductionHistoryPanel).props()).toMatchObject({ projectId: 8, subjectId: 31, subjectType: 'asset', initialLaneId: 41 })
+      expect(wrapper.findComponent(AssetDetailView).exists()).toBe(false)
+    } finally { wrapper.unmount() }
+  })
+
+  it.each([['in_progress', '去做任务'], ['revision', '去修改'], ['pending_review', '追加审核文件']])('制作人 %s 分项展示工作入口 %s', async (status, label) => {
+    getAssetItems.mockResolvedValue({ data: [{ ...assetItem, assetStatus: status === 'pending_review' ? 'reviewing' : status, task: { taskId: 61, taskStatus: status }, allowedActions: ['task.work'] }] })
+    const { wrapper } = await mountList(['shotgrid:asset:list', 'shotgrid:asset:query', 'shotgrid:task:query', 'shotgrid:version:add'])
+    try {
+      await wrapper.find('.el-table__expand-icon').trigger('click'); await flushPromises()
+      const row = wrapper.find('.el-table__row--level-1')
+      const actions = row.findComponent(AssetActionButtons).props('actions')
+      expect(actions.find(action => action.key === 'work').button.label).toBe(label)
+      if (status !== 'pending_review') expect(actions[0].key).toBe('work')
+      useSessionStore().permissions = ['shotgrid:asset:list', 'shotgrid:asset:query', 'shotgrid:task:query']
+      await flushPromises()
+      expect(row.findAll('button').map(buttonLabel)).not.toContain(label)
+    } finally { wrapper.unmount() }
+  })
+
+  it('父资产混合待审核与待开工状态优先显示审核，开工明确为分项选择', async () => {
+    getAssetPage.mockResolvedValue({ rows: [{ ...assetRow, assetStatus: 'reviewing', itemStatusCounts: { reviewing: 1, not_started: 1 }, allowedActions: ['task.start'] }], total: 1 })
+    const { wrapper } = await mountList(['shotgrid:asset:list', 'shotgrid:asset:query', 'shotgrid:task:start', 'shotgrid:version:review', 'shotgrid:version:query', 'shotgrid:reviewList:query'])
+    try {
+      const labels = wrapper.find('.el-table__row--level-0').findAll('button').map(buttonLabel)
+      expect(labels).toContain('审核任务')
+      expect(labels).toContain('选择分项开工（1）')
+      expect(labels).not.toContain('确认开工')
+      expect(labels.indexOf('审核任务')).toBeLessThan(labels.indexOf('选择分项开工（1）'))
+    } finally { wrapper.unmount() }
+  })
+
+  it('父资产审核入口只在全部状态或待审核筛选显示', async () => {
+    getAssetPage.mockResolvedValue({ rows: [{ ...assetRow, assetStatus: 'revision', itemStatusCounts: { reviewing: 1, revision: 1 } }], total: 1 })
+    const { wrapper } = await mountList(['shotgrid:asset:list', 'shotgrid:asset:query', 'shotgrid:version:review', 'shotgrid:version:query', 'shotgrid:reviewList:query'])
+    try {
+      const filter = wrapper.find('.asset-filters').findAllComponents({ name: 'ElSelect' })[1]
+      for (const [status, expected] of [['revision', false], ['reviewing', true], ['', true]]) {
+        await setElSelectValue(filter, status)
+        await flushPromises()
+        const labels = wrapper.find('.el-table__row--level-0').findAll('button').map(buttonLabel)
+        expect(labels.includes('审核任务')).toBe(expected)
+      }
+    } finally { wrapper.unmount() }
+  })
+
+  it('父级阶段按钮不会指向当前筛选隐藏的分项', async () => {
+    getAssetPage.mockResolvedValue({ rows: [{ ...assetRow, itemStatusCounts: { pending_info: 1, unassigned: 1, pending_schedule: 1, not_started: 1, revision: 1 }, allowedActions: ['asset.edit', 'task.assign', 'task.start'] }], total: 1 })
+    const { wrapper } = await mountList(['shotgrid:asset:list', 'shotgrid:asset:query', 'shotgrid:asset:edit', 'shotgrid:task:assign', 'shotgrid:task:schedule', 'shotgrid:task:start'])
+    try {
+      const filter = wrapper.find('.asset-filters').findAllComponents({ name: 'ElSelect' })[1]
+      const stages = ['完善信息', '分配制作人', '设置排期', '选择分项开工（1）']
+      for (const [status, expected] of [['revision', []], ['pending_info', [stages[0]]], ['unassigned', [stages[1]]], ['pending_schedule', [stages[2]]], ['not_started', [stages[3]]], ['', stages]]) {
+        await setElSelectValue(filter, status)
+        await flushPromises()
+        const labels = wrapper.find('.el-table__row--level-0').findAll('button').map(buttonLabel)
+        expect(labels.filter(label => stages.includes(label))).toEqual(expected)
+        expect(labels).toContain('详情')
+        expect(labels).toContain('编辑资产')
+      }
+    } finally { wrapper.unmount() }
+  })
+
+  it('分项排期入口独立于开工权限，并提供查看任务', async () => {
+    const target = { ...assetItem, task: { taskId: 61, taskStatus: 'not_started', lockVersion: 3 }, allowedActions: [] }
+    getAssetItems.mockResolvedValue({ data: [target] })
+    const { wrapper } = await mountList(['shotgrid:asset:list', 'shotgrid:asset:query', 'shotgrid:task:schedule', 'shotgrid:task:query'])
+    try {
+      await wrapper.find('.el-table__expand-icon').trigger('click')
+      await flushPromises()
+      const labels = wrapper.find('.el-table__row--level-1').findAll('button').map(buttonLabel)
+      expect(labels).toContain('设置排期')
+      expect(wrapper.findComponent(AssetActionButtons).exists()).toBe(true)
+      expect(wrapper.find('.el-table__row--level-1').findComponent(AssetActionButtons).props('actions').map(action => action.button.label)).toContain('查看任务')
+      expect(labels).not.toContain('确认开工')
+    } finally { wrapper.unmount() }
+  })
+
+  it.each([
+    ['pending_info', null, '完善信息'],
+    ['unassigned', null, '分配制作人'],
+    ['pending_schedule', { taskId: 61, taskStatus: 'not_started' }, '设置排期'],
+    ['pending_schedule', { taskId: 61, taskStatus: 'not_started', expectedStartTime: '2099-10-10T09:00:00' }, '设置排期'],
+    ['pending_schedule', { taskId: 61, taskStatus: 'not_started', expectedEndTime: '2099-10-11T18:00:00' }, '设置排期'],
+    ['not_started', { taskId: 61, taskStatus: 'not_started', expectedStartTime: '2099-10-10T09:00:00', expectedEndTime: '2099-10-11T18:00:00' }, '确认开工']
+  ])('分项 %s 阶段将下一步操作前置，并保留辅助操作和标准按钮样式', async (assetStatus, task, firstLabel) => {
+    getAssetPage.mockResolvedValue({ rows: [{ ...assetRow, allowedActions: [...assetRow.allowedActions, 'task.start'] }], total: 1 })
+    getAssetItems.mockResolvedValue({ data: [{ ...assetItem, productionItem: assetStatus === 'pending_info' ? '' : assetItem.productionItem, assetStatus, task, allowedActions: ['task.assign', 'assetItem.edit', 'assetItem.delete', 'task.start'] }] })
+    const { wrapper } = await mountList(['shotgrid:asset:list', 'shotgrid:asset:query', 'shotgrid:asset:edit', 'shotgrid:asset:archive', 'shotgrid:task:assign', 'shotgrid:task:start', 'shotgrid:task:schedule'])
+    try {
+      await wrapper.find('.el-table__expand-icon').trigger('click')
+      await flushPromises()
+      const row = wrapper.find('.el-table__row--level-1')
+      const buttons = row.findAllComponents(ElButton).filter(button => button.attributes('aria-label'))
+      const labels = buttons.map(buttonLabel)
+      expect(labels[0]).toBe(firstLabel)
+      if (assetStatus !== 'pending_info') expect(labels.indexOf('编辑分项')).toBe(labels.indexOf('删除分项') - 1)
+      expect(row.findComponent(ElDropdown).exists()).toBe(false)
+      expect(buttons[0].props()).toMatchObject({ round: false, plain: false })
+      expect(row.find('.asset-status-tag').text()).toBe({ pending_info: '待完善', unassigned: '待分配', pending_schedule: '待排期', not_started: '待开工' }[assetStatus])
+      if (assetStatus !== 'not_started') expect(labels).not.toContain('确认开工')
+    } finally { wrapper.unmount() }
+  })
+
+
+  it.each([
+    ['pending_info', '完善信息'],
+    ['unassigned', '分配制作人'],
+    ['pending_schedule', '设置排期']
+  ])('父资产 %s 阶段提供对应入口并保持权限约束', async (assetStatus, label) => {
+    getAssetPage.mockResolvedValue({ rows: [{ ...assetRow, assetStatus, allowedActions: [...assetRow.allowedActions, 'task.assign'], itemStatusCounts: { [assetStatus]: 1 } }], total: 1 })
+    const { wrapper } = await mountList(['shotgrid:asset:list', 'shotgrid:asset:query', 'shotgrid:asset:edit', 'shotgrid:task:assign', 'shotgrid:task:schedule'])
+    try {
+      const row = wrapper.find('.el-table__row--level-0')
+      expect(row.findAllComponents(ElButton).filter(button => button.attributes('aria-label')).map(buttonLabel)[0]).toBe(label)
+    } finally { wrapper.unmount() }
+  })
+
+  it('资产树表在计划时间列汇总时间状态，展开按分项显示起止时间', async () => {
     vi.useFakeTimers({ toFake: ['Date'] })
     vi.setSystemTime(new Date('2026-08-28T12:00:00'))
     getAssetPage.mockResolvedValue({ rows: [{ ...assetRow, itemCount: 4, itemTimeGroups: [
@@ -323,26 +475,21 @@ describe('资产管理真实列表页', () => {
 
   it.each([
     { label: '编辑分项', component: AssetItemFormDialog },
-    { label: '补齐制作分项', component: AssetItemFormDialog },
-    { label: '分配任务', component: AssetAssignDialog },
+    { label: '完善信息', component: AssetItemFormDialog },
+    { label: '分配制作人', component: AssetAssignDialog },
     { label: '删除分项', component: AssetItemDeleteDialog }
   ])('树表子行的 $label 直接打开目标分项原有表单', async ({ label, component }) => {
-    const target = { ...assetItem, assetItemId: 42, productionItem: label === '补齐制作分项' ? '' : '反打视角', assetStatus: 'unassigned', allowedActions: ['assetItem.edit', 'assetItem.delete', 'task.assign'] }
+    const target = { ...assetItem, assetItemId: 42, productionItem: label === '完善信息' ? '' : '反打视角', assetStatus: 'unassigned', allowedActions: ['assetItem.edit', 'assetItem.delete', 'task.assign'] }
     getAssetItems.mockResolvedValue({ data: [assetItem, target] })
     getAssetDetail.mockResolvedValue({ data: { ...assetDetail(), items: [assetItem, target] } })
     const { wrapper } = await mountList(['shotgrid:asset:list', 'shotgrid:asset:query', 'shotgrid:asset:edit', 'shotgrid:asset:archive', 'shotgrid:task:assign'])
     try {
       await wrapper.find('.el-table__expand-icon').trigger('click')
       await flushPromises()
-      const action = wrapper.findAll('.el-table__row--level-1')[1].findAll('button').find(button => buttonLabel(button) === label)
+      const actionGroup = wrapper.findAll('.el-table__row--level-1')[1].findComponent(AssetActionButtons)
+      const action = actionGroup.props('actions').find(action => action.button.label === label)
       expect(action).toBeDefined()
-      expect(action.classes()).toContain('el-button--small')
-      expect(action.attributes('aria-label')).toBe(label)
-      expect(action.text()).toBe(label)
-      expect(action.classes()).toContain('is-round')
-      expect(action.classes()).toContain('is-plain')
-      expect(action.classes().includes('is-dashed')).toBe(label === '补齐制作分项')
-      await action.trigger('click')
+      await actionGroup.findAll('button').find(button => buttonLabel(button) === label).trigger('click')
       await flushPromises()
       expect(wrapper.findComponent(component).props('item').assetItemId).toBe(42)
       expect(wrapper.findComponent(component).props('asset').assetId).toBe(31)
@@ -350,7 +497,7 @@ describe('资产管理真实列表页', () => {
     } finally { wrapper.unmount() }
   })
 
-  it('树表补齐制作分项后刷新为编辑和分配入口', async () => {
+  it('树表完善信息后刷新为编辑和分配入口', async () => {
     const incomplete = { ...assetItem, productionItem: '', assetStatus: 'unassigned', allowedActions: ['assetItem.edit'] }
     getAssetPage.mockImplementation(async () => ({ rows: [{ ...assetRow }], total: 1, hasNext: false }))
     getAssetItems.mockResolvedValue({ data: [incomplete] })
@@ -363,7 +510,7 @@ describe('资产管理真实列表页', () => {
     try {
       await wrapper.find('.el-table__expand-icon').trigger('click')
       await flushPromises()
-      await wrapper.find('.el-table__row--level-1').findAll('button').find(button => buttonLabel(button) === '补齐制作分项').trigger('click')
+      await wrapper.find('.el-table__row--level-1').findAll('button').find(button => buttonLabel(button) === '完善信息').trigger('click')
       await flushPromises()
       const dialog = wrapper.findComponent(AssetItemFormDialog)
       await dialog.findComponent(ElInput).setValue('舱室反打')
@@ -374,9 +521,9 @@ describe('资产管理真实列表页', () => {
       expect(getAssetItems).toHaveBeenCalledTimes(2)
       const row = wrapper.find('.el-table__row--level-1')
       const labels = row.findAll('button').map(buttonLabel)
-      expect(labels).toContain('编辑分项')
-      expect(labels).toContain('分配任务')
-      expect(labels).not.toContain('补齐制作分项')
+      expect(row.findComponent(AssetActionButtons).props('actions').map(action => action.button.label)).toContain('编辑分项')
+      expect(labels).toContain('分配制作人')
+      expect(labels).not.toContain('完善信息')
     } finally { wrapper.unmount() }
   })
 
@@ -400,7 +547,7 @@ describe('资产管理真实列表页', () => {
   })
 
   it('树表仅对选中分项确认开工，刷新后移除删除和开始入口', async () => {
-    const target = { ...assetItem, lockVersion: 3, assetStatus: 'not_started', allowedActions: ['assetItem.delete', 'task.start', 'task.assign'], task: { taskId: 71, lockVersion: 4, taskStatus: 'not_started', assigneeUserId: 7 } }
+    const target = { ...assetItem, lockVersion: 3, assetStatus: 'not_started', allowedActions: ['assetItem.delete', 'task.start', 'task.assign'], task: { taskId: 71, lockVersion: 4, taskStatus: 'not_started', assigneeUserId: 7, ...expectedTaskTimes } }
     getAssetPage.mockResolvedValue({ rows: [{ ...assetRow, lockVersion: 2, allowedActions: ['task.start', 'asset.archive'] }], total: 1 })
     getAssetItems.mockResolvedValue({ data: [target] })
     getAssetDetail.mockResolvedValue({ data: { ...assetDetail(), lockVersion: 2, allowedActions: ['task.start'], items: [target] } })
@@ -414,17 +561,17 @@ describe('资产管理真实列表页', () => {
       await wrapper.find('.el-table__expand-icon').trigger('click')
       await flushPromises()
       const row = wrapper.find('.el-table__row--level-1')
-      expect(row.findAll('button').map(buttonLabel)).toContain('改派任务')
-      const button = row.findAll('button').find(item => buttonLabel(item) === '开始任务')
+      expect(row.findComponent(AssetActionButtons).props('actions').map(action => action.button.label)).toContain('改派制作人')
+      const button = row.findAll('button').find(item => buttonLabel(item) === '确认开工')
       expect(button).toBeDefined()
       await button.trigger('click')
       await flushPromises()
       await completeTaskStartForm(wrapper)
       expect(startTask).toHaveBeenCalledTimes(1)
-      expect(startTask).toHaveBeenCalledWith(71, { lockVersion: 4, assetLockVersion: 2, assetItemLockVersion: 3, startConfirmed: true, ...expectedTaskTimes })
+      expect(startTask).toHaveBeenCalledWith(71, { lockVersion: 4, assetLockVersion: 2, assetItemLockVersion: 3, startConfirmed: true, priority: 'normal' })
       expect(wrapper.find('.el-table__row--level-1').findAll('button').map(buttonLabel)).not.toContain('删除分项')
-      expect(wrapper.find('.el-table__row--level-1').findAll('button').map(buttonLabel)).not.toContain('开始任务')
-      expect(wrapper.find('.el-table__row--level-1').findAll('button').map(buttonLabel)).not.toContain('改派任务')
+      expect(wrapper.find('.el-table__row--level-1').findAll('button').map(buttonLabel)).not.toContain('确认开工')
+      expect(wrapper.find('.el-table__row--level-1').findAll('button').map(buttonLabel)).not.toContain('改派制作人')
       expect(wrapper.find('.asset-row-actions').findComponent(ElDropdown).exists()).toBe(false)
     } finally { wrapper.unmount() }
   })
@@ -437,9 +584,9 @@ describe('资产管理真实列表页', () => {
     try {
       await wrapper.find('.el-table__expand-icon').trigger('click')
       await flushPromises()
-      const button = wrapper.find('.el-table__row--level-1').findAll('button').find(item => buttonLabel(item) === '删除分项')
-      expect(button).toBeDefined()
-      await button.trigger('click')
+      const actionGroup = wrapper.find('.el-table__row--level-1').findComponent(AssetActionButtons)
+      expect(actionGroup.props('actions').some(action => action.key === 'delete')).toBe(true)
+      await actionGroup.findAll('button').find(button => buttonLabel(button) === '删除分项').trigger('click')
       await flushPromises()
       expect(wrapper.findComponent(AssetItemDeleteDialog).exists()).toBe(false)
       expect(deleteAssetItem).not.toHaveBeenCalled()
@@ -488,7 +635,25 @@ describe('资产管理真实列表页', () => {
     } finally { wrapper.unmount(); height.mockRestore(); scroll.mockRestore() }
   })
 
-  it('树表概要将分项数放在名称旁、版本放在缩略图下，父级只显示状态汇总', async () => {
+  it('列设置隐藏信息列并恢复默认，名称与操作保持可见', async () => {
+    const { wrapper } = await mountList()
+    try {
+      await wrapper.find('[aria-label="资产表格列设置"]').trigger('click')
+      await flushPromises()
+      const tree = wrapper.findComponent({ name: 'AssetTreeTable' })
+      const settings = wrapper.findAllComponents({ name: 'ElCheckboxGroup' }).find(group => Array.isArray(group.props('modelValue')) && group.props('modelValue').includes('thumbnail'))
+      settings.vm.$emit('update:modelValue', ['status'])
+      await flushPromises()
+      expect(tree.findAllComponents(ElTableColumn).map(column => column.props('label')).filter(Boolean)).toEqual(['资产 / 制作分项', '状态', '操作'])
+      const reset = wrapper.findAllComponents(ElButton).find(button => buttonLabel(button) === '恢复自动布局')
+      await reset.trigger('click')
+      await flushPromises()
+      expect(tree.findAllComponents(ElTableColumn).map(column => column.props('label'))).toContain('说明')
+      expect(tree.props('visibleColumns')).toHaveLength(5)
+    } finally { wrapper.unmount() }
+  })
+
+  it('树表概要保留分项数和版本，父级仅显示完成进度与分项状态数量', async () => {
     getAssetPage.mockResolvedValue({ rows: [{ ...assetRow, itemCount: 2, itemStatusCounts: { in_progress: 1, not_started: 1 } }], total: 1 })
     getAssetItems.mockResolvedValue({ data: [{ ...assetItem, latestVersion: { versionNo: 3 } }] })
     const { wrapper } = await mountList(['shotgrid:asset:list', 'shotgrid:asset:query'])
@@ -497,7 +662,7 @@ describe('资产管理真实列表页', () => {
       expect(wrapper.find('.asset-identity').text()).toContain('2 个分项')
       expect(wrapper.find('.asset-status').findAllComponents(ElTag).map(tag => tag.text())).toEqual(['待开工 1', '制作中 1'])
       expect(wrapper.find('.asset-status-tag--not_started').text()).toBe('待开工 1')
-      expect(wrapper.find('.asset-status-tag--in_progress').text()).toBe('制作中 1')
+      expect(wrapper.find('.asset-status-summary .asset-status-tag--in_progress').text()).toBe('制作中 1')
       await wrapper.find('.el-table__expand-icon').trigger('click')
       await flushPromises()
       expect(wrapper.find('.el-table__row--level-1 .asset-thumbnail-cell').text()).toContain('V003')
@@ -518,7 +683,7 @@ describe('资产管理真实列表页', () => {
         expect(button.find('svg').exists()).toBe(true)
         expect(button.text()).toBe(button.attributes('aria-label'))
         expect(button.props('circle')).toBe(false)
-        expect(button.props()).toMatchObject({ round: true, plain: true })
+        expect(button.props()).toMatchObject({ round: false, plain: true })
         expect(button.classes()).not.toContain('is-text')
       }
       theme.setDark(false)
@@ -527,7 +692,7 @@ describe('资产管理真实列表页', () => {
       theme.setDark(true)
       await flushPromises()
       expect(actions.findComponent(ElButton).props('dark')).toBe(true)
-      expect(actions.findComponent(ElButton).element.style.getPropertyValue('--el-button-hover-text-color')).toBe('var(--sg-on-accent)')
+      expect(actions.findComponent(ElButton).element.style.getPropertyValue('--el-color-primary')).toBe('#409eff')
       theme.setDark(originalMode)
       expect(actions.findAllComponents(ElButton).find(button => buttonLabel(button) === '删除资产').props('type')).toBe('danger')
       expect(actions.findComponent(ElDropdown).exists()).toBe(false)
@@ -561,6 +726,41 @@ describe('资产管理真实列表页', () => {
     const { wrapper } = await mountList(permissions)
     try { expect(wrapper.find('.asset-row-actions').findAll('button').map(buttonLabel)).toEqual(['详情']) }
     finally { wrapper.unmount() }
+  })
+
+  it('同资产退回一个分项后，父级提示汇总而其他分项保留独立状态', async () => {
+    getAssetPage.mockResolvedValue({ rows: [{ ...assetRow, assetStatus: 'revision', itemCount: 4, itemStatusCounts: { revision: 1, reviewing: 1, in_progress: 1, completed: 1 } }], total: 1 })
+    getAssetItems.mockResolvedValue({ data: ['revision', 'reviewing', 'in_progress', 'completed'].map((status, index) => ({
+      ...assetItem, assetItemId: 41 + index, assetStatus: status,
+      task: { taskId: 61 + index, taskStatus: status === 'reviewing' ? 'pending_review' : status }
+    })) })
+    const { wrapper } = await mountList(['shotgrid:asset:list', 'shotgrid:asset:query'])
+    try {
+      expect(wrapper.find('.asset-completion-summary').text()).toBe('已完成 1/4')
+      expect(wrapper.find('.asset-status').findAllComponents(ElTag).map(tag => tag.text())).toEqual(['制作中 1', '待审核 1', '待修改 1', '已完成 1'])
+      await wrapper.find('.el-table__expand-icon').trigger('click')
+      await flushPromises()
+      expect(wrapper.findAll('.el-table__row--level-1').map(row => row.find('.asset-status-tag').text())).toEqual(['待修改', '待审核', '制作中', '已完成'])
+    } finally { wrapper.unmount() }
+  })
+
+  it('状态筛选同步限制展开分项，切换和清空筛选不会复用旧分项', async () => {
+    getAssetPage.mockResolvedValue({ rows: [{ ...assetRow, itemCount: 2, itemStatusCounts: { reviewing: 1, revision: 1 } }], total: 1 })
+    getAssetItems.mockResolvedValue({ data: [
+      { ...assetItem, assetItemId: 41, assetStatus: 'reviewing' },
+      { ...assetItem, assetItemId: 42, assetStatus: 'revision' }
+    ] })
+    const { wrapper } = await mountList(['shotgrid:asset:list', 'shotgrid:asset:query'])
+    try {
+      const filter = wrapper.find('.asset-filters').findAllComponents({ name: 'ElSelect' })[1]
+      for (const [status, labels] of [['revision', ['待修改']], ['reviewing', ['待审核']], ['', ['待审核', '待修改']]]) {
+        await setElSelectValue(filter, status)
+        await flushPromises()
+        await wrapper.find('.el-table__expand-icon').trigger('click')
+        await flushPromises()
+        expect(wrapper.findAll('.el-table__row--level-1').map(row => row.find('.asset-status-tag').text())).toEqual(labels)
+      }
+    } finally { wrapper.unmount() }
   })
 
   it('树表首次展开才加载全部活动分项，父子主键不冲突且收起重开复用结果', async () => {
@@ -605,10 +805,10 @@ describe('资产管理真实列表页', () => {
     }
   })
 
-  it('树表使用标准选择列，全选只选择可操作父资产而不选择制作分项', async () => {
+  it('树表全选同时选择可操作父资产与已加载分项，并分别计数', async () => {
     getAssetPage.mockResolvedValue({ rows: [
       { ...assetRow, allowedActions: ['task.assign'] },
-      { ...assetRow, assetId: 32, assetName: '不可操作资产', itemCount: 0, allowedActions: [] }
+      { ...assetRow, assetId: 32, assetName: '不可操作资产', lifecycleStatus: 'archived', itemCount: 0, allowedActions: [] }
     ], total: 2 })
     const { wrapper } = await mountList(['shotgrid:asset:list', 'shotgrid:asset:query', 'shotgrid:task:assign'])
     try {
@@ -616,13 +816,68 @@ describe('资产管理真实列表页', () => {
       await wrapper.find('.el-table__expand-icon').trigger('click')
       await flushPromises()
       await wrapper.find('.el-table__header-wrapper input[type="checkbox"]').setValue(true)
-      await vi.waitFor(() => expect(wrapper.findAll('.el-table__body-wrapper input[type="checkbox"]').filter(input => input.element.checked)).toHaveLength(1))
+      await vi.waitFor(() => expect(wrapper.getComponent(ElTable).vm.$.exposed.getSelectionRows()).toHaveLength(2))
       expect(wrapper.text()).toContain('批量重新分配（1）')
       const child = wrapper.find('.el-table__row--level-1')
-      expect(child.find('input[type="checkbox"]').element.disabled).toBe(true)
+      expect(child.find('input[type="checkbox"]').element.disabled).toBe(false)
+      expect(child.find('input[type="checkbox"]').element.checked).toBe(true)
+      expect(wrapper.text()).toContain('已选 1 个制作分项')
+      await wrapper.find('.el-table__header-wrapper input[type="checkbox"]').setValue(false)
+      await flushPromises()
+      await vi.waitFor(() => expect(wrapper.getComponent(ElTable).vm.$.exposed.getSelectionRows()).toHaveLength(0))
+      expect(wrapper.text()).not.toContain('已选 1 个制作分项')
     } finally {
       wrapper.unmount()
     }
+  })
+
+  it.each(['失权', '移除'])('已选分项后台刷新后%s会清理选择', async change => {
+    const { wrapper } = await mountList(['shotgrid:asset:list', 'shotgrid:asset:query', 'shotgrid:task:assign'])
+    try {
+      await wrapper.find('.el-table__expand-icon').trigger('click')
+      await flushPromises()
+      await wrapper.find('.el-table__row--level-1 input[type="checkbox"]').setValue(true)
+      await flushPromises()
+      expect(wrapper.text()).toContain('已选 1 个制作分项')
+      getAssetItems.mockResolvedValue({ data: change === '移除' ? [] : [{ ...assetItem, allowedActions: [] }] })
+      await wrapper.findComponent({ name: 'AssetTreeTable' }).vm.refreshLoadedChildren()
+      await flushPromises()
+      expect(wrapper.text()).not.toContain('已选 1 个制作分项')
+      await vi.waitFor(() => expect(wrapper.getComponent(ElTable).vm.$.exposed.getSelectionRows()).toHaveLength(0))
+    } finally { wrapper.unmount() }
+  })
+
+  it('先全选父资产再展开，不隐式选中后来加载的分项', async () => {
+    const { wrapper } = await mountList(['shotgrid:asset:list', 'shotgrid:asset:query', 'shotgrid:task:assign'])
+    try {
+      await wrapper.find('.el-table__header-wrapper input[type="checkbox"]').setValue(true)
+      await vi.waitFor(() => expect(wrapper.getComponent(ElTable).vm.$.exposed.getSelectionRows()).toHaveLength(1))
+      await wrapper.find('.el-table__expand-icon').trigger('click')
+      await flushPromises()
+      expect(wrapper.find('.el-table__row--level-1 input[type="checkbox"]').element.checked).toBe(false)
+    } finally { wrapper.unmount() }
+  })
+
+  it('只勾选分项不选择父资产，操作抽屉只预选指定分项', async () => {
+    getAssetItems.mockResolvedValue({ data: [assetItem, { ...assetItem, assetItemId: 42, productionItem: '另一分项' }] })
+    getAssetDetail.mockResolvedValue({ data: { ...assetDetail(), items: [assetItem, { ...assetItem, assetItemId: 42, productionItem: '另一分项' }] } })
+    const { wrapper } = await mountList(['shotgrid:asset:list', 'shotgrid:asset:query', 'shotgrid:task:assign', 'shotgrid:asset:archive'])
+    try {
+      await wrapper.find('.el-table__expand-icon').trigger('click')
+      await flushPromises()
+      await wrapper.find('.el-table__row--level-1 input[type="checkbox"]').setValue(true)
+      await flushPromises()
+      expect(wrapper.find('.el-table__row--level-0 input[type="checkbox"]').element.checked).toBe(false)
+      expect(wrapper.text()).toContain('已选 1 个制作分项')
+      expect(wrapper.text()).not.toContain('批量删除资产（')
+      await wrapper.findAllComponents(ElButton).find(button => buttonLabel(button) === '操作所选分项（1）').trigger('click')
+      await flushPromises()
+      const drawer = [...document.querySelectorAll('.el-drawer')].find(node => node.textContent.includes('制作分项批量操作'))
+      expect(drawer.textContent).toContain('已选 1 个分项')
+      const checkedRows = [...drawer.querySelectorAll('.el-table__body-wrapper tr')].filter(row => row.querySelector('input[type="checkbox"]')?.checked)
+      expect(checkedRows).toHaveLength(1)
+      expect(checkedRows[0].textContent).toContain(assetItem.productionItem)
+    } finally { wrapper.unmount() }
   })
 
   it('树表分项加载失败显示错误并能重试，不把失败伪装为无分项', async () => {
@@ -865,13 +1120,14 @@ describe('资产管理真实列表页', () => {
     expect(wrapper.text()).toContain('新建资产')
     const tableTags = wrapper.find('.asset-table-wrap').findAllComponents(ElTag)
     expect(tableTags.find(tag => tag.text() === '场景')?.props('type')).toBe('primary')
-    const productionStatusTag = tableTags.find(tag => tag.text() === '制作中')
-    expect(productionStatusTag.props()).toMatchObject({ type: 'primary', effect: 'light', round: true })
-    expect(productionStatusTag.classes()).toContain('asset-status-tag--in_progress')
+    expect(tableTags.some(tag => tag.text() === '制作中')).toBe(false)
     expect(wrapper.find('.asset-table-wrap').text()).not.toContain('目录已就绪')
     const tableColumns = wrapper.findAllComponents(ElTableColumn)
     const rightFixedColumns = tableColumns.filter(column => column.props('fixed') === 'right')
-    expect(rightFixedColumns.map(column => column.props('label'))).toEqual(['时间状态', '制作人', '状态', '操作'])
+    expect(rightFixedColumns.map(column => column.props('label'))).toEqual(['操作'])
+    expect(tableColumns.filter(column => column.props('fixed') === 'left').map(column => column.props('type') === 'selection' ? '选择' : column.props('label'))).toEqual(['选择', '资产 / 制作分项'])
+    expect(tableColumns.filter(column => ['开始时间', '结束时间', '时间状态'].includes(column.props('label')))).toHaveLength(0)
+    expect(tableColumns.find(column => column.props('label') === '计划时间')?.props()).toMatchObject({ columnKey: 'plan', width: 175 })
     expect(tableColumns.slice(-3).map(column => column.props('label'))).toEqual(['制作人', '状态', '操作'])
     const viewLabels = wrapper.find('.view-switch').findAllComponents(ElRadioButton).map(button => buttonLabel(button))
     expect(viewLabels).toEqual(['表格', '卡片', '类型看板', '人员泳道', '任务甘特'])
@@ -1081,21 +1337,34 @@ describe('资产管理真实列表页', () => {
     wrapper.unmount()
   })
 
-  it.each(['table', 'card', 'type'])('%s 视图的父资产入口只打开详情供选择分项，不直接开始任务', async viewMode => {
+  it.each(['table', 'card', 'type'])('%s 视图未排期父资产不显示开工入口，即使旧响应仍允许开工', async viewMode => {
+    getAssetPage.mockResolvedValue({ rows: [{ ...assetRow, assetStatus: 'pending_schedule', itemStatusCounts: { pending_schedule: 1, not_started: 0 }, allowedActions: ['task.start'] }], total: 1 })
+    const { wrapper } = await mountList(['shotgrid:asset:list', 'shotgrid:asset:query', 'shotgrid:task:start', 'shotgrid:task:schedule'])
+    try {
+      wrapper.findComponent(ElRadioGroup).vm.$emit('update:modelValue', viewMode)
+      await flushPromises()
+      expect(wrapper.findAllComponents(ElButton).map(buttonLabel)).not.toContain('选择分项开工')
+      if (viewMode === 'table') expect(wrapper.findAllComponents(ElButton).map(buttonLabel)).toContain('设置排期')
+    } finally { wrapper.unmount() }
+  })
+
+  it.each(['table', 'card', 'type'])('%s 视图的父资产入口打开专用开工抽屉，不立即提交', async viewMode => {
     getAssetPage.mockResolvedValue({ rows: [{
       ...assetRow,
       allowedActions: [...assetRow.allowedActions, 'task.start'],
       itemStatusCounts: { not_started: 1, in_progress: 1 }
     }], total: 1, hasNext: false })
-    const { wrapper } = await mountList(['shotgrid:asset:list', 'shotgrid:task:start'])
+    const { wrapper } = await mountList(['shotgrid:asset:list', 'shotgrid:asset:query', 'shotgrid:task:start'])
     try {
       wrapper.findComponent(ElRadioGroup).vm.$emit('update:modelValue', viewMode)
       await flushPromises()
-      const entry = wrapper.findAllComponents(ElButton).find(button => buttonLabel(button) === '选择分项开工')
+      const entry = wrapper.findAllComponents(ElButton).find(button => buttonLabel(button).startsWith('选择分项开工') || buttonLabel(button) === '确认开工')
       expect(entry).toBeDefined()
       await entry.trigger('click')
       await flushPromises()
-      expect(wrapper.findComponent(AssetDetailView).exists()).toBe(true)
+      expect(wrapper.findComponent(AssetDetailView).exists()).toBe(false)
+      expect(wrapper.findComponent(AssetStartDrawer).exists()).toBe(true)
+      expect(document.body.textContent).toContain('可开工')
       expect(startTask).not.toHaveBeenCalled()
       expect(wrapper.text()).toContain('待开工 1')
       expect(wrapper.text()).toContain('制作中 1')
@@ -1136,6 +1405,23 @@ describe('资产详情动作镜像与路由隔离', () => {
     startTask.mockReset()
   })
 
+  it('详情按分项排期完整度展示入口，无排期权限时隐藏', async () => {
+    getAssetDetail.mockResolvedValue({ data: { ...assetDetail(), items: [
+      { ...assetItem, task: { taskId: 61, taskStatus: 'not_started' } },
+      { ...assetItem, assetItemId: 42, task: { taskId: 62, taskStatus: 'in_progress', ...expectedTaskTimes } }
+    ] } })
+    const { wrapper } = await mountDetail('/projects/8/assets/31', ['shotgrid:asset:query', 'shotgrid:task:schedule', 'shotgrid:task:query'])
+    try {
+      const cards = wrapper.findAll('.item-card')
+      expect(cards[0].text()).toContain('设置排期')
+      expect(cards[1].text()).toContain('调整排期')
+      expect(cards[0].text()).toContain('查看任务')
+      useSessionStore().permissions = ['shotgrid:asset:query']
+      await flushPromises()
+      expect(wrapper.findAll('.item-card').some(card => /设置排期|调整排期|查看任务/.test(card.text()))).toBe(false)
+    } finally { wrapper.unmount() }
+  })
+
   it('资产详情显示每个分项自己的预期时间范围，无任务不显示任务时间', async () => {
     getAssetDetail.mockResolvedValueOnce({ data: {
       ...assetDetail(),
@@ -1148,7 +1434,7 @@ describe('资产详情动作镜像与路由隔离', () => {
     const { wrapper } = await mountDetail()
     try {
       const cards = wrapper.findAll('.item-card')
-      expect(cards[0].text()).toContain('预期制作时间')
+      expect(cards[0].text()).toContain('计划起止时间')
       expect(cards[0].text()).toContain('2099/09/01 09:30')
       expect(cards[0].text()).toContain('2099/09/04 18:00')
       expect(cards[1].text()).toContain('2099/09/05 10:00')
@@ -1168,7 +1454,7 @@ describe('资产详情动作镜像与路由隔离', () => {
           ...assetItem,
           lockVersion: 3,
           allowedActions: ['task.start'],
-          task: { taskId: 71, lockVersion: 4, taskStatus: 'not_started', assigneeUserId: 7 }
+          task: { taskId: 71, lockVersion: 4, taskStatus: 'not_started', assigneeUserId: 7, ...expectedTaskTimes }
         },
         {
           ...assetItem,
@@ -1180,9 +1466,9 @@ describe('资产详情动作镜像与路由隔离', () => {
       ]
     } })
     startTask.mockResolvedValue({ data: { taskId: 71, taskStatus: 'preparing' } })
-    const { wrapper } = await mountDetail('/projects/8/assets/31', ['shotgrid:task:start'])
+    const { wrapper } = await mountDetail('/projects/8/assets/31', ['shotgrid:asset:query', 'shotgrid:task:start'])
     try {
-      const startButton = wrapper.findAllComponents(ElButton).find(button => buttonLabel(button) === '开始任务')
+      const startButton = wrapper.findAllComponents(ElButton).find(button => buttonLabel(button) === '确认开工')
       expect(startButton).toBeDefined()
       expect(startButton.props('size')).toBe('small')
       await startButton.trigger('click')
@@ -1196,7 +1482,7 @@ describe('资产详情动作镜像与路由隔离', () => {
         lockVersion: 4,
         assetLockVersion: 2,
         assetItemLockVersion: 3,
-        startConfirmed: true, ...expectedTaskTimes
+        startConfirmed: true, priority: 'normal'
       })
       expect(startTask).not.toHaveBeenCalledWith(72, expect.anything())
     } finally {
@@ -1211,12 +1497,12 @@ describe('资产详情动作镜像与路由隔离', () => {
       items: [{
         ...assetItem,
         allowedActions: missing === 'item' ? [] : ['task.start'],
-        task: { taskId: 71, lockVersion: 4, taskStatus: 'not_started', assigneeUserId: 7 }
+        task: { taskId: 71, lockVersion: 4, taskStatus: 'not_started', assigneeUserId: 7, ...expectedTaskTimes }
       }]
     } })
-    const { wrapper } = await mountDetail('/projects/8/assets/31', missing === 'platform' ? [] : ['shotgrid:task:start'])
+    const { wrapper } = await mountDetail('/projects/8/assets/31', missing === 'platform' ? [] : ['shotgrid:asset:query', 'shotgrid:task:start'])
     try {
-      expect(wrapper.findAllComponents(ElButton).map(buttonLabel)).not.toContain('开始任务')
+      expect(wrapper.findAllComponents(ElButton).map(buttonLabel)).not.toContain('确认开工')
     } finally {
       wrapper.unmount()
     }
@@ -1226,12 +1512,12 @@ describe('资产详情动作镜像与路由隔离', () => {
     getAssetDetail.mockResolvedValue({ data: {
       ...assetDetail(), lockVersion: 2, allowedActions: ['task.start'], items: [{
         ...assetItem, lockVersion: 3, allowedActions: ['task.start'],
-        task: { taskId: 71, lockVersion: 4, taskStatus: 'not_started', assigneeUserId: 7 }
+        task: { taskId: 71, lockVersion: 4, taskStatus: 'not_started', assigneeUserId: 7, ...expectedTaskTimes }
       }]
     } })
-    const { wrapper } = await mountDetail('/projects/8/assets/31', ['shotgrid:task:start'])
+    const { wrapper } = await mountDetail('/projects/8/assets/31', ['shotgrid:asset:query', 'shotgrid:task:start'])
     try {
-      await wrapper.findAllComponents(ElButton).find(button => buttonLabel(button) === '开始任务').trigger('click')
+      await wrapper.findAllComponents(ElButton).find(button => buttonLabel(button) === '确认开工').trigger('click')
       await flushPromises()
       await completeTaskStartForm(wrapper, 'cancel')
       expect(startTask).not.toHaveBeenCalled()
@@ -1244,7 +1530,7 @@ describe('资产详情动作镜像与路由隔离', () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     getAssetDetail.mockResolvedValueOnce({ data: {
       ...assetDetail(), itemStatusCounts: { not_started: 1 }, items: [{
-        ...assetItem, assetStatus: 'not_started', task: { taskId: 71, lockVersion: 4, taskStatus: 'not_started', assigneeUserId: 7 }
+        ...assetItem, assetStatus: 'not_started', task: { taskId: 71, lockVersion: 4, taskStatus: 'not_started', assigneeUserId: 7, ...expectedTaskTimes }
       }]
     } }).mockResolvedValueOnce({ data: {
       ...assetDetail(), itemStatusCounts: { in_progress: 1 }, items: [{
@@ -1285,7 +1571,7 @@ describe('资产详情动作镜像与路由隔离', () => {
       await refreshedDialog.findAllComponents(ElButton).find(button => buttonLabel(button) === '保存资产').trigger('click')
       await flushPromises()
       expect(updateAsset).toHaveBeenCalledWith(8, 31, {
-        description: '尚未提交的资产说明', sortOrder: 10, remark: '保持冷蓝色调', lockVersion: 2
+        assetName: assetRow.assetName, description: '尚未提交的资产说明', sortOrder: 10, remark: '保持冷蓝色调', lockVersion: 2
       })
     } finally {
       wrapper.unmount()
@@ -1295,7 +1581,7 @@ describe('资产详情动作镜像与路由隔离', () => {
   it.each([
     { entry: '编辑资产', component: AssetFormDialog, submitLabel: '保存资产', api: updateAsset, targetId: 31, field: 'description', refreshedValue: '最新资产说明', lockField: 'lockVersion', oldLock: 2, newLock: 6 },
     { entry: '编辑分项', component: AssetItemFormDialog, submitLabel: '保存分项', api: updateAssetItem, targetId: 41, field: 'description', refreshedValue: '最新分项说明', lockField: 'lockVersion', oldLock: 3, newLock: 7 },
-    { entry: '改派任务', component: AssetAssignDialog, submitLabel: '确认改派', api: assignAssetItemTask, targetId: 41, field: 'taskDescription', refreshedValue: '最新任务要求', lockField: 'taskLockVersion', oldLock: 4, newLock: 8 },
+    { entry: '改派制作人', component: AssetAssignDialog, submitLabel: '确认改派', api: assignAssetItemTask, targetId: 41, field: 'taskDescription', refreshedValue: '最新任务要求', lockField: 'taskLockVersion', oldLock: 4, newLock: 8 },
     { entry: '删除分项', component: AssetItemDeleteDialog, submitLabel: '确认删除', api: deleteAssetItem, targetId: 41, field: 'reason', refreshedValue: '', lockField: 'lockVersion', oldLock: 3, newLock: 7 },
     { entry: '归档资产', component: AssetArchiveDialog, submitLabel: '确认归档', api: archiveAsset, targetId: 31, field: 'reason', refreshedValue: '', lockField: 'lockVersion', oldLock: 2, newLock: 6 },
     { entry: '归档分项', component: AssetArchiveDialog, submitLabel: '确认归档', api: archiveAssetItem, targetId: 41, field: 'reason', refreshedValue: '', lockField: 'lockVersion', oldLock: 3, newLock: 7 }
@@ -1304,7 +1590,7 @@ describe('资产详情动作镜像与路由隔离', () => {
       ...assetDetail(), lockVersion: 2, items: [{
         ...assetItem, lockVersion: 3,
         allowedActions: entry === '删除分项' ? ['assetItem.delete'] : assetItem.allowedActions,
-        task: { taskId: 71, lockVersion: 4, taskStatus: 'not_started', assigneeUserId: 7, requirements: '原任务要求', priority: 'normal' }
+        task: { taskId: 71, lockVersion: 4, taskStatus: 'not_started', assigneeUserId: 7, ...expectedTaskTimes, requirements: '原任务要求', priority: 'normal' }
       }]
     }
     getAssetDetail.mockResolvedValue({ data: detail })
@@ -1361,16 +1647,16 @@ describe('资产详情动作镜像与路由隔离', () => {
     const initial = {
       ...assetDetail(), lockVersion: 2, allowedActions: ['task.start'], items: [{
         ...assetItem, lockVersion: 3, allowedActions: ['task.start'],
-        task: { taskId: 71, lockVersion: 4, taskStatus: 'not_started', assigneeUserId: 7 }
+        task: { taskId: 71, lockVersion: 4, taskStatus: 'not_started', assigneeUserId: 7, ...expectedTaskTimes }
       }]
     }
     getAssetDetail.mockResolvedValue({ data: initial })
     startTask.mockResolvedValue({ data: { taskId: 71, taskStatus: 'preparing' } })
-    const { wrapper, router } = await mountDetail('/projects/8/assets/31', ['shotgrid:task:start'])
+    const { wrapper, router } = await mountDetail('/projects/8/assets/31', ['shotgrid:asset:query', 'shotgrid:task:start'])
     try {
       let resolveOldRefresh
       getAssetDetail.mockImplementationOnce(() => new Promise(resolve => { resolveOldRefresh = resolve }))
-      await wrapper.findAllComponents(ElButton).find(button => buttonLabel(button) === '开始任务').trigger('click')
+      await wrapper.findAllComponents(ElButton).find(button => buttonLabel(button) === '确认开工').trigger('click')
       await flushPromises()
       await completeTaskStartForm(wrapper)
       expect(startTask).toHaveBeenCalledTimes(1)
@@ -1395,13 +1681,12 @@ describe('资产详情动作镜像与路由隔离', () => {
       ...assetDetail(targetProjectId, targetAssetId, targetAssetId === 31 ? '原资产' : '新资产'), lockVersion: 2,
       allowedActions: ['task.start'], items: [{
         ...assetItem, assetId: targetAssetId, lockVersion: 3, allowedActions: ['task.start'],
-        task: { taskId: targetAssetId === 31 ? 71 : 72, lockVersion: 4, taskStatus: 'not_started', assigneeUserId: 7 }
+        task: { taskId: targetAssetId === 31 ? 71 : 72, lockVersion: 4, taskStatus: 'not_started', assigneeUserId: 7, ...expectedTaskTimes }
       }]
     } }))
-    const { wrapper, router } = await mountDetail('/projects/8/assets/31', ['shotgrid:task:start'])
+    const { wrapper, router } = await mountDetail('/projects/8/assets/31', ['shotgrid:asset:query', 'shotgrid:task:start'])
     try {
-      await wrapper.findAllComponents(ElButton).find(button => buttonLabel(button) === '开始任务').trigger('click')
-      await wrapper.findAllComponents(ElButton).find(button => buttonLabel(button) === '开始任务').trigger('click')
+      await wrapper.findAllComponents(ElButton).find(button => buttonLabel(button) === '确认开工').trigger('click')
       const oldDialog = wrapper.findComponent({ name: 'TaskStartDialog' })
       expect(oldDialog.exists()).toBe(true)
       await router.push('/projects/8/assets/32')
@@ -1424,7 +1709,7 @@ describe('资产详情动作镜像与路由隔离', () => {
     expect(wrapper.text()).toContain('新增制作分项')
     expect(wrapper.text()).toContain('编辑资产')
     expect(wrapper.text()).toContain('归档资产')
-    expect(wrapper.text()).toContain('分配任务')
+    expect(wrapper.text()).toContain('分配制作人')
     const tags = wrapper.findAllComponents(ElTag)
     expect(tags.find(tag => tag.text() === '场景')?.props('type')).toBe('primary')
     expect(tags.find(tag => tag.text() === '制作中')?.props('type')).toBe('primary')
@@ -1438,7 +1723,7 @@ describe('资产详情动作镜像与路由隔离', () => {
     expect(restrictedButtons).not.toContain('新增制作分项')
     expect(restrictedButtons).not.toContain('编辑资产')
     expect(restrictedButtons).not.toContain('归档资产')
-    expect(restrictedButtons).not.toContain('分配任务')
+    expect(restrictedButtons).not.toContain('分配制作人')
     restricted.wrapper.unmount()
   })
 
@@ -1548,7 +1833,7 @@ describe('资产详情动作镜像与路由隔离', () => {
     const { wrapper } = await mountDetail()
     const buttons = wrapper.findAll('button').map(buttonLabel)
     expect(buttons).not.toContain('编辑分项')
-    expect(buttons).not.toContain('改派任务')
+    expect(buttons).not.toContain('改派制作人')
     wrapper.unmount()
   })
 
@@ -1583,7 +1868,7 @@ describe('资产详情动作镜像与路由隔离', () => {
     })
     const { wrapper, router } = await mountDetail()
     expect(wrapper.text()).toContain('旧资产')
-    await wrapper.findAll('button').find(button => button.text().includes('分配任务')).trigger('click')
+    await wrapper.findAll('button').find(button => button.text().includes('分配制作人')).trigger('click')
     expect(wrapper.findComponent(AssetAssignDialog).exists()).toBe(true)
 
     await router.push('/projects/9/assets/51')
@@ -1605,7 +1890,7 @@ describe('资产详情动作镜像与路由隔离', () => {
   it('返回同一资产重开分配弹窗后旧完成事件不能关闭新实例或刷新', async () => {
     getAssetDetail.mockImplementation((targetProjectId, targetAssetId) => Promise.resolve({ data: assetDetail(targetProjectId, targetAssetId, targetProjectId === 8 ? '同一资产' : '中转资产') }))
     const { wrapper, router } = await mountDetail()
-    await wrapper.findAll('button').find(button => button.text().includes('分配任务')).trigger('click')
+    await wrapper.findAll('button').find(button => button.text().includes('分配制作人')).trigger('click')
     const oldDialog = wrapper.findComponent(AssetAssignDialog)
     const oldGeneration = oldDialog.props('operationGeneration')
 
@@ -1613,7 +1898,7 @@ describe('资产详情动作镜像与路由隔离', () => {
     await flushPromises()
     await router.push('/projects/8/assets/31')
     await flushPromises()
-    await wrapper.findAll('button').find(button => button.text().includes('分配任务')).trigger('click')
+    await wrapper.findAll('button').find(button => button.text().includes('分配制作人')).trigger('click')
     const newDialog = wrapper.findComponent(AssetAssignDialog)
     const callsBefore = getAssetDetail.mock.calls.length
     expect(newDialog.props('operationGeneration')).not.toBe(oldGeneration)
@@ -1788,7 +2073,7 @@ describe('资产表单统一使用 Element Plus 校验链路', () => {
     await save.trigger('click')
     await flushPromises()
     expect(updateAsset).toHaveBeenCalledWith(8, 31, {
-      description: assetRow.description, sortOrder: 18, remark: '调整内部协作备注', lockVersion: 0
+      assetName: assetRow.assetName, description: assetRow.description, sortOrder: 18, remark: '调整内部协作备注', lockVersion: 0
     })
     expect(wrapper.emitted('saved')).toHaveLength(1)
     wrapper.unmount()
@@ -1841,9 +2126,43 @@ describe('资产表单统一使用 Element Plus 校验链路', () => {
     await save.trigger('click')
     await flushPromises()
     expect(updateAsset).toHaveBeenLastCalledWith(8, 31, {
-      description: assetRow.description, sortOrder: 18, remark: '保留这份内部备注', lockVersion: 0
+      assetName: assetRow.assetName, description: assetRow.description, sortOrder: 18, remark: '保留这份内部备注', lockVersion: 0
     })
     expect(wrapper.emitted('saved')).toHaveLength(1)
+    wrapper.unmount()
+  })
+
+  it('编辑已开工资产业务名称时校验空白、提交新名称并防止重复保存', async () => {
+    let finishUpdate
+    updateAsset.mockReset().mockImplementation(() => new Promise(resolve => { finishUpdate = resolve }))
+    const wrapper = mountAssetDialog(AssetFormDialog, {
+      projectId: 8, operationGeneration: 1, asset: { ...assetDetail(), descriptionLocked: true }
+    })
+    const nameField = wrapper.findAllComponents(ElFormItem).find(item => item.props('prop') === 'assetName')
+    const input = nameField.get('input')
+    const save = wrapper.findAllComponents(ElButton).find(button => buttonLabel(button) === '保存资产')
+    expect(input.element.disabled).toBe(false)
+    await input.setValue('   ')
+    await save.trigger('click')
+    await flushPromises()
+    expect(updateAsset).not.toHaveBeenCalled()
+    await vi.waitFor(() => expect(nameField.text()).toContain('资产名称不能为空'))
+    await input.setValue(' 修正后的场景名称 ')
+    await save.trigger('click')
+    await flushPromises()
+    expect(updateAsset).toHaveBeenCalledWith(8, 31, expect.objectContaining({
+      assetName: '修正后的场景名称', description: assetRow.description, lockVersion: 0
+    }))
+    expect(save.props('loading')).toBe(true)
+    expect(input.element.disabled).toBe(true)
+    await save.trigger('click')
+    expect(updateAsset).toHaveBeenCalledTimes(1)
+    finishUpdate({ data: { ...assetDetail(), assetName: '修正后的场景名称', lockVersion: 1 } })
+    await flushPromises()
+    expect(wrapper.emitted('saved')[0][0].assetName).toBe('修正后的场景名称')
+    await wrapper.findAllComponents(ElButton).find(button => buttonLabel(button) === '取消').trigger('click')
+    await wrapper.vm.$nextTick()
+    expect(input.element.value).toBe(assetRow.assetName)
     wrapper.unmount()
   })
 
@@ -1885,7 +2204,7 @@ describe('资产表单统一使用 Element Plus 校验链路', () => {
     expect(sortItem.findComponent(ElInputNumber).exists()).toBe(true)
     expect(form.props('model')).not.toHaveProperty('assigneeUserId')
     expect(form.props('model')).not.toHaveProperty('taskDescription')
-    expect(wrapper.text()).toContain('保存后状态：未分配')
+    expect(wrapper.text()).not.toContain('保存后状态：未分配')
     expect(wrapper.text()).toContain(assetRow.description)
     expect(form.findAllComponents(ElFormItem).find(item => item.props('prop') === 'description').props('label')).toBe('分项补充要求')
 
