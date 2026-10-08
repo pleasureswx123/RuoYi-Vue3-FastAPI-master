@@ -1,4 +1,5 @@
 <script setup>
+import { createIdempotencyState } from '@/utils/idempotency'
 import ScheduleDateRangePicker from '@/components/ScheduleDateRangePicker.vue'
 import { RefreshLeft } from '@element-plus/icons-vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
@@ -103,7 +104,7 @@ function selectScheduled() {
 }
 function openSchedule(targets) {
   if (saving.value || loading.value || error.value || !context.canSchedule || !targets.length || targets.some(row => row.blocked) || !current()) return
-  scheduleTargets.value = targets.map(row => ({ row, key: `batch-schedule:${row.taskId}:${crypto.randomUUID()}` }))
+  scheduleTargets.value = targets.map(row => ({ row, key: createIdempotencyState(`batch-schedule:${row.taskId}`).forPayload({ taskId: row.taskId }) }))
   scheduleForm.range = targets.length === 1 && hasSchedule(targets[0]) ? [targets[0].detail.task.expectedStartTime, targets[0].detail.task.expectedEndTime] : []
   scheduleForm.reason = ''
   scheduleError.value = ''
@@ -118,7 +119,7 @@ async function saveSchedules() {
       if (!rows.value.length || rows.value.some(row => row.blocked)) return
       const fields = ['reason', ...rows.value.map((_row, index) => `rows.${index}.draftRange`)]
       if (!await inlineFormRef.value.validateField(fields).catch(() => false) || !current()) return
-      scheduleTargets.value = rows.value.map(row => ({ row, key: `batch-schedule:${row.taskId}:${crypto.randomUUID()}` }))
+      scheduleTargets.value = rows.value.map(row => ({ row, key: createIdempotencyState(`batch-schedule:${row.taskId}`).forPayload({ taskId: row.taskId }) }))
     }
     if ((!scheduleOnly && !await scheduleFormRef.value?.validate().catch(() => false)) || !current()) return
     let failed = false

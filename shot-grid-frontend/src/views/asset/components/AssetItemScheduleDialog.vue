@@ -1,4 +1,5 @@
 <script setup>
+import { createIdempotencyState } from '@/utils/idempotency'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { getAssetDetail } from '@/api/shot-grid/assets'
@@ -63,7 +64,7 @@ async function open(parent, row) {
       taskKind: 'asset_image', target: { targetKind: 'asset_item', targetId: item.assetItemId, parentId: asset.assetId, name: `${asset.assetName} · ${item.productionItem}` },
       currentStart: item.task.expectedStartTime, currentEnd: item.task.expectedEndTime
     }
-    key = `asset-schedule:${item.task.taskId}:${crypto.randomUUID()}`
+    key = createIdempotencyState(`asset-schedule:${item.task.taskId}`).forPayload({ taskId: item.task.taskId })
     error.value = null
     visible.value = true
   } catch (failure) {

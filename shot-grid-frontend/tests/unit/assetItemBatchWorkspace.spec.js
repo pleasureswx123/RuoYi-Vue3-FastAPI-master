@@ -42,8 +42,21 @@ beforeEach(() => {
   batchAssignAssetItemTasks.mockReset().mockResolvedValue({ data: {} })
   updateTaskSchedule.mockReset().mockResolvedValue({ data: {} })
 })
-afterEach(() => wrapper?.unmount())
+afterEach(() => { wrapper?.unmount(); vi.unstubAllGlobals() })
 describe('资产分项批量工作区', () => {
+  it('内网 HTTP 缺少 randomUUID 时仍显示所选排期行并生成独立请求键', async () => {
+    vi.stubGlobal('crypto', { getRandomValues: globalThis.crypto.getRandomValues.bind(globalThis.crypto) })
+    await open()
+    await choose('schedule')
+    const scheduleRows = wrapper.getComponent(ElTable).props('data')
+    expect(scheduleRows.map(row => row.assetItemId)).toEqual([11, 12])
+    expect(button('确认保存').text()).toContain('2 个分项')
+    expect(scheduleRows[0].key).not.toBe(scheduleRows[1].key)
+    scheduleRows.forEach(row => { row.range = ['2026-10-12T09:00:00', '2026-10-13T18:00:00'] })
+    await click('确认保存')
+    expect(updateTaskSchedule).toHaveBeenCalledTimes(2)
+    expect(updateTaskSchedule.mock.calls.map(call => call[2])).toEqual(scheduleRows.map(row => row.key))
+  })
   it('父资产批量入口只加载当前状态分项，切换操作不扩大范围', async () => {
     getAssetDetail.mockResolvedValue({ data: { ...asset, items: [{ ...items[0], assetStatus: 'revision' }, { ...items[1], assetStatus: 'reviewing' }] } })
     wrapper = mount(AssetItemBatchWorkspace, { attachTo: document.body, props: { projectId: 6, contextKey: '6:revision', itemStatus: 'revision' } })

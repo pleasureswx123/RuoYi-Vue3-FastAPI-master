@@ -1,4 +1,5 @@
 <script setup>
+import { createIdempotencyState } from '@/utils/idempotency'
 import { versionSummaryLabel } from '@/components/version/versionPresentation'
 import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -178,9 +179,9 @@ function begin(action) {
     append.value = { ...context, targets: selected.value.map(row => ({ versionId: row.latestVersion.versionId, label: `${row.displayLabel} · ${versionSummaryLabel(row.latestVersion)}` })) }
     return
   }
-  mode.value = action
   form.commonAssignee = ''; form.commonRange = []; form.reason = ''
-  form.rows = selected.value.map(row => ({ ...row, assigneeUserId: row.task?.assigneeUserId ? String(row.task.assigneeUserId) : '', range: row.task?.expectedStartTime && row.task?.expectedEndTime ? [row.task.expectedStartTime, row.task.expectedEndTime] : [], result: '', key: `asset-batch:${row.task?.taskId}:${crypto.randomUUID()}` }))
+  form.rows = selected.value.map(row => ({ ...row, assigneeUserId: row.task?.assigneeUserId ? String(row.task.assigneeUserId) : '', range: row.task?.expectedStartTime && row.task?.expectedEndTime ? [row.task.expectedStartTime, row.task.expectedEndTime] : [], result: '', key: createIdempotencyState(`asset-batch:${row.task?.taskId}`).forPayload({ taskId: row.task?.taskId }) }))
+  mode.value = action
 }
 function applyCommon() {
   if (blocked.value) return
@@ -193,7 +194,7 @@ function applyCommon() {
 const memberRules = [{ validator: (_rule, value, done) => done(members.value.some(member => Number(member.userId) === Number(value)) ? undefined : new Error('请选择有效制作人')) }]
 const rangeRules = [{ validator: (_rule, value, done) => done(Array.isArray(value) && value.length === 2 && value.every(item => item && Number.isFinite(new Date(item).getTime())) && new Date(value[1]) > new Date(value[0]) ? undefined : new Error('请选择完整且结束晚于开始的时间')) }]
 async function submit() {
-  if (blocked.value || !mode.value) return
+  if (blocked.value || !mode.value || !form.rows.length) return
   const token = generation
   // 将异步表单校验纳入忙碌区间，防止连续点击生成重复批次。
   busy.value = true
@@ -295,7 +296,7 @@ defineExpose({ open })
       <el-table class="batch-table" :key="mode" :data="form.rows" row-key="assetItemId" max-height="500"><el-table-column prop="displayLabel" label="资产 / 制作分项" min-width="200" /><el-table-column :label="mode === 'assign' ? '制作人' : '计划起止时间'" min-width="380"><template #default="{ row, $index }"><el-form-item v-if="mode === 'assign'" :prop="`rows.${$index}.assigneeUserId`" :rules="memberRules" ><el-select v-model="row.assigneeUserId" style="width: 100%"><el-option v-for="member in members" :key="member.userId" :value="String(member.userId)" :label="memberLabel(member)" /></el-select></el-form-item><el-form-item v-else :prop="`rows.${$index}.range`" :rules="rangeRules"><ScheduleDateRangePicker v-model="row.range" type="datetimerange" value-format="YYYY-MM-DDTHH:mm:ss" /></el-form-item></template></el-table-column><el-table-column prop="result" label="保存结果" min-width="200" /></el-table>
       <el-form-item v-if="mode === 'schedule'" label="排期原因（选填）" prop="reason" :rules="[{ max: 500, message: '最多 500 字' }]"><el-input v-model="form.reason" maxlength="500" /></el-form-item>
     </el-form>
-    <template #footer><div class="workspace-footer"><div><el-text>已选 {{ mode ? form.rows.length : selected.length }} 个分项</el-text><el-text v-if="selected.length > 100" type="danger" size="small">每次最多操作 100 个分项</el-text><el-text v-else type="info" size="small">{{ attempted ? '请核对逐项保存结果' : '仅处理所选分项' }}</el-text></div><div class="workspace-footer__buttons"><el-button :disabled="busy || childOpen" @click="close">{{ attempted ? '完成' : '取消' }}</el-button><el-button v-if="mode && !attempted" :disabled="busy" @click="backToSelection">返回选择</el-button><el-button v-if="!mode" type="primary" :disabled="!entryAction || !available(entryAction)" @click="begin(entryAction)">{{ activeAction ? `下一步：${activeAction.next}` : '请选择操作' }}</el-button><el-button v-else-if="!attempted" type="primary" :disabled="blocked" :loading="busy" @click="submit">确认保存 {{ form.rows.length }} 个分项</el-button></div></div></template>
+    <template #footer><div class="workspace-footer"><div><el-text>已选 {{ mode ? form.rows.length : selected.length }} 个分项</el-text><el-text v-if="selected.length > 100" type="danger" size="small">每次最多操作 100 个分项</el-text><el-text v-else type="info" size="small">{{ attempted ? '请核对逐项保存结果' : '仅处理所选分项' }}</el-text></div><div class="workspace-footer__buttons"><el-button :disabled="busy || childOpen" @click="close">{{ attempted ? '完成' : '取消' }}</el-button><el-button v-if="mode && !attempted" :disabled="busy" @click="backToSelection">返回选择</el-button><el-button v-if="!mode" type="primary" :disabled="!entryAction || !available(entryAction)" @click="begin(entryAction)">{{ activeAction ? `下一步：${activeAction.next}` : '请选择操作' }}</el-button><el-button v-else-if="!attempted" type="primary" :disabled="blocked || !form.rows.length" :loading="busy" @click="submit">确认保存 {{ form.rows.length }} 个分项</el-button></div></div></template>
   </el-drawer>
   <BatchOverallFeedbackDialog v-if="visible" ref="feedback" @active-change="feedbackOpen = $event" @saved="finishChild" @review="details.open(`/versions/${$event.latestVersion.versionId}`)" />
   <BatchAppendIssueDialog v-if="append" :context="append" @close="finishChild" />

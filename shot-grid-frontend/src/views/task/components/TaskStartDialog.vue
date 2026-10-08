@@ -1,4 +1,5 @@
 <script setup>
+import { createIdempotencyState } from '@/utils/idempotency'
 import { computed, onBeforeUnmount, reactive, ref } from 'vue'
 import { ElCheckbox } from 'element-plus'
 import { formatTaskDateTime } from '@/views/task/taskPresentation'
@@ -33,7 +34,7 @@ const scheduleDraft = computed(() => ({ expectedStartTime: form.expectedRange[0]
 function openSchedule() {
   if (saving.value || !context.canSchedule || !context.validateContext()) return
   scheduleError.value = null
-  scheduleKey = `start-schedule:${context.taskId}:${crypto.randomUUID()}`
+  scheduleKey = createIdempotencyState(`start-schedule:${context.taskId}`).forPayload({ taskId: context.taskId })
   scheduleVisible.value = true
 }
 async function saveSchedule(command) {
