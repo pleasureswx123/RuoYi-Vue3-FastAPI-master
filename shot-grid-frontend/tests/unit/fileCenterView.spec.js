@@ -86,7 +86,7 @@ describe('文件与 NAS 一级页', () => {
     const filterForm = wrapper.find('form.file-filters')
     const toolbarFormComponent = wrapper.findAllComponents(ElForm).find(form => form.classes().includes('file-toolbar'))
     expect(toolbarForm.classes()).toContain('el-form')
-    expect(toolbarForm.findAll('.el-form-item')).toHaveLength(2)
+    expect(toolbarForm.findAll('.el-form-item')).toHaveLength(3)
     expect(toolbarFormComponent.props('labelPosition')).toBe('top')
     expect(filterForm.classes()).toContain('el-form')
     expect(filterForm.findAll('.el-form-item')).toHaveLength(4)
@@ -135,7 +135,7 @@ describe('文件与 NAS 一级页', () => {
     const wrapper = await mountView()
 
     await wrapper.find('input[aria-label="搜索业务文件"]').setValue('动力舱')
-    await wrapper.findAllComponents(ElButton).find(button => button.text() === '搜索').trigger('click')
+    await wrapper.findAllComponents(ElButton).find(button => button.text() === '查询').trigger('click')
     await flushPromises()
     expect(getProjectFilePage).toHaveBeenLastCalledWith('8', expect.objectContaining({ keyword: '动力舱', pageNum: 1 }), expect.anything())
 

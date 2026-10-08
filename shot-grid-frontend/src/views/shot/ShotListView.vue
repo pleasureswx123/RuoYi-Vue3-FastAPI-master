@@ -1454,39 +1454,39 @@ onBeforeUnmount(() => { disposed = true; closeSingleAssign(); destroyRowSortable
 
     <ProjectStatePanel v-if="projectsError" :title="projectsError.title" :message="projectsError.message" :retryable="projectsError.retryable" @retry="loadProjects" />
     <template v-else>
-      <el-form ref="projectContextForm" :model="projectContext" :rules="projectContextRules" class="project-context" size="default" inline label-position="left" aria-label="项目选择">
-        <el-form-item label="当前项目" prop="projectId"><el-select v-model="projectContext.projectId" class="sg-select" :placeholder="projectsLoading ? '正在加载项目…' : '请选择项目'" :disabled="projectsLoading"><el-option :label="projectsLoading ? '正在加载项目…' : '请选择项目'" value="" /><el-option v-for="item in projects" :key="item.projectId" :label="`${item.projectCode} · ${item.projectName}`" :value="String(item.projectId)" /></el-select></el-form-item>
-        <el-form-item v-if="canViewAll" label="项目范围" prop="scope"><el-select v-model="projectContext.scope" class="sg-select" placeholder="我的项目"><el-option label="我的项目" value="" /><el-option label="全部项目" value="all" /></el-select></el-form-item>
+      <el-form ref="projectContextForm" :model="projectContext" :rules="projectContextRules" class="project-context sg-filter-bar sg-context-bar" size="default" inline label-position="left" aria-label="项目选择">
+        <el-form-item label="当前项目" prop="projectId"><el-select v-model="projectContext.projectId" :placeholder="projectsLoading ? '正在加载项目…' : '请选择项目'" :disabled="projectsLoading"><el-option :label="projectsLoading ? '正在加载项目…' : '请选择项目'" value="" /><el-option v-for="item in projects" :key="item.projectId" :label="`${item.projectCode} · ${item.projectName}`" :value="String(item.projectId)" /></el-select></el-form-item>
+        <el-form-item v-if="canViewAll" label="项目范围" prop="scope"><el-select v-model="projectContext.scope" placeholder="我的项目"><el-option label="我的项目" value="" /><el-option label="全部项目" value="all" /></el-select></el-form-item>
         <div v-if="project" class="project-context__tags"><el-tag size="small" effect="plain" round type="primary">{{ project.projectTypeName }}</el-tag><el-tag size="small" effect="plain" round type="info">{{ project.aspectRatio }}</el-tag><el-tag size="small" effect="plain" round :type="projectRoleMeta(project.myProjectRole).type">我的角色：{{ projectRoleMeta(project.myProjectRole).label }}</el-tag><el-tag size="small" effect="plain" round :type="tagTypeFromTone(storageMeta(project.storageStatus).tone)">{{ storageMeta(project.storageStatus).label }}</el-tag></div>
       </el-form>
 
       <el-empty v-if="!projectContext.projectId && !projectsLoading" class="shot-empty" description="当前范围暂无可选项目"><p>请先创建项目，或请项目管理人将你加入项目；如可查看全部项目，也可切换“全部项目”。</p></el-empty>
 
       <template v-else-if="projectContext.projectId">
-        <el-form ref="shotFilterForm" :model="query" :rules="shotFilterRules" class="shot-filters" size="default" aria-label="镜头筛选">
-          <el-form-item class="shot-filter-item shot-filter-item--keyword" prop="keyword">
+        <el-form ref="shotFilterForm" :model="query" :rules="shotFilterRules" class="shot-filters sg-filter-bar" size="default" label-position="top" aria-label="镜头筛选">
+          <el-form-item class="shot-filter-item shot-filter-item--keyword" label="镜头搜索" prop="keyword">
             <el-input v-model="query.keyword" class="shot-search" :prefix-icon="Search" maxlength="200" clearable placeholder="镜头号、制作内容、台词或场次名称" aria-label="搜索镜头" />
           </el-form-item>
-          <el-form-item class="shot-filter-item" prop="episodeId">
-            <el-select v-model="query.episodeId" class="sg-select" placeholder="全部集" aria-label="按集筛选" @change="changeEpisodeFilter"><el-option label="全部集" value="" /><el-option v-for="episode in episodes" :key="episode.episodeId" :label="`${episode.episodeCode} ${episode.episodeName || ''}`" :value="String(episode.episodeId)" /></el-select>
+          <el-form-item class="shot-filter-item" label="集" prop="episodeId">
+            <el-select v-model="query.episodeId" placeholder="全部集" aria-label="按集筛选" @change="changeEpisodeFilter"><el-option label="全部集" value="" /><el-option v-for="episode in episodes" :key="episode.episodeId" :label="`${episode.episodeCode} ${episode.episodeName || ''}`" :value="String(episode.episodeId)" /></el-select>
           </el-form-item>
-          <el-form-item class="shot-filter-item" prop="sceneId">
-            <el-select v-model="query.sceneId" class="sg-select" :placeholder="scenesLoading ? '加载场次中…' : '全部场次'" aria-label="按场次筛选" :disabled="!query.episodeId || scenesLoading" @change="submitFilters"><el-option :label="scenesLoading ? '加载场次中…' : '全部场次'" value="" /><el-option v-for="scene in scenes" :key="scene.sceneId" :label="`${scene.sceneCode} ${scene.sceneName || ''}`" :value="String(scene.sceneId)" /></el-select>
+          <el-form-item class="shot-filter-item" label="场次" prop="sceneId">
+            <el-select v-model="query.sceneId" :placeholder="scenesLoading ? '加载场次中…' : '全部场次'" aria-label="按场次筛选" :disabled="!query.episodeId || scenesLoading" @change="submitFilters"><el-option :label="scenesLoading ? '加载场次中…' : '全部场次'" value="" /><el-option v-for="scene in scenes" :key="scene.sceneId" :label="`${scene.sceneCode} ${scene.sceneName || ''}`" :value="String(scene.sceneId)" /></el-select>
           </el-form-item>
           <div class="shot-filter-range" role="group" aria-label="镜头号区间">
-            <el-form-item class="shot-filter-item" prop="shotNoStart">
+            <el-form-item class="shot-filter-item" label="起始镜头号" prop="shotNoStart">
               <el-input v-model="query.shotNoStart" :disabled="!query.sceneId" inputmode="numeric" clearable placeholder="起始镜头号" aria-label="起始镜头号" @keyup.enter="submitFilters" />
             </el-form-item>
             <span class="shot-filter-range__separator">至</span>
-            <el-form-item class="shot-filter-item" prop="shotNoEnd">
+            <el-form-item class="shot-filter-item" label="结束镜头号" prop="shotNoEnd">
               <el-input v-model="query.shotNoEnd" :disabled="!query.sceneId" inputmode="numeric" clearable placeholder="结束镜头号" aria-label="结束镜头号" @keyup.enter="submitFilters" />
             </el-form-item>
           </div>
-          <el-form-item class="shot-filter-item" prop="shotStatus">
-            <el-select v-model="query.shotStatus" class="sg-select" placeholder="全部状态" aria-label="按状态筛选" @change="submitFilters"><el-option label="全部状态" value="" /><el-option v-for="status in ['pending_info', 'unassigned','pending_schedule','not_started','in_progress','reviewing','revision','completed']" :key="status" :label="shotStatusMeta(status).label" :value="status" /></el-select>
+          <el-form-item class="shot-filter-item" label="镜头状态" prop="shotStatus">
+            <el-select v-model="query.shotStatus" placeholder="全部状态" aria-label="按状态筛选" @change="submitFilters"><el-option label="全部状态" value="" /><el-option v-for="status in ['pending_info', 'unassigned','pending_schedule','not_started','in_progress','reviewing','revision','completed']" :key="status" :label="shotStatusMeta(status).label" :value="status" /></el-select>
           </el-form-item>
-          <el-form-item class="shot-filter-item" prop="assigneeUserId">
-            <el-select v-model="query.assigneeUserId" class="sg-select" placeholder="全部制作人" aria-label="按制作人筛选" @change="submitFilters"><el-option label="全部制作人" value="" /><el-option v-for="member in creatorMembers" :key="member.userId" :label="shotAssigneeOptionLabel(member)" :value="String(member.userId)" /></el-select>
+          <el-form-item class="shot-filter-item" label="制作人" prop="assigneeUserId">
+            <el-select v-model="query.assigneeUserId" placeholder="全部制作人" aria-label="按制作人筛选" @change="submitFilters"><el-option label="全部制作人" value="" /><el-option v-for="member in creatorMembers" :key="member.userId" :label="shotAssigneeOptionLabel(member)" :value="String(member.userId)" /></el-select>
           </el-form-item>
           <el-form-item class="shot-filter-actions">
             <el-button type="primary" :icon="Search" :loading="shotsLoading" @click="submitFilters">查询</el-button>
@@ -1521,12 +1521,19 @@ onBeforeUnmount(() => { disposed = true; closeSingleAssign(); destroyRowSortable
             <el-table-column type="expand" width="40" fixed="left">
               <template #default="{ row }">
                 <div class="shot-expanded-details">
-                  <el-descriptions :column="detailColumnCount" size="small" border>
-                    <el-descriptions-item label="制作内容" :span="detailColumnCount"><div class="shot-detail-text">{{ row.description || '未填写' }}</div></el-descriptions-item>
-                    <el-descriptions-item label="镜头参数">{{ [row.shotSize, row.cameraPosition, row.cameraMovement, row.focalLength].filter(Boolean).join(' · ') || '未填写' }}</el-descriptions-item>
-                    <el-descriptions-item v-for="column in shotDetailColumns.filter(item => !['parameters', 'references'].includes(item.key))" :key="column.key" :label="column.label"><div class="shot-detail-text">{{ row[column.key] || '未填写' }}</div></el-descriptions-item>
-                    <el-descriptions-item label="参考内容" :span="detailColumnCount"><div class="shot-detail-text" v-if="row.referenceDescription">{{ row.referenceDescription }}</div><ReviewReferenceFiles v-if="row.referenceFiles?.length" :files="row.referenceFiles" compact /><span v-else-if="!row.referenceDescription">暂无参考内容</span></el-descriptions-item>
-                  </el-descriptions>
+                  <div class="shot-detail-panel">
+                    <el-descriptions :column="1" :label-width="96" size="small" border>
+                      <el-descriptions-item label="制作内容"><div class="shot-detail-text" :class="{ 'shot-detail-empty': !row.description }">{{ row.description || '未填写' }}</div></el-descriptions-item>
+                    </el-descriptions>
+                    <el-descriptions :column="detailColumnCount" :label-width="96" size="small" border>
+                      <el-descriptions-item label="镜头参数"><span :class="{ 'shot-detail-empty': ![row.shotSize, row.cameraPosition, row.cameraMovement, row.focalLength].some(Boolean) }">{{ [row.shotSize, row.cameraPosition, row.cameraMovement, row.focalLength].filter(Boolean).join(' · ') || '未填写' }}</span></el-descriptions-item>
+                      <el-descriptions-item v-for="column in shotDetailColumns.filter(item => !['parameters', 'references', 'remark'].includes(item.key))" :key="column.key" :label="column.label"><div class="shot-detail-text" :class="{ 'shot-detail-empty': !row[column.key] }">{{ row[column.key] || '未填写' }}</div></el-descriptions-item>
+                    </el-descriptions>
+                    <el-descriptions :column="1" :label-width="96" size="small" border>
+                      <el-descriptions-item label="备注"><div class="shot-detail-text" :class="{ 'shot-detail-empty': !row.remark }">{{ row.remark || '未填写' }}</div></el-descriptions-item>
+                      <el-descriptions-item label="参考内容"><div class="shot-detail-text" v-if="row.referenceDescription">{{ row.referenceDescription }}</div><ReviewReferenceFiles v-if="row.referenceFiles?.length" :files="row.referenceFiles" compact /><span v-else-if="!row.referenceDescription" class="shot-detail-empty">暂无参考内容</span></el-descriptions-item>
+                    </el-descriptions>
+                  </div>
                 </div>
               </template>
             </el-table-column>
@@ -1640,15 +1647,20 @@ onBeforeUnmount(() => { disposed = true; closeSingleAssign(); destroyRowSortable
 </template>
 
 <style scoped>
-.shot-data-table :deep(td.el-table__expanded-cell) { padding: 8px 0; background: var(--sg-text-secondary); }
-.shot-expanded-details { padding: 0 24px; background: var(--sg-surface-soft); }
-.shot-expanded-details :deep(.el-descriptions__body) { overflow: hidden; border-radius: 6px; }
-.shot-expanded-details :deep(.el-descriptions__cell) { padding: 10px 14px; font-size: 12px; line-height: 1.7; }
-.shot-expanded-details :deep(.el-descriptions__label) { width: 104px; white-space: nowrap; }
+.shot-data-table :deep(td.el-table__expanded-cell) { padding: 0; background: var(--sg-surface-soft); }
+.shot-expanded-details { padding: 12px 16px; font-size: 12px; --el-descriptions-table-border: 1px solid var(--sg-border); }
+.shot-detail-panel { overflow: hidden; background: var(--sg-surface); border: 1px solid var(--sg-border); border-radius: 8px; }
+.shot-detail-panel :deep(.el-descriptions + .el-descriptions) { margin-top: -1px; }
+.shot-expanded-details :deep(.el-descriptions__body) { background: var(--sg-surface); }
+.shot-expanded-details :deep(.el-descriptions__table) { table-layout: fixed; }
+.shot-expanded-details :deep(.el-descriptions__table.is-bordered .el-descriptions__cell) { padding: 8px 12px; font-size: 12px; line-height: 1.6; vertical-align: top; }
+.shot-expanded-details :deep(.el-descriptions__label) { white-space: nowrap; color: var(--sg-text-muted); background: var(--sg-surface-soft); font-weight: 500; }
+.shot-expanded-details :deep(.el-descriptions__content) { color: var(--sg-text-secondary); overflow-wrap: anywhere; }
+.shot-detail-empty { color: var(--sg-text-muted); }
 .shot-expanded-details .shot-detail-text { white-space: pre-wrap; overflow-wrap: anywhere; }
 @media (max-width: 700px) {
-  .shot-expanded-details { padding: 0 12px; }
-  .shot-expanded-details :deep(.el-descriptions__cell) { padding: 8px 10px; }
+  .shot-expanded-details { padding: 8px; }
+  .shot-expanded-details :deep(.el-descriptions__table.is-bordered .el-descriptions__cell) { padding: 6px 8px; }
 }
 
 .shot-card__media{position:relative}
@@ -1656,9 +1668,9 @@ onBeforeUnmount(() => { disposed = true; closeSingleAssign(); destroyRowSortable
 .shot-list-toolbar>.shot-list-toolbar__summary{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:0;background:transparent;border:0}.shot-list-toolbar__summary>strong{color:var(--sg-text);font-size:23px;line-height:1}.shot-list-toolbar__summary>span{color:var(--sg-text-muted);font-size:11px}.shot-list-toolbar__summary:deep(.el-button){margin-left:0}.batch-assign-summary{display:grid;gap:6px;margin-bottom:20px;padding:14px;color:var(--sg-text-secondary);background:var(--sg-accent-soft);border-radius:10px}.batch-assign-summary strong{color:var(--sg-text)}.batch-assign-summary span{font-size:12px;line-height:1.5}.batch-assign-form:deep(.el-form-item){margin-bottom:0}.batch-assign-form:deep(.el-select){width:100%}.shot-selection{width:15px;height:15px;cursor:pointer}.shot-selection:disabled{cursor:not-allowed;opacity:.35}.shot-row-actions{display:flex;gap:6px;align-items:center;flex-wrap:wrap}.shot-long-text{line-height:1.55;white-space:pre-wrap}.shot-identity strong,.shot-identity small,.shot-parameters span,.shot-parameters small{display:block}.shot-identity small,.shot-parameters small{margin-top:5px;color:var(--sg-text-muted)}.shot-assets{display:flex;gap:5px;align-items:flex-start;flex-direction:column}.shot-assets__empty{color:var(--sg-text-muted)}.shot-status{display:grid;gap:5px;justify-items:start}
 .shot-page{position:relative;padding-inline:16px}.shot-heading__actions{display:flex;gap:10px}.project-context{display:flex;gap:16px;align-items:end;margin-bottom:14px;padding:16px;background:linear-gradient(90deg,rgba(255,182,87,.06),transparent),var(--sg-surface);border:1px solid var(--sg-border);border-radius:var(--sg-radius-md)}.project-context label{display:grid;min-width:280px;gap:6px}.project-context label>span{color:var(--sg-text-muted);font-size:10px}select,input{color:var(--sg-text);background:var(--sg-surface-soft);border:1px solid var(--sg-border);border-radius:9px}select{height:40px;padding:0 10px}.shot-filters{display:grid;grid-template-columns:minmax(240px,1.6fr) repeat(4,minmax(130px,.7fr)) auto auto;gap:9px;margin-bottom:14px;padding:14px;background:var(--sg-surface);border:1px solid var(--sg-border);border-radius:var(--sg-radius-md)}.shot-search{display:flex;height:40px;gap:8px;align-items:center;padding:0 11px;background:var(--sg-surface-soft);border:1px solid var(--sg-border);border-radius:9px}.shot-search input{min-width:0;flex:1;background:transparent;border:0;outline:0}.shot-list-toolbar{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin:0 2px 12px;color:var(--sg-text-muted);font-size:12px}.shot-list-toolbar>div{display:flex;gap:5px;padding:4px;background:var(--sg-surface);border:1px solid var(--sg-border);border-radius:9px}.shot-list-toolbar button{display:flex;gap:5px;align-items:center;padding:7px 9px;color:var(--sg-text-muted);cursor:pointer;background:transparent;border:0;border-radius:6px}.shot-list-toolbar button.active{color:var(--sg-accent);background:var(--sg-accent-soft)}.shot-loading,.shot-empty{display:grid;min-height:320px;place-items:center;align-content:center;padding:30px;color:var(--sg-text-muted);background:var(--sg-surface);border:1px dashed var(--sg-border-strong);border-radius:var(--sg-radius-lg)}.shot-empty>.el-icon{color:var(--sg-accent);font-size:34px}.shot-empty h3,.shot-empty p{margin:12px 0 0}.shot-empty p{max-width:600px;font-size:12px;text-align:center}.shot-table-wrap{overflow:hidden;background:var(--sg-surface);border:1px solid var(--sg-border);border-radius:var(--sg-radius-md)}.shot-data-table{--el-table-text-color:var(--sg-text-secondary);--el-table-header-text-color:var(--sg-text-muted);--el-table-border-color:var(--sg-border);width:100%}.shot-data-table:deep(.el-table__cell){padding:12px 0;font-size:11px}.shot-data-table:deep(th.el-table__cell){font-weight:650}.shot-description{line-height:1.55}.feedback-cell{line-height:1.55}.shot-thumb{position:relative;overflow:hidden;aspect-ratio:16/9;background:var(--sg-surface-soft);border-radius:10px}.shot-thumb img{width:100%;height:100%;object-fit:cover}.shot-thumb>div{display:grid;width:100%;height:100%;gap:5px;color:var(--sg-text-muted);place-items:center;align-content:center}.shot-thumb--small{width:90px}.shot-thumb--small>.el-icon{position:absolute;top:50%;left:50%;color:var(--sg-text-muted);font-size:20px;transform:translate(-50%,-50%)}.shot-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,300px),1fr));gap:15px}.shot-card{padding:12px;cursor:pointer;background:var(--sg-surface);border:1px solid var(--sg-border);border-radius:var(--sg-radius-md);transition:transform .15s,border-color .15s}.shot-card:hover,.shot-card:focus-visible,.story-frame:hover,.story-frame:focus-visible{border-color:rgba(255,182,87,.35);outline:0;transform:translateY(-2px)}.shot-card__duration{position:absolute;right:8px;bottom:8px;padding:4px 6px;color:white;font-size:10px;background:rgba(0,0,0,.72);border-radius:5px}.shot-card header,.shot-card footer{display:flex;gap:10px;align-items:center;justify-content:space-between}.shot-card header{margin-top:13px}.shot-card h3,.shot-card small,.shot-card p{margin:0}.shot-card h3{margin-top:3px;font-size:18px}.shot-card small,.shot-card footer{color:var(--sg-text-muted);font-size:10px}.shot-card>p{min-height:44px;margin:11px 0;color:var(--sg-text-secondary);font-size:12px;line-height:1.55}.storyboard{display:grid;gap:10px}.story-frame{display:grid;grid-template-columns:45px 230px 1fr;gap:14px;align-items:center;padding:10px;cursor:pointer;background:var(--sg-surface);border:1px solid var(--sg-border);border-radius:var(--sg-radius-md);transition:transform .15s,border-color .15s}.story-frame__index{color:var(--sg-accent);font-size:12px;font-weight:800;text-align:center}.story-frame p{margin:7px 0;color:var(--sg-text-secondary);font-size:12px}.story-frame small{color:var(--sg-text-muted)}.is-refreshing{opacity:.55}.shot-pagination{display:flex;gap:14px;align-items:center;justify-content:center;margin-top:20px;color:var(--sg-text-muted);font-size:12px}@media(max-width:1480px){.shot-filters{grid-template-columns:repeat(3,minmax(0,1fr))}.shot-search{grid-column:span 2}.project-context{align-items:stretch;flex-direction:column}}@media(max-width:760px){.shot-filters{grid-template-columns:1fr}.shot-search{grid-column:auto}.story-frame{grid-template-columns:35px 120px 1fr}.project-context label{min-width:0}}
 .shot-list-toolbar>.shot-list-toolbar__summary{gap:8px;padding:0;background:transparent;border:0;border-radius:0}.shot-list-toolbar>.shot-list-toolbar__summary .el-button{margin-left:0;padding:8px 15px;color:inherit;background:transparent;border-radius:4px}.shot-list-toolbar>.shot-list-toolbar__summary .el-button--primary{color:var(--el-color-primary)}.shot-list-toolbar>.shot-list-toolbar__summary .el-button--danger{color:var(--el-color-danger)}
-.project-context:deep(.el-form-item){min-width:280px;margin:0}.project-context:deep(.el-form-item__label){height:auto;padding-bottom:6px;color:var(--sg-text-muted);font-size:10px;line-height:1}.shot-filters .shot-search{height:auto;padding:0;background:transparent;border:0}.shot-search:deep(.el-input__wrapper){min-height:40px;background:var(--sg-surface-soft);box-shadow:0 0 0 1px var(--sg-border) inset}.shot-list-toolbar__views{padding:0!important;background:transparent!important}.shot-list-toolbar__views:deep(.el-radio-button__inner){display:flex;gap:6px;align-items:center;color:var(--sg-text-muted);background:var(--sg-surface);border-color:var(--sg-border);box-shadow:none}.shot-list-toolbar__views:deep(.el-radio-button__original-radio:checked+.el-radio-button__inner){color:var(--sg-accent);background:var(--sg-accent-soft);border-color:rgba(255,182,87,.32);box-shadow:-1px 0 0 0 rgba(255,182,87,.32)}.shot-card{padding:0}.shot-card:deep(.el-card__body){padding:12px}.shot-card:deep(.el-card__body)>p{min-height:44px;margin:11px 0;color:var(--sg-text-secondary);font-size:12px;line-height:1.55}.story-frame{display:block;padding:0}.story-frame:deep(.el-card__body){display:grid;grid-template-columns:45px 230px minmax(0,1fr);gap:14px;align-items:center;padding:10px}.shot-pagination{margin-top:20px}.shot-pagination:deep(.el-pager li),.shot-pagination:deep(button){background:var(--sg-surface)!important}.shot-pagination:deep(.is-active){color:#17130d!important;background:var(--sg-accent)!important}@media(max-width:760px){.story-frame:deep(.el-card__body){grid-template-columns:35px 120px minmax(0,1fr)}}
-.shot-filters{grid-template-columns:minmax(200px,1.4fr) repeat(2,minmax(100px,.65fr)) minmax(240px,1.3fr) repeat(2,minmax(100px,.65fr)) auto}
-.shot-filter-range{display:flex;gap:6px;align-items:flex-start;min-width:0}.shot-filter-range>.shot-filter-item{flex:1;min-width:0}.shot-filter-range__separator{line-height:40px;color:var(--sg-text-muted)}
+.project-context:deep(.el-form-item){min-width:280px;margin:0;align-items:center}.project-context:deep(.el-form-item__label){height:32px;padding:0 8px 0 0;align-items:center;color:var(--sg-text-muted);font-size:12px;line-height:32px}.shot-filters .shot-search{height:auto;padding:0;background:transparent;border:0}.shot-list-toolbar__views{padding:0!important;background:transparent!important}.shot-list-toolbar__views:deep(.el-radio-button__inner){display:flex;gap:6px;align-items:center;color:var(--sg-text-muted);background:var(--sg-surface);border-color:var(--sg-border);box-shadow:none}.shot-list-toolbar__views:deep(.el-radio-button__original-radio:checked+.el-radio-button__inner){color:var(--sg-accent);background:var(--sg-accent-soft);border-color:rgba(255,182,87,.32);box-shadow:-1px 0 0 0 rgba(255,182,87,.32)}.shot-card{padding:0}.shot-card:deep(.el-card__body){padding:12px}.shot-card:deep(.el-card__body)>p{min-height:44px;margin:11px 0;color:var(--sg-text-secondary);font-size:12px;line-height:1.55}.story-frame{display:block;padding:0}.story-frame:deep(.el-card__body){display:grid;grid-template-columns:45px 230px minmax(0,1fr);gap:14px;align-items:center;padding:10px}.shot-pagination{margin-top:20px}.shot-pagination:deep(.el-pager li),.shot-pagination:deep(button){background:var(--sg-surface)!important}.shot-pagination:deep(.is-active){color:#17130d!important;background:var(--sg-accent)!important}@media(max-width:760px){.story-frame:deep(.el-card__body){grid-template-columns:35px 120px minmax(0,1fr)}}
+.shot-filters{align-items:start;grid-template-columns:minmax(200px,1.4fr) repeat(2,minmax(100px,.65fr)) minmax(240px,1.3fr) repeat(2,minmax(100px,.65fr)) auto}
+.shot-filter-range{display:flex;gap:6px;align-items:flex-start;min-width:0}.shot-filter-range>.shot-filter-item{flex:1;min-width:0}.shot-filter-range__separator{line-height:32px;color:var(--sg-text-muted)}
 .shot-filters:deep(.el-form-item){min-width:0;margin-bottom:0}
 .shot-filter-item:deep(.el-form-item__content),.shot-filter-item:deep(.el-select),.shot-filter-item:deep(.el-input){width:100%;min-width:0}
 .shot-filter-actions:deep(.el-form-item__content){flex-wrap:nowrap;justify-content:flex-end}
@@ -1765,3 +1777,5 @@ onBeforeUnmount(() => { disposed = true; closeSingleAssign(); destroyRowSortable
 .story-frame__assignee{font-size:12px;color:var(--sg-text-secondary)}
 .story-frame__actions{padding-top:12px;border-top:1px solid var(--sg-border)}
 </style>
+
+<style scoped src="../../assets/styles/filter-toolbar.css"></style>

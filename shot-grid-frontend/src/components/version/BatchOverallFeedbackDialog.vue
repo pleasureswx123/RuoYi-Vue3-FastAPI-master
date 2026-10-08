@@ -36,6 +36,8 @@ const activeIndex = computed(() => form.targets.findIndex(row => row.versionId =
 const activeTarget = computed(() => form.targets[activeIndex.value])
 const issueCount = computed(() => form.targets.reduce((sum, row) => sum + row.issues.length, 0))
 const remainingCount = computed(() => form.targets.reduce((sum, row) => sum + row.issues.length - reviewedCount(row), 0))
+const pendingReasonCount = computed(() => form.targets.reduce((sum, row) => sum + row.issues.filter(issue => issue.result === 'still_present' && !issue.comment.trim()).length, 0))
+const reviewProgress = computed(() => issueCount.value ? Math.round((issueCount.value - remainingCount.value) / issueCount.value * 100) : 100)
 const draftTargets = computed(() => form.targets.filter(row => row.drafts.length))
 const unconfirmedDraftCount = computed(() => draftTargets.value.filter(row => !row.draftsConfirmed).length)
 const disabled = computed(() => loading.value || busy.value || navigating.value || Boolean(error.value))
@@ -170,9 +172,18 @@ async function locateIssue(row, issue) {
   workspaceRef.value?.querySelector(`[data-issue-id="${issue.issueId}"] ${input}`)?.focus({ preventScroll: true })
 }
 async function nextUnreviewed() {
-  const targets = [...form.targets.slice(activeIndex.value + 1), ...form.targets.slice(0, activeIndex.value + 1)]
+  // 优先补齐当前镜头，再转到其他镜头，避免原因未填时跳走。
+  const targets = [...form.targets.slice(activeIndex.value), ...form.targets.slice(0, activeIndex.value)]
   const row = targets.find(target => target.issues.some(issue => issueError(issue)))
   if (row) await locateIssue(row, row.issues.find(issue => issueError(issue)))
+}
+async function changeIssueResult(issue, value) {
+  if (value === 'resolved') issue.comment = ''
+  formRef.value?.clearValidate('reviewReady')
+  if (value !== 'still_present') return
+  const versionId = activeVersionId.value
+  await nextTick()
+  if (activeVersionId.value === versionId) workspaceRef.value?.querySelector(`[data-issue-id="${issue.issueId}"] textarea`)?.focus({ preventScroll: true })
 }
 async function changeStep(value) {
   clearSelection()
@@ -310,7 +321,9 @@ defineExpose({ open })
           <span v-if="loading">正在读取所选镜头的审核信息…</span>
           <template v-else>
             <span>已有问题已复核 <strong>{{ issueCount - remainingCount }} / {{ issueCount }}</strong> 条</span>
-            <el-tag :type="remainingCount ? 'warning' : 'success'" size="small">{{ remainingCount ? '还差 ' + remainingCount + ' 条' : '可以进入下一步' }}</el-tag>
+            <el-tag :type="remainingCount ? 'warning' : 'success'" size="small">{{ remainingCount ? '待完成 ' + remainingCount + ' 条' : '复核完成，可以进入下一步' }}</el-tag>
+            <el-text v-if="pendingReasonCount" type="warning" size="small">其中 {{ pendingReasonCount }} 条待补充修改原因</el-text>
+            <el-progress class="batch-feedback-progress__bar" :percentage="reviewProgress" :stroke-width="6" :show-text="false" :status="remainingCount ? undefined : 'success'" aria-label="已有问题复核进度" />
           </template>
         </div>
       </el-form-item>
@@ -330,7 +343,7 @@ defineExpose({ open })
         </nav>
         <section v-if="activeTarget" class="batch-feedback-review__detail" aria-label="当前镜头问题">
           <div class="batch-feedback-workspace-heading">
-            <div><strong>{{ activeTarget.label }}</strong><p class="batch-feedback-meta">当前镜头：{{ reviewedCount(activeTarget) }} / {{ activeTarget.issues.length }} 条已复核</p></div>
+            <div><strong>{{ activeTarget.label }}</strong><p class="batch-feedback-meta">当前镜头：{{ reviewedCount(activeTarget) }} / {{ activeTarget.issues.length }} 条已复核 · 勾选多条可批量设置结论</p></div>
             <el-button v-if="activeTarget.shot.canInspect" :disabled="disabled" link type="primary" @click="emit('review', activeTarget.shot)">查看当前版本画面</el-button>
           </div>
           <div v-if="selectedIssues.length" class="batch-feedback-bulk">
@@ -348,7 +361,7 @@ defineExpose({ open })
             </div>
           </div>
           <div ref="workspaceRef" class="batch-feedback-scroll batch-feedback-issues">
-            <el-table v-if="activeTarget.issues.length" :key="activeVersionId" ref="issueTableRef" :data="activeTarget.issues" row-key="issueId" @selection-change="rows => { selectedIssues = rows }">
+            <el-table v-if="activeTarget.issues.length" :key="activeVersionId" ref="issueTableRef" :data="activeTarget.issues" row-key="issueId" height="100%" @selection-change="rows => { selectedIssues = rows }">
               <el-table-column type="selection" width="42" :selectable="() => !disabled" />
               <el-table-column label="原问题与制作人说明" min-width="240">
                 <template #default="{ row: issue }">
@@ -361,9 +374,10 @@ defineExpose({ open })
               </el-table-column>
               <el-table-column label="你的复核结论" min-width="245">
                 <template #default="{ row: issue, $index }">
-                  <div :data-issue-id="issue.issueId">
+                  <div :data-issue-id="issue.issueId" class="batch-feedback-decision" :class="{ 'batch-feedback-decision--resolved': issue.result === 'resolved' }">
+                    <el-tag class="batch-feedback-decision__status" size="small" :type="!issue.result ? 'info' : issueError(issue) ? 'warning' : issue.result === 'resolved' ? 'success' : 'warning'" aria-live="polite">{{ !issue.result ? '待复核' : issueError(issue) ? '待补充原因' : issue.result === 'resolved' ? '已确认解决' : '已确认仍需修改' }}</el-tag>
                     <el-form-item :prop="['targets', String(activeIndex), 'issues', String($index), 'result']" :error="showReviewErrors && !issue.result ? '请选择复核结论' : ''">
-                      <el-radio-group v-model="issue.result" :aria-label="'问题 ' + issue.issueId + ' 的复核结论'" :disabled="disabled" @change="value => { if (value === 'resolved') issue.comment = '' }">
+                      <el-radio-group v-model="issue.result" :aria-label="'问题 ' + issue.issueId + ' 的复核结论'" :disabled="disabled" @change="value => changeIssueResult(issue, value)">
                         <el-radio-button value="resolved">已解决</el-radio-button>
                         <el-radio-button value="still_present">仍需修改</el-radio-button>
                       </el-radio-group>
@@ -371,7 +385,7 @@ defineExpose({ open })
                     <el-form-item v-if="issue.result === 'still_present'" label="仍需修改的原因" :prop="['targets', String(activeIndex), 'issues', String($index), 'comment']" :error="showReviewErrors && !issue.comment.trim() ? '请填写仍需修改的具体原因' : ''">
                       <el-input v-model="issue.comment" type="textarea" :rows="2" maxlength="1000" show-word-limit placeholder="指出仍未解决的部分，方便制作人继续修改" />
                     </el-form-item>
-                    <el-text v-else-if="!issue.result && !showReviewErrors" type="info" size="small">尚未复核，请选择结论</el-text>
+                    <el-text v-else-if="!issue.result && !showReviewErrors" type="info" size="small">请结合左侧处理说明，选择你的结论</el-text>
                   </div>
                 </template>
               </el-table-column>
@@ -379,8 +393,8 @@ defineExpose({ open })
             <el-empty v-else-if="!loading" :image-size="72" description="此镜头没有历史问题，无需复核" />
           </div>
           <div class="batch-feedback-next-target">
-            <el-text size="small" type="info">切换镜头会保留已填写的复核结论</el-text>
-            <el-button :disabled="disabled || !remainingCount" @click="nextUnreviewed">下一个未复核镜头</el-button>
+            <el-text size="small" :type="remainingCount ? 'info' : 'success'">{{ remainingCount ? '切换镜头保留填写内容；选“仍需修改”后需补充原因' : '所有问题已复核，点击右下角“下一步”继续' }}</el-text>
+            <el-button v-if="remainingCount" :disabled="disabled" type="primary" plain @click="nextUnreviewed">定位下一条待复核问题</el-button>
           </div>
         </section>
         <el-empty v-else description="没有可复核的镜头" />
@@ -482,6 +496,12 @@ defineExpose({ open })
 .batch-feedback-form { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .batch-feedback-gate { flex-shrink: 0; margin-bottom: 20px; }
 .batch-feedback-progress, .batch-feedback-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.batch-feedback-gate :deep(.el-form-item__content) { width: 100%; }
+.batch-feedback-progress { width: 100%; padding: 10px 12px; background: var(--el-fill-color-light); border-radius: 8px; }
+.batch-feedback-progress__bar { flex: 1 1 140px; min-width: 100px; margin-left: auto; }
+.batch-feedback-decision__status { margin-bottom: 10px; }
+.batch-feedback-decision--resolved { --el-color-primary: var(--el-color-success); --el-color-primary-light-7: var(--el-color-success-light-7); --el-color-primary-light-9: var(--el-color-success-light-9); }
+.batch-feedback-decision :deep(.el-form-item:first-of-type) { margin-bottom: 10px; }
 .batch-feedback-review { display: grid; grid-template-columns: 250px minmax(0, 1fr); flex: 1; min-height: 0; border: 1px solid var(--el-border-color-lighter); border-radius: 8px; overflow: hidden; }
 .batch-feedback-nav { min-height: 0; overflow: auto; background: var(--el-fill-color-light); border-right: 1px solid var(--el-border-color-lighter); }
 .batch-feedback-nav :deep(.el-menu) { border: 0; background: transparent; }
@@ -492,7 +512,7 @@ defineExpose({ open })
 .batch-feedback-workspace-heading { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; padding: 14px 16px; }
 .batch-feedback-workspace-heading h4 { margin: 0; }
 .batch-feedback-scroll { min-height: 0; overflow: auto; overscroll-behavior: contain; }
-.batch-feedback-issues { flex: 1; }
+.batch-feedback-issues { flex: 1; overflow: hidden; }
 .batch-feedback-issues :deep(.el-form-item) { margin-bottom: 18px; }
 .batch-feedback-issues :deep(.el-form-item__label) { font-size: 12px; }
 .batch-feedback-issues :deep(.el-table__cell) { vertical-align: top; padding-top: 14px; }

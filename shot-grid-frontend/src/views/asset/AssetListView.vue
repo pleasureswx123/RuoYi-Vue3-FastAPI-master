@@ -702,10 +702,10 @@ onBeforeUnmount(() => {
 
     <ProjectStatePanel v-if="projectsError" :title="projectsError.title" :message="projectsError.message" :retryable="projectsError.retryable" @retry="loadProjects" />
     <template v-else>
-      <el-form ref="projectContextForm" :model="projectContext" :rules="projectContextRules" class="project-context" size="default" inline label-position="left" aria-label="当前项目筛选">
-        <el-form-item label="当前项目" prop="selectedProjectId"><el-select v-model="projectContext.selectedProjectId" class="sg-select" :placeholder="projectsLoading ? '正在加载项目…' : '请选择项目'" :disabled="projectsLoading"><el-option :label="projectsLoading ? '正在加载项目…' : '请选择项目'" value="" /><el-option v-for="item in projects" :key="item.projectId" :label="`${item.projectCode} · ${item.projectName}`" :value="String(item.projectId)" /></el-select></el-form-item>
-        <el-form-item v-if="canViewAll" label="项目范围" prop="scope"><el-select v-model="projectContext.scope" class="sg-select" placeholder="我的项目"><el-option label="我的项目" value="" /><el-option label="全部项目" value="all" /></el-select></el-form-item>
-        <div v-if="project" class="project-context__meta"><el-tag size="small" effect="plain" type="primary">{{ project.projectTypeName }}</el-tag><el-tag size="small" effect="plain" type="info">{{ project.aspectRatio }}</el-tag><el-tag size="small" effect="plain" round :type="projectRoleMeta(project.myProjectRole).type">我的角色：{{ projectRoleMeta(project.myProjectRole).label }}</el-tag><el-tag size="small" effect="plain" round :type="tagTypeFromTone(storageMeta(project.storageStatus).tone)">存储：{{ storageMeta(project.storageStatus).label }}</el-tag></div>
+      <el-form ref="projectContextForm" :model="projectContext" :rules="projectContextRules" class="project-context sg-filter-bar sg-context-bar" size="default" inline label-position="left" aria-label="当前项目筛选">
+        <el-form-item label="当前项目" prop="selectedProjectId"><el-select v-model="projectContext.selectedProjectId" :placeholder="projectsLoading ? '正在加载项目…' : '请选择项目'" :disabled="projectsLoading"><el-option :label="projectsLoading ? '正在加载项目…' : '请选择项目'" value="" /><el-option v-for="item in projects" :key="item.projectId" :label="`${item.projectCode} · ${item.projectName}`" :value="String(item.projectId)" /></el-select></el-form-item>
+        <el-form-item v-if="canViewAll" label="项目范围" prop="scope"><el-select v-model="projectContext.scope" placeholder="我的项目"><el-option label="我的项目" value="" /><el-option label="全部项目" value="all" /></el-select></el-form-item>
+        <div v-if="project" class="project-context__meta"><el-tag size="small" effect="plain" round type="primary">{{ project.projectTypeName }}</el-tag><el-tag size="small" effect="plain" round type="info">{{ project.aspectRatio }}</el-tag><el-tag size="small" effect="plain" round :type="projectRoleMeta(project.myProjectRole).type">我的角色：{{ projectRoleMeta(project.myProjectRole).label }}</el-tag><el-tag size="small" effect="plain" round :type="tagTypeFromTone(storageMeta(project.storageStatus).tone)">存储：{{ storageMeta(project.storageStatus).label }}</el-tag></div>
       </el-form>
 
       <el-card v-if="projectsLoading && !projectContext.selectedProjectId" class="asset-context-loading" shadow="never"><el-skeleton :rows="3" animated /></el-card>
@@ -713,23 +713,23 @@ onBeforeUnmount(() => {
 
       <template v-else-if="projectContext.selectedProjectId">
         <el-alert v-if="pollingError" :title="pollingError" type="warning" show-icon :closable="false" />
-        <el-form ref="assetFilterForm" :model="query" :rules="assetFilterRules" class="asset-filters" size="default" aria-label="资产筛选">
-          <el-form-item class="asset-filter-item asset-filter-item--keyword" prop="keyword">
-            <el-input v-model="query.keyword" class="asset-search sg-input" :prefix-icon="Search" maxlength="200" clearable placeholder="资产名称或描述" aria-label="按资产名称或描述搜索" />
+        <el-form ref="assetFilterForm" :model="query" :rules="assetFilterRules" class="asset-filters sg-filter-bar" size="default" label-position="top" aria-label="资产筛选">
+          <el-form-item class="asset-filter-item asset-filter-item--keyword" label="资产搜索" prop="keyword">
+            <el-input v-model="query.keyword" class="asset-search" :prefix-icon="Search" maxlength="200" clearable placeholder="资产名称或描述" aria-label="按资产名称或描述搜索" />
           </el-form-item>
-          <el-form-item class="asset-filter-item" prop="assetType">
-            <el-select v-model="query.assetType" class="sg-select" placeholder="全部类型" aria-label="按资产类型筛选" @change="submitFilters"><el-option label="全部类型" value="" /><el-option label="角色" value="Character" /><el-option label="场景" value="Environment" /><el-option label="道具" value="Prop" /></el-select>
+          <el-form-item class="asset-filter-item" label="资产类型" prop="assetType">
+            <el-select v-model="query.assetType" placeholder="全部类型" aria-label="按资产类型筛选" @change="submitFilters"><el-option label="全部类型" value="" /><el-option label="角色" value="Character" /><el-option label="场景" value="Environment" /><el-option label="道具" value="Prop" /></el-select>
           </el-form-item>
-          <el-form-item class="asset-filter-item" prop="assetStatus">
-            <el-select v-model="query.assetStatus" class="sg-select" placeholder="全部状态" aria-label="按资产状态筛选" @change="submitFilters"><el-option label="全部状态" value="" /><el-option v-for="status in ['unassigned','pending_schedule','not_started','preparing','in_progress','reviewing','revision','completed']" :key="status" :label="assetStatusMeta(status).label" :value="status" /></el-select>
+          <el-form-item class="asset-filter-item" label="资产状态" prop="assetStatus">
+            <el-select v-model="query.assetStatus" placeholder="全部状态" aria-label="按资产状态筛选" @change="submitFilters"><el-option label="全部状态" value="" /><el-option v-for="status in ['unassigned','pending_schedule','not_started','preparing','in_progress','reviewing','revision','completed']" :key="status" :label="assetStatusMeta(status).label" :value="status" /></el-select>
           </el-form-item>
-          <el-form-item class="asset-filter-item" prop="assigneeUserId">
-            <el-select v-model="query.assigneeUserId" class="sg-select" placeholder="全部制作人" aria-label="按制作人筛选" @change="submitFilters"><el-option label="全部制作人" value="" /><el-option v-for="member in members" :key="member.userId" :label="memberLabel(member)" :value="String(member.userId)" /></el-select>
+          <el-form-item class="asset-filter-item" label="制作人" prop="assigneeUserId">
+            <el-select v-model="query.assigneeUserId" placeholder="全部制作人" aria-label="按制作人筛选" @change="submitFilters"><el-option label="全部制作人" value="" /><el-option v-for="member in members" :key="member.userId" :label="memberLabel(member)" :value="String(member.userId)" /></el-select>
           </el-form-item>
           <el-form-item class="asset-filter-actions">
             <el-button type="primary" :icon="Search" :loading="assetsLoading" @click="submitFilters">查询</el-button>
             <el-button :icon="RefreshLeft" :disabled="assetsLoading" @click="resetFilters">重置</el-button>
-            <el-button :icon="Refresh" :disabled="assetsLoading" @click="loadProjectContext(true)">刷新</el-button>
+            <el-button :icon="Refresh" circle aria-label="刷新资产" :disabled="assetsLoading" @click="loadProjectContext(true)" />
           </el-form-item>
         </el-form>
 
@@ -892,3 +892,5 @@ onBeforeUnmount(() => {
 </style>
 
 <style scoped src="../../assets/styles/compact-list.css"></style>
+
+<style scoped src="../../assets/styles/filter-toolbar.css"></style>

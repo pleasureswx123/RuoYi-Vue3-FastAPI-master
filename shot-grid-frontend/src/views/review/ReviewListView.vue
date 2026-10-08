@@ -4,7 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElTable, ElTableColumn } from 'element-plus'
 import 'element-plus/es/components/table/style/css'
 import 'element-plus/es/components/table-column/style/css'
-import { Plus, Refresh, Search } from '@element-plus/icons-vue'
+import { Refresh, Search } from '@element-plus/icons-vue'
 
 import { getProjectPage } from '@/api/shot-grid/projects'
 import { getReviewListPage } from '@/api/shot-grid/reviews'
@@ -12,7 +12,6 @@ import { useSessionStore } from '@/store/modules/session'
 import { tagTypeFromTone } from '@/utils/tag'
 import ProjectStatePanel from '@/views/project/components/ProjectStatePanel.vue'
 import ProtectedThumbnail from '@/views/shot/components/ProtectedThumbnail.vue'
-import ManualReviewDialog from '@/views/review/components/ManualReviewDialog.vue'
 import RelatedDetailDrawer from '@/components/RelatedDetailDrawer.vue'
 import { taskVersionStatusMeta } from '@/views/task/taskPresentation'
 import {
@@ -52,7 +51,6 @@ const projectsLoading = ref(false)
 const reviewsLoading = ref(false)
 const projectsError = ref(null)
 const reviewsError = ref(null)
-const manualDialogVisible = ref(false)
 const reviewFilterFormRef = ref(null)
 const query = reactive({ reviewStatus: ['draft', 'active', 'completed', 'archived'].includes(route.query.reviewStatus) ? route.query.reviewStatus : '', pageNum: 1, pageSize: 20 })
 let projectsController = null
@@ -60,8 +58,6 @@ let reviewsController = null
 
 const canViewAll = computed(() => sessionStore.permissions.includes('*:*:*') || sessionStore.permissions.includes('shotgrid:project:all'))
 const canListReviews = computed(() => sessionStore.permissions.includes('*:*:*') || sessionStore.permissions.includes('shotgrid:reviewList:list'))
-const canCreateManual = computed(() => sessionStore.permissions.includes('*:*:*') || sessionStore.permissions.includes('shotgrid:reviewList:add'))
-const manualCandidates = computed(() => reviews.value.filter(item => item.reviewStatus === 'active' && item.reviewMode === 'auto_single' && item.versionStatus === 'pending_review'))
 const reviewFilterModel = computed(() => ({ projectId: selectedProjectId.value, reviewStatus: query.reviewStatus }))
 
 function listStatusMeta(status) {
@@ -144,10 +140,6 @@ function changePage(next) {
   loadReviews()
 }
 
-function openCreatedManual(detail) {
-  router.push(`/reviews/${detail.reviewListId}`)
-}
-
 watch(selectedProjectId, () => {
   query.pageNum = 1
   loadReviews()
@@ -167,14 +159,14 @@ onBeforeUnmount(() => {
   <section class="sg-page review-page">
     <header class="sg-page-heading">
       <div><p class="sg-eyebrow">REVIEWS</p><h2 class="sg-page-title">版本审核</h2><p class="sg-page-description">按任务查看审核进度，展开任务可查看各版本审核记录。</p></div>
-      <div class="heading-actions"><el-button v-if="canCreateManual && selectedProjectId" type="primary" :icon="Plus" @click="manualDialogVisible = true">创建批量审核单</el-button><el-button :icon="Refresh" :loading="projectsLoading || reviewsLoading" @click="refreshAll">刷新</el-button></div>
+      <div class="heading-actions"><el-button :icon="Refresh" :loading="projectsLoading || reviewsLoading" @click="refreshAll">刷新</el-button></div>
     </header>
 
     <ProjectStatePanel v-if="projectsError" :title="projectsError.title" :message="projectsError.message" :retryable="projectsError.retryable" @retry="loadProjects" />
     <template v-else>
-      <el-form ref="reviewFilterFormRef" :model="reviewFilterModel" class="review-toolbar" size="large" label-position="top" aria-label="审核单筛选">
-        <el-form-item label="当前项目" prop="projectId"><el-select v-model="selectedProjectId" class="sg-select" :placeholder="projectsLoading ? '正在加载项目…' : '请选择项目'" :loading="projectsLoading" :disabled="projectsLoading"><el-option v-for="project in projects" :key="project.projectId" :label="`${project.projectCode} · ${project.projectName}`" :value="String(project.projectId)" /></el-select></el-form-item>
-        <el-form-item label="审核单状态" prop="reviewStatus"><el-select v-model="query.reviewStatus" class="sg-select" placeholder="全部状态"><el-option label="全部状态" value="" /><el-option label="草稿" value="draft" /><el-option label="待审核" value="active" /><el-option label="已结束" value="completed" /><el-option label="已归档" value="archived" /></el-select></el-form-item>
+      <el-form ref="reviewFilterFormRef" :model="reviewFilterModel" class="review-toolbar sg-filter-bar" size="default" label-position="top" aria-label="审核单筛选">
+        <el-form-item label="当前项目" prop="projectId"><el-select v-model="selectedProjectId" :placeholder="projectsLoading ? '正在加载项目…' : '请选择项目'" :loading="projectsLoading" :disabled="projectsLoading"><el-option v-for="project in projects" :key="project.projectId" :label="`${project.projectCode} · ${project.projectName}`" :value="String(project.projectId)" /></el-select></el-form-item>
+        <el-form-item label="审核单状态" prop="reviewStatus"><el-select v-model="query.reviewStatus" placeholder="全部状态"><el-option label="全部状态" value="" /><el-option label="草稿" value="draft" /><el-option label="待审核" value="active" /><el-option label="已结束" value="completed" /><el-option label="已归档" value="archived" /></el-select></el-form-item>
         <div class="review-toolbar__summary"><el-icon><Search /></el-icon><span>当前筛选 {{ total }} 个任务 / 批量单</span></div>
       </el-form>
 
@@ -206,7 +198,6 @@ onBeforeUnmount(() => {
 
       <el-pagination v-if="total > query.pageSize" class="review-pagination" background layout="prev, pager, next, total" :current-page="query.pageNum" :page-size="query.pageSize" :total="total" :disabled="reviewsLoading" aria-label="任务审核分组分页" @current-change="changePage" />
     </template>
-    <ManualReviewDialog v-if="manualDialogVisible && selectedProjectId" v-model="manualDialogVisible" :project-id="selectedProjectId" :candidates="manualCandidates" @created="openCreatedManual" />
     <RelatedDetailDrawer ref="taskDrawer" @closed="loadReviews" />
   </section>
 </template>
@@ -233,3 +224,5 @@ onBeforeUnmount(() => {
 .review-tree-hint { display: block; margin-top: 4px; color: var(--sg-text-muted); font-size: 11px; }
 .review-tree-preview { display: block; width: 80px; height: 46px; overflow: hidden; border-radius: 6px; }
 </style>
+
+<style scoped src="../../assets/styles/filter-toolbar.css"></style>

@@ -298,7 +298,7 @@ describe('资产管理真实列表页', () => {
       getAssetPage.mockResolvedValue({ rows: [{ ...timedAsset, itemTimeGroups: [
         { taskStatus: 'completed', expectedEndTime: '2026-08-29T12:00:00', itemCount: 2 }
       ] }, emptyAsset], total: 2, hasNext: false })
-      await wrapper.findAll('button').find(button => buttonLabel(button) === '刷新').trigger('click')
+      await wrapper.find('button[aria-label="刷新资产"]').trigger('click')
       await flushPromises()
       expect(cells()).toEqual(['已完成 2', '—'])
       expect(getAssetItems).not.toHaveBeenCalled()
@@ -693,7 +693,7 @@ describe('资产管理真实列表页', () => {
       scrollElement.scrollLeft = 60
       getAssetPage.mockResolvedValue({ rows: [{ ...assetRow }], total: 1 })
       getAssetItems.mockResolvedValue({ data: [{ ...assetItem, productionItem: '刷新后的分项', assetStatus: 'completed' }] })
-      await wrapper.findAll('button').find(button => buttonLabel(button) === '刷新').trigger('click')
+      await wrapper.find('button[aria-label="刷新资产"]').trigger('click')
       await flushPromises()
       expect(wrapper.find('.el-table__row--level-1').text()).toContain('刷新后的分项')
       expect(wrapper.find('.el-table__row--level-1').text()).toContain('已完成')
@@ -724,7 +724,7 @@ describe('资产管理真实列表页', () => {
       await flushPromises()
       expect(wrapper.find('.asset-table-wrap').text()).toContain('分项访问已收回')
       expect(getAssetItems).toHaveBeenCalledTimes(1)
-      await wrapper.findAll('button').find(button => buttonLabel(button) === '刷新').trigger('click')
+      await wrapper.find('button[aria-label="刷新资产"]').trigger('click')
       await flushPromises()
       expect(getAssetItems).toHaveBeenCalledTimes(2)
     } finally {
@@ -856,7 +856,7 @@ describe('资产管理真实列表页', () => {
     expect(filterForm.props('model')).toMatchObject({ keyword: '', assetType: '', assetStatus: '', assigneeUserId: '' })
     expect(filterForm.props('rules')).toHaveProperty('keyword')
     expect(filterForm.findAllComponents(ElFormItem)).toHaveLength(5)
-    expect(filterForm.findComponent(ElInput).classes()).toContain('sg-input')
+    expect(filterForm.classes()).toContain('sg-filter-bar')
     expect(wrapper.text()).toContain('LCFR · 罗刹夫人')
     expect(wrapper.text()).toContain('动力舱室内')
     expect(wrapper.text()).toContain('1个资产')

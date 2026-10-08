@@ -483,7 +483,7 @@ describe('真实任务工作台', () => {
     expect(getMineReviewListPage).toHaveBeenLastCalledWith(expect.objectContaining({ pageNum: 1, pageSize: 20 }), expect.anything())
     await form.find('input[placeholder="搜索镜头号、任务或审核单"]').setValue('a'.repeat(201))
     const calls = getMineReviewListPage.mock.calls.length
-    await form.findAllComponents(ElButton).find(button => button.text() === '搜索').trigger('click')
+    await form.findAllComponents(ElButton).find(button => button.text() === '查询').trigger('click')
     await flushPromises()
     expect(getMineReviewListPage).toHaveBeenCalledTimes(calls)
     await vi.waitFor(() => expect(form.text()).toContain('不能超过 200'))

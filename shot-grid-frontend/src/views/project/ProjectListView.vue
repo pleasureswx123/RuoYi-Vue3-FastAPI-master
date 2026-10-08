@@ -136,12 +136,12 @@ onBeforeUnmount(() => {
       <el-button v-if="canCreate" type="primary" :icon="Plus" @click="showCreate = true">创建项目</el-button>
     </header>
 
-    <el-form ref="filterFormRef" :model="query" :rules="projectFilterRules" class="project-filters" size="large" aria-label="项目筛选">
-      <el-form-item class="project-filter-item project-filter-item--keyword" prop="keyword">
+    <el-form ref="filterFormRef" :model="query" :rules="projectFilterRules" class="project-filters sg-filter-bar" size="default" label-position="top" aria-label="项目筛选">
+      <el-form-item class="project-filter-item project-filter-item--keyword" label="项目搜索" prop="keyword">
         <el-input v-model="query.keyword" :prefix-icon="Search" maxlength="200" clearable placeholder="搜索项目名称或代号" aria-label="搜索项目名称或代号" />
       </el-form-item>
-      <el-form-item class="project-filter-item" prop="projectStatus">
-        <el-select v-model="query.projectStatus" class="sg-select" placeholder="全部状态" aria-label="项目状态">
+      <el-form-item class="project-filter-item" label="项目状态" prop="projectStatus">
+        <el-select v-model="query.projectStatus" placeholder="全部状态" aria-label="项目状态">
           <el-option label="全部状态" value="" />
           <el-option label="准备中" value="preparing" />
           <el-option label="进行中" value="active" />
@@ -149,27 +149,27 @@ onBeforeUnmount(() => {
           <el-option label="已归档" value="archived" />
         </el-select>
       </el-form-item>
-      <el-form-item v-if="canViewAll" class="project-filter-item" prop="scope">
-        <el-select v-model="query.scope" class="sg-select" placeholder="我的项目" aria-label="项目范围">
+      <el-form-item v-if="canViewAll" class="project-filter-item" label="项目范围" prop="scope">
+        <el-select v-model="query.scope" placeholder="我的项目" aria-label="项目范围">
           <el-option label="我的项目" value="" />
           <el-option label="全部项目" value="all" />
         </el-select>
       </el-form-item>
-      <el-form-item class="project-filter-item" prop="orderByColumn">
-        <el-select v-model="query.orderByColumn" class="sg-select" aria-label="排序字段">
+      <el-form-item class="project-filter-item" label="排序字段" prop="orderByColumn">
+        <el-select v-model="query.orderByColumn" aria-label="排序字段">
           <el-option label="创建时间" value="createTime" />
           <el-option label="项目代号" value="projectCode" />
           <el-option label="项目名称" value="projectName" />
         </el-select>
       </el-form-item>
-      <el-form-item class="project-filter-item" prop="isAsc">
-        <el-select v-model="query.isAsc" class="sg-select" aria-label="排序方向">
+      <el-form-item class="project-filter-item" label="排序方向" prop="isAsc">
+        <el-select v-model="query.isAsc" aria-label="排序方向">
           <el-option label="降序" value="descending" />
           <el-option label="升序" value="ascending" />
         </el-select>
       </el-form-item>
       <el-form-item class="project-filter-actions">
-        <el-button type="primary" :loading="loading" @click="submitFilters">查询</el-button>
+        <el-button type="primary" :icon="Search" :loading="loading" @click="submitFilters">查询</el-button>
         <el-button :icon="Refresh" circle aria-label="刷新项目列表" :disabled="loading" @click="loadProjects" />
       </el-form-item>
     </el-form>
@@ -451,3 +451,5 @@ onBeforeUnmount(() => {
   .project-filter-item--keyword { grid-column: auto; }
 }
 </style>
+
+<style scoped src="../../assets/styles/filter-toolbar.css"></style>
