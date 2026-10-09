@@ -1,5 +1,5 @@
 <script setup>
-import { onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { CopyDocument, Refresh } from '@element-plus/icons-vue'
 
@@ -35,6 +35,7 @@ const props = defineProps({
 })
 const expandedOperations = ref(props.collapseOperations ? [] : ['operations'])
 const storage = ref(null)
+const directoryConflict = computed(() => storage.value?.lastErrorKey === 'SG_STORAGE_PROJECT_DIRECTORY_CONFLICT')
 const operations = ref([])
 const total = ref(0)
 const loading = ref(false)
@@ -210,8 +211,9 @@ onBeforeUnmount(() => { storageController?.abort(); operationsController?.abort(
           <div class="storage-path"><code>{{ storage.projectPathSnapshot }}</code><el-button text :icon="CopyDocument" @click="copyPath">复制路径</el-button></div>
         </el-descriptions-item>
       </el-descriptions>
-      <el-alert v-if="storage.lastErrorMessage" title="项目存储异常" :description="storage.lastErrorMessage" type="error" show-icon :closable="false" />
-      <el-button v-if="canRetryProject && storage.storageStatus === 'failed'" type="warning" @click="openProjectRetry">重试项目初始目录</el-button>
+      <el-alert v-if="directoryConflict" title="NAS 项目目录冲突，初始化已暂停" description="请管理员核对上方路径，手动备份或重命名旧目录，使目标路径空出后重新检查。系统不会覆盖或合并旧目录，也不会自动删除文件。" type="warning" show-icon :closable="false" />
+      <el-alert v-else-if="storage.lastErrorMessage" title="项目存储异常" :description="storage.lastErrorMessage" type="error" show-icon :closable="false" />
+      <el-button v-if="canRetryProject && storage.storageStatus === 'failed'" type="warning" @click="openProjectRetry">{{ directoryConflict ? '重新检查并初始化' : '重试项目初始目录' }}</el-button>
     </el-card>
     <el-empty v-else :image-size="64" description="当前项目尚无存储信息" />
 
@@ -251,7 +253,7 @@ onBeforeUnmount(() => { storageController?.abort(); operationsController?.abort(
     <el-alert v-else class="diagnostic-note" title="目录操作记录仅对项目管理人或跨项目管理员开放" type="info" show-icon :closable="false" />
     </template>
 
-    <ProjectModal v-if="retryTarget" title="人工重试目录操作" description="重试后会新增一条操作记录，原失败记录将继续保留。" :busy="retryBusy" @close="closeRetryDialog">
+    <ProjectModal v-if="retryTarget" :title="directoryConflict && retryTarget.type === 'project' ? '重新检查并初始化' : '人工重试目录操作'" description="请求由后台执行并保留操作记录；若目录仍有冲突，初始化会再次停止。提交后可刷新存储状态查看结果。" :busy="retryBusy" @close="closeRetryDialog">
       <el-form ref="retryFormRef" :model="retryForm" :rules="retryRules" class="retry-form" label-position="top">
         <el-form-item label="重试原因" prop="reason" required><el-input v-model="retryForm.reason" type="textarea" :rows="4" maxlength="500" show-word-limit /></el-form-item>
         <el-alert v-if="retryError" :title="retryError.title" type="error" show-icon :closable="false"><span>{{ retryError.message }}</span><el-button v-if="retryError.status === 409" link type="danger" @click="closeRetryDialog(); refreshAll()">刷新最新状态</el-button></el-alert>

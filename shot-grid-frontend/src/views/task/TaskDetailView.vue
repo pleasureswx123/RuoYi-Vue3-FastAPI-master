@@ -16,6 +16,7 @@ import { useSessionStore } from '@/store/modules/session'
 import { tagTypeFromTone } from '@/utils/tag'
 import ProjectStatePanel from '@/views/project/components/ProjectStatePanel.vue'
 import ShotProductionInfo from '@/views/shot/components/ShotProductionInfo.vue'
+import { assetTypeMeta } from '@/views/asset/assetPresentation'
 import TaskEditDialog from '@/views/task/components/TaskEditDialog.vue'
 import TaskTimeReminder from '@/views/task/components/TaskTimeReminder.vue'
 import { useCurrentTime } from '@/composables/useCurrentTime'
@@ -417,14 +418,29 @@ onBeforeUnmount(() => {
       />
 
       <section class="task-detail-grid">
-        <el-card v-if="task.projectReferenceDescription?.trim() || task.projectReferenceFiles?.length" class="task-card task-card--wide" shadow="never" data-testid="project-references">
-          <header><div><p class="sg-eyebrow">PROJECT REFERENCES</p><h3>项目资料</h3></div></header>
-          <p v-if="task.projectReferenceDescription" class="task-requirements">{{ task.projectReferenceDescription }}</p>
-          <ReviewReferenceFiles v-if="task.projectReferenceFiles?.length" :files="task.projectReferenceFiles" />
+        <el-card v-if="task.projectReferenceDescription?.trim() || task.projectReferenceFiles?.length" class="task-card task-card--wide asset-information-card" shadow="never" data-testid="project-references">
+          <header><h3>项目资料</h3></header>
+          <el-descriptions class="asset-information-table" :column="1" label-width="96px" size="small" border>
+            <el-descriptions-item label="资料说明"><div class="asset-information-description">{{ task.projectReferenceDescription || '暂无资料说明。' }}</div></el-descriptions-item>
+            <el-descriptions-item label="参考附件">
+              <ReviewReferenceFiles v-if="task.projectReferenceFiles?.length" :files="task.projectReferenceFiles" />
+              <span v-else>暂无参考附件。</span>
+            </el-descriptions-item>
+          </el-descriptions>
         </el-card>
 
-        <el-card class="task-card task-card--wide" shadow="never" data-testid="task-requirements">
-          <header><div><p class="sg-eyebrow">BRIEF</p><h3>制作要求</h3></div><div class="brief-actions"><el-button v-if="targetRoute && !embedded" link type="primary" @click="router.push(targetRoute)">查看{{ taskKindMeta(task.taskKind).shortLabel }}详情</el-button><el-tag :type="tagTypeFromTone(taskPriorityMeta(task.priority).tone)" size="small" effect="plain" round>{{ taskPriorityMeta(task.priority).label }}优先级</el-tag></div></header>
+        <el-card v-if="task.taskKind === 'asset_image'" class="task-card task-card--wide asset-information-card" shadow="never" data-testid="asset-information">
+          <header><h3>资产信息</h3></header>
+          <el-descriptions class="asset-information-table" :column="3" label-width="96px" size="small" border>
+            <el-descriptions-item label="资产名称">{{ task.target.assetName || '—' }}</el-descriptions-item>
+            <el-descriptions-item label="资产类型">{{ assetTypeMeta(task.target.assetType).label }}</el-descriptions-item>
+            <el-descriptions-item label="当前制作分项">{{ task.target.productionItem || '待补制作分项' }}</el-descriptions-item>
+            <el-descriptions-item label="资产说明" :span="3"><div class="asset-information-description">{{ task.target.targetDescription || '暂无资产描述或分项补充要求。' }}</div></el-descriptions-item>
+          </el-descriptions>
+        </el-card>
+
+        <el-card class="task-card task-card--wide" :class="{ 'asset-information-card': !isShotTask }" shadow="never" data-testid="task-requirements">
+          <header><div><p v-if="isShotTask" class="sg-eyebrow">BRIEF</p><h3>制作要求</h3></div><div class="brief-actions"><el-button v-if="targetRoute && !embedded" link type="primary" @click="router.push(targetRoute)">查看{{ taskKindMeta(task.taskKind).shortLabel }}详情</el-button><el-tag :type="tagTypeFromTone(taskPriorityMeta(task.priority).tone)" size="small" effect="plain" round>{{ taskPriorityMeta(task.priority).label }}优先级</el-tag></div></header>
           <template v-if="isShotTask">
             <ShotProductionInfo v-if="shotProduction" :shot="shotProduction" :reference-files="task.referenceFiles" :reference-description="task.referenceDescription" />
             <p v-else class="task-requirements">{{ task.requirements || task.target.targetDescription || '暂无镜头制作信息。' }}</p>
@@ -433,15 +449,18 @@ onBeforeUnmount(() => {
               <p>{{ task.requirements }}</p>
             </section>
           </template>
-          <template v-else>
-            <p class="task-requirements">{{ task.requirements || '暂无额外制作要求。' }}</p>
-            <section v-if="task.referenceDescription || task.referenceFiles?.length" class="task-additional-requirements" aria-label="分项参考资料">
-              <strong>参考资料</strong>
-              <p v-if="task.referenceDescription" class="task-requirements">{{ task.referenceDescription }}</p>
+          <el-descriptions v-else class="asset-information-table" :column="3" label-width="96px" size="small" border>
+            <el-descriptions-item label="主制作人">{{ taskAssigneeLabel(task.assignee) }}</el-descriptions-item>
+            <el-descriptions-item label="计划起止时间"><TaskTimeReminder :task="task" :now="currentTime" /></el-descriptions-item>
+            <el-descriptions-item label="已提交版本">{{ task.versionCount }}</el-descriptions-item>
+            <el-descriptions-item label="制作要求" :span="3"><div class="asset-information-description">{{ task.requirements || '暂无额外制作要求。' }}</div></el-descriptions-item>
+            <el-descriptions-item label="参考说明" :span="3"><div class="asset-information-description">{{ task.referenceDescription || '暂无参考说明。' }}</div></el-descriptions-item>
+            <el-descriptions-item label="参考附件" :span="3">
               <ReviewReferenceFiles v-if="task.referenceFiles?.length" :files="task.referenceFiles" />
-            </section>
-          </template>
-          <el-descriptions class="task-fields" :column="4" border>
+              <span v-else>暂无参考附件。</span>
+            </el-descriptions-item>
+          </el-descriptions>
+          <el-descriptions v-if="isShotTask" class="task-fields" :column="4" border>
             <el-descriptions-item label="主制作人">{{ taskAssigneeLabel(task.assignee) }}</el-descriptions-item>
             <el-descriptions-item label="计划起止时间" :span="2"><TaskTimeReminder :task="task" :now="currentTime" /></el-descriptions-item>
             <el-descriptions-item label="已提交版本">{{ task.versionCount }}</el-descriptions-item>
@@ -464,15 +483,14 @@ onBeforeUnmount(() => {
           />
         </el-card>
 
-        <el-card class="task-card task-card--wide" shadow="never">
-          <p class="sg-eyebrow">AUDIT</p>
-          <h3>审计与备注</h3>
-          <p class="task-remark">{{ task.remark || '暂无内部备注。' }}</p>
-          <el-descriptions class="task-fields" :column="4" border>
+        <el-card class="task-card task-card--wide asset-information-card" shadow="never">
+          <header><h3>审计与备注</h3></header>
+          <el-descriptions class="asset-information-table" :column="4" label-width="96px" size="small" border>
             <el-descriptions-item label="创建人">{{ task.createBy }}</el-descriptions-item>
             <el-descriptions-item label="创建时间">{{ formatTaskDateTime(task.createTime) }}</el-descriptions-item>
             <el-descriptions-item label="更新人">{{ task.updateBy }}</el-descriptions-item>
             <el-descriptions-item label="更新时间">{{ formatTaskDateTime(task.updateTime) }}</el-descriptions-item>
+            <el-descriptions-item label="内部备注" :span="4"><div class="asset-information-description">{{ task.remark || '暂无内部备注。' }}</div></el-descriptions-item>
           </el-descriptions>
         </el-card>
       </section>
@@ -491,6 +509,13 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .brief-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+.asset-information-card header h3 { margin-bottom: 10px; font-size: 14px; }
+.asset-information-table { overflow-x: auto; }
+.asset-information-table :deep(.el-descriptions__table) { min-width: 620px; }
+.asset-information-table :deep(.el-descriptions__cell) { padding: 8px 10px !important; border-color: var(--sg-border); font-size: 12px; line-height: 1.6; }
+.asset-information-table :deep(.el-descriptions__label) { color: var(--sg-text-muted); background: var(--sg-surface-raised); font-weight: 500; white-space: nowrap; }
+.asset-information-table :deep(.el-descriptions__content) { color: var(--sg-text-secondary); background: var(--sg-surface); overflow-wrap: anywhere; }
+.asset-information-description { white-space: pre-wrap; }
 .task-detail-page{display:grid;gap:18px}.back-link{display:inline-flex;width:max-content;gap:7px;align-items:center;padding:0;color:var(--sg-text-muted);cursor:pointer;background:transparent;border:0}.back-link:hover{color:var(--sg-text)}.task-detail-loading{display:grid;min-height:360px;color:var(--sg-text-muted);background:var(--sg-surface);border:1px solid var(--sg-border);border-radius:var(--sg-radius-lg);place-items:center}.task-hero{display:flex;gap:24px;align-items:center;justify-content:space-between;padding:26px;background:linear-gradient(135deg,rgba(255,182,87,.075),transparent 42%),var(--sg-surface);border:1px solid var(--sg-border);border-radius:var(--sg-radius-lg)}.task-hero__main{min-width:0}.task-hero__title{display:flex;gap:12px;align-items:center}.task-hero h2,.task-hero p{margin:0}.task-hero h2{font-size:clamp(23px,3vw,31px);letter-spacing:-.025em}.task-hero__main>p:not(.sg-eyebrow){margin-top:9px;color:var(--sg-text-secondary);font-size:13px}.task-hero small{display:block;margin-top:8px;color:var(--sg-text-muted)}.task-hero__actions{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap}.task-detail-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.task-card{padding:21px;background:var(--sg-surface);border:1px solid var(--sg-border);border-radius:var(--sg-radius-md)}.task-card--wide{grid-column:1/-1}.task-card header{display:flex;gap:12px;align-items:flex-start;justify-content:space-between}.task-card h3,.task-card p{margin:0}.task-card h3{margin-bottom:16px;font-size:17px}.task-card>strong{display:block;font-size:16px}.task-card>strong+p{margin-top:7px;color:var(--sg-text-secondary);font-size:12px;line-height:1.7}.task-requirements,.task-remark,.version-workspace-anchor>p:not(.sg-eyebrow){color:var(--sg-text-secondary);font-size:13px;line-height:1.8;white-space:pre-wrap}.task-additional-requirements{display:grid;gap:6px;margin-top:12px;padding:12px 14px;background:var(--sg-accent-soft);border-radius:9px}.task-additional-requirements strong{color:var(--sg-accent);font-size:11px}.task-additional-requirements p{color:var(--sg-text-secondary);font-size:12px;line-height:1.7;white-space:pre-wrap}.version-workspace-anchor{background:linear-gradient(135deg,rgba(93,176,255,.055),transparent 46%),var(--sg-surface)}.version-workspace-anchor code{color:var(--sg-accent)}.task-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1px;margin:16px 0 0;overflow:hidden;background:var(--sg-border);border-radius:9px}.task-fields--four{grid-template-columns:repeat(4,minmax(0,1fr))}.task-fields div{padding:13px;background:rgba(13,16,21,.92)}dt{color:var(--sg-text-muted);font-size:10px}dd{margin:5px 0 0;color:var(--sg-text-secondary);font-size:12px;overflow-wrap:anywhere}.text-action{margin-top:15px;padding:0;color:var(--sg-accent);cursor:pointer;background:transparent;border:0}.version-number{display:inline!important;margin-right:9px;color:var(--sg-accent);font-size:25px!important}.task-empty{padding:20px;color:var(--sg-text-muted);font-size:12px;text-align:center;background:rgba(255,255,255,.02);border:1px dashed var(--sg-border);border-radius:9px}.final-version-tag{margin-top:14px}@media(max-width:820px){.task-hero{align-items:flex-start;flex-direction:column}.task-hero__actions{justify-content:flex-start}.task-fields--four{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:620px){.task-detail-grid{grid-template-columns:1fr}.task-card--wide{grid-column:auto}.task-fields,.task-fields--four{grid-template-columns:1fr}.task-hero__title{align-items:flex-start;flex-direction:column}}
 .task-detail-page.task-detail-page--embedded { padding: 0; }
 .task-card.el-card{padding:0;overflow:visible;background:var(--sg-surface);border-color:var(--sg-border)}

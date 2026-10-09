@@ -407,6 +407,7 @@ onBeforeUnmount(() => {
       </el-form-item>
 
       <el-alert v-if="requestError" :title="requestError.title" :description="requestError.message" type="error" show-icon :closable="false" />
+      <el-alert title="NAS 初始化将在后台检查目录。若已有同名旧目录，将暂停初始化；请在项目存储信息中查看路径，手动备份或重命名后重新检查。" type="info" show-icon :closable="false" />
       <footer><el-button :disabled="busy" @click="closeDialog">取消</el-button><el-button type="primary" :loading="busy" :disabled="!canSubmit" @click="submit">创建并初始化 NAS</el-button></footer>
     </el-form>
   </ProjectModal>

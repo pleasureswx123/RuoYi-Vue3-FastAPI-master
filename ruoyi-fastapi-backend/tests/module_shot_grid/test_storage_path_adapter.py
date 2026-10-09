@@ -1,5 +1,6 @@
 import asyncio
 from dataclasses import replace
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -24,6 +25,7 @@ def _context(
     project_path = root / 'AI影视短片' / '罗刹夫人'
     return StorageOperationPathContext(
         operation_id=1,
+        project_storage_created_time=datetime(2026, 10, 9, 12, 0, 0),
         project_id=10,
         operation_type=operation_type,
         aggregate_type=aggregate_type,
@@ -330,3 +332,74 @@ async def test_local_root_requires_explicit_test_switch(tmp_path: Path) -> None:
         await adapter.ensure_directories(_context(tmp_path))
 
     assert exc_info.value.error_key == 'SG_STORAGE_PATH_INVALID'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('marker', [None, 'another-project', ''])
+async def test_existing_unowned_project_directory_is_never_modified(tmp_path: Path, marker: str | None) -> None:
+    adapter = ShotGridStoragePathAdapter(allow_local_root=True)
+    project = tmp_path / 'AI影视短片' / '罗刹夫人'
+    project.mkdir(parents=True)
+    original = project / 'old-version.png'
+    original.write_bytes(b'previous project')
+    if marker is not None:
+        (project / adapter.PROJECT_OWNER_MARKER).write_text(marker)
+    with pytest.raises(StoragePathAdapterError) as error:
+        await adapter.ensure_directories(_context(tmp_path))
+    assert error.value.error_key == 'SG_STORAGE_PROJECT_DIRECTORY_CONFLICT'
+    assert error.value.retryable is False
+    assert original.read_bytes() == b'previous project'
+    assert not (project / 'ASSET').exists()
+
+
+@pytest.mark.asyncio
+async def test_manual_backup_then_project_recheck_creates_new_directory(tmp_path: Path) -> None:
+    adapter = ShotGridStoragePathAdapter(allow_local_root=True)
+    project = tmp_path / 'AI影视短片' / '罗刹夫人'
+    project.mkdir(parents=True)
+    (project / 'old.txt').write_text('preserved')
+    with pytest.raises(StoragePathAdapterError):
+        await adapter.ensure_directories(_context(tmp_path))
+    backup = project.with_name('罗刹夫人_备份')
+    project.rename(backup)
+    retry = replace(_context(tmp_path), operation_id=99, operation_type='reconcile_directory')
+    await adapter.ensure_directories(retry)
+    assert (backup / 'old.txt').read_text() == 'preserved'
+    assert (project / 'VIDEO').is_dir()
+    assert not (project / 'old.txt').exists()
+
+
+@pytest.mark.asyncio
+async def test_same_project_retry_repairs_partial_tree_but_recreated_project_is_rejected(tmp_path: Path) -> None:
+    adapter = ShotGridStoragePathAdapter(allow_local_root=True)
+    context = _context(tmp_path)
+    await adapter.ensure_directories(context)
+    project = tmp_path / 'AI影视短片' / '罗刹夫人'
+    (project / 'VIDEO').rmdir()
+    await adapter.ensure_directories(replace(context, operation_id=98, operation_type='reconcile_directory'))
+    assert (project / 'VIDEO').is_dir()
+    with pytest.raises(StoragePathAdapterError) as error:
+        await adapter.ensure_directories(replace(context, project_storage_created_time=datetime(2026, 10, 10)))
+    assert error.value.error_key == 'SG_STORAGE_PROJECT_DIRECTORY_CONFLICT'
+
+
+@pytest.mark.asyncio
+async def test_directory_appearing_between_check_and_mkdir_is_not_adopted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original_mkdir = Path.mkdir
+    project = tmp_path / 'AI影视短片' / '罗刹夫人'
+
+    def racing_mkdir(path: Path, *args, **kwargs) -> None:
+        if path == project:
+            original_mkdir(path, *args, **kwargs)
+            (path / 'foreign.txt').write_text('foreign')
+            raise FileExistsError
+        return original_mkdir(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, 'mkdir', racing_mkdir)
+    with pytest.raises(StoragePathAdapterError) as error:
+        await ShotGridStoragePathAdapter(allow_local_root=True).ensure_directories(_context(tmp_path))
+    assert error.value.error_key == 'SG_STORAGE_PROJECT_DIRECTORY_CONFLICT'
+    assert not (project / ShotGridStoragePathAdapter.PROJECT_OWNER_MARKER).exists()
+    assert (project / 'foreign.txt').read_text() == 'foreign'

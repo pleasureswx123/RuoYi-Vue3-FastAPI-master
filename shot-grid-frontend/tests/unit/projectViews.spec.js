@@ -648,6 +648,31 @@ describe('项目管理页面', () => {
     wrapper.unmount()
   })
 
+  it('NAS 同名目录冲突提示手动处理，并通过原权限入口重新检查', async () => {
+    getProjectStorage.mockResolvedValue({ data: {
+      storageStatus: 'failed', lockVersion: 3,
+      projectPathSnapshot: '\\\\nas\\shot-grid\\罗刹夫人',
+      lastErrorKey: 'SG_STORAGE_PROJECT_DIRECTORY_CONFLICT', lastErrorMessage: '目录冲突'
+    } })
+    const wrapper = mount(ProjectStoragePanel, {
+      props: { projectId: 8, canRetryProject: true },
+      global: { components: formComponents, stubs: { ProjectModal: projectModalStub, ProjectStatePanel: true } }
+    })
+    try {
+      await flushPromises()
+      expect(wrapper.text()).toContain('手动备份或重命名旧目录')
+      await buttonByText(wrapper, '重新检查并初始化').trigger('click')
+      await nextTick()
+      const form = wrapper.findComponent(ElForm)
+      form.props('model').reason = '旧目录已备份并改名'
+      await buttonByText(form, '提交重试').trigger('click')
+      await flushPromises()
+      expect(retryProjectStorage).toHaveBeenCalledWith(8, { reason: '旧目录已备份并改名', lockVersion: 3 }, expect.any(String))
+      await wrapper.setProps({ canRetryProject: false })
+      expect(wrapper.findAllComponents(ElButton).some(button => button.text() === '重新检查并初始化')).toBe(false)
+    } finally { wrapper.unmount() }
+  })
+
   it('复制项目 NAS 路径时使用共享剪贴板兼容链路', async () => {
     const wrapper = mount(ProjectStoragePanel, {
       props: { projectId: 8 },

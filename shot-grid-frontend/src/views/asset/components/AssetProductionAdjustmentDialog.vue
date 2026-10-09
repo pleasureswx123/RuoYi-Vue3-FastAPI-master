@@ -23,7 +23,7 @@ const form = reactive({ keys: [], mode: 'common', common: {}, individual: {}, re
 const fields = [
   { key: 'requirements', label: '任务制作要求', max: 10000, permission: 'shotgrid:task:edit' },
   { key: 'priority', label: '优先级', permission: 'shotgrid:task:edit' },
-  { key: 'description', label: '分项制作说明', permission: 'shotgrid:asset:edit' },
+  { key: 'description', label: '分项补充要求', permission: 'shotgrid:asset:edit' },
   { key: 'remark', label: '分项备注', max: 500, permission: 'shotgrid:asset:edit' },
   { key: 'references', label: '追加参考说明与附件', permission: 'shotgrid:asset:edit' }
 ].filter(field => context.permissions.includes('*:*:*') || context.permissions.includes(field.permission))
@@ -124,7 +124,7 @@ async function save() {
 </script>
 
 <template>
-  <ProjectDrawer :title="single ? '调整制作资料' : '批量调整制作资料'" :description="single ? context.targets[0].displayLabel : `已选 ${context.targets.length} 个分项`" wide :busy="saving" :close-guard="confirmClose" @close="emit('close')">
+  <ProjectDrawer :title="single ? '制作要求与参考资料' : '批量制作要求与参考资料'" :description="single ? context.targets[0].displayLabel : `已选 ${context.targets.length} 个分项`" wide :busy="saving" :close-guard="confirmClose" @close="emit('close')">
     <el-skeleton v-if="loading" :rows="5" animated />
     <el-alert v-if="error" :title="error" type="error" :closable="false" />
     <el-form v-if="!loading && !error" ref="formRef" :model="form" :rules="rules" :disabled="disabled" label-position="top" class="asset-adjust-form">
@@ -136,7 +136,8 @@ async function save() {
           <ReviewReferenceInput v-if="rows[0]?.referenceFiles.length" :files="rows[0].referenceFiles" readonly purpose="制作参考" />
           <el-form-item label="补充参考说明与附件（追加保留已有资料）" prop="referenceDescription"><div class="asset-adjust-references"><el-input v-model="form.referenceDescription" type="textarea" :rows="2" maxlength="10000" placeholder="填写新增参考说明" /><ReviewReferenceInput :files="referenceAttachments" purpose="制作参考" :disabled="disabled" @add="addReferenceFile" @remove="removeReferenceFile" /></div></el-form-item>
         </template>
-        <el-collapse v-model="moreSettings"><el-collapse-item title="更多设置" name="more">
+        <el-collapse v-model="moreSettings"><el-collapse-item title="更多信息" name="more">
+          <el-alert title="分项补充要求和备注与“编辑分项信息”共用同一份内容，修改后会同步显示。" type="info" :closable="false" />
           <el-form-item v-for="field in fields.filter(field => ['priority', 'description', 'remark'].includes(field.key))" :key="field.key" :label="field.label" :prop="`common.${field.key}`" :rules="field.max ? [{ max: field.max, message: `最多 ${field.max} 字` }] : []">
             <el-select v-if="field.key === 'priority'" v-model="form.common.priority"><el-option v-for="(label, value) in { low: '低', normal: '普通', high: '高', urgent: '紧急' }" :key="value" :value="value" :label="label" /></el-select>
             <el-input v-else v-model="form.common[field.key]" type="textarea" :rows="3" :maxlength="field.max" show-word-limit />

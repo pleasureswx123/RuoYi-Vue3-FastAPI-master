@@ -9,7 +9,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
   archiveAsset,
-  archiveAssetItem,
   assignAssetItemTask,
   createAsset,
   createAssetItem,
@@ -367,7 +366,7 @@ describe('资产管理真实列表页', () => {
       const buttons = row.findAllComponents(ElButton).filter(button => button.attributes('aria-label'))
       const labels = buttons.map(buttonLabel)
       expect(labels[0]).toBe(firstLabel)
-      if (assetStatus !== 'pending_info') expect(labels.indexOf('编辑分项')).toBe(labels.indexOf('删除分项') - 1)
+      if (assetStatus !== 'pending_info') expect(labels.indexOf('编辑分项信息')).toBe(labels.indexOf('删除分项') - 1)
       expect(row.findComponent(ElDropdown).exists()).toBe(false)
       expect(buttons[0].props()).toMatchObject({ round: false, plain: false })
       expect(row.find('.asset-status-tag').text()).toBe({ pending_info: '待完善', unassigned: '待分配', pending_schedule: '待排期', not_started: '待开工' }[assetStatus])
@@ -474,7 +473,7 @@ describe('资产管理真实列表页', () => {
   })
 
   it.each([
-    { label: '编辑分项', component: AssetItemFormDialog },
+    { label: '编辑分项信息', component: AssetItemFormDialog },
     { label: '完善信息', component: AssetItemFormDialog },
     { label: '分配制作人', component: AssetAssignDialog },
     { label: '删除分项', component: AssetItemDeleteDialog }
@@ -521,7 +520,7 @@ describe('资产管理真实列表页', () => {
       expect(getAssetItems).toHaveBeenCalledTimes(2)
       const row = wrapper.find('.el-table__row--level-1')
       const labels = row.findAll('button').map(buttonLabel)
-      expect(row.findComponent(AssetActionButtons).props('actions').map(action => action.button.label)).toContain('编辑分项')
+      expect(row.findComponent(AssetActionButtons).props('actions').map(action => action.button.label)).toContain('编辑分项信息')
       expect(labels).toContain('分配制作人')
       expect(labels).not.toContain('完善信息')
     } finally { wrapper.unmount() }
@@ -535,7 +534,7 @@ describe('资产管理真实列表页', () => {
       await flushPromises()
       let finish
       getAssetDetail.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
-      await wrapper.find('.el-table__row--level-1').findAll('button').find(button => buttonLabel(button) === '编辑分项').trigger('click')
+      await wrapper.find('.el-table__row--level-1').findAll('button').find(button => buttonLabel(button) === '编辑分项信息').trigger('click')
       const signal = getAssetDetail.mock.calls.at(-1)[2].signal
       await setElSelectValue(wrapper.find('.project-context').findComponent(ElSelect), '9')
       await flushPromises()
@@ -1231,6 +1230,34 @@ describe('资产管理真实列表页', () => {
     wrapper.unmount()
   })
 
+  it('父资产操作区新增制作分项，重读权限并保存后刷新列表', async () => {
+    createAssetItem.mockReset().mockResolvedValue({ data: { assetItemId: 99 } })
+    const { wrapper } = await mountList(['shotgrid:asset:list', 'shotgrid:asset:add', 'shotgrid:asset:query'])
+    try {
+      const addButton = () => wrapper.findAll('button').find(button => buttonLabel(button) === '新增制作分项')
+      await addButton().trigger('click')
+      await flushPromises()
+      const dialog = wrapper.findComponent(AssetItemFormDialog)
+      expect(dialog.exists()).toBe(true)
+      expect(dialog.props('item')).toBeNull()
+      const form = dialog.findComponent(ElForm)
+      form.props('model').productionItem = '新增概念设计'
+      const readsBeforeSave = getAssetPage.mock.calls.length
+      await dialog.findAllComponents(ElButton).find(button => buttonLabel(button) === '新增分项').trigger('click')
+      await flushPromises()
+      expect(createAssetItem).toHaveBeenCalledWith(8, 31, expect.objectContaining({ productionItem: '新增概念设计' }))
+      expect(wrapper.findComponent(AssetItemFormDialog).exists()).toBe(false)
+      expect(getAssetPage.mock.calls.length).toBeGreaterThan(readsBeforeSave)
+      getAssetDetail.mockResolvedValueOnce({ data: { ...assetDetail(), allowedActions: [] } })
+      await addButton().trigger('click')
+      await flushPromises()
+      expect(wrapper.findComponent(AssetItemFormDialog).exists()).toBe(false)
+      useSessionStore().permissions = ['shotgrid:asset:list', 'shotgrid:asset:query']
+      await flushPromises()
+      expect(addButton()).toBeUndefined()
+    } finally { wrapper.unmount() }
+  })
+
   it('点击详情在当前列表页右侧抽屉展示完整资产详情', async () => {
     const { wrapper, router } = await mountList()
     await wrapper.findAll('button').find(button => buttonLabel(button) === '详情').trigger('click')
@@ -1580,11 +1607,10 @@ describe('资产详情动作镜像与路由隔离', () => {
 
   it.each([
     { entry: '编辑资产', component: AssetFormDialog, submitLabel: '保存资产', api: updateAsset, targetId: 31, field: 'description', refreshedValue: '最新资产说明', lockField: 'lockVersion', oldLock: 2, newLock: 6 },
-    { entry: '编辑分项', component: AssetItemFormDialog, submitLabel: '保存分项', api: updateAssetItem, targetId: 41, field: 'description', refreshedValue: '最新分项说明', lockField: 'lockVersion', oldLock: 3, newLock: 7 },
+    { entry: '编辑分项信息', component: AssetItemFormDialog, submitLabel: '保存分项', api: updateAssetItem, targetId: 41, field: 'description', refreshedValue: '最新分项说明', lockField: 'lockVersion', oldLock: 3, newLock: 7 },
     { entry: '改派制作人', component: AssetAssignDialog, submitLabel: '确认改派', api: assignAssetItemTask, targetId: 41, field: 'taskDescription', refreshedValue: '最新任务要求', lockField: 'taskLockVersion', oldLock: 4, newLock: 8 },
     { entry: '删除分项', component: AssetItemDeleteDialog, submitLabel: '确认删除', api: deleteAssetItem, targetId: 41, field: 'reason', refreshedValue: '', lockField: 'lockVersion', oldLock: 3, newLock: 7 },
     { entry: '归档资产', component: AssetArchiveDialog, submitLabel: '确认归档', api: archiveAsset, targetId: 31, field: 'reason', refreshedValue: '', lockField: 'lockVersion', oldLock: 2, newLock: 6 },
-    { entry: '归档分项', component: AssetArchiveDialog, submitLabel: '确认归档', api: archiveAssetItem, targetId: 41, field: 'reason', refreshedValue: '', lockField: 'lockVersion', oldLock: 3, newLock: 7 }
   ])('$entry 发生 409 后刷新会关闭旧上下文，重新核对后使用新快照', async ({ entry, component, submitLabel, api, targetId, field, refreshedValue, lockField, oldLock, newLock }) => {
     const detail = {
       ...assetDetail(), lockVersion: 2, items: [{
@@ -1832,7 +1858,7 @@ describe('资产详情动作镜像与路由隔离', () => {
     })
     const { wrapper } = await mountDetail()
     const buttons = wrapper.findAll('button').map(buttonLabel)
-    expect(buttons).not.toContain('编辑分项')
+    expect(buttons).not.toContain('编辑分项信息')
     expect(buttons).not.toContain('改派制作人')
     wrapper.unmount()
   })

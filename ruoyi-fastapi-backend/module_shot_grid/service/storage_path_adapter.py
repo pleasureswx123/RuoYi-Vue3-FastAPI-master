@@ -1,10 +1,12 @@
 import asyncio
+import hashlib
 import ntpath
 import os
 import stat
 import unicodedata
 import uuid
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path, PureWindowsPath
 from typing import Any
 
@@ -36,6 +38,7 @@ class StorageOperationPathContext:
     root_status: str
     root_del_flag: str
     operation_payload: dict[str, Any] | None = None
+    project_storage_created_time: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -53,6 +56,8 @@ class _StorageDirectoryPlan:
     writable_directory: tuple[str, ...]
     mapped_mount_root: Path | None
     mount_resolver: ShotGridNasMountResolver
+    ownership_directory: tuple[str, ...] | None = None
+    owner_identity: str | None = None
 
 
 @dataclass(frozen=True)
@@ -85,6 +90,7 @@ class StoragePathAdapterError(Exception):
 class ShotGridStoragePathAdapter:
     """在受控根目录内幂等创建 Shot Grid 目录。"""
 
+    PROJECT_OWNER_MARKER = '.shot-grid-project-owner'
     RENUMBER_COMMIT_MARKER = '.shot-grid-renumber-staged'
     MAX_RENUMBER_SHOTS = 2000
     LAZY_DIRECTORY_RENUMBER_SCHEMA = 2
@@ -241,6 +247,13 @@ class ShotGridStoragePathAdapter:
             containment_root=containment_root,
             relative_directories=relative_directories,
             writable_directory=writable_directory,
+            ownership_directory=project_parts if self._uses_storage_root_scope(context) else None,
+            owner_identity=hashlib.sha256(
+                f'{context.project_id}|{context.root_path_snapshot}|{context.project_relative_path}|'
+                f'{context.project_storage_created_time.isoformat()}'.encode()
+            ).hexdigest()
+            if context.project_storage_created_time
+            else None,
             mapped_mount_root=mapped_mount_root,
             mount_resolver=self.nas_mount_resolver,
         )
@@ -403,12 +416,16 @@ class ShotGridStoragePathAdapter:
             )
         cls._reject_link_or_reparse_point(root)
 
+        if plan.ownership_directory is not None and plan.owner_identity is None:
+            raise cls._project_directory_conflict_error()
+        project_path = root.joinpath(*plan.ownership_directory) if plan.ownership_directory else None
         created = 0
         existing = 0
         for relative_directory in plan.relative_directories:
             current = root
             for segment in relative_directory:
                 current = current / segment
+                created_here = False
                 if current.exists():
                     cls._reject_link_or_reparse_point(current)
                 cls._assert_resolved_containment(root, current)
@@ -423,6 +440,7 @@ class ShotGridStoragePathAdapter:
                 else:
                     try:
                         current.mkdir()
+                        created_here = True
                         created += 1
                     except FileExistsError:
                         if not current.is_dir():
@@ -434,10 +452,46 @@ class ShotGridStoragePathAdapter:
                         existing += 1
                 cls._assert_resolved_containment(root, current)
                 cls._reject_link_or_reparse_point(current)
+                if current == project_path:
+                    cls._verify_project_owner(root, current, plan.owner_identity, created_here)
 
         writable_path = root.joinpath(*plan.writable_directory)
         cls._probe_writable_directory(root, writable_path)
         return StorageDirectoryResult(created_directories=created, existing_directories=existing)
+
+    @classmethod
+    def _verify_project_owner(cls, root: Path, project: Path, identity: str, created: bool) -> None:
+        """仅接管本次新建目录；已有目录必须持有当前项目的归属标记。"""
+        marker = project / cls.PROJECT_OWNER_MARKER
+        cls._assert_resolved_containment(root, marker)
+        if os.path.lexists(marker):
+            cls._reject_link_or_reparse_point(marker)
+        if created:
+            try:
+                with marker.open('xb') as output:
+                    output.write(identity.encode('ascii'))
+                    output.flush()
+                    os.fsync(output.fileno())
+            except FileExistsError:
+                raise cls._project_directory_conflict_error() from None
+        else:
+            if not marker.is_file():
+                raise cls._project_directory_conflict_error()
+            try:
+                with marker.open('rb') as source:
+                    actual = source.read(65)
+            except (FileNotFoundError, IsADirectoryError):
+                raise cls._project_directory_conflict_error() from None
+            if actual != identity.encode('ascii'):
+                raise cls._project_directory_conflict_error()
+
+    @staticmethod
+    def _project_directory_conflict_error() -> StoragePathAdapterError:
+        return StoragePathAdapterError(
+            error_key='SG_STORAGE_PROJECT_DIRECTORY_CONFLICT',
+            safe_message='NAS 项目目录已存在且无法确认属于当前项目。请管理员先备份或重命名旧目录，再重新检查并初始化。',
+            retryable=False,
+        )
 
     @classmethod
     def _renumber_shot_directories_sync(  # noqa: PLR0912, PLR0915 - NAS 两阶段恢复分支需集中处理

@@ -920,7 +920,7 @@ onBeforeUnmount(() => {
             <div><strong>当前审核 · {{ version.versionNumber }}</strong><p>{{ version.submitterName || '制作人' }} · {{ formatReviewDateTime(version.submittedTime) }}</p></div>
             <el-button v-if="canListVersions && canQueryVersion" type="primary" plain @click="historyVisible = true">版本记录</el-button>
           </div>
-          <ReviewProductionTarget v-if="version.productionTarget" :target="version.productionTarget" />
+          <ReviewProductionTarget v-if="version.productionTarget" :target="version.productionTarget" :task-id="Number(version.taskId)" :project-id="Number(version.projectId)" :can-read-references="hasPermission('shotgrid:task:query')" />
 
           <section ref="reviewWorkStep" class="review-work-step" :class="{ 'is-candidate-focus': candidatePreviewPulse }">
             <header class="work-step-heading"><span class="step-number">1</span><div><strong>播放并检查 {{ activeCandidate?.candidateNumber || '当前候选' }}</strong><p>可对每个文件记录问题和画面批注；通过时再选择最终交付文件。</p></div></header>

@@ -7,9 +7,14 @@ import { getProjectDetail } from '@/api/shot-grid/projects'
 import { updateTaskSchedule } from '@/api/shot-grid/schedules'
 import { useSessionStore } from '@/store/modules/session'
 import { canScheduleAssetItem } from '../assetItemActions'
+import { memberUserName } from '../assetPresentation'
 import ScheduleEditDialog from '@/views/schedule/components/ScheduleEditDialog.vue'
 
-const props = defineProps({ projectId: { type: Number, required: true }, contextKey: { type: String, required: true } })
+const props = defineProps({
+  projectId: { type: Number, required: true },
+  contextKey: { type: String, required: true },
+  members: { type: Array, default: () => [] }
+})
 const emit = defineEmits(['changed', 'busy-change'])
 const session = useSessionStore()
 const task = ref(null)
@@ -60,7 +65,11 @@ async function open(parent, row) {
     }
     task.value = {
       ...item.task, projectId: props.projectId, assetId: asset.assetId, assetItemId: item.assetItemId,
-      assignee: { userId: item.task.assigneeUserId, userName: item.task.assigneeName || '—' },
+      assignee: {
+        userId: item.task.assigneeUserId,
+        userName: memberUserName(props.members.find(member => Number(member.userId) === Number(item.task.assigneeUserId))
+          || { userId: item.task.assigneeUserId, nickName: item.task.assigneeName })
+      },
       taskKind: 'asset_image', target: { targetKind: 'asset_item', targetId: item.assetItemId, parentId: asset.assetId, name: `${asset.assetName} · ${item.productionItem}` },
       currentStart: item.task.expectedStartTime, currentEnd: item.task.expectedEndTime
     }

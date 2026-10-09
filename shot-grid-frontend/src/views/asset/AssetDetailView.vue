@@ -357,10 +357,6 @@ function itemCanEdit(item) {
   return new Set(item.allowedActions || []).has('assetItem.edit') && hasPermission('shotgrid:asset:edit')
 }
 
-function itemCanArchive(item) {
-  return new Set(item.allowedActions || []).has('assetItem.archive') && hasPermission('shotgrid:asset:archive')
-}
-
 function itemCanAssign(item) {
   return new Set(item.allowedActions || []).has('task.assign') && hasPermission('shotgrid:task:assign')
 }
@@ -391,7 +387,7 @@ onBeforeUnmount(() => {
 
 <template>
   <AssetItemBatchWorkspace ref="batchWorkspace" :project-id="projectId || 0" :context-key="`${projectId}:${assetId}`" @changed="loadDetail()" @active-change="batchWorkspaceOpen = $event" />
-  <AssetItemScheduleDialog ref="scheduleDialog" :project-id="projectId || 0" :context-key="`${projectId}:${assetId}`" @changed="loadDetail()" @busy-change="scheduleBusy = $event" />
+  <AssetItemScheduleDialog ref="scheduleDialog" :project-id="projectId || 0" :context-key="`${projectId}:${assetId}`" :members="members" @changed="loadDetail()" @busy-change="scheduleBusy = $event" />
   <RelatedDetailDrawer ref="taskDrawer" @closed="loadDetail()" />
   <TaskStartDialog v-if="startDialog" :context="startDialog" @close="closeStartDialog" @started="finishStartDialog" @failed="failStartDialog" />
   <section class="sg-page asset-detail-page" :class="{ 'asset-detail-page--embedded': embedded }">
@@ -429,7 +425,7 @@ onBeforeUnmount(() => {
           <div class="asset-hero__main">
             <p class="asset-hero__description">{{ asset.description || '暂无资产描述' }}</p>
             <div class="asset-hero__summary">
-              <small>{{ asset.itemCount }} 个制作分项 · {{ asset.usageShotCount }} 个使用镜头</small>
+              <small>{{ asset.itemCount }} 个制作分项</small>
               <el-tag size="small" effect="plain" round :type="tagTypeFromTone(assetDirectoryStatusMeta(asset.directoryStatus).tone)">{{ assetDirectoryStatusMeta(asset.directoryStatus).label }}</el-tag>
               <div class="asset-completion-summary">{{ assetCompletionSummary(asset) }}</div>
               <div v-if="visibleItemStatusEntries(asset.itemStatusCounts).length" class="asset-item-status-counts" aria-label="制作分项状态数量">
@@ -477,13 +473,13 @@ onBeforeUnmount(() => {
             <ProtectedAssetThumbnail class="item-card__thumbnail" :thumbnail="item.thumbnail" :alt="`${item.productionItem || '未命名制作分项'} 缩略图`" />
             <div class="item-card__body">
               <header><div><span class="item-card__id">分项 #{{ item.assetItemId }}</span><h4>{{ item.productionItem || '未命名制作分项' }}</h4></div><el-tag size="small" effect="plain" round :type="tagTypeFromTone(assetStatusMeta(item.assetStatus).tone)">{{ assetStatusMeta(item.assetStatus).label }}</el-tag></header>
-              <AssetDescriptionCell :common-description="asset.description" :item-description="item.description" is-item />
-              <el-descriptions class="item-card__details" :column="4" border>
+              <el-descriptions class="item-card__details" :column="2" label-width="96px" size="small" border>
                 <el-descriptions-item label="负责人">{{ taskAssigneeName(item.task) }}</el-descriptions-item>
                 <el-descriptions-item label="任务"><span v-if="item.task" class="detail-tag-group"><el-tag size="small" effect="plain" round :type="tagTypeFromTone(taskStatusMeta(item.task).tone)">{{ taskStatusMeta(item.task).label }}</el-tag><el-tag size="small" effect="plain" round :type="tagTypeFromTone(taskPriorityMeta(item.task.priority).tone)">{{ taskPriorityMeta(item.task.priority).label }}优先级</el-tag></span><el-tag v-else type="info" size="small" effect="plain" round>未分配</el-tag></el-descriptions-item>
                 <el-descriptions-item label="最新版本"><span v-if="item.latestVersion" class="detail-tag-group"><span>V{{ String(item.latestVersion.versionNo).padStart(3, '0') }}</span><el-tag size="small" effect="plain" round :type="tagTypeFromTone(taskVersionStatusMeta(item.latestVersion.versionStatus).tone)">{{ taskVersionStatusMeta(item.latestVersion.versionStatus).label }}</el-tag></span><span v-else>—</span></el-descriptions-item>
                 <el-descriptions-item label="最终版本"><span v-if="item.finalVersion" class="detail-tag-group"><span>V{{ String(item.finalVersion.versionNo).padStart(3, '0') }}</span><el-tag size="small" effect="plain" round :type="tagTypeFromTone(taskVersionStatusMeta(item.finalVersion.versionStatus).tone)">{{ taskVersionStatusMeta(item.finalVersion.versionStatus).label }}</el-tag></span><span v-else>—</span></el-descriptions-item>
-                <el-descriptions-item v-if="item.task" label="计划起止时间" :span="4"><TaskTimeReminder :task="item.task" :now="currentTime" compact /></el-descriptions-item>
+                <el-descriptions-item v-if="item.task" label="计划起止时间" :span="2"><TaskTimeReminder :task="item.task" :now="currentTime" compact /></el-descriptions-item>
+                <el-descriptions-item label="制作说明" :span="2"><AssetDescriptionCell :common-description="asset.description" :item-description="item.description" is-item /></el-descriptions-item>
               </el-descriptions>
               <AssetItemReferences v-if="item.task?.taskId && hasPermission('shotgrid:task:query')" :task-id="Number(item.task.taskId)" :task-version="Number(item.task.lockVersion || 0)" :project-id="Number(asset.projectId)" />
               <small>{{ item.remark || '无备注' }} · 更新于 {{ formatAssetDateTime(item.updateTime) }}</small>
@@ -492,13 +488,12 @@ onBeforeUnmount(() => {
               <el-button v-if="canScheduleAssetItem(asset, item, canSchedule)" size="small" type="primary" :icon="Clock" :disabled="startDisabled || scheduleBusy" @click="scheduleDialog.open(asset, item)">{{ assetItemScheduleLabel(item) }}</el-button>
               <el-button v-if="itemCanStart(item)" size="small" type="primary" :icon="VideoPlay" :loading="startingOperation?.assetItemId === item.assetItemId" :disabled="startDisabled || scheduleBusy" @click="confirmStartItem(item)">确认开工</el-button>
               <el-button v-if="itemCanAssign(item)" size="small" text type="primary" :icon="UserFilled" :disabled="startDisabled || scheduleBusy" @click="openAssign(item)">{{ item.task ? '改派制作人' : '分配制作人' }}</el-button>
-              <el-button v-if="itemCanEdit(item)" size="small" text :type="item.productionItem ? 'default' : 'warning'" :icon="Edit" :disabled="startDisabled || scheduleBusy" @click="openItemForm(item)">{{ item.productionItem ? '编辑分项' : '完善信息' }}</el-button>
+              <el-button v-if="itemCanEdit(item)" size="small" text :type="item.productionItem ? 'default' : 'warning'" :icon="Edit" :disabled="startDisabled || scheduleBusy" @click="openItemForm(item)">{{ item.productionItem ? '编辑分项信息' : '完善信息' }}</el-button>
               <el-button v-if="item.task?.taskId && hasPermission('shotgrid:task:query')" size="small" text :icon="View" @click="taskDrawer.open(`/tasks/${item.task.taskId}`)">查看任务</el-button>
-              <el-button v-if="canAdvancedItem(item, 'adjust')" size="small" text type="warning" :disabled="batchWorkspaceOpen" @click="batchWorkspace.open([asset], [item.assetItemId], 'adjust')">调整制作要求与资料</el-button>
+              <el-button v-if="canAdvancedItem(item, 'adjust')" size="small" text type="warning" :disabled="batchWorkspaceOpen" @click="batchWorkspace.open([asset], [item.assetItemId], 'adjust')">制作要求与参考资料</el-button>
               <el-button v-if="canAdvancedItem(item, 'review')" size="small" text type="primary" :disabled="batchWorkspaceOpen" @click="batchWorkspace.open([asset], [item.assetItemId], 'review')">反馈与复核</el-button>
               <el-button v-if="canAdvancedItem(item, 'appendIssue')" size="small" text type="warning" :disabled="batchWorkspaceOpen" @click="batchWorkspace.open([asset], [item.assetItemId], 'append')">追加问题</el-button>
               <el-button v-if="itemCanDelete(item)" size="small" text type="danger" :icon="Delete" :disabled="startDisabled || scheduleBusy" @click="openDeleteItem(item)">删除分项</el-button>
-              <el-button v-else-if="itemCanArchive(item)" size="small" text type="danger" :icon="Lock" :disabled="startDisabled || scheduleBusy" @click="openArchive(item)">归档分项</el-button>
             </div>
           </el-card>
         </div>
@@ -545,4 +540,12 @@ onBeforeUnmount(() => {
 .asset-hero__item-meta span { color: var(--sg-text-muted); font-size: 11px; line-height: 1.5; }
 .asset-hero__empty { grid-column: 1 / -1; min-height: 140px; padding: 20px; border: 1px dashed var(--sg-border); border-radius: 10px; }
 .asset-item-status-counts{display:flex;gap:5px;flex-wrap:wrap;margin-top:8px}.item-card__actions{gap:4px}
+.item-card > :deep(.el-card__body) { grid-template-columns: 96px minmax(0, 1fr); gap: 12px; }
+.item-card__thumbnail { height: 96px; }
+.item-card__details :deep(.el-descriptions__cell) { padding: 8px 10px !important; font-size: 12px; line-height: 1.6; }
+.item-card__details :deep(.el-descriptions__label) { font-weight: 500; }
+.item-card__details :deep(.el-descriptions__content) { background: var(--sg-surface) !important; }
+.item-card__actions { grid-column: 1 / -1; max-width: none; flex-direction: row; flex-wrap: wrap; justify-content: flex-start; gap: 6px; padding-top: 10px; border-top: 1px solid var(--sg-border); }
+.item-card__actions .el-button { margin-left: 0; }
+@media (max-width: 700px) { .item-card > :deep(.el-card__body) { grid-template-columns: minmax(0, 1fr); } .item-card__thumbnail { width: 96px; } }
 </style>

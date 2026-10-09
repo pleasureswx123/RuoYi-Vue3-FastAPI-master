@@ -6,7 +6,7 @@ import { useSessionStore } from '@/store/modules/session'
 import AssetAssignDialog from './AssetAssignDialog.vue'
 import AssetItemFormDialog from './AssetItemFormDialog.vue'
 import AssetItemDeleteDialog from './AssetItemDeleteDialog.vue'
-import { canAssetItemAction } from '../assetItemActions'
+import { canAddAssetItem, canAssetItemAction } from '../assetItemActions'
 import { memberUserName } from '../assetPresentation'
 import { useAssetItemStart } from '../useAssetItemStart'
 import TaskStartDialog from '@/views/task/components/TaskStartDialog.vue'
@@ -47,8 +47,10 @@ watch(() => props.contextKey, reset)
 onBeforeUnmount(() => { disposed = true; reset() })
 
 async function run(action, parent, row) {
+  const adding = action === 'assetItem.add'
+  const permitted = (currentAsset, item) => adding ? canAddAssetItem(currentAsset, hasPermission) : canAssetItemAction(currentAsset, item, action, hasPermission)
   if (busy.value || disposed || Number(parent?.projectId) !== props.projectId || !hasPermission('shotgrid:asset:query') ||
-    !canAssetItemAction(parent, row, action, hasPermission)) return
+    !permitted(parent, row)) return
   const operationGeneration = ++generation
   controller = new AbortController()
   const signal = controller.signal
@@ -58,9 +60,9 @@ async function run(action, parent, row) {
     const response = await getAssetDetail(props.projectId, parent.assetId, { signal })
     if (disposed || signal.aborted || generation !== operationGeneration) return
     const currentAsset = response.data
-    const item = currentAsset?.items?.find(candidate => Number(candidate.assetItemId) === Number(row.assetItemId))
+    const item = adding ? null : currentAsset?.items?.find(candidate => Number(candidate.assetItemId) === Number(row.assetItemId))
     if (Number(currentAsset?.projectId) !== props.projectId || Number(currentAsset?.assetId) !== Number(parent.assetId) ||
-      !canAssetItemAction(currentAsset, item, action, hasPermission)) {
+      !permitted(currentAsset, item)) {
       ElMessage.warning('分项状态或权限已变化，请核对刷新后的操作。')
       emit('changed', { projectId: props.projectId, assetId: parent.assetId })
       return
@@ -69,8 +71,8 @@ async function run(action, parent, row) {
     loading.value = false
     if (action === 'task.start') await confirmStartItem(item)
     else context.value = Object.freeze({
-      action, projectId: props.projectId, assetId: Number(parent.assetId), assetItemId: Number(item.assetItemId), operationGeneration,
-      asset: Object.freeze({ ...currentAsset }), item: Object.freeze({ ...item, task: item.task ? Object.freeze({ ...item.task }) : null })
+      action, projectId: props.projectId, assetId: Number(parent.assetId), assetItemId: item ? Number(item.assetItemId) : null, operationGeneration,
+      asset: Object.freeze({ ...currentAsset }), item: item ? Object.freeze({ ...item, task: item.task ? Object.freeze({ ...item.task }) : null }) : null
     })
   } catch (error) {
     if (!disposed && !signal.aborted && generation === operationGeneration) ElMessage.error(error?.message || '分项操作加载失败，请重试')
@@ -82,10 +84,10 @@ async function run(action, parent, row) {
 function completed(_result, operation) {
   if (disposed || !context.value || context.value.operationGeneration !== operation?.operationGeneration ||
     context.value.projectId !== Number(operation.projectId) || context.value.assetId !== Number(operation.assetId) ||
-    context.value.assetItemId !== Number(operation.assetItemId)) return
+    Number(context.value.assetItemId) !== Number(operation.assetItemId)) return
   const action = context.value.action
   context.value = null
-  ElMessage.success(action === 'assetItem.delete' ? '制作分项已删除' : action === 'assetItem.edit' ? '制作分项已更新' : '分项任务分配已更新')
+  ElMessage.success(action === 'assetItem.add' ? '制作分项已新增' : action === 'assetItem.delete' ? '制作分项已删除' : action === 'assetItem.edit' ? '制作分项已更新' : '分项任务分配已更新')
   emit('changed', operation)
 }
 
@@ -99,7 +101,7 @@ defineExpose({ run })
 
 <template>
   <TaskStartDialog v-if="startDialog" :context="startDialog" @close="closeStartDialog" @started="finishStartDialog" @failed="failStartDialog" />
-  <AssetItemFormDialog v-if="context?.action === 'assetItem.edit'" :key="context.operationGeneration" :project-id="context.projectId" :operation-generation="context.operationGeneration" :asset="context.asset" :item="context.item" @close="context = null" @saved="completed" @refresh="refreshAfterConflict" />
+  <AssetItemFormDialog v-if="['assetItem.add', 'assetItem.edit'].includes(context?.action)" :key="context.operationGeneration" :project-id="context.projectId" :operation-generation="context.operationGeneration" :asset="context.asset" :item="context.item" @close="context = null" @saved="completed" @refresh="refreshAfterConflict" />
   <AssetAssignDialog v-if="context?.action === 'task.assign'" :key="context.operationGeneration" :project-id="context.projectId" :operation-generation="context.operationGeneration" :asset="context.asset" :item="context.item" :members="members" @close="context = null" @assigned="completed" @refresh="refreshAfterConflict" />
   <AssetItemDeleteDialog v-if="context?.action === 'assetItem.delete'" :key="context.operationGeneration" :project-id="context.projectId" :operation-generation="context.operationGeneration" :asset="context.asset" :item="context.item" @close="context = null" @deleted="completed" @refresh="refreshAfterConflict" />
 </template>

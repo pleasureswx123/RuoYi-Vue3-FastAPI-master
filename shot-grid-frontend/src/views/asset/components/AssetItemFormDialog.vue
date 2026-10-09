@@ -82,7 +82,7 @@ function closeDialog() {
 </script>
 
 <template>
-  <ProjectModal :title="isEdit ? '编辑制作分项' : `新增制作分项 · ${asset.assetName}`" :description="isEdit ? '制作分项是独立分配、提交图片版本和审核的最小生产单元；管理人员确认开工后，制作信息不可再修改。' : '先新增未分配制作分项；保存后再通过“分配任务”选择制作人并创建任务。'" :busy="saving" @close="closeDialog">
+  <ProjectModal :title="isEdit ? '编辑分项信息' : `新增制作分项 · ${asset.assetName}`" :description="isEdit ? '制作分项是独立分配、提交图片版本和审核的最小生产单元；管理人员确认开工后，制作信息不可再修改。' : '先新增未分配制作分项；保存后再通过“分配任务”选择制作人并创建任务。'" :busy="saving" @close="closeDialog">
     <el-form ref="itemForm" :model="form" :rules="itemRules" class="item-form" size="large" label-position="top" aria-label="资产制作分项表单">
       <el-alert v-if="requestError" :title="requestError.title" type="error" show-icon :closable="false"><span>{{ requestError.message }}</span><el-button v-if="requestError.status === 409" link type="danger" @click="emit('refresh')">刷新后重试</el-button></el-alert>
       <el-descriptions :column="1" border aria-label="所属资产信息">

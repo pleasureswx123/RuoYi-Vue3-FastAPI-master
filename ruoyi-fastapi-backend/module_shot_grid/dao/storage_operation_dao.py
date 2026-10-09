@@ -124,6 +124,7 @@ class ShotGridStorageOperationDao:
                         ShotGridProjectStorage.project_relative_path,
                         ShotGridProjectStorage.project_path_snapshot,
                         ShotGridProjectStorage.storage_status,
+                        ShotGridProjectStorage.create_time.label('project_storage_created_time'),
                         ShotGridStorageRoot.protocol,
                         ShotGridStorageRoot.unc_root_path.label('configured_root_path'),
                         ShotGridStorageRoot.root_status,

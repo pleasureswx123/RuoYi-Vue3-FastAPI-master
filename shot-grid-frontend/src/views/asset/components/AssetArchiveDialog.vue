@@ -26,7 +26,7 @@ const archiveRules = {
   reason: [{
     validator: (_rule, value, callback) => {
       if (!String(value || '').trim()) {
-        callback(new Error('必须填写归档原因'))
+        callback(new Error(targetIsItem.value ? '必须填写停用原因' : '必须填写归档原因'))
         return
       }
       callback()
@@ -70,14 +70,14 @@ function closeDialog() {
 </script>
 
 <template>
-  <ProjectModal :title="targetIsItem ? '归档制作分项' : '归档资产'" :description="targetIsItem ? `${asset.assetName} · ${item.productionItem || '未命名制作分项'}；历史任务与版本将继续保留。` : `${asset.assetName}；资产及历史版本将保留，归档后不再进入活动生产。`" :busy="saving" @close="closeDialog">
+  <ProjectModal :title="targetIsItem ? '停用分项（保留历史）' : '归档资产'" :description="targetIsItem ? `${asset.assetName} · ${item.productionItem || '未命名制作分项'}；停用后不再计入活动分项进度，历史任务、版本和文件仍保留。` : `${asset.assetName}；资产及历史版本将保留，归档后不再进入活动生产。`" :busy="saving" @close="closeDialog">
     <el-form ref="archiveForm" :model="form" :rules="archiveRules" class="archive-form" label-position="top" aria-label="资产归档表单">
-      <el-alert title="请确认归档" description="请填写归档原因并确认目标；归档后历史记录仍会保留。" type="warning" show-icon :closable="false" />
+      <el-alert :title="targetIsItem ? '确认停用分项' : '请确认归档'" :description="targetIsItem ? '仅用于废弃或停用，不是完成后的必需操作。请核对目标并填写停用原因。' : '请填写归档原因并确认目标；归档后历史记录仍会保留。'" type="warning" show-icon :closable="false" />
       <el-alert v-if="requestError" :title="requestError.title" type="error" show-icon :closable="false"><span>{{ requestError.message }}</span><el-button v-if="requestError.status === 409" link type="danger" @click="emit('refresh')">刷新后重试</el-button></el-alert>
-      <el-form-item label="归档原因" prop="reason">
-        <el-input v-model="form.reason" type="textarea" :rows="4" maxlength="500" show-word-limit :disabled="saving" placeholder="说明归档原因" />
+      <el-form-item :label="targetIsItem ? '停用原因' : '归档原因'" prop="reason">
+        <el-input v-model="form.reason" type="textarea" :rows="4" maxlength="500" show-word-limit :disabled="saving" :placeholder="targetIsItem ? '说明停用原因' : '说明归档原因'" />
       </el-form-item>
-      <footer><el-button :disabled="saving" @click="closeDialog">取消</el-button><el-button type="danger" :loading="saving" @click="submit">确认归档</el-button></footer>
+      <footer><el-button :disabled="saving" @click="closeDialog">取消</el-button><el-button type="danger" :loading="saving" @click="submit">{{ targetIsItem ? '确认停用' : '确认归档' }}</el-button></footer>
     </el-form>
   </ProjectModal>
 </template>

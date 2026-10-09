@@ -39,6 +39,11 @@ export function prioritizeAssetItemActions(actions, item) {
   return items
 }
 
+export function canAddAssetItem(asset, hasPermission) {
+  return Boolean(asset?.lifecycleStatus === 'active' && asset.allowedActions?.includes('assetItem.add') &&
+    hasPermission('shotgrid:asset:add') && hasPermission('shotgrid:asset:query'))
+}
+
 export function canAssetItemAction(asset, item, action, hasPermission) {
   if (!asset || !item || !permissions[action] || !hasPermission(permissions[action])) return false
   if (Number(item.projectId) !== Number(asset.projectId) || Number(item.assetId) !== Number(asset.assetId)) return false

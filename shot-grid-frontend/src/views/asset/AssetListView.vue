@@ -23,7 +23,7 @@ import ProjectStatePanel from '@/views/project/components/ProjectStatePanel.vue'
 import AssetFormDialog from '@/views/asset/components/AssetFormDialog.vue'
 import AssetTreeTable from '@/views/asset/components/AssetTreeTable.vue'
 import AssetItemOperationHost from '@/views/asset/components/AssetItemOperationHost.vue'
-import { canScheduleAssetItem, assetItemScheduleLabel, canAssetItemAction, prioritizeAssetItemActions } from '@/views/asset/assetItemActions'
+import { canScheduleAssetItem, assetItemScheduleLabel, canAddAssetItem, canAssetItemAction, prioritizeAssetItemActions } from '@/views/asset/assetItemActions'
 import AssetImportDialog from '@/views/asset/components/AssetImportDialog.vue'
 import AssetRequirementDialog from '@/views/asset/components/AssetRequirementDialog.vue'
 import AssetDetailView from '@/views/asset/AssetDetailView.vue'
@@ -268,6 +268,7 @@ function assetTableActions(row) {
   add('schedule', matchesItemStatus('pending_schedule') && (row.assetStatus === 'pending_schedule' || counts.pending_schedule > 0) && canSchedule.value && canManageItemWorkspace(row), { label: '设置排期', type: 'primary', plain: false, icon: Clock, disabled }, () => batchWorkspace.value.open([row], [], 'schedule'))
   add('start', canOpenItemStart(row), { label: assetStartLabel(row), type: 'success', plain: false, icon: VideoPlay, disabled }, () => openAssetItemStart(row))
   add('detail', true, { label: '详情', type: 'primary', icon: View }, () => openAsset(row))
+  add('add-item', canAddAssetItem(row, hasPermission), { label: '新增制作分项', type: 'primary', icon: Plus, disabled }, () => itemOperations.value?.run('assetItem.add', row))
   add('edit', canEditAsset(row), { label: '编辑资产', type: 'warning', icon: Edit, loading: editingAssetId.value === Number(row.assetId), disabled }, () => handleAssetCommand('edit', row))
   add('delete', canDeleteAsset(row), { label: '删除资产', type: 'danger', icon: Delete, disabled }, () => handleAssetCommand('delete', row))
   return actions
@@ -286,7 +287,7 @@ function assetItemTableActions(asset, row) {
   const add = (key, allowed, button, run) => { if (allowed) actions.push({ key, button: { disabled, ...button }, run }) }
   add('start', itemCan(asset, row, 'task.start'), { label: '确认开工', type: 'success', plain: false, icon: VideoPlay }, () => itemOperations.value.run('task.start', asset, row))
   const complete = Boolean(String(row.productionItem || '').trim())
-  add('edit', itemCan(asset, row, 'assetItem.edit'), { label: complete ? '编辑分项' : '完善信息', type: 'warning', plain: false, icon: Edit }, () => itemOperations.value.run('assetItem.edit', asset, row))
+  add('edit', itemCan(asset, row, 'assetItem.edit'), { label: complete ? '编辑分项信息' : '完善信息', type: 'warning', plain: false, icon: Edit }, () => itemOperations.value.run('assetItem.edit', asset, row))
   add('schedule', canScheduleAssetItem(asset, row, canSchedule.value), { label: assetItemScheduleLabel(row), type: 'primary', plain: false, icon: Clock }, () => scheduleDialog.value.open(asset, row))
   add('assign', itemCan(asset, row, 'task.assign'), { label: row.task ? '改派制作人' : '分配制作人', type: row.task ? 'warning' : 'primary', plain: Boolean(row.task), icon: row.task ? Switch : User }, () => itemOperations.value.run('task.assign', asset, row))
   const canWork = row.task?.taskId && row.allowedActions?.includes('task.work') && hasPermission('shotgrid:task:query') && hasPermission('shotgrid:version:add')
@@ -295,7 +296,7 @@ function assetItemTableActions(asset, row) {
   add('task', row.task?.taskId && hasPermission('shotgrid:task:query'), { label: '查看任务', type: 'primary', icon: View }, () => taskDrawer.value.open(`/tasks/${row.task.taskId}`))
   add('history', hasPermission('shotgrid:asset:query'), { label: '制作履历', color: '#159b94', icon: Clock }, () => { historyTarget.value = { projectId: currentProjectId.value, assetId: asset.assetId, itemId: row.assetItemId, title: `${asset.assetName} · ${row.productionItem || '未命名分项'}` } })
   add('detail', true, { label: '分项详情', color: '#159b94', icon: Clock }, () => openAsset(row))
-  add('adjust', canItemWorkspace(asset, row, 'adjust'), { label: '调整制作资料', type: 'warning', icon: Edit }, () => openItemAdjustment(asset, row))
+  add('adjust', canItemWorkspace(asset, row, 'adjust'), { label: '制作要求与参考资料', type: 'warning', icon: Edit }, () => openItemAdjustment(asset, row))
   add('review', canReviewAssets(asset) && row.allowedActions?.includes('task.review') && row.task?.taskStatus === 'pending_review' && row.latestVersion?.versionId, { label: '审核任务', type: 'primary', plain: false, icon: View }, () => reviewEntry.value.open(asset, row.assetItemId))
   add('append', canItemWorkspace(asset, row, 'appendIssue'), { label: '追加问题', type: 'warning', icon: Edit }, () => batchWorkspace.value.open([asset], [row.assetItemId], 'append'))
   add('delete', itemCan(asset, row, 'assetItem.delete'), { label: '删除分项', type: 'danger', icon: Delete }, () => itemOperations.value.run('assetItem.delete', asset, row))
@@ -965,7 +966,7 @@ onBeforeUnmount(() => {
     <AssetStartDrawer ref="startDrawer" :project-id="currentProjectId || 0" :context-key="`${currentProjectId}:${appliedAssetQuery}`" :members="members" @active-change="itemActionBusy = $event" @changed="refreshWorkspace" />
     <AssetProductionAdjustmentDialog v-if="adjustmentContext" :context="adjustmentContext" @close="closeItemAdjustment" />
     <AssetItemBatchWorkspace ref="batchWorkspace" :item-status="appliedItemStatus" :project-id="currentProjectId || 0" :context-key="`${currentProjectId}:${appliedItemStatus}`" @changed="refreshWorkspace" @active-change="batchWorkspaceOpen = $event" />
-    <AssetItemScheduleDialog ref="scheduleDialog" :project-id="currentProjectId || 0" :context-key="`${currentProjectId}:${appliedItemStatus}`" @changed="refreshWorkspace" @busy-change="scheduleBusy = $event" />
+    <AssetItemScheduleDialog ref="scheduleDialog" :project-id="currentProjectId || 0" :context-key="`${currentProjectId}:${appliedItemStatus}`" :members="members" @changed="refreshWorkspace" @busy-change="scheduleBusy = $event" />
     <RelatedDetailDrawer ref="taskDrawer" @closed="loadAssets" />
     <el-drawer v-model="showDetail" class="sg-detail-drawer asset-detail-drawer" modal-class="sg-detail-drawer-mask" header-class="sg-detail-drawer__header" body-class="sg-detail-drawer__body" :title="detailDrawerTitle" direction="rtl" size="72%" resizable append-to-body destroy-on-close @closed="clearDetailDrawer">
       <AssetDetailView v-if="detailAssetId && currentProjectId" embedded :target-project-id="currentProjectId" :target-asset-id="detailAssetId" :target-asset-item-id="detailAssetItemId" @changed="handleDetailChanged" @deleted="handleDetailDeleted" />

@@ -38,6 +38,7 @@ def _operation(*, attempt_count: int = 1) -> SimpleNamespace:
 def _context(root: Path, *, root_status: str = 'enabled', root_del_flag: str = '0') -> dict[str, object]:
     return {
         'operation_id': OPERATION_ID,
+        'project_storage_created_time': datetime(2026, 10, 9, 12, 0, 0),
         'project_id': PROJECT_ID,
         'operation_type': 'initialize_project',
         'aggregate_type': 'project',

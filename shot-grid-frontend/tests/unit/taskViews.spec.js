@@ -800,8 +800,8 @@ describe('任务详情、状态动作与异步上下文', () => {
   it('只有任务查看权限的制作人也能查看资产分项参考资料', async () => {
     getTaskDetail.mockResolvedValue({ data: assetTaskFixture(31, { referenceDescription: '角色服装参考', referenceFiles: [{ fileId: '11111111-1111-4111-8111-111111111111', originalName: '角色参考.pdf', contentType: 'application/pdf', fileSize: 100, downloadUrl: '/shot-grid/tasks/31/reference-files/11111111-1111-4111-8111-111111111111/download' }] }) })
     const { wrapper } = await mountDetail('/tasks/31', ['shotgrid:task:query'])
-    expect(wrapper.get('[aria-label="分项参考资料"]').text()).toContain('角色服装参考')
-    expect(wrapper.get('[aria-label="分项参考资料"]').text()).toContain('角色参考.pdf')
+    expect(wrapper.get('[data-testid="task-requirements"]').text()).toContain('角色服装参考')
+    expect(wrapper.get('[data-testid="task-requirements"]').text()).toContain('角色参考.pdf')
     wrapper.unmount()
   })
 

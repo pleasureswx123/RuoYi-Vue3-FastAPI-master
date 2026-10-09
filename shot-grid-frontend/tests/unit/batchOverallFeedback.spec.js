@@ -280,7 +280,7 @@ describe('批量反馈三步向导', () => {
     const preview = wrapper.findAllComponents(ElTable).find(table => table.props('rowKey') === 'versionId')
     preview.vm.$.exposed.toggleRowExpansion(preview.props('data')[0], true)
     await flushPromises()
-    expect(wrapper.text()).toContain('修改原因：需要修改31')
+    expect(wrapper.find('.batch-feedback-preview .el-table__body-wrapper tbody tr').findAll('td')[2].text()).toBe('需要修改31')
     await send()
     expect(submitBatchFeedback.mock.calls[0][1].content).toBe('')
   })

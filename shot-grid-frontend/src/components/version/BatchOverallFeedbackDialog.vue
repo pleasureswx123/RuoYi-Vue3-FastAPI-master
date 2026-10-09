@@ -33,6 +33,12 @@ const showFeedbackErrors = ref(false)
 const bulkEditing = ref(false)
 const selectedIssues = ref([])
 const expandedDrafts = ref([])
+const confirmationTable = ref(null)
+const confirmationTotals = computed(() => form.targets.reduce((total, row) => ({
+  resolved: total.resolved + resultCount(row, 'resolved'),
+  stillPresent: total.stillPresent + resultCount(row, 'still_present'),
+  publishing: total.publishing + row.drafts.length + (form.content.trim() ? 1 : 0)
+}), { resolved: 0, stillPresent: 0, publishing: 0 }))
 const activeIndex = computed(() => form.targets.findIndex(row => row.versionId === activeVersionId.value))
 const activeTarget = computed(() => form.targets[activeIndex.value])
 const issueCount = computed(() => form.targets.reduce((sum, row) => sum + row.issues.length, 0))
@@ -366,7 +372,7 @@ defineExpose({ open })
               <el-table-column type="selection" width="42" :selectable="() => !disabled" />
               <el-table-column label="原问题与制作人说明" min-width="240">
                 <template #default="{ row: issue }">
-                  <div class="batch-feedback-meta">#{{ issue.issueId }} · {{ issue.originVersionNumber }} · {{ issue.originCandidateId ? '文件反馈' : '整体反馈' }}</div>
+                  <div class="batch-feedback-meta">{{ issue.originVersionNumber }} · {{ issue.originCandidateId ? '文件反馈' : '整体反馈' }}</div>
                   <div class="batch-feedback-text">{{ issue.content || '画面标注问题' }}</div>
                   <ReviewReferenceFiles v-if="issue.referenceFiles?.length" :files="issue.referenceFiles" compact />
                   <div class="batch-feedback-response"><span class="batch-feedback-meta">制作人处理说明</span><p>{{ issue.currentVersionResponse?.responseText || '未填写处理说明' }}</p></div>
@@ -378,7 +384,7 @@ defineExpose({ open })
                   <div :data-issue-id="issue.issueId" class="batch-feedback-decision" :class="{ 'batch-feedback-decision--resolved': issue.result === 'resolved' }">
                     <el-tag class="batch-feedback-decision__status" size="small" :type="!issue.result ? 'info' : issueError(issue) ? 'warning' : issue.result === 'resolved' ? 'success' : 'warning'" aria-live="polite">{{ !issue.result ? '待复核' : issueError(issue) ? '待补充原因' : issue.result === 'resolved' ? '已确认解决' : '已确认仍需修改' }}</el-tag>
                     <el-form-item :prop="['targets', String(activeIndex), 'issues', String($index), 'result']" :error="showReviewErrors && !issue.result ? '请选择复核结论' : ''">
-                      <el-radio-group v-model="issue.result" :aria-label="'问题 ' + issue.issueId + ' 的复核结论'" :disabled="disabled" @change="value => changeIssueResult(issue, value)">
+                      <el-radio-group v-model="issue.result" :aria-label="'第 ' + ($index + 1) + ' 条问题的复核结论'" :disabled="disabled" @change="value => changeIssueResult(issue, value)">
                         <el-radio-button value="resolved">已解决</el-radio-button>
                         <el-radio-button value="still_present">仍需修改</el-radio-button>
                       </el-radio-group>
@@ -408,7 +414,7 @@ defineExpose({ open })
             <el-collapse-item v-for="row in draftTargets" :key="row.versionId" :name="row.versionId">
               <template #title><span class="batch-feedback-collapse-title">{{ row.label }} · {{ row.drafts.length }} 条草稿 <el-tag size="small" :type="row.draftsConfirmed ? 'success' : 'warning'">{{ row.draftsConfirmed ? '已确认发送' : '待确认' }}</el-tag></span></template>
               <div v-for="draft in row.drafts" :key="draft.draftId" class="batch-feedback-draft">
-                <div class="batch-feedback-meta">{{ draft.reviewerName || '审核人' }} · {{ draft.candidateId ? '文件反馈 #' + draft.candidateId : '整体反馈' }}</div>
+                <div class="batch-feedback-meta">{{ draft.reviewerName || '审核人' }} · {{ draft.candidateId ? '文件反馈' : '整体反馈' }}</div>
                 <div class="batch-feedback-text">{{ draft.content || '画面标注问题' }}</div>
                 <ReviewReferenceFiles v-if="draft.referenceFiles?.length" :files="draft.referenceFiles" compact />
                 <el-button v-if="row.shot.canInspect && (draft.annotations || draft.mediaTimeMs != null)" :disabled="disabled" link type="primary" @click="emit('review', row.shot)">查看画面与标注</el-button>
@@ -433,21 +439,33 @@ defineExpose({ open })
         <el-alert v-for="row in form.targets.filter(target => showFeedbackErrors && feedbackError(target))" :key="row.versionId" :title="row.label + '：' + feedbackError(row)" type="warning" :closable="false" show-icon class="batch-feedback-gap" />
       </div>
       <div v-else class="batch-feedback-scroll batch-feedback-confirm">
-        <el-alert title="整批提交：全部成功后统一退回修改；任一任务校验失败，本批均不提交。" type="info" :closable="false" show-icon />
-        <div v-if="form.content.trim()" class="batch-feedback-section"><h4>发送给全部 {{ form.targets.length }} 个任务的新增反馈</h4><p class="batch-feedback-text">{{ form.content.trim() }}</p></div>
-        <section v-if="referenceAttachments.length" class="batch-feedback-section"><h4>共同参考内容（{{ referenceAttachments.length }} 个）</h4><ReviewReferenceInput :files="referenceAttachments" readonly /></section>
-        <el-table :data="form.targets" row-key="versionId" class="batch-feedback-gap">
+        <el-descriptions class="batch-confirm-summary" :column="4" size="small" border>
+          <el-descriptions-item label="本次任务"><strong>{{ form.targets.length }}</strong> 个</el-descriptions-item>
+          <el-descriptions-item label="已解决"><el-text type="success">{{ confirmationTotals.resolved }} 条</el-text></el-descriptions-item>
+          <el-descriptions-item label="仍需修改"><el-text :type="confirmationTotals.stillPresent ? 'warning' : 'info'">{{ confirmationTotals.stillPresent }} 条</el-text></el-descriptions-item>
+          <el-descriptions-item label="待发送意见"><strong>{{ confirmationTotals.publishing }}</strong> 条</el-descriptions-item>
+        </el-descriptions>
+        <el-alert title="确认后，所选任务将统一退回修改。任一任务校验失败，本批均不提交。" type="warning" :closable="false" show-icon />
+        <el-card v-if="form.content.trim() || referenceAttachments.length" class="batch-confirm-message" shadow="never">
+          <template #header><div class="batch-confirm-heading"><strong>本次新增反馈</strong><el-tag size="small" effect="plain">发送给全部 {{ form.targets.length }} 个任务</el-tag></div></template>
+          <p v-if="form.content.trim()" class="batch-feedback-text">{{ form.content.trim() }}</p>
+          <ReviewReferenceInput v-if="referenceAttachments.length" :files="referenceAttachments" readonly />
+        </el-card>
+        <div class="batch-confirm-heading"><strong>逐项核对</strong><span class="batch-feedback-meta">点击“查看明细”核对原问题、修改原因及已有草稿</span></div>
+        <el-table ref="confirmationTable" :data="form.targets" row-key="versionId" size="small" border class="batch-confirm-table">
           <el-table-column type="expand">
             <template #default="{ row }">
               <div class="batch-feedback-preview">
-                <h4>历史问题复核结论</h4>
-                <p v-if="!row.issues.length" class="batch-feedback-meta">无历史问题</p>
-                <div v-for="issue in row.issues" :key="issue.issueId" class="batch-feedback-draft">
-                  <el-tag size="small" :type="issue.result === 'resolved' ? 'success' : 'warning'">{{ issue.result === 'resolved' ? '已解决' : '仍需修改' }}</el-tag>
-                  <p class="batch-feedback-text">#{{ issue.issueId }} · {{ issue.content || '画面标注问题' }}</p>
-                  <p v-if="issue.comment" class="batch-feedback-text">修改原因：{{ issue.comment }}</p>
-                </div>
-                <h4>将发布的已有草稿 · {{ row.drafts.length }} 条</h4>
+                <template v-if="row.issues.length">
+                  <h4>历史问题复核结论 <el-tag size="small" type="info" effect="plain">{{ row.issues.length }} 条</el-tag></h4>
+                  <el-table :data="row.issues" row-key="issueId" size="small" border>
+                    <el-table-column label="复核结论" width="105"><template #default="{ row: issue }"><el-tag size="small" :type="issue.result === 'resolved' ? 'success' : 'warning'">{{ issue.result === 'resolved' ? '已解决' : '仍需修改' }}</el-tag></template></el-table-column>
+                    <el-table-column label="原问题" min-width="220"><template #default="{ row: issue }"><p class="batch-feedback-text">{{ issue.content || '画面标注问题' }}</p></template></el-table-column>
+                    <el-table-column label="修改原因" min-width="180"><template #default="{ row: issue }"><p class="batch-feedback-text">{{ issue.comment || '—' }}</p></template></el-table-column>
+                  </el-table>
+                </template>
+                <p v-else class="batch-feedback-meta">无历史问题，待发送意见见本次新增反馈及已有草稿。</p>
+                <h4 v-if="row.drafts.length">将发布的已有草稿 · {{ row.drafts.length }} 条</h4>
                 <div v-for="draft in row.drafts" :key="draft.draftId" class="batch-feedback-draft">
                   <p class="batch-feedback-text">{{ draft.content || '画面标注问题' }}</p>
                   <ReviewReferenceFiles v-if="draft.referenceFiles?.length" :files="draft.referenceFiles" compact />
@@ -464,9 +482,9 @@ defineExpose({ open })
           <el-table-column label="仍需修改" width="100"><template #default="{ row }">{{ resultCount(row, 'still_present') }} 条</template></el-table-column>
           <el-table-column label="待发布意见" width="115"><template #default="{ row }">{{ row.drafts.length + (form.content.trim() ? 1 : 0) }} 条</template></el-table-column>
           <el-table-column label="本轮已发布" width="115"><template #default="{ row }">{{ row.currentIssues.length }} 条</template></el-table-column>
-          <el-table-column label="发送后" width="100"><template #default><el-tag type="warning" size="small">待修改</el-tag></template></el-table-column>
+          <el-table-column label="明细" width="100" fixed="right"><template #default="{ row }"><el-button link type="primary" @click="confirmationTable?.toggleRowExpansion(row)">查看明细</el-button></template></el-table-column>
         </el-table>
-        <p class="batch-feedback-meta">展开任务可查看逐条意见；需要调整时，返回上一步，填写内容会保留。</p>
+        <p class="batch-feedback-meta">需要调整内容时，可返回上一步；已填写内容会保留。</p>
       </div>
     </el-form>
     <template #footer>
@@ -537,6 +555,22 @@ defineExpose({ open })
 .batch-feedback-response p { margin: 4px 0 0; }
 .batch-feedback-draft { border-bottom: 1px solid var(--el-border-color-lighter); padding: 10px 0; margin-bottom: 12px; }
 .batch-feedback-preview { padding: 4px 20px 16px; }
+.batch-feedback-confirm { display: flex; flex-direction: column; gap: 12px; }
+.batch-feedback-confirm > * { flex-shrink: 0; }
+.batch-confirm-heading { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; }
+.batch-confirm-heading strong { font-size: 14px; }
+.batch-confirm-summary :deep(.el-descriptions__cell) { padding: 10px 12px !important; }
+.batch-confirm-summary :deep(.el-descriptions__label) { font-size: 12px; font-weight: 500; }
+.batch-confirm-message { border-color: var(--el-color-primary-light-7); }
+.batch-confirm-message :deep(.el-card__header) { padding: 10px 14px; background: var(--el-color-primary-light-9); }
+.batch-confirm-message :deep(.el-card__body) { padding: 12px 14px; }
+.batch-feedback-confirm .batch-feedback-text { margin: 0; }
+.batch-confirm-table :deep(.el-table__cell) { padding: 10px 0; vertical-align: top; }
+.batch-confirm-table :deep(.el-table__expanded-cell) { padding: 0; }
+.batch-feedback-confirm .batch-feedback-preview { padding: 14px 16px; background: var(--el-fill-color-light); }
+.batch-feedback-confirm .batch-feedback-preview h4 { display: flex; align-items: center; gap: 8px; margin: 0 0 10px; font-size: 13px; }
+.batch-feedback-confirm .batch-feedback-preview h4:not(:first-child) { margin-top: 16px; }
+.batch-feedback-confirm .batch-feedback-draft { margin: 0; padding: 8px 0; }
 @media (max-width: 760px) {
   :global(.batch-feedback-dialog) { height: calc(100dvh - 24px); margin: 12px auto; }
   .batch-feedback-review { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }

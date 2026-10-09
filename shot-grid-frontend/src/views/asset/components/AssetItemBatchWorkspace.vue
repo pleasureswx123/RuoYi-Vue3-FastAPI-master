@@ -62,7 +62,7 @@ const available = action => !blocked.value && !childOpen.value && selected.value
 const actionOptions = [
   { key: 'assign', label: '分配制作人', next: '选择制作人' },
   { key: 'schedule', label: '设置排期', next: '填写排期' },
-  { key: 'adjust', label: '调整制作资料', next: '调整制作资料' },
+  { key: 'adjust', label: '制作要求与参考资料', next: '制作要求与参考资料' },
   { key: 'review', label: '审核反馈', next: '填写反馈' },
   { key: 'append', label: '追加问题', next: '追加问题' }
 ]
