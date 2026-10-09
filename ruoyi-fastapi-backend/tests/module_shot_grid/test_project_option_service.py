@@ -13,6 +13,7 @@ from module_shot_grid.entity.vo.project_option_vo import (
 )
 from module_shot_grid.exceptions import ShotGridDomainException
 from module_shot_grid.service.project_option_service import ShotGridProjectOptionService
+from module_shot_grid.service.storage_path_adapter import StoragePathAdapterError
 
 SERVICE_UNAVAILABLE_STATUS = 503
 CANDIDATE_USER_ID = 2
@@ -233,3 +234,58 @@ async def test_asset_assignee_options_return_the_same_safe_projection(monkeypatc
         'projectRole': 'creator',
         'producerCode': 'AC',
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    'check_nas,db_conflict,exists',
+    [(False, False, False), (True, True, False), (True, False, True), (True, False, False), (True, False, None)],
+)
+async def test_path_preflight_releases_transaction_before_nas(
+    monkeypatch: pytest.MonkeyPatch, check_nas: bool, db_conflict: bool, exists: bool | None
+) -> None:
+    root = SimpleNamespace(
+        storage_root_id=10,
+        root_name='主存储',
+        unc_root_path=r'\\192.168.10.64\web',
+        root_status='enabled',
+        last_probe_status='healthy',
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.project_option_service.ShotGridProjectOptionDao.get_storage_root',
+        AsyncMock(return_value=root),
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.project_option_service.ShotGridProjectOptionDao.storage_path_exists',
+        AsyncMock(return_value=db_conflict),
+    )
+    db = AsyncMock()
+
+    async def check(root_path: str, relative_path: str) -> bool:
+        db.rollback.assert_awaited_once()
+        assert root_path == root.unc_root_path
+        assert relative_path == r'AI影视短片\测试项目'
+        if exists is None:
+            raise StoragePathAdapterError(
+                error_key='SG_STORAGE_CHECK_TIMEOUT', safe_message='NAS 路径检查超时', retryable=True
+            )
+        return exists
+
+    checker = AsyncMock(side_effect=check)
+    monkeypatch.setattr(
+        'module_shot_grid.service.project_option_service.ShotGridStoragePathAdapter.project_directory_exists', checker
+    )
+    result = await ShotGridProjectOptionService.preview_project_path(
+        db, 10, ShotGridProjectPathPreviewRequestModel(projectName='测试项目', checkNas=check_nas)
+    )
+    assert result.path_conflict == db_conflict
+    if check_nas and not db_conflict:
+        if exists is None:
+            assert result.nas_path_status == 'unavailable'
+            assert result.nas_check_message == 'NAS 路径检查超时'
+        else:
+            assert result.nas_path_status == ('exists' if exists else 'available')
+    else:
+        checker.assert_not_awaited()
+        assert result.nas_path_status == 'not_checked'
+    db.commit.assert_not_awaited()

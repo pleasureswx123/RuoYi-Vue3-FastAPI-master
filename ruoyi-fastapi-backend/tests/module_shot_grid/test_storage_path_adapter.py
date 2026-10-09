@@ -3,6 +3,7 @@ from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
+from typing import NoReturn
 
 import pytest
 
@@ -403,3 +404,54 @@ async def test_directory_appearing_between_check_and_mkdir_is_not_adopted(
     assert error.value.error_key == 'SG_STORAGE_PROJECT_DIRECTORY_CONFLICT'
     assert not (project / ShotGridStoragePathAdapter.PROJECT_OWNER_MARKER).exists()
     assert (project / 'foreign.txt').read_text() == 'foreign'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('existing', ['absent', 'directory', 'file', 'parent_file'])
+async def test_project_preflight_is_read_only(tmp_path: Path, existing: str) -> None:
+    target = tmp_path / 'AI影视短片' / '测试项目'
+    if existing == 'directory':
+        target.mkdir(parents=True)
+    elif existing == 'file':
+        target.parent.mkdir()
+        target.write_text('历史内容')
+    elif existing == 'parent_file':
+        target.parent.write_text('历史内容')
+    before = sorted(str(path.relative_to(tmp_path)) for path in tmp_path.rglob('*'))  # noqa: ASYNC240 -- 测试本地临时目录
+    result = await ShotGridStoragePathAdapter(allow_local_root=True).project_directory_exists(
+        str(tmp_path), r'AI影视短片\测试项目'
+    )
+    assert result is (existing != 'absent')
+    assert sorted(str(path.relative_to(tmp_path)) for path in tmp_path.rglob('*')) == before  # noqa: ASYNC240 -- 测试本地临时目录
+
+
+@pytest.mark.asyncio
+async def test_project_preflight_rejects_traversal_and_permission_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter = ShotGridStoragePathAdapter(allow_local_root=True)
+    with pytest.raises(StoragePathAdapterError):
+        await adapter.project_directory_exists(str(tmp_path), r'..\outside')
+
+    def inaccessible(_path: Path) -> NoReturn:
+        raise PermissionError('private filesystem information')
+
+    monkeypatch.setattr(Path, 'lstat', inaccessible)
+    with pytest.raises(StoragePathAdapterError) as error:
+        await adapter.project_directory_exists(str(tmp_path), r'AI影视短片\项目')
+    assert error.value.error_key == 'SG_STORAGE_ROOT_UNAVAILABLE'
+    assert 'private' not in error.value.safe_message
+
+
+@pytest.mark.asyncio
+async def test_project_preflight_converts_timeout_to_safe_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def timed_out(_self: ShotGridStoragePathAdapter, _root: str, _relative: str) -> NoReturn:
+        raise TimeoutError('private NAS details')
+
+    monkeypatch.setattr(ShotGridStoragePathAdapter, '_project_directory_exists_sync', timed_out)
+    with pytest.raises(StoragePathAdapterError) as error:
+        await ShotGridStoragePathAdapter(allow_local_root=True).project_directory_exists(str(tmp_path), '项目')
+    assert error.value.error_key == 'SG_STORAGE_CHECK_TIMEOUT'
+    assert 'private' not in error.value.safe_message

@@ -18,6 +18,7 @@ from module_shot_grid.entity.vo.project_option_vo import (
 from module_shot_grid.exceptions import shot_grid_error
 from module_shot_grid.service.platform_role_service import ShotGridPlatformRoleService
 from module_shot_grid.service.project_path_service import ShotGridProjectPathService
+from module_shot_grid.service.storage_path_adapter import ShotGridStoragePathAdapter, StoragePathAdapterError
 
 
 class ShotGridProjectOptionService:
@@ -57,7 +58,7 @@ class ShotGridProjectOptionService:
             storage_root.storage_root_id,
             snapshot.path_key,
         )
-        return ShotGridProjectPathPreviewModel(
+        result = ShotGridProjectPathPreviewModel(
             storageRootId=storage_root.storage_root_id,
             rootName=storage_root.root_name,
             projectDirectoryName=snapshot.project_dir_name,
@@ -65,6 +66,17 @@ class ShotGridProjectOptionService:
             projectPathPreview=snapshot.full_path,
             pathConflict=conflict,
         )
+        if command.check_nas and not conflict:
+            root_path = str(storage_root.unc_root_path)
+            # 当前接口只读；先释放数据库事务，再进行可能缓慢的 NAS 检查。
+            await db.rollback()
+            try:
+                exists = await ShotGridStoragePathAdapter().project_directory_exists(root_path, snapshot.relative_path)
+                result.nas_path_status = 'exists' if exists else 'available'
+            except StoragePathAdapterError as exc:
+                result.nas_path_status = 'unavailable'
+                result.nas_check_message = exc.safe_message
+        return result
 
     @classmethod
     async def get_member_candidate_page(

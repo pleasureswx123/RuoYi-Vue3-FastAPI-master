@@ -27,6 +27,7 @@ class ShotGridProjectPathPreviewRequestModel(ShotGridApiModel):
 
     project_type: Literal['ai_short_film'] = 'ai_short_film'
     project_name: str = Field(min_length=1, max_length=200)
+    check_nas: bool = False
 
     @field_validator('project_name', mode='before')
     @classmethod
@@ -45,6 +46,8 @@ class ShotGridProjectPathPreviewModel(ShotGridApiModel):
     project_relative_path: str
     project_path_preview: str
     path_conflict: bool
+    nas_path_status: Literal['not_checked', 'available', 'exists', 'unavailable'] = 'not_checked'
+    nas_check_message: str | None = None
 
 
 class ShotGridMemberCandidateQueryModel(ShotGridApiModel):

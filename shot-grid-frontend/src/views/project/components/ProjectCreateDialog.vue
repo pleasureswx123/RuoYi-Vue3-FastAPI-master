@@ -1,5 +1,6 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { ElMessage } from 'element-plus'
 
 import {
   createProject,
@@ -8,6 +9,7 @@ import {
   previewProjectPath
 } from '@/api/shot-grid/projects'
 import { createIdempotencyState } from '@/utils/idempotency'
+import { copyTextToClipboard } from '@/utils/clipboard'
 import {
   normalizeProjectRoleOptions,
   projectErrorState,
@@ -36,6 +38,8 @@ const roleOptionsError = ref(null)
 const pathPreview = ref(null)
 const previewLoading = ref(false)
 const previewError = ref(null)
+const nasCheck = ref(null)
+const checkingNas = ref(false)
 let active = true
 const { referenceAttachments, addReferenceFile, removeReferenceFile, resetReferenceAttachments, uploadPendingReferenceFiles } = useReviewReferenceAttachments({ canEdit: () => !busy.value, isCurrent: () => active })
 const form = reactive({
@@ -205,13 +209,14 @@ function invalidatePathPreview() {
   if (previewTimer) clearTimeout(previewTimer)
   previewTimer = null
   pathPreview.value = null
+  nasCheck.value = null
   previewError.value = null
   previewLoading.value = false
   previewController?.abort()
   return previewGeneration
 }
 
-async function loadPathPreview() {
+async function loadPathPreview(checkNas = false) {
   const generation = invalidatePathPreview()
   const storageRootId = Number(form.storageRootId)
   if (!storageRootId || !form.projectName.trim()) {
@@ -224,12 +229,14 @@ async function loadPathPreview() {
       storageRootId,
       {
         projectType: 'ai_short_film',
-        projectName: form.projectName.trim()
+        projectName: form.projectName.trim(),
+        checkNas
       },
       { signal: previewController.signal }
     )
-    if (generation !== previewGeneration) return null
+    if (!active || generation !== previewGeneration) return null
     pathPreview.value = response.data
+    if (checkNas) nasCheck.value = response.data
     if (response.data.pathConflict) {
       previewError.value = { title: '项目目录已被占用', message: '请修改项目名称，系统会自动重新校验。' }
     }
@@ -237,6 +244,7 @@ async function loadPathPreview() {
   } catch (error) {
     if (generation === previewGeneration && error?.code !== 'ERR_CANCELED') {
       previewError.value = projectErrorState(error, 'NAS 路径计算失败')
+      if (checkNas) nasCheck.value = { nasPathStatus: 'unavailable', nasCheckMessage: previewError.value.message }
     }
     return null
   } finally {
@@ -247,8 +255,38 @@ async function loadPathPreview() {
 function schedulePathPreview() {
   invalidatePathPreview()
   if (!form.storageRootId || !form.projectName.trim()) return
-  previewTimer = setTimeout(loadPathPreview, 350)
+  previewTimer = setTimeout(() => loadPathPreview(), 350)
 }
+
+async function checkNasPath() {
+  checkingNas.value = true
+  try {
+    const result = await loadPathPreview(true)
+    return active && result && !result.pathConflict && result.nasPathStatus === 'available'
+  } finally { checkingNas.value = false }
+}
+
+async function recheckNas() {
+  if (busy.value) return
+  busy.value = true
+  try { await checkNasPath() } finally { busy.value = false }
+}
+
+async function copyNasPath() {
+  const copied = await copyTextToClipboard(nasCheck.value?.projectPathPreview)
+  if (!active) return
+  if (copied) ElMessage.success('NAS 完整路径已复制')
+  else ElMessage.warning('自动复制失败，请选中完整路径后手动复制')
+}
+
+const nasCheckTitle = computed(() => nasCheck.value?.pathConflict ? '该路径已被平台中的项目占用'
+  : nasCheck.value?.nasPathStatus === 'exists' ? 'NAS 上已存在同名目录或文件，尚未创建项目'
+    : nasCheck.value?.nasPathStatus === 'available' ? 'NAS 路径检查通过，可以创建项目'
+      : '暂时无法确认 NAS 路径，尚未创建项目')
+const nasCheckDescription = computed(() => nasCheck.value?.pathConflict ? '请先返回项目列表核对已有项目；创建新项目时，请更换项目名称或 NAS 根目录后重新检查。'
+  : nasCheck.value?.nasPathStatus === 'exists' ? '请管理员先备份并移走或重命名旧目录，使下方完整路径空出，再点击“重新检查”。也可以修改项目名称。已填写内容会保留，系统不会覆盖旧文件。'
+    : nasCheck.value?.nasPathStatus === 'available' ? '点击“创建并初始化 NAS”继续；提交时会再次检查，后台初始化也会校验目录归属。'
+      : nasCheck.value?.nasCheckMessage || '请检查 NAS 连接或联系管理员，恢复后重新检查。')
 
 function addMember(candidate) {
   if (!roleOptionsReady.value) return
@@ -294,8 +332,7 @@ async function submit() {
     if (!isValid) return
 
     const payload = buildPayload()
-    const preview = pathPreview.value || (await loadPathPreview())
-    if (!preview || preview.pathConflict) return
+    if (!await checkNasPath()) return
 
     payload.referenceFileIds = await uploadPendingReferenceFiles()
     const response = await createProject(payload, idempotency.forPayload(payload))
@@ -329,6 +366,7 @@ onMounted(() => {
 })
 onBeforeUnmount(() => {
   active = false
+  previewGeneration += 1
   if (previewTimer) clearTimeout(previewTimer)
   storageGeneration += 1
   roleOptionsGeneration += 1
@@ -407,14 +445,22 @@ onBeforeUnmount(() => {
       </el-form-item>
 
       <el-alert v-if="requestError" :title="requestError.title" :description="requestError.message" type="error" show-icon :closable="false" />
-      <el-alert title="NAS 初始化将在后台检查目录。若已有同名旧目录，将暂停初始化；请在项目存储信息中查看路径，手动备份或重命名后重新检查。" type="info" show-icon :closable="false" />
-      <footer><el-button :disabled="busy" @click="closeDialog">取消</el-button><el-button type="primary" :loading="busy" :disabled="!canSubmit" @click="submit">创建并初始化 NAS</el-button></footer>
+      <el-alert v-if="nasCheck" class="nas-check-result" :title="nasCheckTitle" :type="nasCheck.nasPathStatus === 'available' ? 'success' : 'warning'" show-icon :closable="false">
+        <p>{{ nasCheckDescription }}</p>
+        <div v-if="nasCheck.projectPathPreview" class="nas-check-path"><code>{{ nasCheck.projectPathPreview }}</code><el-button link type="primary" @click="copyNasPath">复制路径</el-button></div>
+        <el-button v-if="nasCheck.nasPathStatus !== 'available'" :loading="checkingNas" @click="recheckNas">重新检查</el-button>
+      </el-alert>
+      <el-alert v-else :title="checkingNas ? '正在检查 NAS 完整路径，请稍候…' : '提交前会实时检查 NAS 完整路径；已有同名目录或检查失败时，将保留表单并提示处理。'" type="info" show-icon :closable="false" />
+      <footer><el-button :disabled="busy" @click="closeDialog">取消</el-button><el-button type="primary" :loading="busy" :disabled="!canSubmit" @click="submit">{{ checkingNas ? '正在检查 NAS…' : '创建并初始化 NAS' }}</el-button></footer>
     </el-form>
   </ProjectModal>
 </template>
 
 <style scoped>
 .project-form { display: grid; gap: 22px; }
+.nas-check-result p { margin: 0 0 10px; line-height: 1.7; }
+.nas-check-path { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 10px; }
+.nas-check-path code { overflow-wrap: anywhere; }
 .project-form__grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 18px; }
 .project-form :deep(.el-form-item) { margin-bottom: 0; }
 .project-form :deep(.el-input),

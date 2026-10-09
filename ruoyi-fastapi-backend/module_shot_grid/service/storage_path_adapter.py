@@ -130,6 +130,44 @@ class ShotGridStoragePathAdapter:
         plan = self._build_plan(context)
         return await asyncio.to_thread(self._ensure_directories_sync, plan)
 
+    async def project_directory_exists(self, root_path: str, relative_path: str) -> bool:
+        """创建前只读检查；超时停止等待，后台线程不创建或修改任何 NAS 内容。"""
+        try:
+            return await asyncio.wait_for(
+                asyncio.to_thread(self._project_directory_exists_sync, root_path, relative_path), timeout=10
+            )
+        except TimeoutError as exc:
+            raise StoragePathAdapterError(
+                error_key='SG_STORAGE_CHECK_TIMEOUT',
+                safe_message='NAS 路径检查超时，请稍后重新检查。',
+                retryable=True,
+            ) from exc
+        except (OSError, NasMountResolutionError) as exc:
+            raise self._root_unavailable_error() from exc
+
+    def _project_directory_exists_sync(self, root_path: str, relative_path: str) -> bool:
+        root, is_unc, mount_root = self._validated_root(root_path)
+        parts = self._relative_parts(relative_path)
+        self._assert_lexical_containment(root, parts, is_unc=is_unc)
+        self.nas_mount_resolver.ensure_mount_ready(mount_root)
+        # 显式 stat/lstat，不将权限不足或网络异常当成目录不存在。
+        self._reject_link_or_reparse_point(root)
+        if not stat.S_ISDIR(root.stat().st_mode):
+            raise self._root_unavailable_error()
+        current = root
+        for segment in parts:
+            current = current / segment
+            try:
+                path_stat = current.lstat()
+            except FileNotFoundError:
+                return False
+            self._reject_link_or_reparse_point(current)
+            self._assert_resolved_containment(root, current)
+            if not stat.S_ISDIR(path_stat.st_mode):
+                # 同名文件同样会阻挡目录创建。
+                return True
+        return True
+
     async def finalize_operation(self, context: StorageOperationPathContext) -> None:
         """数据库成功提交后尽力清理重编号事务目录；失败不改变业务成功结果。"""
 

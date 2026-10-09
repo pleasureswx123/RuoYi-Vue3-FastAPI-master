@@ -177,7 +177,7 @@ describe('项目管理页面', () => {
     getProjectRoleOptions.mockResolvedValue({ data: projectRoleOptions })
     getProjectMemberRoleOptions.mockResolvedValue({ data: projectRoleOptions })
     getStorageRootOptions.mockResolvedValue({ data: [{ storageRootId: 7, rootName: '主存储', rootCode: 'MAIN', uncRootPath: '\\\\nas\\shot-grid' }] })
-    previewProjectPath.mockResolvedValue({ data: { projectPathPreview: '\\\\nas\\shot-grid\\罗刹夫人', pathConflict: false } })
+    previewProjectPath.mockResolvedValue({ data: { projectPathPreview: '\\\\nas\\shot-grid\\罗刹夫人', pathConflict: false, nasPathStatus: 'available' } })
     createProject.mockResolvedValue({ data: { projectId: 8 } })
     updateProject.mockResolvedValue({ data: { ...projectRow, lockVersion: 2 } })
     archiveProject.mockResolvedValue({ data: { ...projectRow, projectStatus: 'archived' } })
@@ -383,6 +383,89 @@ describe('项目管理页面', () => {
     await flushPromises()
     expect(wrapper.emitted('created')).toEqual([[{ projectId: 8 }]])
     wrapper.unmount()
+  })
+
+  it('提交时重新检查真实 NAS，冲突保留表单并允许复制路径、处理后重新检查', async () => {
+    const wrapper = mount(ProjectCreateDialog, {
+      props: { currentUser: { userId: 1, userName: 'admin' } },
+      global: { components: formComponents, stubs: { ProjectModal: projectModalStub, MemberCandidateSelect: true } }
+    })
+    try {
+      await flushPromises()
+      const model = wrapper.findComponent(ElForm).props('model')
+      Object.assign(model, { projectName: '旧项目', projectCode: 'OLD', storageRootId: '7', remark: '保留备注' })
+      await nextTick()
+      await new Promise(resolve => setTimeout(resolve, 400))
+      await flushPromises()
+      expect(previewProjectPath).toHaveBeenLastCalledWith(7, expect.objectContaining({ checkNas: false }), expect.any(Object))
+      let finishCheck
+      previewProjectPath.mockImplementationOnce(() => new Promise(resolve => { finishCheck = resolve }))
+      const submit = buttonByText(wrapper, '创建并初始化 NAS')
+      await submit.trigger('click')
+      await flushPromises()
+      expect(wrapper.text()).toContain('正在检查 NAS')
+      expect(submit.props('loading')).toBe(true)
+      expect(wrapper.findComponent(ElForm).props('disabled')).toBe(true)
+      expect(createProject).not.toHaveBeenCalled()
+      expect(previewProjectPath).toHaveBeenLastCalledWith(7, expect.objectContaining({ projectName: '旧项目', checkNas: true }), expect.any(Object))
+      finishCheck({ data: { projectPathPreview: 'NAS完整路径', pathConflict: false, nasPathStatus: 'exists' } })
+      await flushPromises()
+      expect(wrapper.text()).toContain('尚未创建项目')
+      expect(model.remark).toBe('保留备注')
+      expect(createProject).not.toHaveBeenCalled()
+      await buttonByText(wrapper, '复制路径').trigger('click')
+      expect(copyTextToClipboard).toHaveBeenCalledWith('NAS完整路径')
+      await buttonByText(wrapper, '重新检查').trigger('click')
+      await flushPromises()
+      expect(wrapper.text()).toContain('NAS 路径检查通过')
+      expect(createProject).not.toHaveBeenCalled()
+      await buttonByText(wrapper, '创建并初始化 NAS').trigger('click')
+      await flushPromises()
+      expect(createProject).toHaveBeenCalledTimes(1)
+    } finally { wrapper.unmount() }
+  })
+
+  it.each([
+    { pathConflict: true, nasPathStatus: 'not_checked' },
+    { pathConflict: false, nasPathStatus: 'unavailable', nasCheckMessage: 'NAS 检查超时' },
+    { pathConflict: false, nasPathStatus: 'not_checked' }
+  ])('NAS 检查未通过时不创建或上传附件：%j', async result => {
+    previewProjectPath.mockResolvedValue({ data: result })
+    const wrapper = mount(ProjectCreateDialog, {
+      props: { currentUser: { userId: 1, userName: 'admin' } },
+      global: { components: formComponents, stubs: { ProjectModal: projectModalStub, MemberCandidateSelect: true } }
+    })
+    try {
+      await flushPromises()
+      Object.assign(wrapper.findComponent(ElForm).props('model'), { projectName: '测试项目', projectCode: 'TEST', storageRootId: '7' })
+      await nextTick()
+      await buttonByText(wrapper, '创建并初始化 NAS').trigger('click')
+      await flushPromises()
+      expect(createProject).not.toHaveBeenCalled()
+      expect(uploadReviewReferenceFile).not.toHaveBeenCalled()
+      expect(buttonByText(wrapper, '重新检查')).toBeDefined()
+      expect(wrapper.findComponent(ElForm).props('disabled')).toBe(false)
+    } finally { wrapper.unmount() }
+  })
+
+  it('NAS 检查过程中卸载窗口，忽略迟到成功且不创建项目', async () => {
+    let finishCheck
+    previewProjectPath.mockImplementation(() => new Promise(resolve => { finishCheck = resolve }))
+    const wrapper = mount(ProjectCreateDialog, {
+      props: { currentUser: { userId: 1, userName: 'admin' } },
+      global: { components: formComponents, stubs: { ProjectModal: projectModalStub, MemberCandidateSelect: true } }
+    })
+    await flushPromises()
+    Object.assign(wrapper.findComponent(ElForm).props('model'), { projectName: '测试项目', projectCode: 'TEST', storageRootId: '7' })
+    await nextTick()
+    await buttonByText(wrapper, '创建并初始化 NAS').trigger('click')
+    await flushPromises()
+    const signal = previewProjectPath.mock.calls.at(-1)[2].signal
+    wrapper.unmount()
+    expect(signal.aborted).toBe(true)
+    finishCheck({ data: { pathConflict: false, nasPathStatus: 'available' } })
+    await flushPromises()
+    expect(createProject).not.toHaveBeenCalled()
   })
 
   it('项目角色映射不完整时明确提示并禁止创建', async () => {
