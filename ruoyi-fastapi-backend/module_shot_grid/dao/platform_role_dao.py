@@ -8,7 +8,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from module_admin.entity.do.menu_do import SysMenu
 from module_admin.entity.do.role_do import SysRole, SysRoleMenu
 from module_admin.entity.do.user_do import SysUser, SysUserRole
-from module_shot_grid.entity.do.project_do import ShotGridManagedUserRole, ShotGridProject, ShotGridProjectMember
+from module_shot_grid.entity.do.project_do import (
+    ShotGridManagedUserRole,
+    ShotGridProject,
+    ShotGridProjectMember,
+    ShotGridProjectMemberRole,
+)
 
 
 class ShotGridPlatformRoleDao:
@@ -113,8 +118,13 @@ class ShotGridPlatformRoleDao:
         if not user_ids:
             return []
         rows = await db.execute(
-            select(ShotGridProjectMember.user_id, ShotGridProjectMember.project_role)
+            select(ShotGridProjectMember.user_id, ShotGridProjectMemberRole.project_role)
             .select_from(ShotGridProjectMember)
+            .join(
+                ShotGridProjectMemberRole,
+                (ShotGridProjectMemberRole.project_id == ShotGridProjectMember.project_id)
+                & (ShotGridProjectMemberRole.user_id == ShotGridProjectMember.user_id),
+            )
             .join(ShotGridProject, ShotGridProject.project_id == ShotGridProjectMember.project_id)
             .where(
                 ShotGridProjectMember.user_id.in_(user_ids),
@@ -122,7 +132,7 @@ class ShotGridPlatformRoleDao:
                 ShotGridProject.del_flag == '0',
             )
             .distinct()
-            .order_by(ShotGridProjectMember.user_id, ShotGridProjectMember.project_role)
+            .order_by(ShotGridProjectMember.user_id, ShotGridProjectMemberRole.project_role)
         )
         return [(int(user_id), str(project_role)) for user_id, project_role in rows.all()]
 
@@ -176,6 +186,11 @@ class ShotGridPlatformRoleDao:
         active_rows = await db.execute(
             select(ShotGridProjectMember.user_id)
             .select_from(ShotGridProjectMember)
+            .join(
+                ShotGridProjectMemberRole,
+                (ShotGridProjectMemberRole.project_id == ShotGridProjectMember.project_id)
+                & (ShotGridProjectMemberRole.user_id == ShotGridProjectMember.user_id),
+            )
             .join(ShotGridProject, ShotGridProject.project_id == ShotGridProjectMember.project_id)
             .where(
                 ShotGridProjectMember.member_status == 'active',

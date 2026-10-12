@@ -1,4 +1,5 @@
 <script setup>
+import { myProjectRoles } from '@/views/project/projectPresentation'
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
@@ -224,7 +225,7 @@ onBeforeUnmount(() => {
                 <el-tag size="small" effect="plain" type="info">{{ project.aspectRatio }}</el-tag>
               </div>
             </div>
-            <el-tag class="project-card__role" size="small" effect="plain" round :type="projectRoleMeta(project.myProjectRole).type">我的角色：{{ projectRoleMeta(project.myProjectRole).label }}</el-tag>
+            <el-tag class="project-card__role" size="small" effect="plain" round :type="projectRoleMeta(myProjectRoles(project)).type">我的角色：{{ projectRoleMeta(myProjectRoles(project)).label }}</el-tag>
           </div>
           <div class="project-card__storage">
             <el-tag size="small" effect="plain" round :type="tagTypeFromTone(storageMeta(project.storageStatus).tone)">{{ storageMeta(project.storageStatus).label }}</el-tag>

@@ -1033,7 +1033,7 @@ class ShotGridVersionSubmissionService:
             raise shot_grid_error(409, 'SG_PROJECT_NOT_READY', '项目或任务目标 NAS 目录尚未就绪')
         if (
             context['member_status'] != 'active'
-            or context.get('assignee_project_role') != 'creator'
+            or 'creator' not in (context.get('assignee_project_roles') or [])
             or context['assignee_user_status'] != '0'
         ):
             raise shot_grid_error(409, 'SG_TASK_ASSIGNEE_STATE_INVALID', '任务制作人当前不是有效制作人员')
@@ -1104,7 +1104,7 @@ class ShotGridVersionSubmissionService:
         actor_id: int,
     ) -> None:
         assignee_user_id = task.assignee_user_id if hasattr(task, 'assignee_user_id') else task['assignee_user_id']
-        if access.project_role != 'creator' or access.user_id != actor_id or assignee_user_id != actor_id:
+        if not access.has_role('creator') or access.user_id != actor_id or assignee_user_id != actor_id:
             raise shot_grid_error(
                 403,
                 'SG_PROJECT_ACCESS_DENIED',
@@ -1128,9 +1128,9 @@ class ShotGridVersionSubmissionService:
         row: dict[str, Any],
         actor_id: int,
     ) -> None:
-        if access.has_all_scope or access.project_role == 'director':
+        if access.has_all_scope or access.has_role('director'):
             return
-        if access.project_role != 'creator' or row['submitted_by'] != actor_id or row['assignee_user_id'] != actor_id:
+        if not access.has_role('creator') or row['submitted_by'] != actor_id or row['assignee_user_id'] != actor_id:
             raise shot_grid_error(403, 'SG_PROJECT_ACCESS_DENIED', '无权访问该版本提交')
 
     @staticmethod
@@ -1521,20 +1521,15 @@ class ShotGridVersionSubmissionService:
                 user.admin or '*:*:*' in current_user.permissions or 'shotgrid:project:all' in current_user.permissions
             )
         )
-        if has_all_scope:
-            return ShotGridProjectAccessModel(
-                projectId=project_id,
-                userId=actor_id,
-                hasAllScope=True,
-            )
         member = await ShotGridVersionSubmissionDao.lock_actor_member(db, project_id, actor_id)
-        if member is None:
+        if member is None and not has_all_scope:
             raise shot_grid_error(403, 'SG_PROJECT_ACCESS_DENIED', '当前用户已不是活动项目成员')
         return ShotGridProjectAccessModel(
             projectId=project_id,
             userId=actor_id,
-            projectRole=member.project_role,
-            hasAllScope=False,
+            projectRole=member.project_role if member is not None else None,
+            projectRoles=(member.project_roles or []) if member is not None else [],
+            hasAllScope=has_all_scope,
         )
 
     @classmethod

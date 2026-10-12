@@ -69,7 +69,19 @@ export function phaseLabel(phase) {
   return PHASE_LABELS[phase] || '未知阶段'
 }
 
+export function memberRoles(member) {
+  return member?.projectRoles ?? (member?.projectRole ? [member.projectRole] : [])
+}
+
+export function myProjectRoles(project) {
+  return project?.myProjectRoles ?? (project?.myProjectRole ? [project.myProjectRole] : [])
+}
+
 export function projectRoleMeta(role) {
+  if (Array.isArray(role)) {
+    if (!role.length) return { label: '跨项目管理员', type: 'info' }
+    return { label: role.map(value => projectRoleMeta(value).label).join('、'), type: role.includes('director') ? 'primary' : 'info' }
+  }
   if (Object.hasOwn(PROJECT_ROLE_META, role)) return PROJECT_ROLE_META[role]
   if (role === null || role === undefined || role === '') {
     return { label: '跨项目管理员', type: 'info' }

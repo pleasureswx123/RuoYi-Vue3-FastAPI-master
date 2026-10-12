@@ -42,13 +42,14 @@ const selectedCandidate = ref(null)
 const editingMember = ref(null)
 const addFormRef = ref(null)
 const editFormRef = ref(null)
-const addForm = reactive({ projectRole: '' })
-const editForm = reactive({ projectRole: '' })
+const addForm = reactive({ projectRoles: [] })
+const editForm = reactive({ projectRoles: [] })
 const memberRules = {
-  projectRole: [{
+  projectRoles: [{
     validator: (_rule, value, callback) => {
       if (!roleOptionsReady.value) callback(new Error('项目角色配置未就绪'))
-      else if (!isConfiguredProjectRole(value)) callback(new Error('请选择有效的项目角色'))
+      else if (!Array.isArray(value) || !value.length || !value.every(isConfiguredProjectRole)) callback(new Error('请选择有效的项目角色'))
+      else if (editingMember.value?.isProjectCreator && !value.includes('director')) callback(new Error('项目创建者必须保留项目管理人角色'))
       else callback()
     },
     trigger: 'change'
@@ -111,10 +112,10 @@ async function loadMembers() {
 }
 
 function resetRoleForms() {
-  const defaultRole = defaultCreatorRole.value
-  if (selectedCandidate.value) addForm.projectRole = defaultRole
-  if (editingMember.value && !isConfiguredProjectRole(editForm.projectRole)) {
-    editForm.projectRole = editingMember.value.projectRole
+  const defaultRole = defaultCreatorRole.value ? [defaultCreatorRole.value] : []
+  if (selectedCandidate.value) addForm.projectRoles = [...defaultRole]
+  if (editingMember.value && !editForm.projectRoles.every(isConfiguredProjectRole)) {
+    editForm.projectRoles = [...(editingMember.value.projectRoles || [editingMember.value.projectRole])]
   }
   addFormRef.value?.clearValidate()
   editFormRef.value?.clearValidate()
@@ -155,21 +156,21 @@ function chooseCandidate(candidate) {
   if (!roleOptionsReady.value) return
   addDialogGeneration += 1
   selectedCandidate.value = candidate
-  addForm.projectRole = defaultCreatorRole.value
+  addForm.projectRoles = defaultCreatorRole.value ? [defaultCreatorRole.value] : []
   mutationError.value = null
 }
 
 function openEdit(member) {
   editDialogGeneration += 1
   editingMember.value = member
-  editForm.projectRole = member.projectRole
+  editForm.projectRoles = [...(member.projectRoles || [member.projectRole])]
   mutationError.value = null
 }
 
 function closeAddDialog() {
   addDialogGeneration += 1
   addFormRef.value?.resetFields()
-  addForm.projectRole = defaultCreatorRole.value
+  addForm.projectRoles = defaultCreatorRole.value ? [defaultCreatorRole.value] : []
   selectedCandidate.value = null
   mutationError.value = null
 }
@@ -177,7 +178,7 @@ function closeAddDialog() {
 function closeEditDialog() {
   editDialogGeneration += 1
   editFormRef.value?.resetFields()
-  editForm.projectRole = defaultCreatorRole.value
+  editForm.projectRoles = defaultCreatorRole.value ? [defaultCreatorRole.value] : []
   editingMember.value = null
   mutationError.value = null
 }
@@ -196,7 +197,7 @@ async function submitAdd() {
 
     await addProjectMember(props.projectId, {
       userId: candidate.userId,
-      projectRole: addForm.projectRole
+      projectRoles: [...addForm.projectRoles]
     })
     if (generation !== addDialogGeneration) return
     closeAddDialog()
@@ -220,7 +221,7 @@ async function submitEdit() {
     if (!isValid || !member) return
 
     await updateProjectMember(props.projectId, member.userId, {
-      projectRole: editForm.projectRole
+      projectRoles: [...editForm.projectRoles]
     })
     if (generation !== editDialogGeneration) return
     closeEditDialog()
@@ -232,6 +233,7 @@ async function submitEdit() {
 }
 
 async function removeMember(member) {
+  if (member.isProjectCreator || mutationBusy.value) return
   try {
     await ElMessageBox.confirm(`确认将“${member.nickName || member.userName}”移出项目吗？`, '移除项目成员', {
       confirmButtonText: '确认移除', cancelButtonText: '取消', type: 'warning'
@@ -286,7 +288,7 @@ onBeforeUnmount(() => {
   <el-card class="detail-panel member-panel" shadow="never">
     <template #header>
       <header class="detail-panel__heading">
-        <div><h2>项目成员</h2><span>项目角色决定成员在当前项目中的访问与操作权限。</span></div>
+        <div><h2>项目成员</h2><span>一个项目可设置多名项目管理人，且至少保留一名。同一成员可兼任项目管理人和制作人员，添加或编辑时可多选角色。</span></div>
         <el-button v-if="compact" type="primary" plain size="small" @click="emit('show-all')">完整列表</el-button>
         <el-button :icon="Refresh" circle aria-label="刷新成员和角色配置" :loading="loading || roleOptionsLoading" @click="refreshPanel" />
       </header>
@@ -308,10 +310,10 @@ onBeforeUnmount(() => {
       <el-empty v-else-if="!members.length" :image-size="72" description="项目当前没有可展示的活动成员" />
       <el-table v-else class="member-table" :class="{ 'is-compact': compact }" :data="members" row-key="userId" v-loading="loading" empty-text="项目当前没有可展示的活动成员">
         <el-table-column label="成员" :min-width="compact ? 100 : 170" show-overflow-tooltip fixed="left">
-          <template #default="{ row }"><strong>{{ row.nickName || row.userName }}</strong><small>{{ row.userName }}</small></template>
+          <template #default="{ row }"><strong>{{ row.nickName || row.userName }}</strong><el-tag v-if="row.isProjectCreator" size="small" type="warning" effect="plain">创建者</el-tag><small>{{ row.userName }}</small></template>
         </el-table-column>
         <el-table-column label="项目角色" :width="compact ? 120 : undefined" :min-width="compact ? 120 : 130">
-          <template #default="{ row }"><el-tag size="small" effect="plain" round :type="projectRoleMeta(row.projectRole).type">{{ projectRoleMeta(row.projectRole).label }}</el-tag></template>
+          <template #default="{ row }"><el-tag v-for="role in (row.projectRoles || [row.projectRole])" :key="role" size="small" effect="plain" round :type="projectRoleMeta(role).type">{{ projectRoleMeta(role).label }}</el-tag></template>
         </el-table-column>
         <el-table-column v-if="!compact" label="部门" min-width="130"><template #default="{ row }">{{ row.deptName || '—' }}</template></el-table-column>
         <el-table-column v-if="!compact" label="加入时间" min-width="170"><template #default="{ row }">{{ formatDateTime(row.joinedTime) }}</template></el-table-column>
@@ -319,7 +321,7 @@ onBeforeUnmount(() => {
           <template #default="{ row }">
             <div class="member-actions">
               <el-button v-if="canEdit" :size="compact ? 'small' : 'default'" text type="primary" @click="openEdit(row)">编辑</el-button>
-              <el-button v-if="canRemove" :size="compact ? 'small' : 'default'" text type="danger" :disabled="mutationBusy" @click="removeMember(row)">移除</el-button>
+              <el-button v-if="canRemove && !row.isProjectCreator" :size="compact ? 'small' : 'default'" text type="danger" :disabled="mutationBusy" @click="removeMember(row)">移除</el-button>
             </div>
           </template>
         </el-table-column>
@@ -330,7 +332,7 @@ onBeforeUnmount(() => {
     <ProjectModal v-if="selectedCandidate" title="添加项目成员" :busy="mutationBusy" @close="closeAddDialog">
       <el-form ref="addFormRef" :model="addForm" :rules="memberRules" class="member-form" size="large" label-position="top">
         <div class="member-identity"><strong>{{ selectedCandidate.nickName || selectedCandidate.userName }}</strong><span>{{ selectedCandidate.userName }} · {{ selectedCandidate.deptName || '未分配部门' }}</span></div>
-        <el-form-item label="项目角色" prop="projectRole" required><el-select v-model="addForm.projectRole" class="sg-select" :loading="roleOptionsLoading" :disabled="!roleOptionsReady"><el-option v-for="option in roleOptions" :key="`${option.projectRole}:${option.systemRoleId}`" :label="projectRoleOptionLabel(option)" :value="option.projectRole" /></el-select></el-form-item>
+        <el-form-item label="项目角色" prop="projectRoles" required><el-select multiple v-model="addForm.projectRoles" class="sg-select" :loading="roleOptionsLoading" :disabled="!roleOptionsReady"><el-option v-for="option in roleOptions" :key="`${option.projectRole}:${option.systemRoleId}`" :label="projectRoleOptionLabel(option)" :value="option.projectRole" /></el-select></el-form-item>
         <el-alert v-if="roleOptionsLoading" title="正在加载项目角色配置…" type="info" show-icon :closable="false" />
         <el-alert v-else-if="roleOptionsError" :title="roleOptionsError.title" :description="roleOptionsError.message" type="error" show-icon :closable="false"><el-button v-if="roleOptionsError.retryable" link type="danger" @click="loadRoleOptions">重试</el-button></el-alert>
         <el-alert v-else-if="roleConfigurationMessage" title="项目角色配置缺失" :description="roleConfigurationMessage" type="error" show-icon :closable="false"><el-button link type="danger" @click="loadRoleOptions">重新检查</el-button></el-alert>
@@ -342,7 +344,8 @@ onBeforeUnmount(() => {
     <ProjectModal v-if="editingMember" title="编辑项目成员" :busy="mutationBusy" @close="closeEditDialog">
       <el-form ref="editFormRef" :model="editForm" :rules="memberRules" class="member-form" size="large" label-position="top">
         <div class="member-identity"><strong>{{ editingMember.nickName || editingMember.userName }}</strong><span>{{ editingMember.userName }}</span></div>
-        <el-form-item label="项目角色" prop="projectRole" required><el-select v-model="editForm.projectRole" class="sg-select" :loading="roleOptionsLoading" :disabled="!roleOptionsReady"><el-option v-for="option in roleOptions" :key="`${option.projectRole}:${option.systemRoleId}`" :label="projectRoleOptionLabel(option)" :value="option.projectRole" /></el-select></el-form-item>
+        <el-form-item label="项目角色" prop="projectRoles" required><el-select multiple v-model="editForm.projectRoles" class="sg-select" :loading="roleOptionsLoading" :disabled="!roleOptionsReady"><el-option v-for="option in roleOptions" :key="`${option.projectRole}:${option.systemRoleId}`" :label="projectRoleOptionLabel(option)" :value="option.projectRole" :disabled="editingMember.isProjectCreator && option.projectRole === 'director'" /></el-select></el-form-item>
+        <el-alert v-if="editingMember.isProjectCreator" title="创建者固定担任项目管理人，可增减制作人员角色。" type="info" :closable="false" />
         <el-alert v-if="roleOptionsLoading" title="正在加载项目角色配置…" type="info" show-icon :closable="false" />
         <el-alert v-else-if="roleOptionsError" :title="roleOptionsError.title" :description="roleOptionsError.message" type="error" show-icon :closable="false"><el-button v-if="roleOptionsError.retryable" link type="danger" @click="loadRoleOptions">重试</el-button></el-alert>
         <el-alert v-else-if="roleConfigurationMessage" title="项目角色配置缺失" :description="roleConfigurationMessage" type="error" show-icon :closable="false"><el-button link type="danger" @click="loadRoleOptions">重新检查</el-button></el-alert>

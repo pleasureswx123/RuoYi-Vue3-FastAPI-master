@@ -12,6 +12,8 @@ import {
   ElPagination,
   ElProgress,
   ElSkeleton,
+  ElSelect,
+  ElOption,
   ElTable,
   ElTableColumn,
   ElTag
@@ -98,6 +100,8 @@ const formComponents = {
   ElInput,
   ElPagination,
   ElSkeleton,
+  ElSelect,
+  ElOption,
   ElTable,
   ElTableColumn,
   ElTag
@@ -646,19 +650,22 @@ describe('项目管理页面', () => {
       deptName: '制作部'
     })
     await nextTick()
+    await wrapper.find('[aria-label="刷新成员和角色配置"]').trigger('click')
+    await flushPromises()
     const form = wrapper.findComponent(ElForm)
+    expect(form.props('model').projectRoles).toEqual(['creator'])
     const submitButton = buttonByText(form, '添加')
-    form.props('model').projectRole = 'owner'
+    form.props('model').projectRoles = []
     await nextTick()
     await submitButton.trigger('click')
     await flushPromises()
     expect(addProjectMember).not.toHaveBeenCalled()
 
-    form.props('model').projectRole = 'creator'
+    form.props('model').projectRoles = ['creator']
     await nextTick()
     await submitButton.trigger('click')
     await flushPromises()
-    expect(addProjectMember).toHaveBeenCalledWith(8, { userId: 21, projectRole: 'creator' })
+    expect(addProjectMember).toHaveBeenCalledWith(8, { userId: 21, projectRoles: ['creator'] })
     expect(submitButton.props('nativeType')).toBe('button')
     wrapper.unmount()
   })
@@ -680,17 +687,80 @@ describe('项目管理页面', () => {
     await nextTick()
     const form = wrapper.findComponent(ElForm)
     const submitButton = buttonByText(form, '保存')
-    form.props('model').projectRole = 'owner'
+    form.props('model').projectRoles = []
     await nextTick()
     await submitButton.trigger('click')
     await flushPromises()
     expect(updateProjectMember).not.toHaveBeenCalled()
 
-    form.props('model').projectRole = 'director'
+    form.props('model').projectRoles = ['director', 'creator']
     await nextTick()
     await submitButton.trigger('click')
     await flushPromises()
-    expect(updateProjectMember).toHaveBeenCalledWith(8, 21, { projectRole: 'director' })
+    expect(updateProjectMember).toHaveBeenCalledWith(8, 21, { projectRoles: ['director', 'creator'] })
+    wrapper.unmount()
+  })
+
+  it('创建者显示标识、隐藏移除且固定管理人角色，同时允许兼任制作', async () => {
+    getProjectMembers.mockResolvedValue({ rows: [{ userId: 21, userName: 'owner', nickName: '创建者甲', isProjectCreator: true, projectRoles: ['director'], projectRole: 'director' }] })
+    const wrapper = mount(ProjectMemberPanel, {
+      attachTo: document.body,
+      props: { projectId: 8, canManage: true, permissions: ['shotgrid:member:edit', 'shotgrid:member:remove'] },
+      global: { components: { ...formComponents, ElSelect, ElOption }, stubs: { ProjectModal: projectModalStub, MemberCandidateSelect: true, ProjectStatePanel: true } }
+    })
+    await flushPromises()
+    expect(wrapper.findAllComponents(ElTag).some(tag => tag.text() === '创建者')).toBe(true)
+    expect(wrapper.find('.member-actions').text()).not.toContain('移除')
+    await wrapper.find('.member-actions button').trigger('click')
+    await flushPromises()
+    const select = wrapper.findComponent(ElSelect)
+    await select.find('.el-select__wrapper').trigger('click')
+    await flushPromises()
+    const manager = [...document.querySelectorAll('.el-select-dropdown__item')].find(option => option.textContent.includes('项目管理人'))
+    expect(manager.classList.contains('is-disabled')).toBe(true)
+    manager.click()
+    await flushPromises()
+    expect(select.props('modelValue')).toEqual(['director'])
+    const creator = [...document.querySelectorAll('.el-select-dropdown__item')].find(option => option.textContent.includes('制作人员'))
+    creator.click()
+    await flushPromises()
+    await buttonByText(wrapper.findComponent(ElForm), '保存').trigger('click')
+    await flushPromises()
+    expect(updateProjectMember).toHaveBeenCalledWith(8, 21, { projectRoles: ['director', 'creator'] })
+    wrapper.unmount()
+  })
+
+  it('成员角色使用真实多选组件，保存双角色并再次编辑完整回显', async () => {
+    const member = { userId: 21, userName: 'creator01', nickName: '制作人甲', projectRole: 'creator', projectRoles: ['creator'], joinedTime: '2026-08-18T10:00:00' }
+    getProjectMembers.mockResolvedValue({ rows: [member] })
+    const wrapper = mount(ProjectMemberPanel, {
+      attachTo: document.body,
+      props: { projectId: 8, canManage: true, permissions: ['shotgrid:member:edit'] },
+      global: {
+        components: { ...formComponents, ElSelect, ElOption },
+        stubs: { ProjectModal: projectModalStub, MemberCandidateSelect: true, ProjectStatePanel: true }
+      }
+    })
+    await flushPromises()
+    await wrapper.find('.member-actions button').trigger('click')
+    await flushPromises()
+    const select = wrapper.findComponent(ElSelect)
+    expect(select.props('multiple')).toBe(true)
+    await select.find('.el-select__wrapper').trigger('click')
+    await flushPromises()
+    const managerOption = [...document.querySelectorAll('.el-select-dropdown__item')].find(option => option.textContent.includes('项目管理人'))
+    expect(managerOption).toBeTruthy()
+    managerOption.click()
+    await flushPromises()
+    expect(wrapper.findComponent(ElForm).props('model').projectRoles).toEqual(['creator', 'director'])
+    getProjectMembers.mockResolvedValue({ rows: [{ ...member, projectRole: 'director', projectRoles: ['director', 'creator'] }] })
+    await buttonByText(wrapper.findComponent(ElForm), '保存').trigger('click')
+    await flushPromises()
+    expect(updateProjectMember).toHaveBeenCalledWith(8, 21, { projectRoles: ['creator', 'director'] })
+    expect(wrapper.findAllComponents(ElTag).map(tag => tag.text())).toEqual(expect.arrayContaining(['项目管理人', '制作人员']))
+    await wrapper.find('.member-actions button').trigger('click')
+    await flushPromises()
+    expect(wrapper.findComponent(ElSelect).props('modelValue')).toEqual(['director', 'creator'])
     wrapper.unmount()
   })
 

@@ -227,9 +227,7 @@ class ShotGridReviewService:
             context.get('project_status') != 'archived'
             and cls._can_edit_prompt(access, context.get('assignee_user_id'), current_user)
         )
-        values['ai_params'] = (
-            row.get('ai_params') if access.has_all_scope or access.project_role == 'director' else None
-        )
+        values['ai_params'] = row.get('ai_params') if access.has_all_scope or access.has_role('director') else None
         values['production_target'] = cls._version_production_target(row)
         version_files = [
             ShotGridVersionFileModel.model_validate(
@@ -283,7 +281,7 @@ class ShotGridReviewService:
     ) -> bool:
         permissions = current_user.permissions
         return bool(
-            access.project_role == 'creator'
+            access.has_role('creator')
             and access.user_id == assignee_id
             and ('shotgrid:version:add' in permissions or '*:*:*' in permissions)
         )
@@ -2156,7 +2154,9 @@ class ShotGridReviewService:
         member = await ShotGridProjectMemberDao.get_member(db, project_id, user_id)
         if member is None:
             raise shot_grid_error(403, 'SG_PROJECT_ACCESS_DENIED', '无权访问该项目')
-        return access.model_copy(update={'project_role': member.project_role})
+        return access.model_copy(
+            update={'project_role': member.project_role, 'project_roles': member.project_roles or []}
+        )
 
     @staticmethod
     def _require_access_context(
@@ -2170,7 +2170,7 @@ class ShotGridReviewService:
 
     @staticmethod
     def _require_director(access: ShotGridProjectAccessModel) -> None:
-        if access.has_all_scope or access.project_role == 'director':
+        if access.has_all_scope or access.has_role('director'):
             return
         raise shot_grid_error(403, 'SG_PROJECT_ACCESS_DENIED', '只有项目管理人或管理员可以执行审核动作')
 

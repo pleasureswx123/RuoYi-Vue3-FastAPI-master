@@ -1083,7 +1083,7 @@ class ShotGridAssetCrudService:
             and user.user_id is not None
             and access.project_id == project_id
             and access.user_id == user.user_id
-            and access.project_role == 'creator'
+            and access.has_role('creator')
             and assignee_user_id == user.user_id
             and assignee_valid
             and project_status not in {'completed', 'archived'}
@@ -1180,7 +1180,7 @@ class ShotGridAssetCrudService:
             and user.user_id is not None
             and access.project_id == project_id
             and access.user_id == user.user_id
-            and (access.has_all_scope or access.project_role == 'director')
+            and (access.has_all_scope or access.has_role('director'))
             and project_status not in {'completed', 'archived'}
             and storage_status == 'ready'
         )

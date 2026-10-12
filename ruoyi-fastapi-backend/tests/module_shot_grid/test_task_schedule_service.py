@@ -132,7 +132,7 @@ def _command(
 
 def _wire_success(monkeypatch: pytest.MonkeyPatch, task: SimpleNamespace, *, overlaps: list[int] | None = None) -> dict:
     project = SimpleNamespace(project_id=PROJECT_ID, project_status='active', del_flag='0')
-    member = SimpleNamespace(project_role='director', member_status='active')
+    member = SimpleNamespace(project_role='director', project_roles=['director'], member_status='active')
     conflict_task = _task(
         current_start=datetime(2026, 9, 2, 9),
         current_end=datetime(2026, 9, 4, 18),

@@ -25,6 +25,7 @@ drop table if exists sg_scene;
 drop table if exists sg_asset_item;
 drop table if exists sg_storage_operation;
 drop table if exists sg_project_storage;
+drop table if exists sg_project_member_role;
 drop table if exists sg_project_member;
 drop table if exists sg_import_batch;
 drop table if exists sg_episode;
@@ -1575,6 +1576,7 @@ COMMENT ON COLUMN sg_managed_user_role.create_time IS '创建时间';
 
 -- sg_project
 CREATE TABLE sg_project (
+    creator_user_id BIGINT,
 	project_id BIGSERIAL NOT NULL,
 	project_code VARCHAR(12) NOT NULL,
 	project_name VARCHAR(200) NOT NULL,
@@ -3271,7 +3273,7 @@ create table if not exists alembic_version (
     constraint alembic_version_pkc primary key (version_num)
 );
 delete from alembic_version;
-insert into alembic_version(version_num) values ('20260908_27');
+insert into alembic_version(version_num) values ('20261012_38');
 
 
 CREATE OR REPLACE FUNCTION "find_in_set"(int8, varchar)
@@ -3364,3 +3366,23 @@ $$ IMMUTABLE STRICT LANGUAGE PLPGSQL;
 
 -- 退回修改交接历史（仅追加，随任务保留）
 ALTER TABLE sg_task ADD COLUMN IF NOT EXISTS revision_transfers JSONB NOT NULL DEFAULT '[]'::jsonb;
+
+
+-- 项目成员多角色；旧单值列仅作为兼容投影。
+CREATE TABLE IF NOT EXISTS sg_project_member_role (
+    project_id BIGINT NOT NULL,
+    user_id BIGINT NOT NULL,
+    project_role VARCHAR(20) NOT NULL,
+    create_by VARCHAR(64) NOT NULL DEFAULT '',
+    create_time TIMESTAMP(0) WITHOUT TIME ZONE NOT NULL,
+    PRIMARY KEY (project_id, user_id, project_role),
+    CONSTRAINT fk_sg_member_role_member FOREIGN KEY (project_id, user_id)
+        REFERENCES sg_project_member (project_id, user_id) ON DELETE RESTRICT,
+    CONSTRAINT ck_sg_member_role CHECK (project_role IN ('director', 'creator'))
+);
+CREATE INDEX IF NOT EXISTS idx_sg_member_role_project_role
+    ON sg_project_member_role (project_id, project_role, user_id);
+COMMENT ON TABLE sg_project_member_role IS '项目成员角色关联表';
+INSERT INTO sg_project_member_role (project_id, user_id, project_role, create_by, create_time)
+SELECT project_id, user_id, project_role, create_by, create_time FROM sg_project_member
+ON CONFLICT DO NOTHING;

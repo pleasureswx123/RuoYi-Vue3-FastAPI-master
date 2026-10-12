@@ -82,7 +82,7 @@ def test_asset_rollup_projects_preparing_counts_and_only_valid_startable_items()
     compiled = _sql(select(rollup))
     assert "sg_task.task_status = 'preparing'" in compiled
     assert "sg_project_member.member_status = 'active'" in compiled
-    assert "sg_project_member.project_role = 'creator'" in compiled
+    assert "sg_project_member_role.project_role = 'creator'" in compiled
     assert "sys_user.status = '0'" in compiled
 
 

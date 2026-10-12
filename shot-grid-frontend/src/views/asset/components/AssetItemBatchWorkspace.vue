@@ -1,4 +1,5 @@
 <script setup>
+import { myProjectRoles } from '@/views/project/projectPresentation'
 import { createIdempotencyState } from '@/utils/idempotency'
 import { versionSummaryLabel } from '@/components/version/versionPresentation'
 import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
@@ -45,7 +46,7 @@ let generation = 0
 let disposed = false
 let controller
 const permitted = permission => session.permissions.includes('*:*:*') || session.permissions.includes(permission)
-const manager = computed(() => project.value && !['completed', 'archived'].includes(project.value.projectStatus) && (project.value.myProjectRole === 'director' || permitted('shotgrid:project:all')))
+const manager = computed(() => project.value && !['completed', 'archived'].includes(project.value.projectStatus) && (myProjectRoles(project.value).includes('director') || permitted('shotgrid:project:all')))
 const blocked = computed(() => loading.value || busy.value || Boolean(error.value) || attempted.value)
 const childOpen = computed(() => feedbackOpen.value || Boolean(adjustment.value) || Boolean(append.value))
 const current = token => !disposed && visible.value && token === generation

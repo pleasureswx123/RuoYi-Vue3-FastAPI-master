@@ -6,6 +6,7 @@ param(
     [string]$RemoteEnvFile = '/etc/ruoyi-shot-grid/production.env',
     [string]$RemoteStateDir = '/var/lib/ruoyi-shot-grid',
     [switch]$SkipBuild,
+    [switch]$StopBackendForMigration,
     [string]$DebianMirror = 'http://mirrors.cloud.tencent.com/debian',
     [string]$DebianSecurityMirror = 'http://mirrors.cloud.tencent.com/debian-security',
     [string]$PipIndexUrl = 'https://mirrors.aliyun.com/pypi/simple',
@@ -174,6 +175,7 @@ for image_name in '$backendImage' '$adminImage' '$businessImage'; do
   docker image inspect "`$image_name" >/dev/null
 done
 DEPLOY_SKIP_BUILD=1 \
+DEPLOY_STOP_BACKEND_FOR_MIGRATION='$([int]$StopBackendForMigration.IsPresent)' \
 RUOYI_ENV_FILE='$RemoteEnvFile' \
 RUOYI_DEPLOY_STATE_DIR='$RemoteStateDir' \
 SERVER_IP='192.168.10.122' \

@@ -1,12 +1,12 @@
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import ColumnElement, case, func, select, update
+from sqlalchemy import ColumnElement, case, delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from module_admin.entity.do.dept_do import SysDept
 from module_admin.entity.do.user_do import SysUser
-from module_shot_grid.entity.do.project_do import ShotGridProjectMember
+from module_shot_grid.entity.do.project_do import ShotGridProject, ShotGridProjectMember, ShotGridProjectMemberRole
 from module_shot_grid.entity.do.task_do import ShotGridTask
 from module_shot_grid.entity.vo.project_member_vo import ProjectRole
 
@@ -24,7 +24,9 @@ class ShotGridProjectMemberDao:
         """按项目和用户查询成员关系。"""
         return (
             await db.execute(
-                select(ShotGridProjectMember).where(
+                select(ShotGridProjectMember)
+                .execution_options(populate_existing=True)
+                .where(
                     ShotGridProjectMember.project_id == project_id,
                     ShotGridProjectMember.user_id == user_id,
                     ShotGridProjectMember.member_status == 'active',
@@ -50,6 +52,7 @@ class ShotGridProjectMemberDao:
                     ShotGridProjectMember.member_status == 'active',
                 )
                 .with_for_update()
+                .execution_options(populate_existing=True)
             )
         ).scalar_one_or_none()
 
@@ -70,6 +73,7 @@ class ShotGridProjectMemberDao:
                     ShotGridProjectMember.user_id == user_id,
                 )
                 .with_for_update()
+                .execution_options(populate_existing=True)
             )
         ).scalar_one_or_none()
 
@@ -108,6 +112,9 @@ class ShotGridProjectMemberDao:
     ) -> list[dict[str, Any]]:
         statement = (
             select(
+                (ShotGridProject.creator_user_id == ShotGridProjectMember.user_id)
+                .is_(True)
+                .label('is_project_creator'),
                 SysUser.user_id,
                 SysUser.user_name,
                 SysUser.nick_name,
@@ -115,11 +122,13 @@ class ShotGridProjectMemberDao:
                 SysUser.dept_id,
                 SysDept.dept_name,
                 ShotGridProjectMember.project_role,
+                ShotGridProjectMember.project_roles,
                 ShotGridProjectMember.producer_code,
                 ShotGridProjectMember.joined_time,
                 SysUser.status.label('account_status'),
             )
             .select_from(ShotGridProjectMember)
+            .join(ShotGridProject, ShotGridProject.project_id == ShotGridProjectMember.project_id)
             .join(SysUser, SysUser.user_id == ShotGridProjectMember.user_id)
             .outerjoin(SysDept, SysDept.dept_id == SysUser.dept_id)
             .where(
@@ -128,11 +137,12 @@ class ShotGridProjectMemberDao:
             )
         )
         if project_role is not None:
-            statement = statement.where(ShotGridProjectMember.project_role == project_role)
+            statement = statement.where(ShotGridProjectMember.has_role(project_role))
         rows = (
             await db.execute(
                 statement.order_by(
-                    case((ShotGridProjectMember.project_role == 'director', 0), else_=1),
+                    case((ShotGridProject.creator_user_id == ShotGridProjectMember.user_id, 0), else_=1),
+                    case((ShotGridProjectMember.has_role('director'), 0), else_=1),
                     ShotGridProjectMember.joined_time,
                     ShotGridProjectMember.user_id,
                 )
@@ -151,6 +161,9 @@ class ShotGridProjectMemberDao:
             (
                 await db.execute(
                     select(
+                        (ShotGridProject.creator_user_id == ShotGridProjectMember.user_id)
+                        .is_(True)
+                        .label('is_project_creator'),
                         SysUser.user_id,
                         SysUser.user_name,
                         SysUser.nick_name,
@@ -158,11 +171,13 @@ class ShotGridProjectMemberDao:
                         SysUser.dept_id,
                         SysDept.dept_name,
                         ShotGridProjectMember.project_role,
+                        ShotGridProjectMember.project_roles,
                         ShotGridProjectMember.producer_code,
                         ShotGridProjectMember.joined_time,
                         SysUser.status.label('account_status'),
                     )
                     .select_from(ShotGridProjectMember)
+                    .join(ShotGridProject, ShotGridProject.project_id == ShotGridProjectMember.project_id)
                     .join(SysUser, SysUser.user_id == ShotGridProjectMember.user_id)
                     .outerjoin(SysDept, SysDept.dept_id == SysUser.dept_id)
                     .where(
@@ -189,6 +204,7 @@ class ShotGridProjectMemberDao:
         statement = (
             select(func.count())
             .select_from(ShotGridProjectMember)
+            .join(ShotGridProject, ShotGridProject.project_id == ShotGridProjectMember.project_id)
             .where(
                 ShotGridProjectMember.project_id == project_id,
                 ShotGridProjectMember.member_status == 'active',
@@ -206,9 +222,10 @@ class ShotGridProjectMemberDao:
                 await db.execute(
                     select(func.count())
                     .select_from(ShotGridProjectMember)
+                    .join(ShotGridProject, ShotGridProject.project_id == ShotGridProjectMember.project_id)
                     .where(
                         ShotGridProjectMember.project_id == project_id,
-                        ShotGridProjectMember.project_role == 'director',
+                        ShotGridProjectMember.has_role('director'),
                         ShotGridProjectMember.member_status == 'active',
                     )
                 )
@@ -298,3 +315,32 @@ class ShotGridProjectMemberDao:
                 removed_time=removed_time,
             )
         )
+
+    @classmethod
+    async def replace_roles(cls, db: AsyncSession, project_id: int, user_id: int, roles: list[str], actor: str) -> None:
+        """项目锁内替换角色关系，调用方负责事务和平台绑定同步。"""
+        await db.execute(
+            delete(ShotGridProjectMemberRole).where(
+                ShotGridProjectMemberRole.project_id == project_id,
+                ShotGridProjectMemberRole.user_id == user_id,
+                ShotGridProjectMemberRole.project_role.not_in(roles),
+            )
+        )
+        existing = set(
+            (
+                await db.scalars(
+                    select(ShotGridProjectMemberRole.project_role).where(
+                        ShotGridProjectMemberRole.project_id == project_id,
+                        ShotGridProjectMemberRole.user_id == user_id,
+                    )
+                )
+            ).all()
+        )
+        for role in roles:
+            if role not in existing:
+                db.add(
+                    ShotGridProjectMemberRole(
+                        project_id=project_id, user_id=user_id, project_role=role, create_by=actor
+                    )
+                )
+        await db.flush()

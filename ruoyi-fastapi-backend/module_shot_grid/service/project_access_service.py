@@ -33,21 +33,15 @@ class ShotGridProjectAccessService:
         has_all_scope = bool(
             user.admin or '*:*:*' in current_user.permissions or 'shotgrid:project:all' in current_user.permissions
         )
-        if has_all_scope:
-            return ShotGridProjectAccessModel(
-                projectId=project_id,
-                userId=user.user_id,
-                hasAllScope=True,
-            )
-
         member = await ShotGridProjectMemberDao.get_member(db, project_id, user.user_id)
-        if member is None:
+        if member is None and not has_all_scope:
             raise shot_grid_error(403, 'SG_PROJECT_ACCESS_DENIED', '无权访问该项目')
         return ShotGridProjectAccessModel(
             projectId=project_id,
             userId=user.user_id,
-            projectRole=member.project_role,
-            hasAllScope=False,
+            projectRole=member.project_role if member is not None else None,
+            projectRoles=(member.project_roles or []) if member is not None else [],
+            hasAllScope=has_all_scope,
         )
 
     @classmethod
@@ -57,6 +51,6 @@ class ShotGridProjectAccessService:
         allowed_roles: set[str],
     ) -> ShotGridProjectAccessModel:
         """校验项目内角色；拥有跨项目范围的管理员按平台动作权限放行。"""
-        if access.has_all_scope or access.project_role in allowed_roles:
+        if access.has_all_scope or bool(set(access.project_roles) & allowed_roles):
             return access
         raise shot_grid_error(403, 'SG_PROJECT_ACCESS_DENIED', '当前项目角色无权执行该操作')

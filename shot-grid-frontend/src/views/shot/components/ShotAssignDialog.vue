@@ -1,4 +1,5 @@
 <script setup>
+import { memberRoles } from '@/views/project/projectPresentation'
 import { computed, reactive, ref } from 'vue'
 import { ElCollapse, ElCollapseItem } from 'element-plus'
 import 'element-plus/es/components/collapse/style/css'
@@ -30,7 +31,7 @@ const requestError = ref(null)
 const form = reactive({
   assigneeUserId: props.shot.task?.assignee?.userId ? String(props.shot.task.assignee.userId) : ''
 })
-const candidates = computed(() => props.members.filter(member => member.projectRole === 'creator'))
+const candidates = computed(() => props.members.filter(member => memberRoles(member).includes('creator')))
 const isReassign = computed(() => Boolean(props.shot.task))
 const assignFormRules = {
   assigneeUserId: [{

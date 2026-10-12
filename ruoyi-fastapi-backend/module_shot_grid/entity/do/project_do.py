@@ -4,6 +4,7 @@ from sqlalchemy import (
     BigInteger,
     CheckConstraint,
     Column,
+    ColumnElement,
     Date,
     ForeignKey,
     ForeignKeyConstraint,
@@ -13,8 +14,11 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    select,
     text,
 )
+from sqlalchemy.ext.hybrid import hybrid_method
+from sqlalchemy.orm import column_property
 
 from config.database import Base
 from module_shot_grid.entity.do.base_do import (
@@ -33,6 +37,7 @@ class ShotGridProject(ShotGridMutableAuditMixin, Base):
     __tablename__ = 'sg_project'
 
     project_id = Column(BigInteger, primary_key=True, nullable=False, autoincrement=True, comment='项目ID')
+    creator_user_id = Column(BigInteger, nullable=True, comment='固定项目创建者用户ID，历史无法确认时为空')
     project_code = Column(String(12), nullable=False, comment='项目代号及产出文件前缀')
     project_name = Column(String(200), nullable=False, comment='项目名称')
     project_type = Column(
@@ -146,6 +151,26 @@ class ShotGridProjectPurge(Base):
     )
 
 
+class ShotGridProjectMemberRole(ShotGridCreateAuditMixin, Base):
+    """项目成员角色关联；授权事实来源。"""
+
+    __tablename__ = 'sg_project_member_role'
+    project_id = Column(BigInteger, primary_key=True)
+    user_id = Column(BigInteger, primary_key=True)
+    project_role = Column(String(20), primary_key=True)
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ['project_id', 'user_id'],
+            ['sg_project_member.project_id', 'sg_project_member.user_id'],
+            name='fk_sg_member_role_member',
+            ondelete='RESTRICT',
+        ),
+        CheckConstraint("project_role in ('director', 'creator')", name='ck_sg_member_role'),
+        Index('idx_sg_member_role_project_role', 'project_id', 'project_role', 'user_id'),
+        {'comment': '项目成员角色关联表'},
+    )
+
+
 class ShotGridProjectMember(Base):
     """
     Shot Grid 项目成员表。
@@ -168,6 +193,30 @@ class ShotGridProjectMember(Base):
         comment='用户ID',
     )
     project_role = Column(String(20), nullable=False, comment='项目角色')
+    project_roles = column_property(
+        select(func.array_agg(ShotGridProjectMemberRole.project_role))
+        .where(ShotGridProjectMemberRole.project_id == project_id, ShotGridProjectMemberRole.user_id == user_id)
+        .correlate_except(ShotGridProjectMemberRole)
+        .scalar_subquery()
+    )
+
+    @hybrid_method
+    def has_role(self, role: str) -> bool:
+        return role in (self.project_roles or [])
+
+    @has_role.expression
+    def has_role(self, role: str) -> ColumnElement[bool]:
+        return (
+            select(ShotGridProjectMemberRole.user_id)
+            .where(
+                ShotGridProjectMemberRole.project_id == self.project_id,
+                ShotGridProjectMemberRole.user_id == self.user_id,
+                ShotGridProjectMemberRole.project_role == role,
+            )
+            .correlate_except(ShotGridProjectMemberRole)
+            .exists()
+        )
+
     producer_code = Column(String(12), nullable=True, comment='制作人文件名缩写')
     member_status = Column(String(20), nullable=False, server_default='active', comment='成员状态')
     joined_time = Column(SHOT_GRID_DATETIME, nullable=False, default=datetime.now, comment='加入时间')

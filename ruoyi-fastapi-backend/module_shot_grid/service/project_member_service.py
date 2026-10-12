@@ -46,7 +46,7 @@ class ShotGridProjectMemberService:
         _, actor_name, dept_name = ShotGridProjectService._actor(current_user)
         try:
             await ShotGridPlatformRoleService.lock_target_users(db, {command.user_id})
-            await cls._lock_mutable_project(db, project_id)
+            project = await cls._lock_mutable_project(db, project_id)
             await cls._refresh_write_access(db, project_id, current_user)
             existing = await ShotGridProjectMemberDao.get_member_including_removed_for_update(
                 db, project_id, command.user_id
@@ -65,6 +65,8 @@ class ShotGridProjectMemberService:
                     '项目成员账号不存在、已停用或已删除',
                     details={'userIds': [command.user_id]},
                 )
+            if getattr(project, 'creator_user_id', None) == command.user_id and 'director' not in command.project_roles:
+                raise shot_grid_error(409, 'SG_PROJECT_CREATOR_PROTECTED', '项目创建者必须保留项目管理人角色')
             if command.producer_code and await ShotGridProjectMemberDao.producer_code_exists(
                 db, project_id, command.producer_code
             ):
@@ -99,6 +101,9 @@ class ShotGridProjectMemberService:
                         'removed_time': None,
                     },
                 )
+            await ShotGridProjectMemberDao.replace_roles(
+                db, project_id, command.user_id, command.project_roles, actor_name
+            )
             platform_role_changes = await ShotGridPlatformRoleService.synchronize_user_roles(
                 db,
                 {command.user_id},
@@ -114,7 +119,8 @@ class ShotGridProjectMemberService:
                 project_id=project_id,
                 user_id=command.user_id,
                 payload={
-                    'projectRole': command.project_role,
+                    'beforeProjectRoles': list(existing.project_roles or []) if existing is not None else [],
+                    'projectRoles': command.project_roles,
                     'producerCode': command.producer_code,
                 },
                 platform_role_changes=platform_role_changes,
@@ -140,7 +146,7 @@ class ShotGridProjectMemberService:
         return result
 
     @classmethod
-    async def update_member(
+    async def update_member(  # noqa: PLR0912
         cls,
         db: AsyncSession,
         project_id: int,
@@ -152,7 +158,7 @@ class ShotGridProjectMemberService:
         _, actor_name, dept_name = ShotGridProjectService._actor(current_user)
         try:
             await ShotGridPlatformRoleService.lock_target_users(db, {user_id})
-            await cls._lock_mutable_project(db, project_id)
+            project = await cls._lock_mutable_project(db, project_id)
             await cls._refresh_write_access(db, project_id, current_user)
             member = await ShotGridProjectMemberDao.get_member_for_update(db, project_id, user_id)
             if member is None:
@@ -170,25 +176,30 @@ class ShotGridProjectMemberService:
                     details={'userIds': [user_id]},
                 )
 
+            if (
+                getattr(project, 'creator_user_id', None) == user_id
+                and 'project_roles' in command.model_fields_set
+                and 'director' not in command.project_roles
+            ):
+                raise shot_grid_error(409, 'SG_PROJECT_CREATOR_PROTECTED', '项目创建者必须保留项目管理人角色')
+            before_roles = list(member.project_roles or [])
             values: dict[str, str | None] = {}
-            if 'project_role' in command.model_fields_set:
-                role_changed = command.project_role != member.project_role
+            if 'project_roles' in command.model_fields_set:
                 if (
-                    member.project_role == 'director'
-                    and command.project_role != 'director'
+                    'director' in (member.project_roles or [])
+                    and 'director' not in command.project_roles
                     and await ShotGridProjectMemberDao.count_directors(db, project_id) <= 1
                 ):
                     raise shot_grid_error(409, 'SG_LAST_DIRECTOR_REQUIRED', '项目必须至少保留一名项目管理人')
                 if (
-                    role_changed
-                    and member.project_role == 'creator'
-                    and command.project_role == 'director'
+                    'creator' in before_roles
+                    and 'creator' not in command.project_roles
                     and await ShotGridProjectMemberDao.has_active_tasks(db, project_id, user_id)
                 ):
                     raise shot_grid_error(
                         409,
                         'SG_MEMBER_ROLE_TASK_CONFLICT',
-                        '仍负责活动任务的制作人员不能改为项目管理人，请先完成改派',
+                        '仍负责活动任务的成员不能撤销制作人员角色，请先完成改派',
                     )
                 values['project_role'] = command.project_role
 
@@ -210,7 +221,10 @@ class ShotGridProjectMemberService:
                     raise shot_grid_error(409, 'SG_PRODUCER_CODE_CONFLICT', '同一项目内制作人缩写重复')
                 values['producer_code'] = command.producer_code
 
-            await ShotGridProjectMemberDao.update_member(db, project_id, user_id, values)
+            if values:
+                await ShotGridProjectMemberDao.update_member(db, project_id, user_id, values)
+            if 'project_roles' in command.model_fields_set:
+                await ShotGridProjectMemberDao.replace_roles(db, project_id, user_id, command.project_roles, actor_name)
             platform_role_changes = await ShotGridPlatformRoleService.synchronize_user_roles(
                 db,
                 {user_id},
@@ -226,9 +240,8 @@ class ShotGridProjectMemberService:
                 project_id=project_id,
                 user_id=user_id,
                 payload={
-                    'projectRole': command.project_role
-                    if 'project_role' in command.model_fields_set
-                    else member.project_role,
+                    'beforeProjectRoles': before_roles,
+                    'projectRoles': command.project_roles if command.project_roles is not None else before_roles,
                     'producerCode': command.producer_code
                     if 'producer_code' in command.model_fields_set
                     else member.producer_code,
@@ -263,13 +276,15 @@ class ShotGridProjectMemberService:
         actor_user_id, actor_name, dept_name = ShotGridProjectService._actor(current_user)
         try:
             await ShotGridPlatformRoleService.lock_target_users(db, {user_id})
-            await cls._lock_mutable_project(db, project_id)
+            project = await cls._lock_mutable_project(db, project_id)
             await cls._refresh_write_access(db, project_id, current_user)
             member = await ShotGridProjectMemberDao.get_member_for_update(db, project_id, user_id)
             if member is None:
                 raise shot_grid_error(404, 'SG_MEMBER_NOT_FOUND', '项目成员不存在')
+            if getattr(project, 'creator_user_id', None) == user_id:
+                raise shot_grid_error(409, 'SG_PROJECT_CREATOR_PROTECTED', '项目创建者不能移除')
             if (
-                member.project_role == 'director'
+                'director' in (member.project_roles or [])
                 and await ShotGridProjectMemberDao.count_directors(db, project_id) <= 1
             ):
                 raise shot_grid_error(409, 'SG_LAST_DIRECTOR_REQUIRED', '项目必须至少保留一名项目管理人')
@@ -299,7 +314,8 @@ class ShotGridProjectMemberService:
                 project_id=project_id,
                 user_id=user_id,
                 payload={
-                    'projectRole': member.project_role,
+                    'beforeProjectRoles': list(member.project_roles or []),
+                    'projectRoles': [],
                     'producerCode': member.producer_code,
                 },
                 platform_role_changes=platform_role_changes,

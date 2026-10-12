@@ -13,7 +13,7 @@ from module_shot_grid.exceptions import ShotGridDomainException
 from module_shot_grid.service.project_service import ShotGridProjectService
 
 PROJECT_ID = 1001
-INITIAL_MEMBER_COUNT = 2
+INITIAL_MEMBER_COUNT = 3
 EXPECTED_ROLLBACKS_AFTER_CONCURRENT_CONFLICT = 2
 
 
@@ -48,7 +48,7 @@ def _patch_create_dependencies(monkeypatch: pytest.MonkeyPatch) -> dict[str, Asy
                 unc_root_path=r'\\192.168.10.64\策划部',
             )
         ),
-        'get_users': AsyncMock(return_value={1, 2}),
+        'get_users': AsyncMock(return_value={1, 2, 7}),
         'lock_users': AsyncMock(),
         'sync_roles': AsyncMock(
             return_value=[
@@ -70,12 +70,14 @@ def _patch_create_dependencies(monkeypatch: pytest.MonkeyPatch) -> dict[str, Asy
         ),
         'get_path': AsyncMock(return_value=None),
         'add_member': AsyncMock(),
+        'replace_roles': AsyncMock(),
         'add_storage': AsyncMock(),
         'add_operation': AsyncMock(),
         'audit': AsyncMock(),
     }
 
     async def add_project(_db: AsyncSession, project: ShotGridProject) -> ShotGridProject:
+        assert project.creator_user_id == _current_user().user.user_id
         project.project_id = PROJECT_ID
         return project
 
@@ -89,6 +91,7 @@ def _patch_create_dependencies(monkeypatch: pytest.MonkeyPatch) -> dict[str, Asy
         'sync_roles': 'ShotGridPlatformRoleService.synchronize_user_roles',
         'get_path': 'ShotGridProjectStorageDao.get_storage_by_path_key',
         'add_member': 'ShotGridProjectMemberDao.add_member',
+        'replace_roles': 'ShotGridProjectMemberDao.replace_roles',
         'add_storage': 'ShotGridProjectStorageDao.add_storage',
         'add_operation': 'ShotGridProjectStorageDao.add_operation',
         'audit': 'ShotGridProjectAuditDao.add_success_log',
@@ -115,6 +118,12 @@ async def test_create_project_commits_project_members_storage_outbox_and_audit(
     assert result.project_status == 'preparing'
     assert result.storage_status == 'initializing'
     assert mocks['add_member'].await_count == INITIAL_MEMBER_COUNT
+    owner = next(
+        call.args[1]
+        for call in mocks['add_member'].await_args_list
+        if call.args[1].user_id == _current_user().user.user_id
+    )
+    assert owner.project_role == 'director'
     mocks['add_storage'].assert_awaited_once()
     operation = mocks['add_operation'].await_args.args[1]
     assert operation.operation_type == 'initialize_project'

@@ -1,4 +1,5 @@
 <script setup>
+import { myProjectRoles } from '@/views/project/projectPresentation'
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { CopyDocument, Download, Refresh, RefreshLeft, Search } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
@@ -49,7 +50,7 @@ const selectedProjectId = computed({
   set: value => { toolbar.projectId = value }
 })
 const selectedProject = computed(() => projects.value.find(item => String(item.projectId) === selectedProjectId.value) || null)
-const canDiagnose = computed(() => wildcard.value || canViewAll.value || selectedProject.value?.myProjectRole === 'director')
+const canDiagnose = computed(() => wildcard.value || canViewAll.value || myProjectRoles(selectedProject.value).includes('director'))
 const pageCount = computed(() => Math.max(1, Math.ceil(total.value / filters.pageSize)))
 const isVideoFile = file => String(file?.contentType || '').toLowerCase().startsWith('video/')
 const videoPreviewFor = file => {

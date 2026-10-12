@@ -58,7 +58,7 @@ async def test_member_list_applies_optional_project_role_filter() -> None:
     sql = _postgresql_sql(db.execute.await_args.args[0])
     assert 'sg_project_member.project_id = 10' in sql
     assert "sg_project_member.member_status = 'active'" in sql
-    assert "sg_project_member.project_role = 'creator'" in sql
+    assert "sg_project_member_role.project_role = 'creator'" in sql
 
 
 @pytest.mark.asyncio

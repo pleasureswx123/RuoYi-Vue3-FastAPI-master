@@ -852,7 +852,7 @@ class ShotGridAssetCrudDao:
     def _assignee_valid_expression() -> Any:
         return and_(
             ShotGridProjectMember.member_status == 'active',
-            ShotGridProjectMember.project_role == 'creator',
+            ShotGridProjectMember.has_role('creator'),
             SysUser.status == '0',
             SysUser.del_flag == '0',
         )

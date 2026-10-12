@@ -116,7 +116,7 @@ class ShotGridReviewDao:
                 ShotGridProjectMember,
                 (ShotGridProjectMember.project_id == ShotGridReviewList.project_id)
                 & (ShotGridProjectMember.user_id == user_id)
-                & (ShotGridProjectMember.project_role == 'director')
+                & (ShotGridProjectMember.has_role('director'))
                 & (ShotGridProjectMember.member_status == 'active'),
             )
         return statement
@@ -149,7 +149,7 @@ class ShotGridReviewDao:
             .join(ShotGridProjectMember, ShotGridProjectMember.user_id == SysUser.user_id)
             .where(
                 ShotGridProjectMember.project_id.in_(projects.correlate(None)),
-                ShotGridProjectMember.project_role == 'creator',
+                ShotGridProjectMember.has_role('creator'),
                 ShotGridProjectMember.member_status == 'active',
                 SysUser.del_flag == '0',
             )

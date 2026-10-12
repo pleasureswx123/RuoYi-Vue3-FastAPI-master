@@ -18,6 +18,7 @@ from module_shot_grid.entity.do.project_do import (
     ShotGridEpisode,
     ShotGridProject,
     ShotGridProjectMember,
+    ShotGridProjectMemberRole,
     ShotGridProjectPurge,
     ShotGridScene,
     ShotGridShot,
@@ -339,6 +340,7 @@ class ShotGridProjectPurgeDao:
             ShotGridImportBatch,
             ShotGridStorageOperation,
             ShotGridProjectStorage,
+            ShotGridProjectMemberRole,
             ShotGridProjectMember,
         ):
             await db.execute(delete(model).where(model.project_id == project_id))

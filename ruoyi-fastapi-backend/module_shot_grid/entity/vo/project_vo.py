@@ -91,9 +91,6 @@ class ShotGridProjectCreateModel(ShotGridProjectReferenceInput):
         member_ids = [member.user_id for member in self.members]
         if len(member_ids) != len(set(member_ids)):
             raise ValueError('初始项目成员不能重复')
-        overlap = sorted(set(self.director_user_ids).intersection(member_ids))
-        if overlap:
-            raise ValueError(f'项目管理人与初始成员重复：{overlap}')
         producer_codes = [member.producer_code for member in self.members if member.producer_code is not None]
         if len(producer_codes) != len(set(producer_codes)):
             raise ValueError('同一项目内制作人缩写不能重复')
@@ -280,6 +277,13 @@ class ShotGridProjectListItemModel(ShotGridProjectOverviewModel):
     project_status: ProjectStatus
     storage_status: Literal['initializing', 'ready', 'failed', 'migrating']
     my_project_role: Literal['director', 'creator'] | None = None
+    my_project_roles: list[Literal['director', 'creator']] = Field(default_factory=list)
+
+    @field_validator('my_project_roles', mode='before')
+    @classmethod
+    def normalize_my_roles(cls, value: Any) -> list[str]:
+        return [role for role in ('director', 'creator') if role in (value or [])]
+
     lock_version: int
 
 

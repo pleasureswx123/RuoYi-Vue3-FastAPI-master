@@ -51,7 +51,7 @@ class ShotGridProductionAdjustmentService:
             ShotGridTaskService._require_director_access(access, project_id, actor_id)
             if not access.has_all_scope:
                 member = await ShotGridTaskScheduleDao.lock_actor_member(db, project_id, actor_id)
-                if member is None or member.project_role != 'director':
+                if member is None or 'director' not in (member.project_roles or []):
                     raise shot_grid_error(403, 'SG_ADJUST_FORBIDDEN', '当前管理权限已变化')
             locked = []
             for item in sorted(command.items, key=lambda item: item.task_id):

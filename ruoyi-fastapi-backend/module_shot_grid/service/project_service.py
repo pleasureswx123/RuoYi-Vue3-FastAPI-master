@@ -116,7 +116,7 @@ class ShotGridProjectService:
         if row is None:
             raise shot_grid_error(404, 'SG_PROJECT_NOT_FOUND', '项目存储绑定不存在或不可见')
         values = dict(row)
-        if values['storage_status'] != 'ready' and not (access.has_all_scope or access.project_role == 'director'):
+        if values['storage_status'] != 'ready' and not (access.has_all_scope or access.has_role('director')):
             values['project_path_snapshot'] = None
         return ShotGridProjectStorageStatusModel.model_validate(values)
 
@@ -153,7 +153,7 @@ class ShotGridProjectService:
             if storage_root.last_probe_status != 'healthy':
                 raise shot_grid_error(503, 'SG_STORAGE_ROOT_UNAVAILABLE', 'NAS 根目录当前不可达或不可写')
 
-            user_ids = set(command.director_user_ids) | {member.user_id for member in command.members}
+            user_ids = {user_id} | set(command.director_user_ids) | {member.user_id for member in command.members}
             await ShotGridPlatformRoleService.lock_target_users(db, user_ids)
             active_user_ids = await ShotGridProjectMemberDao.get_active_users(db, user_ids, user_data_scope_sql)
             invalid_user_ids = sorted(user_ids - active_user_ids)
@@ -180,6 +180,7 @@ class ShotGridProjectService:
             project = await ShotGridProjectDao.add_project(
                 db,
                 ShotGridProject(
+                    creator_user_id=user_id,
                     project_code=command.project_code,
                     project_name=command.project_name,
                     project_type=command.project_type,
@@ -201,33 +202,28 @@ class ShotGridProjectService:
                 await ShotGridProjectReferenceService.replace_files(
                     db, project.project_id, command.reference_file_ids, user_id, actor_name
                 )
-            for director_user_id in command.director_user_ids:
+            initial_members = {member.user_id: member for member in command.members}
+            for member_user_id in sorted(user_ids):
+                initial = initial_members.get(member_user_id)
+                roles = set(initial.project_roles if initial else [])
+                if member_user_id == user_id or member_user_id in command.director_user_ids:
+                    roles.add('director')
+                ordered_roles = [role for role in ('director', 'creator') if role in roles]
                 await ShotGridProjectMemberDao.add_member(
                     db,
                     ShotGridProjectMember(
                         project_id=project.project_id,
-                        user_id=director_user_id,
-                        project_role='director',
-                        producer_code=None,
+                        user_id=member_user_id,
+                        project_role=ordered_roles[0],
+                        producer_code=initial.producer_code if initial else None,
                         member_status='active',
                         joined_time=now,
                         create_by=actor_name,
                         create_time=now,
                     ),
                 )
-            for member in command.members:
-                await ShotGridProjectMemberDao.add_member(
-                    db,
-                    ShotGridProjectMember(
-                        project_id=project.project_id,
-                        user_id=member.user_id,
-                        project_role=member.project_role,
-                        producer_code=member.producer_code,
-                        member_status='active',
-                        joined_time=now,
-                        create_by=actor_name,
-                        create_time=now,
-                    ),
+                await ShotGridProjectMemberDao.replace_roles(
+                    db, project.project_id, member_user_id, ordered_roles, actor_name
                 )
 
             platform_role_changes = await ShotGridPlatformRoleService.synchronize_user_roles(
@@ -283,7 +279,8 @@ class ShotGridProjectService:
                     'projectId': project.project_id,
                     'projectCode': project.project_code,
                     'storageRootId': storage_root.storage_root_id,
-                    'directorUserIds': command.director_user_ids,
+                    'directorUserIds': sorted(set(command.director_user_ids) | {user_id}),
+                    'creatorUserId': user_id,
                     'referenceDescription': ShotGridProjectReferenceService.audit_description(
                         command.reference_description
                     ),
@@ -514,7 +511,7 @@ class ShotGridProjectService:
     ) -> None:
         if access.project_id != project_id or access.user_id != user_id:
             raise shot_grid_error(403, 'SG_PROJECT_ACCESS_DENIED', '项目访问上下文不一致')
-        if not (access.has_all_scope or access.project_role == 'director'):
+        if not (access.has_all_scope or access.has_role('director')):
             raise shot_grid_error(403, 'SG_PROJECT_ACCESS_DENIED', '当前项目角色无权修改项目')
 
     @staticmethod
@@ -553,7 +550,7 @@ class ShotGridProjectService:
         project_status: str,
         storage_status: str,
     ) -> list[str]:
-        if not (access.has_all_scope or current_role == 'director'):
+        if not (access.has_all_scope or access.has_role('director')):
             return []
         delete_action = (
             ['project.delete']

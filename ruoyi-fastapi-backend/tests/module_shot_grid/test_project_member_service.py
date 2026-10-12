@@ -27,6 +27,9 @@ def _current_user() -> CurrentUserModel:
 
 def _patch_project_lock(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
+        'module_shot_grid.service.project_member_service.ShotGridProjectMemberDao.replace_roles', AsyncMock()
+    )
+    monkeypatch.setattr(
         'module_shot_grid.service.project_member_service.ShotGridPlatformRoleService.lock_target_users',
         AsyncMock(),
     )
@@ -50,7 +53,7 @@ def _patch_project_lock(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     monkeypatch.setattr(
         'module_shot_grid.service.project_member_service.ShotGridProjectDao.get_project_by_id',
-        AsyncMock(return_value=SimpleNamespace(project_id=10, project_status='active')),
+        AsyncMock(return_value=SimpleNamespace(project_id=10, project_status='active', creator_user_id=None)),
     )
     monkeypatch.setattr(
         'module_shot_grid.service.project_member_service.ShotGridProjectAccessService.resolve_access',
@@ -70,7 +73,9 @@ async def test_cannot_demote_last_director(monkeypatch: pytest.MonkeyPatch) -> N
     _patch_project_lock(monkeypatch)
     monkeypatch.setattr(
         'module_shot_grid.service.project_member_service.ShotGridProjectMemberDao.get_member_for_update',
-        AsyncMock(return_value=SimpleNamespace(project_role='director', producer_code='DIR')),
+        AsyncMock(
+            return_value=SimpleNamespace(project_roles=['director'], project_role='director', producer_code='DIR')
+        ),
     )
     monkeypatch.setattr(
         'module_shot_grid.service.project_member_service.ShotGridProjectMemberDao.count_directors',
@@ -97,7 +102,7 @@ async def test_active_task_prevents_clearing_producer_code(monkeypatch: pytest.M
     _patch_project_lock(monkeypatch)
     monkeypatch.setattr(
         'module_shot_grid.service.project_member_service.ShotGridProjectMemberDao.get_member_for_update',
-        AsyncMock(return_value=SimpleNamespace(project_role='creator', producer_code='YJF')),
+        AsyncMock(return_value=SimpleNamespace(project_roles=['creator'], project_role='creator', producer_code='YJF')),
     )
     monkeypatch.setattr(
         'module_shot_grid.service.project_member_service.ShotGridProjectMemberDao.has_active_tasks',
@@ -123,7 +128,7 @@ async def test_active_task_prevents_member_removal(monkeypatch: pytest.MonkeyPat
     _patch_project_lock(monkeypatch)
     monkeypatch.setattr(
         'module_shot_grid.service.project_member_service.ShotGridProjectMemberDao.get_member_for_update',
-        AsyncMock(return_value=SimpleNamespace(project_role='creator', producer_code='YJF')),
+        AsyncMock(return_value=SimpleNamespace(project_roles=['creator'], project_role='creator', producer_code='YJF')),
     )
     monkeypatch.setattr(
         'module_shot_grid.service.project_member_service.ShotGridProjectMemberDao.has_active_tasks',
@@ -151,7 +156,7 @@ async def test_member_without_active_tasks_is_soft_removed_and_history_is_preser
     _patch_project_lock(monkeypatch)
     monkeypatch.setattr(
         'module_shot_grid.service.project_member_service.ShotGridProjectMemberDao.get_member_for_update',
-        AsyncMock(return_value=SimpleNamespace(project_role='creator', producer_code='YJF')),
+        AsyncMock(return_value=SimpleNamespace(project_roles=['creator'], project_role='creator', producer_code='YJF')),
     )
     monkeypatch.setattr(
         'module_shot_grid.service.project_member_service.ShotGridProjectMemberDao.has_active_tasks',
@@ -183,7 +188,7 @@ async def test_readding_removed_member_restores_same_membership_record(
     _patch_project_lock(monkeypatch)
     monkeypatch.setattr(
         'module_shot_grid.service.project_member_service.ShotGridProjectMemberDao.get_member_including_removed_for_update',
-        AsyncMock(return_value=SimpleNamespace(member_status='removed')),
+        AsyncMock(return_value=SimpleNamespace(member_status='removed', project_roles=['creator'])),
     )
     monkeypatch.setattr(
         'module_shot_grid.service.project_member_service.ShotGridProjectMemberDao.get_active_users',
@@ -305,7 +310,7 @@ async def test_creator_with_active_tasks_cannot_become_director(monkeypatch: pyt
     _patch_project_lock(monkeypatch)
     monkeypatch.setattr(
         'module_shot_grid.service.project_member_service.ShotGridProjectMemberDao.get_member_for_update',
-        AsyncMock(return_value=SimpleNamespace(project_role='creator', producer_code='YJF')),
+        AsyncMock(return_value=SimpleNamespace(project_roles=['creator'], project_role='creator', producer_code='YJF')),
     )
     monkeypatch.setattr(
         'module_shot_grid.service.project_member_service.ShotGridProjectMemberDao.has_active_tasks',
@@ -324,4 +329,136 @@ async def test_creator_with_active_tasks_cannot_become_director(monkeypatch: pyt
         )
 
     assert exc_info.value.error_key == 'SG_MEMBER_ROLE_TASK_CONFLICT'
+    db.rollback.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_adding_director_preserves_creator_with_active_tasks(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_project_lock(monkeypatch)
+    base = 'module_shot_grid.service.project_member_service.'
+    monkeypatch.setattr(
+        base + 'ShotGridProjectMemberDao.get_member_for_update',
+        AsyncMock(
+            return_value=SimpleNamespace(project_roles=['creator'], project_role='creator', producer_code=None),
+        ),
+    )
+    active_tasks = AsyncMock(return_value=True)
+    monkeypatch.setattr(base + 'ShotGridProjectMemberDao.has_active_tasks', active_tasks)
+    monkeypatch.setattr(base + 'ShotGridProjectMemberDao.update_member', AsyncMock())
+    monkeypatch.setattr(
+        base + 'ShotGridProjectMemberDao.get_member_detail',
+        AsyncMock(
+            return_value={
+                'user_id': 2,
+                'user_name': 'creator',
+                'nick_name': '制作人员',
+                'project_role': 'director',
+                'project_roles': ['creator', 'director'],
+                'joined_time': datetime.now(),
+            }
+        ),
+    )
+    audit = AsyncMock()
+    monkeypatch.setattr(base + 'ShotGridProjectAuditDao.add_success_log', audit)
+    db = AsyncMock()
+    result = await ShotGridProjectMemberService.update_member(
+        db,
+        10,
+        2,
+        ShotGridProjectMemberUpdateModel(projectRoles=['director', 'creator']),
+        _current_user(),
+        true(),
+    )
+    assert result.project_roles == ['director', 'creator']
+    active_tasks.assert_not_awaited()
+    assert audit.await_args.kwargs['oper_param']['beforeProjectRoles'] == ['creator']
+    assert audit.await_args.kwargs['oper_param']['projectRoles'] == ['director', 'creator']
+    db.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_dual_role_creator_cannot_be_revoked_with_active_tasks(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_project_lock(monkeypatch)
+    base = 'module_shot_grid.service.project_member_service.'
+    monkeypatch.setattr(
+        base + 'ShotGridProjectMemberDao.get_member_for_update',
+        AsyncMock(
+            return_value=SimpleNamespace(
+                project_roles=['director', 'creator'], project_role='director', producer_code=None
+            ),
+        ),
+    )
+    monkeypatch.setattr(base + 'ShotGridProjectMemberDao.has_active_tasks', AsyncMock(return_value=True))
+    db = AsyncMock()
+    with pytest.raises(ShotGridDomainException) as error:
+        await ShotGridProjectMemberService.update_member(
+            db,
+            10,
+            2,
+            ShotGridProjectMemberUpdateModel(projectRoles=['director']),
+            _current_user(),
+            true(),
+        )
+    assert error.value.error_key == 'SG_MEMBER_ROLE_TASK_CONFLICT'
+    db.commit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('action', ['remove', 'demote', 'add_creator', 'remove_creator'])
+async def test_project_creator_is_protected_with_other_directors(monkeypatch: pytest.MonkeyPatch, action: str) -> None:
+    _patch_project_lock(monkeypatch)
+    monkeypatch.setattr(
+        'module_shot_grid.service.project_member_service.ShotGridProjectDao.get_project_by_id',
+        AsyncMock(return_value=SimpleNamespace(project_id=10, project_status='active', creator_user_id=2)),
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.project_member_service.ShotGridProjectMemberDao.get_member_for_update',
+        AsyncMock(
+            return_value=SimpleNamespace(
+                project_roles=['director', 'creator'] if action == 'remove_creator' else ['director'],
+                producer_code=None,
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.project_member_service.ShotGridProjectMemberDao.count_directors',
+        AsyncMock(return_value=3),
+    )
+    for method in ('soft_remove_member', 'update_member', 'has_active_tasks'):
+        monkeypatch.setattr(
+            f'module_shot_grid.service.project_member_service.ShotGridProjectMemberDao.{method}',
+            AsyncMock(return_value=False),
+        )
+    monkeypatch.setattr(
+        'module_shot_grid.service.project_member_service.ShotGridProjectMemberDao.get_member_detail',
+        AsyncMock(
+            return_value={
+                'user_id': 2,
+                'user_name': 'owner',
+                'nick_name': '创建者',
+                'project_role': 'creator',
+                'project_roles': ['creator'],
+                'joined_time': datetime.now(),
+            }
+        ),
+    )
+    monkeypatch.setattr(ShotGridProjectMemberService, '_audit', AsyncMock())
+    db = AsyncMock()
+    if action in {'add_creator', 'remove_creator'}:
+        roles = ['director', 'creator'] if action == 'add_creator' else ['director']
+        await ShotGridProjectMemberService.update_member(
+            db, 10, 2, ShotGridProjectMemberUpdateModel(projectRoles=roles), _current_user(), true()
+        )
+        db.commit.assert_awaited_once()
+        db.rollback.assert_not_awaited()
+        return
+    with pytest.raises(ShotGridDomainException) as error:
+        if action == 'remove':
+            await ShotGridProjectMemberService.remove_member(db, 10, 2, _current_user())
+        else:
+            await ShotGridProjectMemberService.update_member(
+                db, 10, 2, ShotGridProjectMemberUpdateModel(projectRoles=['creator']), _current_user(), true()
+            )
+    assert error.value.error_key == 'SG_PROJECT_CREATOR_PROTECTED'
+    db.commit.assert_not_awaited()
     db.rollback.assert_awaited_once()

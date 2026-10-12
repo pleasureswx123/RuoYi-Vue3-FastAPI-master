@@ -19,6 +19,7 @@ from exceptions.exception import ServiceException
 from module_admin.entity.do.file_do import SysFileInfo, SysFileReference
 from module_admin.entity.do.log_do import SysOperLog
 from module_admin.service.common_service import CommonService
+from module_shot_grid.dao.project_member_dao import ShotGridProjectMemberDao
 from module_shot_grid.dao.project_purge_dao import ShotGridProjectPurgeDao
 from module_shot_grid.dao.task_dao import ShotGridTaskDao
 from module_shot_grid.entity.do.project_do import ShotGridEpisode, ShotGridProjectMember, ShotGridScene, ShotGridShot
@@ -53,6 +54,8 @@ START = datetime(2026, 9, 28, 10)
 async def prepare(sessions):
     async with sessions() as db:
         db.add(ShotGridProjectMember(project_id=PROJECT_ID, user_id=OUTSIDER_ID, project_role='creator'))
+        await db.flush()
+        await ShotGridProjectMemberDao.replace_roles(db, PROJECT_ID, OUTSIDER_ID, ['creator'], '测试')
         db.add(ShotGridEpisode(episode_id=940, project_id=PROJECT_ID, episode_no=1, storage_dir_name='EP001'))
         await db.flush()
         db.add(ShotGridScene(scene_id=941, project_id=PROJECT_ID, episode_id=940, scene_no=1))

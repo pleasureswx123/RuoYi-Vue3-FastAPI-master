@@ -88,7 +88,7 @@ def test_unscheduled_statement_only_returns_real_active_unfinished_tasks_with_va
     assert 'sg_task.expected_end_time is null' in sql
     assert "sg_task.task_status != 'completed'" in sql
     assert "schedule_assignee_member.member_status = 'active'" in sql
-    assert "schedule_assignee_member.project_role = 'creator'" in sql
+    assert "sg_project_member_role.project_role = 'creator'" in sql
     assert "schedule_assignee.status = '0'" in sql
     assert "sg_shot.lifecycle_status = 'active'" in sql
     assert "sg_asset_item.lifecycle_status = 'active'" in sql

@@ -518,7 +518,7 @@ class ShotGridTaskService:
             cls._require_matching_access(access, project_id, actor_user_id)
             task = await cls._lock_task(db, project_id, task_id)
             is_shot = task.task_kind == 'shot_video'
-            can_start = access.has_all_scope or access.project_role == 'director'
+            can_start = access.has_all_scope or access.has_role('director')
             if not can_start or not cls._has_permission(current_user, 'shotgrid:task:start'):
                 raise shot_grid_error(
                     403,
@@ -1093,9 +1093,9 @@ class ShotGridTaskService:
         )
         if not target_active:
             return []
-        director = access.has_all_scope or access.project_role == 'director'
+        director = access.has_all_scope or access.has_role('director')
         owner = row['assignee_user_id'] == access.user_id
-        owner_creator = access.project_role == 'creator' and owner
+        owner_creator = access.has_role('creator') and owner
         target_ready = row['task_kind'] != 'asset_image' or is_asset_production_item_ready(row.get('production_item'))
         assignment_ready = row['task_kind'] != 'shot_video' or not missing_shot_assignment_fields(
             {

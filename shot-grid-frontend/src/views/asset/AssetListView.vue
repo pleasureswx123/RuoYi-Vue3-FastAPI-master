@@ -1,4 +1,5 @@
 <script setup>
+import { myProjectRoles, memberRoles } from '@/views/project/projectPresentation'
 import { assetOptionalColumns, useAssetTablePresentation } from './useAssetTablePresentation'
 import AssetReviewEntry from './components/AssetReviewEntry.vue'
 import ProductionHistoryPanel from '@/components/production-history/ProductionHistoryPanel.vue'
@@ -126,7 +127,7 @@ const canViewAll = computed(() => hasPermission('shotgrid:project:all'))
 const projectAllowedActions = computed(() => new Set(project.value?.allowedActions || []))
 const canCreate = computed(() => projectAllowedActions.value.has('asset.create') && hasPermission('shotgrid:asset:add'))
 const canImport = computed(() => projectAllowedActions.value.has('asset.import') && hasPermission('shotgrid:asset:import'))
-const isDirector = computed(() => project.value?.myProjectRole === 'director' || wildcard.value || canViewAll.value)
+const isDirector = computed(() => myProjectRoles(project.value).includes('director') || wildcard.value || canViewAll.value)
 const projectAllowsWrites = computed(() => project.value && !['completed', 'archived'].includes(project.value.projectStatus) && project.value.storageStatus === 'ready')
 const canEdit = computed(() => isDirector.value && hasPermission('shotgrid:asset:edit') && projectAllowsWrites.value)
 const canDelete = computed(() => isDirector.value && hasPermission('shotgrid:asset:archive') && projectAllowsWrites.value)
@@ -160,7 +161,7 @@ const groupedAssets = computed(() => ['Character', 'Environment', 'Prop'].map(ty
   type,
   assets: assets.value.filter(asset => asset.assetType === type)
 })))
-const creatorMembers = computed(() => members.value.filter(member => member.projectRole === 'creator'))
+const creatorMembers = computed(() => members.value.filter(member => memberRoles(member).includes('creator')))
 const selectedItems = ref([])
 const selectedItemIds = computed(() => new Set(selectedItems.value.map(row => Number(row.assetItemId))))
 const selectedAssets = computed(() => assets.value.filter(asset => selectedAssetIds.value.has(Number(asset.assetId))))
@@ -176,7 +177,7 @@ function itemStatusEntries(asset) {
 
 function canReviewAssets(asset) {
   return asset?.lifecycleStatus === 'active' && project.value && !['completed', 'archived'].includes(project.value.projectStatus) &&
-    (project.value.myProjectRole === 'director' || hasPermission('shotgrid:project:all')) &&
+    (myProjectRoles(project.value).includes('director') || hasPermission('shotgrid:project:all')) &&
     ['shotgrid:asset:query', 'shotgrid:version:query', 'shotgrid:reviewList:query', 'shotgrid:version:review'].every(hasPermission)
 }
 function matchesItemStatus(status) {
@@ -848,7 +849,7 @@ onBeforeUnmount(() => {
       <el-form ref="projectContextForm" :model="projectContext" :rules="projectContextRules" class="project-context sg-filter-bar sg-context-bar" size="default" inline label-position="left" aria-label="当前项目筛选">
         <el-form-item label="当前项目" prop="selectedProjectId"><el-select v-model="projectContext.selectedProjectId" :placeholder="projectsLoading ? '正在加载项目…' : '请选择项目'" :disabled="projectsLoading"><el-option :label="projectsLoading ? '正在加载项目…' : '请选择项目'" value="" /><el-option v-for="item in projects" :key="item.projectId" :label="`${item.projectCode} · ${item.projectName}`" :value="String(item.projectId)" /></el-select></el-form-item>
         <el-form-item v-if="canViewAll" label="项目范围" prop="scope"><el-select v-model="projectContext.scope" placeholder="我的项目"><el-option label="我的项目" value="" /><el-option label="全部项目" value="all" /></el-select></el-form-item>
-        <div v-if="project" class="project-context__meta"><el-tag size="small" effect="plain" round type="primary">{{ project.projectTypeName }}</el-tag><el-tag size="small" effect="plain" round type="info">{{ project.aspectRatio }}</el-tag><el-tag size="small" effect="plain" round :type="projectRoleMeta(project.myProjectRole).type">我的角色：{{ projectRoleMeta(project.myProjectRole).label }}</el-tag><el-tag size="small" effect="plain" round :type="tagTypeFromTone(storageMeta(project.storageStatus).tone)">存储：{{ storageMeta(project.storageStatus).label }}</el-tag></div>
+        <div v-if="project" class="project-context__meta"><el-tag size="small" effect="plain" round type="primary">{{ project.projectTypeName }}</el-tag><el-tag size="small" effect="plain" round type="info">{{ project.aspectRatio }}</el-tag><el-tag size="small" effect="plain" round :type="projectRoleMeta(myProjectRoles(project)).type">我的角色：{{ projectRoleMeta(myProjectRoles(project)).label }}</el-tag><el-tag size="small" effect="plain" round :type="tagTypeFromTone(storageMeta(project.storageStatus).tone)">存储：{{ storageMeta(project.storageStatus).label }}</el-tag></div>
       </el-form>
 
       <el-card v-if="projectsLoading && !projectContext.selectedProjectId" class="asset-context-loading" shadow="never"><el-skeleton :rows="3" animated /></el-card>

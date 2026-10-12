@@ -1,4 +1,5 @@
 <script setup>
+import { myProjectRoles } from '@/views/project/projectPresentation'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
@@ -47,7 +48,7 @@ const allowedActions = computed(() => new Set(project.value?.allowedActions || [
 const wildcard = computed(() => sessionStore.permissions.includes('*:*:*'))
 const hasPermission = permission => wildcard.value || sessionStore.permissions.includes(permission)
 const isDirectorScope = computed(
-  () => project.value?.myProjectRole === 'director' || wildcard.value || hasPermission('shotgrid:project:all')
+  () => myProjectRoles(project.value).includes('director') || wildcard.value || hasPermission('shotgrid:project:all')
 )
 const canDiagnoseStorage = computed(() => isDirectorScope.value && hasPermission('shotgrid:storage:path'))
 const canRetryOperation = computed(() => isDirectorScope.value && hasPermission('shotgrid:storage:retry'))
@@ -160,7 +161,7 @@ onBeforeUnmount(() => controller?.abort())
           <el-descriptions-item label="项目类型"><el-tag size="small" effect="plain" type="primary">{{ project.projectTypeName }}</el-tag></el-descriptions-item>
           <el-descriptions-item label="画幅"><el-tag size="small" effect="plain" type="info">{{ project.aspectRatio }}</el-tag></el-descriptions-item>
           <el-descriptions-item label="当前阶段"><el-tag size="small" effect="plain" type="info">{{ phaseLabel(project.currentPhase) }}</el-tag></el-descriptions-item>
-          <el-descriptions-item label="我的角色"><el-tag size="small" effect="plain" round :type="projectRoleMeta(project.myProjectRole).type">{{ projectRoleMeta(project.myProjectRole).label }}</el-tag></el-descriptions-item>
+          <el-descriptions-item label="我的角色"><el-tag size="small" effect="plain" round :type="projectRoleMeta(myProjectRoles(project)).type">{{ projectRoleMeta(myProjectRoles(project)).label }}</el-tag></el-descriptions-item>
           <el-descriptions-item label="存储状态"><el-tag size="small" effect="plain" round :type="tagTypeFromTone(storageMeta(project.storageStatus).tone)">{{ storageMeta(project.storageStatus).label }}</el-tag></el-descriptions-item>
           <el-descriptions-item label="最后更新">{{ formatDateTime(project.updateTime) }}</el-descriptions-item>
         </el-descriptions>

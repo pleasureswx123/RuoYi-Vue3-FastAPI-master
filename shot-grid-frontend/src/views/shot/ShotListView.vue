@@ -1,4 +1,5 @@
 <script setup>
+import { myProjectRoles, memberRoles } from '@/views/project/projectPresentation'
 import ReviewReferenceFiles from '@/components/review/ReviewReferenceFiles.vue'
 import BatchOverallFeedbackDialog from '@/components/version/BatchOverallFeedbackDialog.vue'
 import BatchAppendIssueDialog from '@/components/version/BatchAppendIssueDialog.vue'
@@ -325,7 +326,7 @@ useVersionCollectionRealtime(computed(() => hasPermission('shotgrid:version:quer
   await loadShots(null, true)
 })
 const canViewAll = computed(() => hasPermission('shotgrid:project:all'))
-const isDirector = computed(() => project.value?.myProjectRole === 'director' || wildcard.value || canViewAll.value)
+const isDirector = computed(() => myProjectRoles(project.value).includes('director') || wildcard.value || canViewAll.value)
 const projectAllowsWrites = computed(() => project.value && !['completed', 'archived'].includes(project.value.projectStatus) && project.value.storageStatus === 'ready')
 const canCreate = computed(() => isDirector.value && hasPermission('shotgrid:shot:add') && projectAllowsWrites.value)
 const canImport = computed(() => isDirector.value && hasPermission('shotgrid:shot:import') && projectAllowsWrites.value)
@@ -401,7 +402,7 @@ const scheduleInitialFilters = computed(() => ({
     ? [query.shotStatus === 'reviewing' ? 'pending_review' : query.shotStatus]
     : []
 }))
-const creatorMembers = computed(() => members.value.filter(member => member.projectRole === 'creator'))
+const creatorMembers = computed(() => members.value.filter(member => memberRoles(member).includes('creator')))
 const selectedShots = computed(() => shots.value.filter(shot => selectedShotIds.value.has(Number(shot.shotId))))
 const hasAssignedSelection = computed(() => selectedShots.value.some(shot => Boolean(shot.assignee)))
 const batchAssignLabel = computed(() => hasAssignedSelection.value ? '批量重新分配' : '批量分配')
@@ -1457,7 +1458,7 @@ onBeforeUnmount(() => { disposed = true; closeSingleAssign(); destroyRowSortable
       <el-form ref="projectContextForm" :model="projectContext" :rules="projectContextRules" class="project-context sg-filter-bar sg-context-bar" size="default" inline label-position="left" aria-label="项目选择">
         <el-form-item label="当前项目" prop="projectId"><el-select v-model="projectContext.projectId" :placeholder="projectsLoading ? '正在加载项目…' : '请选择项目'" :disabled="projectsLoading"><el-option :label="projectsLoading ? '正在加载项目…' : '请选择项目'" value="" /><el-option v-for="item in projects" :key="item.projectId" :label="`${item.projectCode} · ${item.projectName}`" :value="String(item.projectId)" /></el-select></el-form-item>
         <el-form-item v-if="canViewAll" label="项目范围" prop="scope"><el-select v-model="projectContext.scope" placeholder="我的项目"><el-option label="我的项目" value="" /><el-option label="全部项目" value="all" /></el-select></el-form-item>
-        <div v-if="project" class="project-context__tags"><el-tag size="small" effect="plain" round type="primary">{{ project.projectTypeName }}</el-tag><el-tag size="small" effect="plain" round type="info">{{ project.aspectRatio }}</el-tag><el-tag size="small" effect="plain" round :type="projectRoleMeta(project.myProjectRole).type">我的角色：{{ projectRoleMeta(project.myProjectRole).label }}</el-tag><el-tag size="small" effect="plain" round :type="tagTypeFromTone(storageMeta(project.storageStatus).tone)">{{ storageMeta(project.storageStatus).label }}</el-tag></div>
+        <div v-if="project" class="project-context__tags"><el-tag size="small" effect="plain" round type="primary">{{ project.projectTypeName }}</el-tag><el-tag size="small" effect="plain" round type="info">{{ project.aspectRatio }}</el-tag><el-tag size="small" effect="plain" round :type="projectRoleMeta(myProjectRoles(project)).type">我的角色：{{ projectRoleMeta(myProjectRoles(project)).label }}</el-tag><el-tag size="small" effect="plain" round :type="tagTypeFromTone(storageMeta(project.storageStatus).tone)">{{ storageMeta(project.storageStatus).label }}</el-tag></div>
       </el-form>
 
       <el-empty v-if="!projectContext.projectId && !projectsLoading" class="shot-empty" description="当前范围暂无可选项目"><p>请先创建项目，或请项目管理人将你加入项目；如可查看全部项目，也可切换“全部项目”。</p></el-empty>

@@ -1465,13 +1465,13 @@ class ShotGridShotCrudService:
         if (
             row.get('task_id') is not None
             and row.get('task_status') in {'in_progress', 'revision', 'pending_review'}
-            and access.project_role == 'creator'
+            and access.has_role('creator')
             and current_user.user is not None
             and row.get('assignee_user_id') == current_user.user.user_id
             and cls._has_permission(current_user, 'shotgrid:version:add')
         ):
             candidates.append(('task.work', 'shotgrid:task:query'))
-        if not (access.has_all_scope or access.project_role == 'director'):
+        if not (access.has_all_scope or access.has_role('director')):
             return [action for action, permission in candidates if cls._has_permission(current_user, permission)]
         if (
             row.get('task_id') is not None
@@ -1569,7 +1569,7 @@ class ShotGridShotCrudService:
         if (
             access.project_id != project_id
             or access.user_id != actor_user_id
-            or not (access.has_all_scope or access.project_role == 'director')
+            or not (access.has_all_scope or access.has_role('director'))
         ):
             raise shot_grid_error(403, 'SG_PROJECT_ACCESS_DENIED', '当前项目角色无权维护镜头')
 

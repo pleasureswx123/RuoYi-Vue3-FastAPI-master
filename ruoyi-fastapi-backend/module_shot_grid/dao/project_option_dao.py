@@ -137,6 +137,7 @@ class ShotGridProjectOptionDao:
                 SysUser.dept_id,
                 SysDept.dept_name,
                 ShotGridProjectMember.project_role,
+                ShotGridProjectMember.project_roles,
                 func.upper(SysUser.nick_name).label('producer_code'),
             )
             .join(ShotGridProjectMember, ShotGridProjectMember.user_id == SysUser.user_id)
@@ -144,7 +145,7 @@ class ShotGridProjectOptionDao:
             .where(
                 ShotGridProjectMember.project_id == project_id,
                 ShotGridProjectMember.member_status == 'active',
-                ShotGridProjectMember.project_role == 'creator',
+                ShotGridProjectMember.has_role('creator'),
                 SysUser.status == '0',
                 SysUser.del_flag == '0',
             )

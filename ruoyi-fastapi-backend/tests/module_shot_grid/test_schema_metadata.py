@@ -6,7 +6,7 @@ from module_admin.entity.do.file_do import SysFileInfo  # noqa: F401
 from module_admin.entity.do.user_do import SysUser  # noqa: F401
 from module_shot_grid.schema import SHOT_GRID_TABLE_NAMES
 
-EXPECTED_TABLE_COUNT = 32
+EXPECTED_TABLE_COUNT = 33
 
 
 def _primary_key_columns(table_name: str) -> tuple[str, ...]:

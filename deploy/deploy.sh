@@ -120,13 +120,17 @@ PREVIOUS_RELEASE_FILE="$STATE_DIR/previous-release"
 previous_release=''
 [[ -f "$CURRENT_RELEASE_FILE" ]] && previous_release="$(tr -d '\r\n' < "$CURRENT_RELEASE_FILE")"
 switch_started=0
+migration_stop_started=0
 
 rollback_on_error() {
     local exit_code=$?
     trap - ERR
     echo "发布 $RELEASE_ID 未完成。当前栈状态：" >&2
     "${COMPOSE[@]}" ps >&2 || true
-    if [[ "$switch_started" = 1 && -n "$previous_release" && "$previous_release" != "$RELEASE_ID" ]]; then
+    if [[ "$migration_stop_started" = 1 ]]; then
+        echo '本次迁移禁止新旧写服务混跑，失败后停止后端，不自动退回旧镜像；请核对数据库版本后恢复兼容版本。' >&2
+        "${COMPOSE[@]}" stop backend || true
+    elif [[ "$switch_started" = 1 && -n "$previous_release" && "$previous_release" != "$RELEASE_ID" ]]; then
         echo "尝试回到上一应用镜像 $previous_release；数据库不会自动降级。" >&2
         APP_RELEASE_ID="$previous_release" "${COMPOSE[@]}" up -d --no-build --wait --wait-timeout 240 \
             backend admin-frontend shot-grid-frontend || true
@@ -176,6 +180,12 @@ fi
 
 echo '启动并等待独立 PostgreSQL / Redis 健康'
 "${COMPOSE[@]}" up -d --wait --wait-timeout 180 postgres redis
+
+if [[ "${DEPLOY_STOP_BACKEND_FOR_MIGRATION:-0}" = 1 ]]; then
+    echo '停止旧后端写服务，备份和迁移期间保持停写'
+    migration_stop_started=1
+    "${COMPOSE[@]}" stop backend
+fi
 
 backup_file="$STATE_DIR/backups/postgres-$(date -u +%Y%m%dT%H%M%SZ)-before-${RELEASE_ID}.dump"
 echo "备份数据库到：$backup_file"

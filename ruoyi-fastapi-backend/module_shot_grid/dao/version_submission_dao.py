@@ -157,6 +157,7 @@ class ShotGridVersionSubmissionDao:
                 ShotGridProject.project_code,
                 ShotGridProject.project_status,
                 ShotGridProjectMember.project_role.label('assignee_project_role'),
+                ShotGridProjectMember.project_roles.label('assignee_project_roles'),
                 func.upper(SysUser.nick_name).label('producer_code'),
                 ShotGridProjectMember.member_status,
                 SysUser.status.label('assignee_user_status'),

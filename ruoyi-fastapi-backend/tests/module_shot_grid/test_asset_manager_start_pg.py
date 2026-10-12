@@ -27,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from module_admin.entity.do.user_do import SysUser
 from module_admin.entity.vo.user_vo import CurrentUserModel, UserInfoModel
+from module_shot_grid.dao.project_member_dao import ShotGridProjectMemberDao
 from module_shot_grid.dao.search_dao import ShotGridSearchDao
 from module_shot_grid.dao.shot_crud_dao import ShotGridShotCrudDao
 from module_shot_grid.dao.storage_operation_dao import ShotGridStorageOperationDao
@@ -360,6 +361,9 @@ async def _seed(db: AsyncSession) -> None:
             for index in range(3)
         ]
     )
+    await db.flush()
+    await ShotGridProjectMemberDao.replace_roles(db, PROJECT_ID, DIRECTOR_ID, ['director'], '测试')
+    await ShotGridProjectMemberDao.replace_roles(db, PROJECT_ID, CREATOR_ID, ['creator'], '测试')
     await db.commit()
 
 
@@ -1146,6 +1150,8 @@ async def test_batch_reassignment_rolls_back_when_later_target_has_started(
     user = _user(permissions=['shotgrid:task:assign'])
     async with pg_sessions() as db:
         db.add(ShotGridProjectMember(project_id=PROJECT_ID, user_id=OUTSIDER_ID, project_role='creator'))
+        await db.flush()
+        await ShotGridProjectMemberDao.replace_roles(db, PROJECT_ID, OUTSIDER_ID, ['creator'], '测试')
         if task_kind == 'shot_video':
             db.add(ShotGridEpisode(episode_id=940, project_id=PROJECT_ID, episode_no=1, storage_dir_name='EP001'))
             await db.flush()

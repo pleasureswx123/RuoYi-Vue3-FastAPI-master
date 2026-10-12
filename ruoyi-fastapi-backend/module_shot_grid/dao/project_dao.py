@@ -210,6 +210,7 @@ class ShotGridProjectDao:
             ShotGridProject.current_phase,
             ShotGridProjectStorage.storage_status,
             current_member.project_role.label('my_project_role'),
+            current_member.project_roles.label('my_project_roles'),
             *[column for column in overview.c if column.key != 'project_id'],
             ShotGridProject.lock_version,
         ]

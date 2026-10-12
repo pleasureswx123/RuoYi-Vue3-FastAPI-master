@@ -102,7 +102,7 @@ async def test_shot_assignee_options_apply_membership_account_and_nickname_guard
     for sql in (count_sql, rows_sql):
         assert 'sg_project_member.project_id = 1001' in sql
         assert "sg_project_member.member_status = 'active'" in sql
-        assert "sg_project_member.project_role = 'creator'" in sql
+        assert "sg_project_member_role.project_role = 'creator'" in sql
         assert "sys_user.status = '0'" in sql
         assert "sys_user.del_flag = '0'" in sql
         assert "sys_user.nick_name ILIKE '%%YJF%%'" in sql
@@ -129,7 +129,7 @@ async def test_asset_assignee_options_reuse_the_same_safe_project_member_guards(
     rows_sql = _postgresql_sql(db.execute.await_args.args[0])
     assert 'sg_project_member.project_id = 1001' in rows_sql
     assert "sg_project_member.member_status = 'active'" in rows_sql
-    assert "sg_project_member.project_role = 'creator'" in rows_sql
+    assert "sg_project_member_role.project_role = 'creator'" in rows_sql
     assert 'sg_project_member.producer_code IS NOT NULL' not in rows_sql
     assert 'upper(sys_user.nick_name) AS producer_code' in rows_sql
     assert "sys_user.status = '0'" in rows_sql

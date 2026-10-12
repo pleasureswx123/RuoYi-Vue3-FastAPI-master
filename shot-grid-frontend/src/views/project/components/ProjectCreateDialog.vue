@@ -57,7 +57,7 @@ const form = reactive({
     userName: props.currentUser.userName,
     nickName: props.currentUser.nickName,
     deptName: props.currentUser.dept?.deptName || null,
-    projectRole: '',
+    projectRoles: [],
     isCurrentUser: true
   }]
 })
@@ -93,9 +93,9 @@ const createRules = {
     validator: (_rule, value, callback) => {
       if (!roleOptionsReady.value) {
         callback(new Error('项目角色配置未就绪'))
-      } else if (!Array.isArray(value) || value.some(member => !isConfiguredProjectRole(member.projectRole))) {
+      } else if (!Array.isArray(value) || value.some(member => !member.projectRoles?.length || !member.projectRoles.every(isConfiguredProjectRole))) {
         callback(new Error('项目成员包含未配置的项目角色'))
-      } else if (!value.some(member => member.projectRole === 'director')) {
+      } else if (!value.some(member => member.projectRoles.includes('director'))) {
         callback(new Error('项目必须至少有一名项目管理人'))
       } else {
         callback()
@@ -173,8 +173,8 @@ function applyRoleDefaults() {
   const directorRole = roleOptions.value.find(option => option.projectRole === 'director')?.projectRole || ''
   const creatorRole = defaultCreatorRole.value
   form.members.forEach(member => {
-    if (configured.has(member.projectRole)) return
-    member.projectRole = member.isCurrentUser ? directorRole : creatorRole
+    if (member.projectRoles?.length && member.projectRoles.every(role => configured.has(role))) return
+    member.projectRoles = [member.isCurrentUser ? directorRole : creatorRole].filter(Boolean)
   })
   createFormRef.value?.clearValidate('members')
 }
@@ -290,7 +290,7 @@ const nasCheckDescription = computed(() => nasCheck.value?.pathConflict ? '请�
 
 function addMember(candidate) {
   if (!roleOptionsReady.value) return
-  form.members.push({ ...candidate, projectRole: defaultCreatorRole.value })
+  form.members.push({ ...candidate, projectRoles: [defaultCreatorRole.value].filter(Boolean) })
   createFormRef.value?.validateField('members').catch(() => false)
 }
 
@@ -305,12 +305,12 @@ function buildPayload() {
   const storageRootId = Number(form.storageRootId)
   const normalizedMembers = form.members.map(member => ({
     userId: member.userId,
-    projectRole: member.projectRole
+    projectRoles: [...member.projectRoles]
   }))
   const directorUserIds = normalizedMembers
-    .filter(member => member.projectRole === 'director')
+    .filter(member => member.projectRoles.includes('director'))
     .map(member => member.userId)
-  const initialMembers = normalizedMembers.filter(member => member.projectRole !== 'director')
+  const initialMembers = normalizedMembers.filter(member => member.projectRoles.length > 1 || !member.projectRoles.includes('director'))
   return {
     projectCode, projectName, projectType: 'ai_short_film',
     referenceDescription: form.referenceDescription.trim() || null,
@@ -425,7 +425,7 @@ onBeforeUnmount(() => {
           <MemberCandidateSelect :department-id="currentUser.dept?.deptId" :exclude-ids="selectedUserIds" :disabled="!roleOptionsReady" @select="addMember" />
           <el-table class="member-rows" :data="form.members" row-key="userId" empty-text="尚未添加项目成员">
             <el-table-column label="成员" min-width="210"><template #default="{ row }"><strong>{{ row.nickName || row.userName }}</strong><small>{{ row.userName }} · {{ row.deptName || '未分配部门' }}<template v-if="row.isCurrentUser"> · 当前登录账号</template></small></template></el-table-column>
-            <el-table-column label="项目角色" min-width="250"><template #default="{ row }"><el-select v-model="row.projectRole" class="sg-select" size="default" aria-label="项目角色" :loading="roleOptionsLoading" :disabled="!roleOptionsReady"><el-option v-for="option in roleOptions" :key="`${option.projectRole}:${option.systemRoleId}`" :label="projectRoleOptionLabel(option)" :value="option.projectRole" /></el-select></template></el-table-column>
+            <el-table-column label="项目角色" min-width="250"><template #default="{ row }"><el-select multiple v-model="row.projectRoles" class="sg-select" size="default" aria-label="项目角色" :loading="roleOptionsLoading" :disabled="!roleOptionsReady"><el-option v-for="option in roleOptions" :key="`${option.projectRole}:${option.systemRoleId}`" :label="projectRoleOptionLabel(option)" :value="option.projectRole" /></el-select></template></el-table-column>
             <el-table-column label="操作" width="90"><template #default="{ row, $index }"><el-button v-if="!row.isCurrentUser" link type="danger" @click="removeMember($index)">移除</el-button><el-tag v-else size="small" type="info" effect="plain">本人</el-tag></template></el-table-column>
           </el-table>
         </el-card>

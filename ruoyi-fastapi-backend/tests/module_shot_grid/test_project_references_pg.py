@@ -16,6 +16,7 @@ from sqlalchemy import select, text
 from exceptions.exception import ServiceException
 from module_admin.entity.do.file_do import SysFileInfo, SysFileReference
 from module_admin.service.common_service import CommonService
+from module_shot_grid.dao.project_member_dao import ShotGridProjectMemberDao
 from module_shot_grid.dao.project_purge_dao import ShotGridProjectPurgeDao
 from module_shot_grid.entity.do.project_do import ShotGridProject, ShotGridProjectMember
 from module_shot_grid.entity.vo.project_vo import ShotGridProjectUpdateModel
@@ -102,6 +103,8 @@ async def test_shared_materials_edit_keep_remove_task_projection_and_access(pg_s
         with pytest.raises(ShotGridDomainException):
             await ShotGridTaskService.get_task_detail(db, FIRST_TASK_ID, _user(OUTSIDER_ID))
         db.add(ShotGridProjectMember(project_id=PROJECT_ID, user_id=OUTSIDER_ID, project_role='director'))
+        await db.flush()
+        await ShotGridProjectMemberDao.replace_roles(db, PROJECT_ID, OUTSIDER_ID, ['director'], '测试')
         await db.commit()
     # 另一管理人可以保留已经绑定的文件，不能借此引用他人的新文件。
     result = await save(pg_sessions, version=1, actor=OUTSIDER_ID, referenceFileIds=[first])

@@ -26,7 +26,7 @@ async def test_project_member_receives_project_role(monkeypatch: pytest.MonkeyPa
         'module_shot_grid.service.project_access_service.ShotGridProjectDao.get_project_by_id',
         AsyncMock(return_value=SimpleNamespace(project_id=10)),
     )
-    get_member = AsyncMock(return_value=SimpleNamespace(project_role='creator'))
+    get_member = AsyncMock(return_value=SimpleNamespace(project_roles=['creator'], project_role='creator'))
     monkeypatch.setattr(
         'module_shot_grid.service.project_access_service.ShotGridProjectMemberDao.get_member',
         get_member,
@@ -63,7 +63,7 @@ async def test_all_project_scope_does_not_replace_action_permission(monkeypatch:
         'module_shot_grid.service.project_access_service.ShotGridProjectDao.get_project_by_id',
         AsyncMock(return_value=SimpleNamespace(project_id=10)),
     )
-    get_member = AsyncMock()
+    get_member = AsyncMock(return_value=None)
     monkeypatch.setattr(
         'module_shot_grid.service.project_access_service.ShotGridProjectMemberDao.get_member',
         get_member,
@@ -76,7 +76,7 @@ async def test_all_project_scope_does_not_replace_action_permission(monkeypatch:
     )
 
     assert access.has_all_scope is True
-    get_member.assert_not_awaited()
+    get_member.assert_awaited_once()
 
 
 def test_project_role_dependency_rejects_creator_write_action() -> None:
@@ -109,3 +109,20 @@ def test_project_role_dependency_allows_director_and_all_scope() -> None:
 
     assert ShotGridProjectAccessService.require_roles(director_access, {'director'}) is director_access
     assert ShotGridProjectAccessService.require_roles(all_scope_access, {'director'}) is all_scope_access
+
+
+@pytest.mark.asyncio
+async def test_global_scope_keeps_real_creator_membership(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        'module_shot_grid.service.project_access_service.ShotGridProjectDao.get_project_by_id',
+        AsyncMock(return_value=SimpleNamespace(project_id=10)),
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.project_access_service.ShotGridProjectMemberDao.get_member',
+        AsyncMock(return_value=SimpleNamespace(project_role='director', project_roles=['director', 'creator'])),
+    )
+    access = await ShotGridProjectAccessService.resolve_access(
+        AsyncMock(), _current_user(permissions=['shotgrid:project:all']), 10
+    )
+    assert access.has_all_scope
+    assert access.has_role('creator')

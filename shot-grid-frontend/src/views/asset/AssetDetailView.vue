@@ -1,4 +1,5 @@
 <script setup>
+import { myProjectRoles } from '@/views/project/projectPresentation'
 import AssetItemReferences from './components/AssetItemReferences.vue'
 import AssetItemScheduleDialog from '@/views/asset/components/AssetItemScheduleDialog.vue'
 import AssetItemBatchWorkspace from '@/views/asset/components/AssetItemBatchWorkspace.vue'
@@ -95,8 +96,8 @@ const assetId = computed(() => {
 })
 const wildcard = computed(() => sessionStore.permissions.includes('*:*:*'))
 const hasPermission = permission => wildcard.value || sessionStore.permissions.includes(permission)
-const canSchedule = computed(() => hasPermission('shotgrid:task:schedule') && project.value && !['completed', 'archived'].includes(project.value.projectStatus) && (project.value.myProjectRole === 'director' || hasPermission('shotgrid:project:all')))
-const canManageWorkspace = computed(() => hasPermission('shotgrid:asset:query') && project.value && !['completed', 'archived'].includes(project.value.projectStatus) && (project.value.myProjectRole === 'director' || hasPermission('shotgrid:project:all')) && ['shotgrid:task:assign', 'shotgrid:task:edit', 'shotgrid:task:schedule', 'shotgrid:version:review'].some(hasPermission))
+const canSchedule = computed(() => hasPermission('shotgrid:task:schedule') && project.value && !['completed', 'archived'].includes(project.value.projectStatus) && (myProjectRoles(project.value).includes('director') || hasPermission('shotgrid:project:all')))
+const canManageWorkspace = computed(() => hasPermission('shotgrid:asset:query') && project.value && !['completed', 'archived'].includes(project.value.projectStatus) && (myProjectRoles(project.value).includes('director') || hasPermission('shotgrid:project:all')) && ['shotgrid:task:assign', 'shotgrid:task:edit', 'shotgrid:task:schedule', 'shotgrid:version:review'].some(hasPermission))
 function canAdvancedItem(item, action) {
   return canManageWorkspace.value && item.lifecycleStatus === 'active' && item.allowedActions?.includes(`task.${action}`) &&
     (action === 'adjust' ? hasPermission('shotgrid:task:edit') && hasPermission('shotgrid:task:query') : hasPermission('shotgrid:version:review') && hasPermission('shotgrid:note:add') && hasPermission('shotgrid:version:query'))

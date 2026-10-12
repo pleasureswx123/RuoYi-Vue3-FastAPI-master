@@ -6,6 +6,7 @@ import os
 import pytest
 from sqlalchemy import select
 
+from module_shot_grid.dao.project_member_dao import ShotGridProjectMemberDao
 from module_shot_grid.dao.task_dao import ShotGridTaskDao
 from module_shot_grid.entity.do.project_do import ShotGridProjectMember
 from module_shot_grid.entity.do.review_do import ShotGridNote
@@ -47,6 +48,8 @@ async def prepare(sessions):
     version_id, ids = await prepare_round(sessions)
     async with sessions() as db:
         db.add(ShotGridProjectMember(project_id=PROJECT_ID, user_id=OUTSIDER_ID, project_role='creator'))
+        await db.flush()
+        await ShotGridProjectMemberDao.replace_roles(db, PROJECT_ID, OUTSIDER_ID, ['creator'], '测试')
         await db.commit()
         await Reviews.add_issue_draft(
             db, version_id, ShotGridNoteCreateModel(candidateId=ids[0], content='需要修改'), _user()

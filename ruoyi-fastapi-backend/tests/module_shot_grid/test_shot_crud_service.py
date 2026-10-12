@@ -120,7 +120,7 @@ def test_shot_work_entry_permissions(
         task_id=69, task_status=status, assignee_user_id=owner + 10, project_status='archived' if archived else 'active'
     )
     user = CurrentUserModel(permissions=permissions, roles=[], user=UserInfoModel(userId=11, userName='member'))
-    access = _access().model_copy(update={'project_role': role, 'user_id': 11})
+    access = _access().model_copy(update={'project_role': role, 'project_roles': [role] if role else [], 'user_id': 11})
     assert ShotGridShotCrudService._allowed_actions(row, user, access) == expected
 
 
@@ -357,7 +357,12 @@ def test_shot_assignment_requires_platform_permission_and_project_management_acc
     if has_permission:
         current_user.permissions.append('shotgrid:task:assign')
     access = _access().model_copy(
-        update={'user_id': MANAGER_USER_ID, 'project_role': project_role, 'has_all_scope': has_all_scope}
+        update={
+            'user_id': MANAGER_USER_ID,
+            'project_role': project_role,
+            'project_roles': [project_role] if project_role else [],
+            'has_all_scope': has_all_scope,
+        }
     )
 
     actions = ShotGridShotCrudService._allowed_actions(row, current_user, access)
@@ -1170,6 +1175,7 @@ async def test_shot_list_exposes_task_identity_and_manager_start_action(monkeypa
 
     creator_access = _access()
     creator_access.project_role = 'creator'
+    creator_access.project_roles = ['creator']
     page = await ShotGridShotCrudService.get_shot_page(
         AsyncMock(),
         PROJECT_ID,
@@ -1285,7 +1291,7 @@ def test_append_issue_entry_permissions(
         roles=[],
         user=UserInfoModel(userId=11, userName='member'),
     )
-    access = _access().model_copy(update={'project_role': role, 'user_id': 11})
+    access = _access().model_copy(update={'project_role': role, 'project_roles': [role] if role else [], 'user_id': 11})
     assert ('task.appendIssue' in ShotGridShotCrudService._allowed_actions(row, user, access)) is allowed
 
 

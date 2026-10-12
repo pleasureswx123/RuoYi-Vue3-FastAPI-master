@@ -161,6 +161,7 @@ async def test_shot_assignee_options_return_project_role_and_producer_code(monke
                         'dept_id': 100,
                         'dept_name': '策划部',
                         'project_role': 'creator',
+                        'project_roles': ['creator'],
                         'producer_code': 'YJF',
                     }
                 ],
@@ -185,6 +186,7 @@ async def test_shot_assignee_options_return_project_role_and_producer_code(monke
                 'deptId': 100,
                 'deptName': '策划部',
                 'projectRole': 'creator',
+                'projectRoles': ['creator'],
                 'producerCode': 'YJF',
             }
         ],
@@ -210,6 +212,7 @@ async def test_asset_assignee_options_return_the_same_safe_projection(monkeypatc
                         'dept_id': 100,
                         'dept_name': '策划部',
                         'project_role': 'creator',
+                        'project_roles': ['creator'],
                         'producer_code': 'AC',
                     }
                 ],
@@ -232,6 +235,7 @@ async def test_asset_assignee_options_return_the_same_safe_projection(monkeypatc
         'deptId': 100,
         'deptName': '策划部',
         'projectRole': 'creator',
+        'projectRoles': ['creator'],
         'producerCode': 'AC',
     }
 

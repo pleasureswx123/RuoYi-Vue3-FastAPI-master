@@ -108,7 +108,8 @@ class ShotGridShotAssigneeOptionModel(ShotGridApiModel):
     avatar: str | None = None
     dept_id: int | None = None
     dept_name: str | None = None
-    project_role: Literal['creator']
+    project_role: Literal['director', 'creator']
+    project_roles: list[Literal['director', 'creator']] = Field(default_factory=list)
     producer_code: str
 
 

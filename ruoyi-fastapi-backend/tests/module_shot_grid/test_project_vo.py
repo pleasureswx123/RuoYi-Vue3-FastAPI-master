@@ -30,7 +30,6 @@ def test_project_create_normalizes_codes_and_required_text() -> None:
     [
         {'directorUserIds': []},
         {'directorUserIds': [1, 1]},
-        {'members': [{'userId': 1, 'projectRole': 'creator'}]},
         {
             'members': [
                 {'userId': 2, 'projectRole': 'creator', 'producerCode': 'YJF'},

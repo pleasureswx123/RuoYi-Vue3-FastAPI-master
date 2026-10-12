@@ -1,4 +1,5 @@
 <script setup>
+import { myProjectRoles } from '@/views/project/projectPresentation'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ArrowLeft, Calendar } from '@element-plus/icons-vue'
@@ -24,7 +25,7 @@ const projectId = computed(() => {
 const scheduleQuery = computed(() => normalizeScheduleRouteQuery(route.query))
 const wildcard = computed(() => sessionStore.permissions.includes('*:*:*'))
 const hasPermission = permission => wildcard.value || sessionStore.permissions.includes(permission)
-const isDirector = computed(() => project.value?.myProjectRole === 'director' || wildcard.value || hasPermission('shotgrid:project:all'))
+const isDirector = computed(() => myProjectRoles(project.value).includes('director') || wildcard.value || hasPermission('shotgrid:project:all'))
 const editableAllowed = computed(() => Boolean(
   project.value
   && isDirector.value
@@ -90,7 +91,7 @@ onBeforeUnmount(() => controller?.abort())
       </div>
       <div v-if="project" class="project-schedule-heading__meta">
         <el-tag effect="plain" type="primary"><el-icon><Calendar /></el-icon>{{ statusMeta(project.projectStatus).label }}</el-tag>
-        <el-tag effect="plain" type="info">{{ projectRoleMeta(project.myProjectRole).label }}</el-tag>
+        <el-tag effect="plain" type="info">{{ projectRoleMeta(myProjectRoles(project)).label }}</el-tag>
         <el-tag v-if="!editableAllowed" effect="plain" type="warning">只读查看</el-tag>
       </div>
     </header>

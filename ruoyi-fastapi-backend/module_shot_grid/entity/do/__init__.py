@@ -16,6 +16,7 @@ from module_shot_grid.entity.do.project_do import (
     ShotGridManagedUserRole,
     ShotGridProject,
     ShotGridProjectMember,
+    ShotGridProjectMemberRole,
     ShotGridScene,
     ShotGridShot,
 )
@@ -57,6 +58,7 @@ __all__ = [
     'ShotGridNote',
     'ShotGridProject',
     'ShotGridProjectMember',
+    'ShotGridProjectMemberRole',
     'ShotGridProjectStorage',
     'ShotGridReviewAction',
     'ShotGridReviewIssueDraft',

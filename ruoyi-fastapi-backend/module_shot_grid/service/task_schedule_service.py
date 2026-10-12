@@ -142,10 +142,7 @@ class ShotGridTaskScheduleService:
         task = await ShotGridTaskDao.get_task_detail(db, task_id)
         if task is None:
             raise shot_grid_error(404, 'SG_TASK_NOT_FOUND', '任务不存在或不可见')
-        if (
-            not (access.has_all_scope or access.project_role == 'director')
-            and task.get('assignee_user_id') != actor_user_id
-        ):
+        if not (access.has_all_scope or access.has_role('director')) and task.get('assignee_user_id') != actor_user_id:
             raise shot_grid_error(403, 'SG_PROJECT_ACCESS_DENIED', '制作人员只能查看本人任务的排期历史')
 
         rows, total = await ShotGridTaskScheduleDao.get_schedule_changes(
@@ -192,7 +189,7 @@ class ShotGridTaskScheduleService:
             cls._require_schedule_access(access, current_user, project_id, actor_user_id)
             if not access.has_all_scope:
                 actor_member = await ShotGridTaskScheduleDao.lock_actor_member(db, project_id, actor_user_id)
-                if actor_member is None or actor_member.project_role != 'director':
+                if actor_member is None or 'director' not in (actor_member.project_roles or []):
                     raise shot_grid_error(409, 'SG_TASK_SCHEDULE_READ_ONLY', '当前用户已不是项目管理人员')
 
             task = await ShotGridTaskScheduleDao.lock_task(db, project_id, task_id)
@@ -348,7 +345,7 @@ class ShotGridTaskScheduleService:
             raise shot_grid_error(403, 'SG_PROJECT_ACCESS_DENIED', '项目访问上下文与任务不一致')
         if not cls._has_permission(current_user, 'shotgrid:task:schedule'):
             raise shot_grid_error(403, 'SG_TASK_SCHEDULE_READ_ONLY', '当前用户没有调整任务排期权限')
-        if not (access.has_all_scope or access.project_role == 'director'):
+        if not (access.has_all_scope or access.has_role('director')):
             raise shot_grid_error(403, 'SG_TASK_SCHEDULE_READ_ONLY', '制作人员只能查看任务排期')
 
     @classmethod
@@ -563,7 +560,7 @@ class ShotGridTaskScheduleService:
     ) -> bool:
         return bool(
             cls._has_permission(current_user, 'shotgrid:task:schedule')
-            and (access.has_all_scope or access.project_role == 'director')
+            and (access.has_all_scope or access.has_role('director'))
             and row.get('project_status') not in {'completed', 'archived'}
             and row.get('task_status') in SCHEDULE_MUTABLE_STATUSES
         )

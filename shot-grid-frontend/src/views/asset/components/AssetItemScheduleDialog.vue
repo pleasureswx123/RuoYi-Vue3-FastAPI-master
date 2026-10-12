@@ -1,4 +1,5 @@
 <script setup>
+import { myProjectRoles } from '@/views/project/projectPresentation'
 import { createIdempotencyState } from '@/utils/idempotency'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
@@ -56,7 +57,7 @@ async function open(parent, row) {
     const asset = assetResponse.data
     const project = projectResponse.data
     const item = asset?.items?.find(value => Number(value.assetItemId) === Number(row.assetItemId))
-    const manager = project?.myProjectRole === 'director' || permitted('shotgrid:project:all') || session.permissions.includes('*:*:*')
+    const manager = myProjectRoles(project).includes('director') || permitted('shotgrid:project:all') || session.permissions.includes('*:*:*')
     if (Number(project?.projectId) !== props.projectId || Number(asset?.assetId) !== Number(parent.assetId) ||
       !canScheduleAssetItem(asset, item, manager && !['completed', 'archived'].includes(project?.projectStatus))) {
       ElMessage.warning('分项状态或排期权限已变化，请刷新后核对。')

@@ -124,7 +124,7 @@ class ShotGridTaskDao:
                 assignee_member.member_status.label('assignee_member_status'),
                 and_(
                     assignee_member.member_status == 'active',
-                    assignee_member.project_role == 'creator',
+                    assignee_member.has_role('creator'),
                     assignee.status == '0',
                     assignee.del_flag == '0',
                 ).label('assignee_valid'),
@@ -608,7 +608,7 @@ class ShotGridTaskDao:
                         ShotGridProjectMember.project_id == project_id,
                         ShotGridProjectMember.user_id == user_id,
                         ShotGridProjectMember.member_status == 'active',
-                        ShotGridProjectMember.project_role == 'creator',
+                        ShotGridProjectMember.has_role('creator'),
                         SysUser.status == '0',
                         SysUser.del_flag == '0',
                     )
