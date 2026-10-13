@@ -22,6 +22,8 @@ const idempotency = createIdempotencyState(`shot-import-${operationContext.proje
 const uploadRef = ref(null)
 const file = ref(null)
 const preview = ref(null)
+const showErrorsOnly = ref(false)
+const errorSection = ref(null)
 const selectedKeys = ref(new Set())
 const previewing = ref(false)
 const committing = ref(false)
@@ -41,6 +43,7 @@ const selectedRows = computed(() => selectedPreviewRows.value
   .filter(row => row.canImport)
   .map(row => ({ sheetName: row.sheetName, rowNumber: row.rowNumber })))
 const validRows = computed(() => (preview.value?.rows || []).filter(row => row.canImport))
+const errorRows = computed(() => (preview.value?.rows || []).filter(row => !row.canImport || visibleErrors(row).length))
 const isBusy = computed(() => previewing.value || committing.value || downloading.value)
 
 function rowKey(row) {
@@ -94,9 +97,17 @@ function previewRowClass({ row }) {
   return ''
 }
 
+async function locateErrors() {
+  showErrorsOnly.value = true
+  await nextTick()
+  errorSection.value?.scrollIntoView?.({ behavior: 'smooth', block: 'nearest' })
+  errorSection.value?.focus({ preventScroll: true })
+}
+
 function resetPreview() {
   previewController?.abort()
   preview.value = null
+  showErrorsOnly.value = false
   selectedKeys.value = new Set()
   previewTableRefs.clear()
   requestError.value = null
@@ -143,7 +154,9 @@ async function runPreview() {
   previewing.value = true
   try {
     const response = await previewShotImport(operationContext.projectId, file.value, { signal: controller.signal })
+    if (previewController !== controller || controller.signal.aborted) return
     preview.value = response.data
+    showErrorsOnly.value = false
     selectedKeys.value = new Set((response.data?.rows || []).filter(row => row.canImport).map(row => rowKey(row)))
     await syncPreviewTableSelections()
   } catch (error) {
@@ -244,7 +257,7 @@ onBeforeUnmount(() => { previewController?.abort(); downloadController?.abort() 
         <section class="shot-preview-summary">
           <div><span class="shot-preview-summary__label">有效 / 总行</span><strong class="shot-preview-summary__value">{{ validRows.length }} / {{ preview.summary.totalRows }}</strong></div>
           <div><span class="shot-preview-summary__label">含警告行</span><el-tag class="shot-preview-summary__tag" size="small" effect="plain" round type="warning">{{ preview.summary.warningRows }}</el-tag></div>
-          <div><span class="shot-preview-summary__label">错误行</span><el-tag class="shot-preview-summary__tag" size="small" effect="plain" round type="danger">{{ preview.summary.errorRows }}</el-tag></div>
+          <div><span class="shot-preview-summary__label">错误行</span><el-tag class="shot-preview-summary__tag" size="small" effect="plain" round type="danger">{{ preview.summary.errorRows }}</el-tag><el-button v-if="errorRows.length" link type="danger" :disabled="isBusy" @click="locateErrors">查看错误</el-button></div>
           <div><span class="shot-preview-summary__label">集 / 场次 / 镜头</span><strong class="shot-preview-summary__value">{{ preview.summary.distinctEpisodes }} / {{ preview.summary.distinctScenes }} / {{ preview.summary.distinctShots }}</strong></div>
           <div><span class="shot-preview-summary__label">导入有效期</span><el-tooltip content="预览结果为临时数据，超过该时间后需要重新预览。" placement="top"><strong class="shot-preview-summary__value">{{ formatPreviewExpiry(preview.expiresAt) }}</strong></el-tooltip></div>
         </section>
@@ -254,9 +267,20 @@ onBeforeUnmount(() => { previewController?.abort(); downloadController?.abort() 
         </section>
 
         <el-alert class="assignment-boundary" title="仅场次、镜头号必填；其他字段可留空，导入后通过编辑镜头补充。时长留空默认为 0。" type="info" show-icon :closable="false" />
-        <div class="selection-toolbar"><span>已选择 {{ selectedRows.length }} 条</span></div>
+        <div class="selection-toolbar"><span>已选择 {{ selectedRows.length }} 条<template v-if="showErrorsOnly">（有效行的选择已保留）</template></span><el-button v-if="showErrorsOnly" :disabled="isBusy" @click="showErrorsOnly = false">返回全部行</el-button><el-button v-else-if="errorRows.length" type="danger" plain :disabled="isBusy" @click="locateErrors">只看错误行（{{ errorRows.length }}）</el-button></div>
 
-        <section v-for="(rows, sheetName) in groupedRows" :key="sheetName" class="sheet-block">
+        <section v-if="showErrorsOnly" ref="errorSection" class="sheet-block error-diagnostics" tabindex="-1" aria-label="错误行定位">
+          <header><strong>错误行定位 · {{ errorRows.length }} 行</strong></header>
+          <el-alert title="打开原 Excel，切换到对应工作表，按左侧行号定位并修改；保存后更换文件、重新预览。错误行不会导入。" type="warning" :closable="false" show-icon />
+          <el-table :data="errorRows" :row-key="rowKey" max-height="320" size="small" border>
+            <el-table-column prop="sheetName" label="工作表" width="110" />
+            <el-table-column label="Excel 行号" width="110"><template #default="{ row }">第 {{ row.rowNumber }} 行</template></el-table-column>
+            <el-table-column label="错误原因" min-width="260"><template #default="{ row }"><div class="error-diagnostics__reason"><p v-for="(issue, index) in visibleErrors(row)" :key="index">{{ issueText(issue) }}</p><p v-if="!visibleErrors(row).length">该行无法导入，请核对原表内容。</p></div></template></el-table-column>
+            <el-table-column label="场次 / 镜头" min-width="130"><template #default="{ row }">{{ row.normalized?.sceneCode || '—' }} / {{ row.normalized?.shotCode || '—' }}</template></el-table-column>
+          </el-table>
+        </section>
+
+        <section v-for="(rows, sheetName) in groupedRows" v-show="!showErrorsOnly" :key="sheetName" class="sheet-block">
           <header><div><el-icon><Document /></el-icon><strong>{{ sheetName }}</strong><span>{{ rows.length }} 行</span></div></header>
           <div class="preview-table-wrap">
             <el-table :ref="instance => setPreviewTableRef(sheetName, instance)" :data="rows" :row-key="rowKey" :row-class-name="previewRowClass" class="preview-table" max-height="320" @selection-change="selection => handleSheetSelection(rows, selection)">
@@ -312,6 +336,8 @@ onBeforeUnmount(() => { previewController?.abort(); downloadController?.abort() 
 .shot-preview-summary__tag { margin-top: 5px; }
 
 .file-picker__upload { justify-self: start; }
+.error-diagnostics__reason p { margin: 0; color: var(--sg-danger); white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.6; }
+.error-diagnostics:focus-visible { outline: 2px solid var(--sg-accent); outline-offset: 2px; }
 .issue-list { display: flex; min-width: 180px; flex-wrap: wrap; gap: 5px; }
 .issue-list .el-tag { max-width: 100%; height: auto; min-height: 24px; white-space: normal; }
 .assignment-boundary { margin-top: -4px; }

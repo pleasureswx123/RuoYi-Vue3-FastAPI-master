@@ -112,6 +112,47 @@ describe('镜头 Excel 导入对话框', () => {
     wrapper.unmount()
   })
 
+  it('集中定位跨工作表错误且保留有效行选择，重新预览重置错误视图', async () => {
+    const secondError = { ...preview.rows[1], sheetName: 'EP002', rowNumber: 408, errors: [{ fieldName: '镜头号', message: '镜头号重复' }] }
+    previewShotImport.mockResolvedValue({ data: { ...preview, rows: [...preview.rows, secondError], summary: { ...preview.summary, errorRows: 2, totalRows: 4 } } })
+    const wrapper = mount(ShotImportDialog, {
+      props: { projectId: 8, operationGeneration: 1 },
+      global: { components, stubs: { teleport: true, ElDialog: dialogStub } }
+    })
+    try {
+      const input = wrapper.find('input[type="file"]')
+      Object.defineProperty(input.element, 'files', { configurable: true, value: [new File(['xlsx'], '镜头.xlsx')] })
+      await input.trigger('change')
+      await wrapper.findAll('button').find(button => button.text() === '预览导入内容').trigger('click')
+      await flushPromises()
+      wrapper.findAllComponents(ElTable)[1].vm.$emit('selection-change', [])
+      await flushPromises()
+      await wrapper.findAll('button').find(button => button.text() === '查看错误').trigger('click')
+      await flushPromises()
+      const diagnostics = wrapper.get('[aria-label="错误行定位"]')
+      expect(diagnostics.text()).toContain('EP001')
+      expect(diagnostics.text()).toContain('第 3 行')
+      expect(diagnostics.text()).toContain('EP002')
+      expect(diagnostics.text()).toContain('第 408 行')
+      expect(diagnostics.text()).toContain('镜头号重复')
+      expect(diagnostics.findComponent(ElTable).props('data')).toHaveLength(2)
+      expect(wrapper.text()).toContain('已选择 1 条')
+      expect(wrapper.find('.preview-table-wrap').element.parentElement.style.display).toBe('none')
+      await wrapper.findAll('button').find(button => button.text() === '返回全部行').trigger('click')
+      await flushPromises()
+      expect(wrapper.find('.preview-table-wrap').element.parentElement.style.display).not.toBe('none')
+      expect(wrapper.text()).toContain('已选择 1 条')
+      await wrapper.findAll('button').find(button => button.text().startsWith('只看错误行')).trigger('click')
+      await flushPromises()
+      await wrapper.findAll('button').find(button => button.text() === '确认导入 1 条').trigger('click')
+      await flushPromises()
+      expect(commitShotImport).toHaveBeenLastCalledWith(8, { importToken: 'token-6', selectedRows: [{ sheetName: 'EP001', rowNumber: 2 }] }, expect.any(String))
+      await wrapper.findAll('button').find(button => button.text() === '重新预览').trigger('click')
+      await flushPromises()
+      expect(wrapper.find('[aria-label="错误行定位"]').exists()).toBe(false)
+    } finally { wrapper.unmount() }
+  })
+
   it('组件卸载会中止仍在进行的模板下载且不创建 object URL', async () => {
     let resolveDownload
     downloadShotImportTemplate.mockReturnValue(new Promise(resolve => { resolveDownload = resolve }))
