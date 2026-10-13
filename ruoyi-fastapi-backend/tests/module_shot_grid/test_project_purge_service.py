@@ -58,6 +58,7 @@ def _context() -> dict[str, object]:
 @pytest.mark.asyncio
 async def test_purge_project_deletes_graph_and_enqueues_physical_cleanup(monkeypatch: pytest.MonkeyPatch) -> None:
     db = AsyncMock()
+    db.scalar.return_value = None
     lock_context = AsyncMock(return_value=_context())
     lock_runtime = AsyncMock(return_value=set())
     get_members = AsyncMock(return_value={11, 12})
@@ -108,6 +109,7 @@ async def test_purge_project_deletes_graph_and_enqueues_physical_cleanup(monkeyp
 @pytest.mark.asyncio
 async def test_purge_project_requires_platform_all_scope(monkeypatch: pytest.MonkeyPatch) -> None:
     db = AsyncMock()
+    db.scalar.return_value = None
     monkeypatch.setattr(
         'module_shot_grid.service.project_purge_service.ShotGridProjectPurgeDao.lock_project_context',
         AsyncMock(),
@@ -130,6 +132,7 @@ async def test_purge_project_requires_platform_all_scope(monkeypatch: pytest.Mon
 @pytest.mark.asyncio
 async def test_purge_project_rejects_name_mismatch_before_any_delete(monkeypatch: pytest.MonkeyPatch) -> None:
     db = AsyncMock()
+    db.scalar.return_value = None
     delete_graph = AsyncMock()
     monkeypatch.setattr(
         'module_shot_grid.service.project_purge_service.ShotGridProjectPurgeDao.lock_project_context',
@@ -157,6 +160,7 @@ async def test_purge_project_rejects_name_mismatch_before_any_delete(monkeypatch
 @pytest.mark.asyncio
 async def test_purge_project_rejects_running_storage_or_file_workers(monkeypatch: pytest.MonkeyPatch) -> None:
     db = AsyncMock()
+    db.scalar.return_value = None
     monkeypatch.setattr(
         'module_shot_grid.service.project_purge_service.ShotGridProjectPurgeDao.lock_project_context',
         AsyncMock(return_value=_context()),

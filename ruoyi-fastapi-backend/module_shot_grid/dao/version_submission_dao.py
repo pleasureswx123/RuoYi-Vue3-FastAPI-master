@@ -546,10 +546,6 @@ class ShotGridVersionSubmissionDao:
                 ShotGridVersionSubmission.submission_status == 'published',
                 ShotGridVersionSubmission.update_time <= now,
             ),
-            and_(
-                ShotGridVersionSubmission.submission_status.in_(('publishing', 'committing')),
-                ShotGridVersionSubmission.lease_until <= now,
-            ),
         )
         candidates = list(
             (

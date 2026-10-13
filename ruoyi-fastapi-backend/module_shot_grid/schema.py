@@ -29,7 +29,9 @@ SHOT_GRID_STORAGE_ROOT_REMOVE_SCHEMA_REVISION = '20260831_26'
 SHOT_GRID_SHOT_TEXT_SCHEMA_REVISION = '20260908_27'
 SHOT_GRID_MULTIPLE_ROLES_SCHEMA_REVISION = '20261012_37'
 SHOT_GRID_PROJECT_CREATOR_SCHEMA_REVISION = '20261012_38'
-SHOT_GRID_SCHEMA_REVISION = SHOT_GRID_PROJECT_CREATOR_SCHEMA_REVISION
+SHOT_GRID_FORCE_DELETE_SCHEMA_REVISION = '20261013_39'
+SHOT_GRID_TARGET_PURGE_SCHEMA_REVISION = '20261013_40'
+SHOT_GRID_SCHEMA_REVISION = SHOT_GRID_TARGET_PURGE_SCHEMA_REVISION
 
 SHOT_GRID_NAVIGATION_ROUTE_KEYS = ('workbench', 'projects', 'shots', 'assets', 'reviews', 'files')
 
@@ -37,6 +39,8 @@ SHOT_GRID_TABLE_NAMES = frozenset(
     {
         'sg_project',
         'sg_project_purge',
+        'sg_target_purge',
+        'sg_target_purge_path',
         'sg_project_member',
         'sg_project_member_role',
         'sg_managed_user_role',
@@ -109,12 +113,14 @@ SHOT_GRID_PERMISSION_CODES = frozenset(
         'shotgrid:shot:add',
         'shotgrid:shot:edit',
         'shotgrid:shot:archive',
+        'shotgrid:shot:forceDelete',
         'shotgrid:shot:import',
         'shotgrid:asset:list',
         'shotgrid:asset:query',
         'shotgrid:asset:add',
         'shotgrid:asset:edit',
         'shotgrid:asset:archive',
+        'shotgrid:asset:forceDelete',
         'shotgrid:asset:import',
         'shotgrid:assetRequirement:list',
         'shotgrid:assetRequirement:resolve',

@@ -109,7 +109,7 @@ def _access() -> ShotGridProjectAccessModel:
             [],
         ),
         ('director', 'pending_review', 2, False, ['shotgrid:version:query', 'shotgrid:reviewList:query'], []),
-        ('director', 'completed', 2, False, ['*:*:*'], []),
+        ('director', 'completed', 2, False, ['*:*:*'], ['shot.forceDelete']),
     ],
 )
 def test_shot_work_entry_permissions(
@@ -640,6 +640,7 @@ async def test_scene_renumber_freezes_directory_mapping_and_audit_before_commit(
         audit,
     )
     db = AsyncMock()
+    db.scalar.return_value = None
 
     result = await ShotGridShotCrudService.renumber_scene_shots(
         db,

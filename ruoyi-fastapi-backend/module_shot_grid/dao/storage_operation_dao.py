@@ -40,10 +40,6 @@ class ShotGridStorageOperationDao:
                     ShotGridStorageOperation.next_retry_time <= now,
                 ),
             ),
-            and_(
-                ShotGridStorageOperation.operation_status == 'processing',
-                ShotGridStorageOperation.lease_until <= now,
-            ),
         )
         # 兼容升级前已经排队的资产目录操作：至少一个制作分项真正开始后才允许物理执行。
         asset_production_started = exists(

@@ -252,3 +252,8 @@ export function rematchAssetRequirements(projectId) {
     silentError: true
   })
 }
+
+// 强制永久删除独立授权，后台清理独占文件。
+export function batchForceDeleteAssets(projectId, items, reason) {
+  return request({ url: projectUrl(projectId, '/assets/batch-force-delete'), method: 'post', data: { items, reason } })
+}

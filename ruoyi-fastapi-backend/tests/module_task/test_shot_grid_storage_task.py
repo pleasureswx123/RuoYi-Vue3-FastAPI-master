@@ -127,6 +127,9 @@ async def test_leader_wrapper_passes_worker_safety_configuration() -> None:
         'module_shot_grid.service.storage_worker_service': SimpleNamespace(
             ShotGridStorageWorkerService=SimpleNamespace(run_scheduled_batch=run_scheduled_batch),
         ),
+        'module_shot_grid.service.target_purge_worker_service': SimpleNamespace(
+            ShotGridTargetPurgeWorkerService=SimpleNamespace(run_scheduled_batch=AsyncMock(return_value=())),
+        ),
         'module_shot_grid.service.project_purge_worker_service': SimpleNamespace(
             ShotGridProjectPurgeWorkerService=SimpleNamespace(run_scheduled_batch=run_purge_batch),
         ),
@@ -198,6 +201,9 @@ async def test_shutdown_drain_waits_for_active_storage_job() -> None:
         'module_shot_grid.config': SimpleNamespace(SHOT_GRID_STORAGE_WORKER_CONFIG=worker_config),
         'module_shot_grid.service.storage_worker_service': SimpleNamespace(
             ShotGridStorageWorkerService=SimpleNamespace(run_scheduled_batch=controlled_batch),
+        ),
+        'module_shot_grid.service.target_purge_worker_service': SimpleNamespace(
+            ShotGridTargetPurgeWorkerService=SimpleNamespace(run_scheduled_batch=AsyncMock(return_value=())),
         ),
         'module_shot_grid.service.project_purge_worker_service': SimpleNamespace(
             ShotGridProjectPurgeWorkerService=SimpleNamespace(run_scheduled_batch=AsyncMock(return_value=())),

@@ -10,6 +10,7 @@ from common.vo import PageModel
 from module_admin.entity.vo.user_vo import CurrentUserModel
 from module_shot_grid.dao.project_audit_dao import ShotGridProjectAuditDao
 from module_shot_grid.dao.shot_crud_dao import ShotGridShotCrudDao
+from module_shot_grid.dao.target_purge_dao import ShotGridTargetPurgeDao
 from module_shot_grid.entity.do.asset_do import ShotGridAsset
 from module_shot_grid.entity.do.project_do import ShotGridEpisode, ShotGridProject, ShotGridScene, ShotGridShot
 from module_shot_grid.entity.do.storage_do import ShotGridProjectStorage, ShotGridStorageOperation
@@ -633,6 +634,7 @@ class ShotGridShotCrudService:
                 update_time=now,
             )
             await ShotGridShotCrudDao.add_storage_operation(db, operation)
+            await ShotGridTargetPurgeDao.assert_project_clear(db, project_id)
             storage.storage_status = 'migrating'
             storage.last_error_key = None
             storage.last_error_message = None
@@ -817,6 +819,7 @@ class ShotGridShotCrudService:
             update_time=now,
         )
         await ShotGridShotCrudDao.add_storage_operation(db, operation)
+        await ShotGridTargetPurgeDao.assert_project_clear(db, project.project_id)
         storage.storage_status = 'migrating'
         storage.last_error_key = None
         storage.last_error_message = None
@@ -1458,9 +1461,16 @@ class ShotGridShotCrudService:
         if (
             row['lifecycle_status'] != 'active'
             or row.get('project_status') in {'completed', 'archived'}
-            or row.get('storage_status') != 'ready'
+            or row.get('storage_status') == 'migrating'
         ):
             return []
+        if row.get('storage_status') != 'ready':
+            return (
+                ['shot.forceDelete']
+                if (access.has_all_scope or access.has_role('director'))
+                and cls._has_permission(current_user, 'shotgrid:shot:forceDelete')
+                else []
+            )
         candidates = []
         if (
             row.get('task_id') is not None
@@ -1504,6 +1514,7 @@ class ShotGridShotCrudService:
             and not missing_shot_assignment_fields(row)
         ):
             candidates.append(('task.assign', 'shotgrid:task:assign'))
+        candidates.append(('shot.forceDelete', 'shotgrid:shot:forceDelete'))
         if row.get('task_status') in {None, 'not_started'}:
             candidates.append(('shot.edit', 'shotgrid:shot:edit'))
             candidates.append(('shot.archive', 'shotgrid:shot:archive'))
@@ -1614,6 +1625,8 @@ class ShotGridShotCrudService:
 
     @classmethod
     def _map_integrity_error(cls, exc: IntegrityError) -> ShotGridDomainException:
+        if cls._constraint_name(exc) == 'ck_sg_target_purge_reserved':
+            return shot_grid_error(409, 'SG_TARGET_PURGE_PATH_RESERVED', '旧目标文件仍在清理中，完成后才能复用编号')
         constraint = cls._constraint_name(exc)
         if constraint == 'uk_sg_shot_scene_no_active':
             return shot_grid_error(409, 'SG_SHOT_NO_CONFLICT', '该场内镜头编号已被活动镜头占用')

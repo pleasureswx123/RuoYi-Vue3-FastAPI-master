@@ -521,6 +521,10 @@ def test_initial_migration_seeds_frozen_and_legacy_permissions_without_duplicate
     permission_sequence.append(purge_migration['PERMISSION'])
     permission_sequence.append(schedule_migration['PERMISSION'])
     permission_sequence.append(storage_root_remove_migration['PERMISSION'])
+    force_source = _migration_namespace('20261013_39')['UPGRADE_SQL']
+    for permission in ('shotgrid:shot:forceDelete', 'shotgrid:asset:forceDelete'):
+        assert permission in force_source
+        permission_sequence.append(permission)
     legacy_permissions = {'shotgrid:note:reply', 'shotgrid:note:resolve'}
 
     assert len(permission_sequence) == len(SHOT_GRID_PERMISSION_CODES | legacy_permissions)

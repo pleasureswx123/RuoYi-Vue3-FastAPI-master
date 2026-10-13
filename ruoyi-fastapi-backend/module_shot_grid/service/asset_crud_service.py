@@ -1039,14 +1039,19 @@ class ShotGridAssetCrudService:
                 project_id=project_id,
                 project_status=project_status,
                 storage_status=storage_status,
+                require_storage_ready=False,
             )
             or lifecycle_status != 'active'
         ):
             return []
 
+        if storage_status != 'ready':
+            return ['asset.forceDelete'] if cls._has_permission(current_user, 'shotgrid:asset:forceDelete') else []
         actions: list[str] = []
         if cls._has_permission(current_user, 'shotgrid:asset:edit'):
             actions.append('asset.edit')
+        if cls._has_permission(current_user, 'shotgrid:asset:forceDelete'):
+            actions.append('asset.forceDelete')
         if not has_archive_blockers and cls._has_permission(current_user, 'shotgrid:asset:archive'):
             actions.append('asset.archive')
         if cls._has_permission(current_user, 'shotgrid:asset:add'):
@@ -1173,6 +1178,7 @@ class ShotGridAssetCrudService:
         project_id: int,
         project_status: str,
         storage_status: str | None,
+        require_storage_ready: bool = True,
     ) -> bool:
         user = current_user.user
         return bool(
@@ -1182,7 +1188,8 @@ class ShotGridAssetCrudService:
             and access.user_id == user.user_id
             and (access.has_all_scope or access.has_role('director'))
             and project_status not in {'completed', 'archived'}
-            and storage_status == 'ready'
+            and storage_status != 'migrating'
+            and (not require_storage_ready or storage_status == 'ready')
         )
 
     @staticmethod
@@ -1511,6 +1518,8 @@ class ShotGridAssetCrudService:
 
     @staticmethod
     def _map_integrity_error(exc: IntegrityError) -> ShotGridDomainException:
+        if ShotGridProjectService._constraint_name(exc) == 'ck_sg_target_purge_reserved':
+            return shot_grid_error(409, 'SG_TARGET_PURGE_PATH_RESERVED', '旧目标文件仍在清理中，完成后才能复用名称')
         constraint = ShotGridProjectService._constraint_name(exc)
         if constraint in {'uk_sg_asset_name_active', 'uk_sg_asset_storage_path'}:
             return shot_grid_error(409, 'SG_ASSET_NAME_CONFLICT', '同类型资产名称或目录已经存在')

@@ -235,3 +235,8 @@ export function commitShotImport(projectId, data, idempotencyKey) {
     silentError: true
   })
 }
+
+// 强制永久删除独立授权，后台清理独占文件。
+export function batchForceDeleteShots(projectId, items, reason) {
+  return request({ url: projectUrl(projectId, '/shots/batch-force-delete'), method: 'post', data: { items, reason } })
+}

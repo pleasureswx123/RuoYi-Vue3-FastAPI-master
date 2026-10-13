@@ -1,4 +1,6 @@
 <script setup>
+import ForceDeleteAction from '@/components/ForceDeleteAction.vue'
+import TargetPurgeStatus from '@/components/TargetPurgeStatus.vue'
 import { myProjectRoles, memberRoles } from '@/views/project/projectPresentation'
 import { assetOptionalColumns, useAssetTablePresentation } from './useAssetTablePresentation'
 import AssetReviewEntry from './components/AssetReviewEntry.vue'
@@ -31,6 +33,8 @@ import AssetDetailView from '@/views/asset/AssetDetailView.vue'
 import ProtectedAssetThumbnail from '@/views/asset/components/ProtectedAssetThumbnail.vue'
 import { assetCompletionSummary, assetErrorState, assetItemStatusEntries, assetStatusMeta, assetStatusTagClass, assetTypeMeta, memberLabel, memberUserName, resolveAssetThumbnail } from '@/views/asset/assetPresentation'
 import { projectRoleMeta, storageMeta } from '@/views/project/projectPresentation'
+
+const purgeRefresh = ref(0)
 
 const ScheduleBoard = defineAsyncComponent(() => import('@/views/schedule/ScheduleBoard.vue'))
 
@@ -215,7 +219,7 @@ function canAssignAsset(asset) {
 }
 
 function canSelectAsset(asset) {
-  return canAssignAsset(asset) || canDeleteAsset(asset) || canManageItemWorkspace(asset)
+  return (hasPermission('shotgrid:asset:forceDelete') && (asset?.allowedActions || []).includes('asset.forceDelete')) || canAssignAsset(asset) || canDeleteAsset(asset) || canManageItemWorkspace(asset)
 }
 
 function canManageItemWorkspace(asset) {
@@ -509,6 +513,7 @@ async function handleDetailChanged(operationContext) {
 
 async function handleDetailDeleted(operationContext) {
   if (currentProjectId.value !== Number(operationContext?.projectId)) return
+  purgeRefresh.value++
   closeDetailDrawer()
   await loadAssets()
 }
@@ -843,6 +848,7 @@ onBeforeUnmount(() => {
         <el-button v-if="canCreate" type="primary" :icon="Plus" @click="openCreateDialog">新建资产</el-button>
       </div>
     </header>
+    <TargetPurgeStatus :project-id="currentProjectId" entity-type="asset" :refresh-key="purgeRefresh" />
 
     <ProjectStatePanel v-if="projectsError" :title="projectsError.title" :message="projectsError.message" :retryable="projectsError.retryable" @retry="loadProjects" />
     <template v-else>
@@ -903,7 +909,9 @@ onBeforeUnmount(() => {
                         :can-query="hasPermission('shotgrid:asset:query')" :loading="assetsLoading" :background-refresh="backgroundAssetRefresh" :selection-disabled="assigning || deleting || itemActionBusy"
                         @selection-change="updateAssetSelection" @item-selection-change="selectedItems = $event" @open-item="openAsset">
           <template #asset-actions="{ row }">
-            <AssetActionButtons :actions="assetTableActions(row)" />
+            <AssetActionButtons :actions="assetTableActions(row)">
+              <ForceDeleteAction :project-id="currentProjectId" entity-type="asset" :items="[row]" compact @deleted="purgeRefresh++; loadAssets()" />
+            </AssetActionButtons>
           </template>
           <template #item-actions="{ row, asset }">
             <AssetActionButtons :actions="assetItemTableActions(asset, row)" />

@@ -15,6 +15,7 @@ from module_shot_grid.entity.vo.asset_crud_vo import (
     ShotGridAssetArchiveModel,
     ShotGridAssetBatchDeleteModel,
     ShotGridAssetBatchDeleteResultModel,
+    ShotGridAssetBatchForceDeleteModel,
     ShotGridAssetCreateModel,
     ShotGridAssetDetailModel,
     ShotGridAssetItemCreateModel,
@@ -27,6 +28,7 @@ from module_shot_grid.entity.vo.asset_crud_vo import (
     ShotGridAssetUpdateModel,
 )
 from module_shot_grid.service.asset_crud_service import ShotGridAssetCrudService
+from module_shot_grid.service.force_delete_service import ShotGridForceDeleteService
 from utils.response_util import ResponseUtil
 
 SQL_BIGINT_MAX = 9_223_372_036_854_775_807
@@ -300,5 +302,28 @@ async def delete_shot_grid_asset_item(
 ) -> Response:
     result = await ShotGridAssetCrudService.delete_asset_item(
         query_db, project_id, asset_item_id, command, current_user, access
+    )
+    return ResponseUtil.success(data=result)
+
+
+@asset_crud_controller.post(
+    '/{projectId}/assets/batch-force-delete',
+    summary='强制永久删除资产',
+    response_model=DataResponseModel[ShotGridAssetBatchDeleteResultModel],
+    dependencies=[UserInterfaceAuthDependency('shotgrid:asset:forceDelete')],
+)
+async def batch_force_delete_assets(
+    project_id: Annotated[int, Path(alias='projectId', gt=0, le=SQL_BIGINT_MAX)],
+    command: ShotGridAssetBatchForceDeleteModel,
+    query_db: Annotated[AsyncSession, DBSessionDependency()],
+    current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
+    access: Annotated[ShotGridProjectAccessModel, ProjectRoleDependency('director')],
+) -> Response:
+    result = await ShotGridForceDeleteService.batch_delete_assets(
+        query_db,
+        project_id,
+        command,
+        current_user,
+        access,
     )
     return ResponseUtil.success(data=result)

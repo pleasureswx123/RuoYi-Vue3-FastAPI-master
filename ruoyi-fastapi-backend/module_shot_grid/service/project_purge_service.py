@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from module_admin.entity.vo.user_vo import CurrentUserModel
 from module_shot_grid.dao.project_audit_dao import ShotGridProjectAuditDao
 from module_shot_grid.dao.project_purge_dao import ShotGridProjectPurgeDao
+from module_shot_grid.dao.target_purge_dao import ShotGridTargetPurgeDao
 from module_shot_grid.entity.do.project_do import ShotGridProjectPurge
 from module_shot_grid.entity.vo.access_vo import ShotGridProjectAccessModel
 from module_shot_grid.entity.vo.project_vo import ShotGridProjectPurgeAcceptedModel, ShotGridProjectPurgeModel
@@ -39,6 +40,7 @@ class ShotGridProjectPurgeService:
             if project.project_name != command.project_name:
                 raise shot_grid_error(422, 'SG_PROJECT_PURGE_CONFIRMATION_MISMATCH', '输入的项目名称与当前项目不一致')
 
+            await ShotGridTargetPurgeDao.assert_project_clear(db, project_id)
             active_runtime = await ShotGridProjectPurgeDao.lock_runtime_dependencies(db, project_id)
             if active_runtime:
                 raise shot_grid_error(

@@ -8,6 +8,7 @@ from module_shot_grid.entity.vo.common_vo import (
     ShotGridLockVersionModel,
     ShotGridPageQueryModel,
 )
+from module_shot_grid.entity.vo.target_purge_vo import ShotGridTargetPurgeStatusModel
 
 AssetType = Literal['Character', 'Environment', 'Prop']
 AssetWorkStatus = Literal[
@@ -197,8 +198,16 @@ class ShotGridAssetBatchDeleteModel(ShotGridApiModel):
         return self
 
 
+class ShotGridAssetBatchForceDeleteModel(ShotGridAssetBatchDeleteModel):
+    """独立强制删除请求，不沿用普通删除的默认原因。"""
+
+    reason: str = Field(min_length=1, max_length=500)
+
+
 class ShotGridAssetBatchDeleteResultModel(ShotGridApiModel):
     """资产批量删除结果。"""
+
+    purges: list[ShotGridTargetPurgeStatusModel] = Field(default_factory=list)
 
     deleted_asset_ids: list[int]
     deleted_count: int = Field(ge=1)

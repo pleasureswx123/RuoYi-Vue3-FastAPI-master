@@ -700,6 +700,12 @@ class ShotGridReviewService:
             version_rows = await ShotGridReviewDao.get_manual_review_versions(
                 db, int(review_list.project_id), review_list_id
             )
+            if target_status == 'active':
+                active_versions = await ShotGridReviewDao.get_versions_for_manual_review(
+                    db, int(review_list.project_id), version_ids
+                )
+                if len(active_versions) != len(version_ids):
+                    raise cls._invalid_transition('审核单包含已删除或不可审核的任务版本')
             if target_status == 'active' and any(item['version_status'] != 'pending_review' for item in version_rows):
                 raise cls._invalid_transition('激活前所有版本都必须仍处于待审核状态')
             if target_status == 'completed' and any(

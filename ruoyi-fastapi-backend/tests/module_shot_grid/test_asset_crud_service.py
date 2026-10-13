@@ -979,7 +979,7 @@ def test_asset_and_item_allowed_actions_are_server_side_state_mirrors() -> None:
         has_uncommitted_submission=False,
     )
 
-    assert asset_actions == ['asset.edit', 'asset.archive', 'assetItem.add', 'task.assign']
+    assert asset_actions == ['asset.edit', 'asset.forceDelete', 'asset.archive', 'assetItem.add', 'task.assign']
     assert item_actions == ['assetItem.edit', 'assetItem.archive', 'assetItem.delete', 'task.assign']
     assert ShotGridAssetCrudService._item_allowed_actions(
         _current_user(),

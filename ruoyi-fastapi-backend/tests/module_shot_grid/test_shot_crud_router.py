@@ -11,6 +11,7 @@ CRUD_ROUTER_ORDER = 45
 IMPORT_ROUTER_ORDER = 43
 
 EXPECTED_ROUTES = {
+    ('POST', '/shot-grid/projects/{projectId}/shots/batch-force-delete'): 'shotgrid:shot:forceDelete',
     ('GET', '/shot-grid/projects/{projectId}/shots/{shotId}/reference-files/{fileId}/download'): 'shotgrid:shot:query',
     ('GET', '/shot-grid/projects/{projectId}/shots'): 'shotgrid:shot:list',
     ('POST', '/shot-grid/projects/{projectId}/shots'): 'shotgrid:shot:add',

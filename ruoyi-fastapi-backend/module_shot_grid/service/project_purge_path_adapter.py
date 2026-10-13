@@ -11,6 +11,7 @@ from module_shot_grid.service.storage_path_adapter import (
     StorageOperationPathContext,
     StoragePathAdapterError,
 )
+from module_shot_grid.service.windows_purge import remove_tree as remove_windows_tree
 from utils.file_util import FileReconcileUtil
 from utils.upload_util import UploadUtil
 
@@ -105,13 +106,16 @@ class ShotGridProjectPurgePathAdapter:
                         retryable=False,
                     )
                 cls._reject_tree_links(project_path)
-                if not shutil.rmtree.avoids_symlink_attacks and not allow_unsafe_local_test_root:
+                if os.name == 'nt':
+                    remove_windows_tree(project_path)
+                elif not shutil.rmtree.avoids_symlink_attacks and not allow_unsafe_local_test_root:
                     raise ProjectPurgePathAdapterError(
                         error_key='SG_PROJECT_PURGE_PATH_UNSAFE',
                         safe_message='当前运行环境不支持安全递归删除项目目录',
                         retryable=False,
                     )
-                shutil.rmtree(project_path)
+                else:
+                    shutil.rmtree(project_path)
                 if project_path.exists():
                     raise OSError('项目目录删除后仍然存在')
 

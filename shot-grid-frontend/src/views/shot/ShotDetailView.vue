@@ -1,4 +1,5 @@
 <script setup>
+import ForceDeleteAction from '@/components/ForceDeleteAction.vue'
 import { computed, onBeforeUnmount, onMounted, provide, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -220,6 +221,7 @@ onBeforeUnmount(() => { disposed = true; loadGeneration += 1; controller?.abort(
 
 <template>
   <section class="sg-page shot-detail-page" :class="{ 'shot-detail-page--embedded': embedded }">
+    <ForceDeleteAction v-if="projectId" :project-id="projectId" entity-type="shot" :items="shot ? [shot] : []" @deleted="props.embedded ? emit('deleted', { projectId, shotId }) : router.push({ path: '/shots', query: { projectId } })" />
     <el-button v-if="!embedded" class="back-link" link :icon="ArrowLeft" @click="router.push({ path: '/shots', query: { projectId } })">返回镜头列表</el-button>
     <ProjectStatePanel v-if="errorState" :title="errorState.title" :message="errorState.message" :retryable="errorState.retryable" @retry="loadDetail" />
     <el-card v-else-if="loading && !shot" class="detail-loading" shadow="never" aria-busy="true"><el-skeleton animated :rows="8" /></el-card>

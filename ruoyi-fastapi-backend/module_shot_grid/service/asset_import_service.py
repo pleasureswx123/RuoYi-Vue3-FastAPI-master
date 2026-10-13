@@ -30,6 +30,7 @@ from module_shot_grid.service.excel_security_service import ExcelSecurityService
 from module_shot_grid.service.import_preview_store import ImportPreviewStore
 from module_shot_grid.service.project_access_service import ShotGridProjectAccessService
 from module_shot_grid.service.project_path_service import ShotGridProjectPathService
+from module_shot_grid.service.project_service import ShotGridProjectService
 from utils.log_util import logger
 
 MAX_IDEMPOTENCY_KEY_LENGTH = 100
@@ -1027,6 +1028,12 @@ class AssetImportService:
 
     @staticmethod
     def _map_integrity_error(exc: IntegrityError) -> ShotGridDomainException:
+        if ShotGridProjectService._constraint_name(exc) == 'ck_sg_target_purge_reserved':
+            return shot_grid_error(
+                409,
+                'SG_TARGET_PURGE_PATH_RESERVED',
+                '所选资产的旧文件尚未清理完成，请在列表中重试清理，完成后重新预览导入',
+            )
         message = str(exc.orig).lower()
         if 'uk_sg_import_batch_idempotency' in message:
             return shot_grid_error(409, 'SG_IDEMPOTENCY_CONFLICT', '同一幂等键已被其他资产导入占用')

@@ -669,6 +669,23 @@ describe('资产管理真实列表页', () => {
     } finally { wrapper.unmount() }
   })
 
+  it('不勾选资产即可从删除按钮后打开强制删除确认', async () => {
+    getAssetPage.mockResolvedValue({ rows: [{ ...assetRow, allowedActions: [...assetRow.allowedActions, 'asset.forceDelete'] }], total: 1 })
+    const { wrapper } = await mountList(['shotgrid:asset:list', 'shotgrid:asset:archive', 'shotgrid:asset:forceDelete'])
+    try {
+      expect(wrapper.findAll('.el-table__row.is-selected')).toHaveLength(0)
+      const buttons = wrapper.find('.asset-row-actions').findAll('button')
+      const labels = buttons.map(buttonLabel)
+      expect(labels[labels.indexOf('删除资产') + 1]).toBe('强制删除资产')
+      await buttons.find(button => buttonLabel(button) === '强制删除资产').trigger('click')
+      await flushPromises()
+      const dialog = wrapper.findAllComponents(ElDialog).find(item => item.props('title') === '强制删除资产')
+      expect(dialog.props('modelValue')).toBe(true)
+      expect(document.body.textContent).toContain('删除原因')
+      expect(document.body.textContent).toContain('将同时删除制作分项并解除镜头关联')
+    } finally { wrapper.unmount() }
+  })
+
   it('树表父资产操作直接显示并打开对应资产编辑表单', async () => {
     const { wrapper } = await mountList(['shotgrid:asset:list', 'shotgrid:asset:query', 'shotgrid:asset:edit', 'shotgrid:asset:archive'])
     const theme = useThemeStore()

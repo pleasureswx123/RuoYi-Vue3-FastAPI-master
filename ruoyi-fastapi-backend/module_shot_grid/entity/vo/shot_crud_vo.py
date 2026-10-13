@@ -5,6 +5,7 @@ from uuid import UUID
 from pydantic import ConfigDict, Field, field_validator, model_validator
 
 from module_shot_grid.entity.vo.common_vo import ShotGridApiModel, ShotGridLockVersionModel, ShotGridPageQueryModel
+from module_shot_grid.entity.vo.target_purge_vo import ShotGridTargetPurgeStatusModel
 from module_shot_grid.entity.vo.task_vo import ShotGridTaskReferenceFileModel
 
 ShotStatus = Literal[
@@ -242,8 +243,21 @@ class ShotGridShotBatchDeleteModel(ShotGridApiModel):
         return self
 
 
+class ShotGridShotBatchForceDeleteModel(ShotGridShotBatchDeleteModel):
+    """独立强制删除请求，必须明确填写原因。"""
+
+    reason: str = Field(min_length=1, max_length=500)
+
+    @field_validator('reason', mode='before')
+    @classmethod
+    def normalize_reason(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
+
+
 class ShotGridShotBatchDeleteResultModel(ShotGridApiModel):
     """镜头批量删除结果。"""
+
+    purges: list[ShotGridTargetPurgeStatusModel] = Field(default_factory=list)
 
     deleted_shot_ids: list[int]
     deleted_count: int = Field(ge=1)

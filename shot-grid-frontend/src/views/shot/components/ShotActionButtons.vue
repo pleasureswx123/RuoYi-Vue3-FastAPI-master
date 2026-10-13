@@ -8,6 +8,7 @@ defineProps({ actions: { type: Array, required: true } })
   <div class="shot-row-actions" role="group" aria-label="镜头操作" @click.stop @keydown.stop>
     <TableActionButton v-for="action in actions" :key="action.key" element-palette :round="false"
                        v-bind="action.button" @click="action.run" />
+    <slot />
   </div>
 </template>
 

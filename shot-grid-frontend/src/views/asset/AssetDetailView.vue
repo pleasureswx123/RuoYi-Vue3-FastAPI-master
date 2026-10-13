@@ -1,4 +1,5 @@
 <script setup>
+import ForceDeleteAction from '@/components/ForceDeleteAction.vue'
 import { myProjectRoles } from '@/views/project/projectPresentation'
 import AssetItemReferences from './components/AssetItemReferences.vue'
 import AssetItemScheduleDialog from '@/views/asset/components/AssetItemScheduleDialog.vue'
@@ -392,6 +393,7 @@ onBeforeUnmount(() => {
   <RelatedDetailDrawer ref="taskDrawer" @closed="loadDetail()" />
   <TaskStartDialog v-if="startDialog" :context="startDialog" @close="closeStartDialog" @started="finishStartDialog" @failed="failStartDialog" />
   <section class="sg-page asset-detail-page" :class="{ 'asset-detail-page--embedded': embedded }">
+    <ForceDeleteAction v-if="projectId" :project-id="projectId" entity-type="asset" :items="asset ? [asset] : []" @deleted="props.embedded ? emit('deleted', { projectId, assetId }) : router.push({ path: '/assets', query: { projectId } })" />
     <el-button v-if="!embedded" class="back-link" link :icon="ArrowLeft" @click="router.push({ path: '/assets', query: { projectId: String(projectId || '') } })">返回资产库</el-button>
 
     <el-card v-if="loading && !asset" class="detail-loading" shadow="never" aria-busy="true">

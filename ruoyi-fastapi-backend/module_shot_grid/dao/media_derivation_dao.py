@@ -62,10 +62,6 @@ class ShotGridMediaDerivationDao:
                 ShotGridMediaDerivation.next_retry_time.is_not(None),
                 ShotGridMediaDerivation.next_retry_time <= now,
             ),
-            and_(
-                ShotGridMediaDerivation.derivation_status == 'processing',
-                ShotGridMediaDerivation.lease_until < now,
-            ),
         )
         task = await db.scalar(
             select(ShotGridMediaDerivation)

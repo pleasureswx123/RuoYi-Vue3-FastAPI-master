@@ -359,6 +359,12 @@ async def test_real_asyncio_scheduler_shutdown_drains_active_storage_job() -> No
             DataBaseConfig=SimpleNamespace(db_type='postgresql'),
         ),
         'module_shot_grid.config': SimpleNamespace(SHOT_GRID_STORAGE_WORKER_CONFIG=worker_config),
+        'module_shot_grid.service.project_purge_worker_service': SimpleNamespace(
+            ShotGridProjectPurgeWorkerService=SimpleNamespace(run_scheduled_batch=AsyncMock()),
+        ),
+        'module_shot_grid.service.target_purge_worker_service': SimpleNamespace(
+            ShotGridTargetPurgeWorkerService=SimpleNamespace(run_scheduled_batch=AsyncMock()),
+        ),
         'module_shot_grid.service.storage_worker_service': SimpleNamespace(
             ShotGridStorageWorkerService=SimpleNamespace(run_scheduled_batch=controlled_batch),
         ),

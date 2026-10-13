@@ -3273,7 +3273,7 @@ create table if not exists alembic_version (
     constraint alembic_version_pkc primary key (version_num)
 );
 delete from alembic_version;
-insert into alembic_version(version_num) values ('20261012_38');
+insert into alembic_version(version_num) values ('20261013_40');
 
 
 CREATE OR REPLACE FUNCTION "find_in_set"(int8, varchar)
@@ -3386,3 +3386,97 @@ COMMENT ON TABLE sg_project_member_role IS '项目成员角色关联表';
 INSERT INTO sg_project_member_role (project_id, user_id, project_role, create_by, create_time)
 SELECT project_id, user_id, project_role, create_by, create_time FROM sg_project_member
 ON CONFLICT DO NOTHING;
+
+-- 独立强制删除权限，不自动授予角色。
+
+INSERT INTO sys_menu (menu_name, parent_id, order_num, path, component, query, route_name,
+ is_frame, is_cache, menu_type, visible, status, perms, icon, create_by, create_time, remark)
+SELECT seed.name, parent.menu_id, 99, '#', '', '', '', 1, 0, 'F', '0', '0', seed.perm, '#',
+ 'shotgrid_migration_20261013_39', current_timestamp, '强制逻辑删除，保留历史和NAS文件'
+FROM (VALUES ('强制删除镜头','shotgrid:shot:forceDelete','shotgrid:shot:list'),
+             ('强制删除资产','shotgrid:asset:forceDelete','shotgrid:asset:list')) seed(name,perm,parent_perm)
+JOIN LATERAL (SELECT menu_id FROM sys_menu WHERE perms=seed.parent_perm AND menu_type='C' ORDER BY menu_id LIMIT 1) parent ON true
+WHERE NOT EXISTS (SELECT 1 FROM sys_menu WHERE perms=seed.perm);
+
+-- 镜头与资产永久清理队列。
+
+CREATE TABLE sg_target_purge (
+	purge_id BIGSERIAL NOT NULL,
+	project_id BIGINT NOT NULL,
+	target_kind VARCHAR(10) NOT NULL,
+	target_id BIGINT NOT NULL,
+	target_label VARCHAR(240) NOT NULL,
+	root_path_snapshot VARCHAR(1000) NOT NULL,
+	project_relative_path VARCHAR(1200) NOT NULL,
+	project_path_snapshot VARCHAR(2000) NOT NULL,
+	nas_manifest JSONB NOT NULL,
+	file_manifest JSONB NOT NULL,
+	purge_status VARCHAR(20) DEFAULT 'pending' NOT NULL,
+	attempt_count INTEGER DEFAULT '0' NOT NULL,
+	next_retry_time TIMESTAMP(0) WITHOUT TIME ZONE,
+	lease_owner VARCHAR(100),
+	lease_until TIMESTAMP(0) WITHOUT TIME ZONE,
+	requested_by_user_id BIGINT NOT NULL,
+	requested_by VARCHAR(64) NOT NULL,
+	reason VARCHAR(500) NOT NULL,
+	last_error_key VARCHAR(100),
+	last_error_message VARCHAR(500),
+	create_time TIMESTAMP(0) WITHOUT TIME ZONE NOT NULL,
+	update_time TIMESTAMP(0) WITHOUT TIME ZONE NOT NULL,
+	completed_time TIMESTAMP(0) WITHOUT TIME ZONE,
+	PRIMARY KEY (purge_id),
+	CONSTRAINT uk_sg_target_purge_target UNIQUE (project_id, target_kind, target_id),
+	CONSTRAINT ck_sg_target_purge_kind CHECK (target_kind in ('shot','asset')),
+	CONSTRAINT ck_sg_target_purge_status CHECK (purge_status in ('pending','processing','retry_wait','succeeded','failed')),
+	CONSTRAINT ck_sg_target_purge_attempt CHECK (attempt_count >= 0),
+	CONSTRAINT ck_sg_target_purge_required CHECK (btrim(reason) <> '' AND btrim(target_label) <> '' AND btrim(requested_by) <> ''),
+	CONSTRAINT ck_sg_target_purge_manifest CHECK (jsonb_typeof(nas_manifest) = 'array' AND jsonb_typeof(file_manifest) = 'array'),
+	CONSTRAINT ck_sg_target_purge_lease CHECK ((purge_status = 'processing') = (lease_owner IS NOT NULL AND lease_until IS NOT NULL))
+)
+
+;
+
+CREATE TABLE sg_target_purge_path (
+	purge_id BIGINT NOT NULL,
+	path_key VARCHAR(1200) NOT NULL,
+	project_id BIGINT NOT NULL,
+	PRIMARY KEY (purge_id, path_key),
+	CONSTRAINT uk_sg_target_purge_path UNIQUE (project_id, path_key),
+	CONSTRAINT ck_sg_target_purge_path_required CHECK (btrim(path_key) <> ''),
+	FOREIGN KEY(purge_id) REFERENCES sg_target_purge (purge_id) ON DELETE RESTRICT
+)
+
+;
+CREATE INDEX idx_sg_target_purge_queue ON sg_target_purge (purge_status, next_retry_time, purge_id);
+
+-- 永久清理完成前禁止重用目标身份，覆盖批量导入与重编号。
+CREATE OR REPLACE FUNCTION sg_guard_target_purge_identity() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE candidate text; extra_candidate text; episode_dir text; scene_number integer;
+BEGIN
+    PERFORM 1 FROM sg_project WHERE project_id = NEW.project_id FOR UPDATE;
+    IF TG_TABLE_NAME = 'sg_shot' THEN
+        SELECT e.storage_dir_name, s.scene_no INTO episode_dir, scene_number
+        FROM sg_scene s JOIN sg_episode e ON e.episode_id = s.episode_id
+        WHERE s.scene_id = NEW.scene_id;
+        candidate := 'VIDEO/' || episode_dir || '/' || COALESCE(NEW.storage_dir_name,
+            lpad(scene_number::text, greatest(3,length(scene_number::text)), '0') || '_' ||
+            lpad(NEW.shot_no::text, greatest(4,length(NEW.shot_no::text)), '0'));
+        extra_candidate := 'VIDEO/' || episode_dir || '/' ||
+            lpad(scene_number::text, greatest(3,length(scene_number::text)), '0') || '_' ||
+            lpad(NEW.shot_no::text, greatest(4,length(NEW.shot_no::text)), '0');
+    ELSE
+        candidate := 'ASSET/' || NEW.asset_type || '/' || NEW.storage_dir_name;
+        extra_candidate := 'ASSET/' || NEW.asset_type || '/' || NEW.asset_name_key;
+    END IF;
+    candidate := lower(normalize(replace(candidate, chr(92), '/'), NFC));
+    extra_candidate := lower(normalize(replace(extra_candidate, chr(92), '/'), NFC));
+    IF EXISTS (SELECT 1 FROM sg_target_purge_path p WHERE p.project_id = NEW.project_id AND
+        (p.path_key = candidate OR p.path_key = extra_candidate OR
+         starts_with(candidate, p.path_key || '/') OR starts_with(p.path_key, candidate || '/'))) THEN
+        RAISE EXCEPTION '旧目标文件仍在清理中，完成后才能复用编号或名称'
+            USING ERRCODE = '23514', CONSTRAINT = 'ck_sg_target_purge_reserved';
+    END IF;
+    RETURN NEW;
+END $$;
+CREATE TRIGGER trg_sg_shot_purge_guard BEFORE INSERT OR UPDATE OF project_id, episode_id, scene_id, shot_no, storage_dir_name ON sg_shot FOR EACH ROW EXECUTE FUNCTION sg_guard_target_purge_identity();
+CREATE TRIGGER trg_sg_asset_purge_guard BEFORE INSERT OR UPDATE OF project_id, asset_type, asset_name_key, storage_dir_name ON sg_asset FOR EACH ROW EXECUTE FUNCTION sg_guard_target_purge_identity();

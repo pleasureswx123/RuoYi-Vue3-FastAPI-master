@@ -1002,12 +1002,14 @@ class ShotGridReviewDao:
             (
                 await db.execute(
                     select(ShotGridVersion)
+                    .join(ShotGridTask, ShotGridTask.task_id == ShotGridVersion.task_id)
                     .where(
                         ShotGridVersion.project_id == project_id,
+                        ShotGridTask.del_flag == '0',
                         ShotGridVersion.version_id.in_(version_ids),
                         ShotGridVersion.version_status == 'pending_review',
                     )
-                    .with_for_update()
+                    .with_for_update(of=ShotGridVersion)
                 )
             ).scalars()
         )

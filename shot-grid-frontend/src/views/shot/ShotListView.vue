@@ -1,4 +1,6 @@
 <script setup>
+import ForceDeleteAction from '@/components/ForceDeleteAction.vue'
+import TargetPurgeStatus from '@/components/TargetPurgeStatus.vue'
 import { myProjectRoles, memberRoles } from '@/views/project/projectPresentation'
 import ReviewReferenceFiles from '@/components/review/ReviewReferenceFiles.vue'
 import BatchOverallFeedbackDialog from '@/components/version/BatchOverallFeedbackDialog.vue'
@@ -36,6 +38,8 @@ import ShotFormDialog from '@/views/shot/components/ShotFormDialog.vue'
 import ShotAssignDialog from '@/views/shot/components/ShotAssignDialog.vue'
 import ShotImportDialog from '@/views/shot/components/ShotImportDialog.vue'
 import { directoryStatusMeta, formatShotCode, formatShotDuration, shotAssigneeName, shotAssigneeOptionLabel, shotErrorState, shotStatusMeta, shotStatusTagClass } from '@/views/shot/shotPresentation'
+
+const purgeRefresh = ref(0)
 
 const ScheduleBoard = defineAsyncComponent(() => import('@/views/schedule/ScheduleBoard.vue'))
 
@@ -735,7 +739,7 @@ async function handleBatchFeedbackSaved(context) {
 }
 
 function canSelectShot(shot) {
-  return canScheduleShot(shot) || canAdjustShot(shot) || canAssignShot(shot) || canDeleteShot(shot) || canAddOverallFeedback(shot) || canStartShot(shot) || canAppendShotIssue(shot)
+  return (hasPermission('shotgrid:shot:forceDelete') && (shot?.allowedActions || []).includes('shot.forceDelete')) || canScheduleShot(shot) || canAdjustShot(shot) || canAssignShot(shot) || canDeleteShot(shot) || canAddOverallFeedback(shot) || canStartShot(shot) || canAppendShotIssue(shot)
 }
 
 function isShotSelectable(shot) {
@@ -1129,6 +1133,7 @@ async function handleDetailChanged(operationContext) {
 
 async function handleDetailDeleted(operationContext) {
   if (currentProjectId.value !== Number(operationContext?.projectId)) return
+  purgeRefresh.value++
   closeDetailDrawer()
   await loadShots()
 }
@@ -1452,6 +1457,7 @@ onBeforeUnmount(() => { disposed = true; closeSingleAssign(); destroyRowSortable
       <h2 class="sg-page-title">镜头管理</h2>
       <div class="shot-heading__actions"><el-button v-if="canCreateEpisode" @click="openHierarchyCreate('episode')">新建集</el-button><el-button v-if="canCreateScene" :disabled="!episodes.length" @click="openHierarchyCreate('scene')">新建场次</el-button><el-button v-if="canImport" :icon="Upload" @click="openImportDialog">导入 Excel</el-button><el-button v-if="canCreate" type="primary" :icon="Plus" @click="openCreateDialog">新建镜头</el-button></div>
     </header>
+    <TargetPurgeStatus :project-id="currentProjectId" entity-type="shot" :refresh-key="purgeRefresh" />
 
     <ProjectStatePanel v-if="projectsError" :title="projectsError.title" :message="projectsError.message" :retryable="projectsError.retryable" @retry="loadProjects" />
     <template v-else>
@@ -1578,7 +1584,9 @@ onBeforeUnmount(() => { disposed = true; closeSingleAssign(); destroyRowSortable
             </el-table-column>
             <el-table-column label="操作" column-key="actions" :width="Math.max(420, tableColumnWidths.actions || 420)" fixed="right">
               <template #default="scope">
-                <ShotActionButtons v-if="scope?.row" :actions="shotActions(scope.row)" />
+                <ShotActionButtons v-if="scope?.row" :actions="shotActions(scope.row)">
+                  <ForceDeleteAction :project-id="currentProjectId" entity-type="shot" :items="[scope.row]" compact @deleted="purgeRefresh++; loadShots()" />
+                </ShotActionButtons>
               </template>
             </el-table-column>
           </el-table>
@@ -1601,7 +1609,9 @@ onBeforeUnmount(() => { disposed = true; closeSingleAssign(); destroyRowSortable
                   <el-descriptions-item v-for="item in storyboardSpecs(shot)" :key="item.label" :label="item.label">{{ item.value }}</el-descriptions-item>
                 </el-descriptions>
                 <div class="story-frame__assignee">制作人：{{ shotAssigneeName(shot.assignee, members) }}</div>
-                <ShotActionButtons class="story-frame__actions" :actions="shotActions(shot)" />
+                <ShotActionButtons class="story-frame__actions" :actions="shotActions(shot)">
+                  <ForceDeleteAction :project-id="currentProjectId" entity-type="shot" :items="[shot]" compact @deleted="purgeRefresh++; loadShots()" />
+                </ShotActionButtons>
               </div>
             </el-card>
         </div>

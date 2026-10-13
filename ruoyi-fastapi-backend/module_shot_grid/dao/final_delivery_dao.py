@@ -113,10 +113,6 @@ class ShotGridFinalDeliveryDao:
     ) -> ShotGridFinalDelivery | None:
         due = or_(
             and_(ShotGridFinalDelivery.delivery_status == 'pending', ShotGridFinalDelivery.update_time <= now),
-            and_(
-                ShotGridFinalDelivery.delivery_status == 'publishing',
-                ShotGridFinalDelivery.lease_until <= now,
-            ),
         )
         candidates = list(
             (

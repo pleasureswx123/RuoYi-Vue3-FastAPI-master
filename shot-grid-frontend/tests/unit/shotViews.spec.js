@@ -1511,6 +1511,23 @@ describe('镜头管理真实列表页', () => {
     wrapper.unmount()
   })
 
+  it('不勾选镜头即可从删除按钮后打开强制删除确认', async () => {
+    getShotPage.mockResolvedValue({ rows: [{ ...shotRow, status: 'in_progress', allowedActions: ['shot.forceDelete'] }], total: 1, hasNext: false })
+    const { wrapper } = await mountView(['shotgrid:shot:list', 'shotgrid:shot:archive', 'shotgrid:shot:forceDelete'])
+    expect(selectedTableShots(wrapper)).toEqual([])
+    const buttons = wrapper.find('.shot-row-actions').findAll('button')
+    const labels = buttons.map(buttonLabel)
+    expect(labels[labels.indexOf('删除') + 1]).toBe('强制删除镜头')
+    await buttons.find(button => buttonLabel(button) === '强制删除镜头').trigger('click')
+    await flushPromises()
+    const dialog = wrapper.findAllComponents(ElDialog).find(item => item.props('title') === '强制删除镜头')
+    expect(dialog.props('modelValue')).toBe(true)
+    expect(document.body.textContent).toContain('删除原因')
+    expect(document.body.textContent).toContain('确认强制删除')
+    expect(selectedTableShots(wrapper)).toEqual([])
+    wrapper.unmount()
+  })
+
   it('未开始镜头可勾选、编辑和批量删除，已开始镜头禁止编辑和删除', async () => {
     const notStartedShot = { ...shotRow, status: 'not_started' }
     getShotPage.mockResolvedValue({ rows: [notStartedShot], total: 1, hasNext: false })

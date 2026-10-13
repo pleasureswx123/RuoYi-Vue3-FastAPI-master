@@ -32,6 +32,7 @@ from module_shot_grid.entity.vo.shot_import_vo import (
 from module_shot_grid.exceptions import ShotGridDomainException, shot_grid_error
 from module_shot_grid.service.excel_security_service import ExcelSecurityService
 from module_shot_grid.service.import_preview_store import ImportPreviewStore
+from module_shot_grid.service.shot_crud_service import ShotGridShotCrudService
 from module_shot_grid.service.shot_excel_parser import ShotExcelParser
 from utils.log_util import logger
 
@@ -272,6 +273,12 @@ class ShotGridShotImportService:
             if isinstance(exc, ShotGridDomainException):
                 raise
             if isinstance(exc, IntegrityError):
+                if ShotGridShotCrudService._constraint_name(exc) == 'ck_sg_target_purge_reserved':
+                    raise shot_grid_error(
+                        409,
+                        'SG_TARGET_PURGE_PATH_RESERVED',
+                        '所选镜头的旧文件尚未清理完成，请在列表中重试清理，完成后重新预览导入',
+                    ) from exc
                 raise shot_grid_error(409, 'SG_IMPORT_DATABASE_CONFLICT', '导入数据与数据库当前状态冲突') from exc
             raise shot_grid_error(500, 'SG_IMPORT_COMMIT_FAILED', '镜头导入提交失败') from exc
 
@@ -716,8 +723,12 @@ class ShotGridShotImportService:
             error_key = exc.error_key
             error_message = exc.message
         elif isinstance(exc, IntegrityError):
-            error_key = 'SG_IMPORT_DATABASE_CONFLICT'
-            error_message = '导入数据与数据库当前状态冲突'
+            if ShotGridShotCrudService._constraint_name(exc) == 'ck_sg_target_purge_reserved':
+                error_key = 'SG_TARGET_PURGE_PATH_RESERVED'
+                error_message = '所选镜头的旧文件尚未清理完成，请在列表中重试清理，完成后重新预览导入'
+            else:
+                error_key = 'SG_IMPORT_DATABASE_CONFLICT'
+                error_message = '导入数据与数据库当前状态冲突'
         else:
             error_key = 'SG_IMPORT_COMMIT_FAILED'
             error_message = '镜头导入提交失败'

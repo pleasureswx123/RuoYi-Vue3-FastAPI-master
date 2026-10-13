@@ -45,7 +45,7 @@ class _ScalarListResult:
         return self.values
 
 
-def test_claim_statement_uses_postgresql_skip_locked_and_recovers_expired_processing() -> None:
+def test_claim_statement_uses_skip_locked_without_reclaiming_unknown_io() -> None:
     now = datetime(2026, 8, 10, 12, 0, 0)
 
     statement = ShotGridStorageOperationDao.build_claim_statement(now)
@@ -54,8 +54,8 @@ def test_claim_statement_uses_postgresql_skip_locked_and_recovers_expired_proces
     assert 'FOR UPDATE SKIP LOCKED' in sql
     assert "operation_status = 'pending'" in sql
     assert "operation_status = 'retry_wait'" in sql
-    assert "operation_status = 'processing'" in sql
-    assert 'lease_until <=' in sql
+    assert "operation_status = 'processing'" not in sql
+    assert 'lease_until <=' not in sql
     assert 'attempt_count' not in str(statement.whereclause)
     assert "aggregate_type != 'asset'" in sql
     assert "sg_task.task_status IN ('preparing', 'in_progress', 'pending_review', 'revision', 'completed')" in sql
@@ -87,10 +87,10 @@ async def test_execution_context_freezes_root_status_and_both_path_scopes() -> N
 
 
 @pytest.mark.asyncio
-async def test_claim_increments_attempt_and_replaces_expired_lease_even_after_max_attempts() -> None:
+async def test_claim_increments_attempt_for_pending_operation() -> None:
     now = datetime(2026, 8, 10, 12, 0, 0)
     operation = SimpleNamespace(
-        operation_status='processing',
+        operation_status='pending',
         attempt_count=MAX_ATTEMPT_COUNT,
         next_retry_time=None,
         lease_owner='dead-worker',

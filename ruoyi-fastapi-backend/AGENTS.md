@@ -820,3 +820,23 @@ python -m pytest tests/cli -q
 - 成员响应增加 `isProjectCreator`；查询按创建者、管理人、加入时间及用户 ID 排序。概览和完整成员列表共用组件，创建者显示标识、隐藏移除，编辑时 director 不可取消，仍可增减 creator（撤销 creator 继续受活动任务约束）。
 - 后端新增、恢复、编辑与移除均在原项目协调锁内检查；移除创建者或提交缺少 director 的角色集合返回 409 `SG_PROJECT_CREATOR_PROTECTED`，跨项目管理员也不能绕过。未提供转交接口；创建者身份不可由普通项目编辑修改。
 - PostgreSQL 迁移 `20261012_38` 接续 37：按创建账号和创建时成员记录匹配唯一历史用户；无法确认则保留空值，不猜测或授予权限。已确认创建者若被移除或缺少 director 则拒绝迁移并回滚，需先核对。降级仅移除身份字段，保留成员及角色，降级后不再有创建者保护。
+
+
+### 2026-10-13 镜头与资产强制永久删除
+
+- 沿用 `shotgrid:shot:forceDelete`、`shotgrid:asset:forceDelete` 独立权限和原 batch-force-delete 接口，不新增使用者选项。列表当前行的普通删除之后显示强删，无需选择复选框；资产只删除父资产及其全部制作分项。弹窗使用 Element Plus Form 显式校验原因，保持 `lock-scroll=false`，避免本地 Chrome 滚动条引发布局抖动。
+- 登录、动作权限、项目 director/全部范围、生命周期、目标归属、lockVersion 和项目协调锁仍生效；强删允许目录未就绪，禁止目录迁移。普通删除规则不变。
+- 同一数据库事务冻结独占 NAS/平台文件清单、建立 `sg_target_purge` 与路径占用、物理删除目标业务图及历史、写独立操作审计。包括已归档或逻辑删除的资产分项；共享审核单只移除目标内容，空审核单删除；其他镜头的编号和文件不变。其他镜头的资产需求保留来源并解除匹配。仍被其他业务引用的文件保留，归属不明确或在保留期的文件拒绝清理。
+- 目录、版本发布、媒体、最终交付有执行中的 I/O 时拒绝本次删除，租约过期也不代表 I/O 已停止。这四种 Worker 禁止自动接管过期执行态；需管理员确认旧进程与 I/O 全部退出后按精确任务人工恢复，不能仅按租约时间重置。
+- Leader 目录调度链处理目标清理：短事务领取、事务外 NAS I/O、owner/attempt/有效租约门禁回写。失败保留路径占用；failed/retry_wait 可授权重试。processing 过期不自动接管，前端提示联系管理员处理。
+- PostgreSQL `20261013_40` 接续 39，初始化 SQL 同步；身份写入触发器覆盖创建、导入、改名与重编号。原冻结目录及当前同号/同名身份一直占用到全部清理成功，届时允许新 ID 重建并重新上传同名文件。强删服务检查迁移门禁，未升级返回 `SG_TARGET_PURGE_UPGRADE_REQUIRED`。不承诺 MySQL 支持。
+- 状态接口 GET `/shot-grid/projects/{projectId}/target-purges`，必填 `targetKind`，支持 `purgeId/unfinishedOnly/pageNum/pageSize`；POST `/{purgeId}/retry` 使用同项目、同实体强删权限。公开响应不含实际根路径/文件清单。列表加载、详情删除返回和刷新恢复清理状态；清理中同编号不可复用。
+- 升级必须先停止并排空全部旧 Worker，再执行 40 并启动全部新 Worker；严禁旧版本与新版本混跑。升级不执行历史已逻辑删除目标的追溯物理清理。迁移回退不会恢复已删除业务，存在未完成清理时拒绝降级。
+- 当前仅实现并执行定向测试；业务库尚未执行 40，真实 NAS 删除—同号重建—同名上传闭环未验收，不能视为生产启用完成。详见 `docs/superpowers/plans/2026-10-13-force-delete-permanent-verification.md`。
+
+
+### 2026-10-13 Windows 永久清理修复
+
+Windows 不得直接绕过 `rmtree.avoids_symlink_attacks` 检查。Windows 分支从卷/UNC共享根开始以 GENERIC_READ 和仅共享读锁住全部祖先目录，OPEN_REPARSE_POINT 打开并按句柄检查重解析点；递归期间持有父目录句柄，通过 SetFileInformationByHandle 标记精确句柄删除。无法获得句柄、文件被写入占用、重解析点或权限不足均失败，不降级无保护递归。Linux 沿用原安全 rmtree/CIFS 门禁。仅 FILE_READ_ATTRIBUTES 不足以阻止重命名，禁止替换 GENERIC_READ。
+
+镜头、资产导入遇到 `ck_sg_target_purge_reserved` 应明确返回 `SG_TARGET_PURGE_PATH_RESERVED` 和清理后重新预览提示，不折叠为普通数据库冲突。真实项目16原失败队列1、2已恢复成功且占用为0；只验证这两个目录和独占文件清理，不代表同号重新上传完整E2E已完成。
