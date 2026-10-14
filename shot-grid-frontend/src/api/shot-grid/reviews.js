@@ -41,6 +41,10 @@ export function downloadReviewReferenceFile(file, options = {}) {
     signal: options.signal,
     timeout: 120_000,
     silentError: true
+  }).then(blob => {
+    // 部分历史异常以 HTTP 200 返回 JSON，不能把错误内容交给图片或播放器。
+    if (blob.type.includes('json')) throw new Error('参考文件读取失败，请刷新后重试')
+    return blob
   })
 }
 

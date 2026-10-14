@@ -5010,3 +5010,10 @@ commit 结果中的复用集/场均为 0、资产关系为 0。数据库终态�
 Windows 不得直接绕过 `rmtree.avoids_symlink_attacks` 检查。Windows 分支从卷/UNC共享根开始以 GENERIC_READ 和仅共享读锁住全部祖先目录，OPEN_REPARSE_POINT 打开并按句柄检查重解析点；递归期间持有父目录句柄，通过 SetFileInformationByHandle 标记精确句柄删除。无法获得句柄、文件被写入占用、重解析点或权限不足均失败，不降级无保护递归。Linux 沿用原安全 rmtree/CIFS 门禁。仅 FILE_READ_ATTRIBUTES 不足以阻止重命名，禁止替换 GENERIC_READ。
 
 镜头、资产导入遇到 `ck_sg_target_purge_reserved` 应明确返回 `SG_TARGET_PURGE_PATH_RESERVED` 和清理后重新预览提示，不折叠为普通数据库冲突。真实项目16原失败队列1、2已恢复成功且占用为0；只验证这两个目录和独占文件清理，不代表同号重新上传完整E2E已完成。
+
+
+### 2026-10-14 参考文件在线预览
+
+项目资料、镜头与任务参考附件统一复用 ReviewReferenceFiles：点击图标或文件名按原鉴权下载接口读取后在浏览器内预览，保留下载。图片、MP4/MOV 使用带明确 MIME 的临时 Blob 地址，PDF 通过本地 PDF.js Worker 按页渲染到 canvas，避免内嵌浏览器缺少 PDF 插件时空白；DOCX 展示净化后的正文及内嵌图片（隔离 iframe、禁止脚本和外部资源），TXT 支持 UTF-8/GB18030，XLSX 使用 ElTable 展示工作表文字与已保存公式结果（每表最多 1000 行、100 列），PPTX 提供逐页文字预览。Office 内容预览不承诺原始分页、图表、动画或精确版式；旧 DOC/XLS/PPT 提示转换或下载，不调用外部在线 Office 服务。关闭、切换文件及卸载须取消请求、隔离迟到响应并释放对象 URL。
+
+基座对齐：继续沿用已有项目/任务/镜头查询权限、项目数据范围、精确业务引用及平台文件 ACL；任务详情项目 ID 位于 detail.project.project_id，任务关联镜头附件下载必须按该嵌套结构访问。下载返回 JSON 错误时不得当作媒体 Blob 播放。无数据库字段、迁移、公开文件地址或权限扩展。

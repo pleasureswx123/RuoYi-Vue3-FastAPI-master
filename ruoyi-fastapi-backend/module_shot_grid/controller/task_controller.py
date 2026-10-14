@@ -328,7 +328,7 @@ async def download_task_shot_reference(
     if not detail.target.shot_id:
         raise shot_grid_error(403, 'SG_FILE_ACCESS_DENIED', '文件不存在或无权访问')
     result = await ShotGridShotReferenceService.download(
-        request, query_db, current_user, detail.project_id, detail.target.shot_id, str(file_id)
+        request, query_db, current_user, detail.project.project_id, detail.target.shot_id, str(file_id)
     )
     return ResponseUtil.streaming(
         data=result.data,

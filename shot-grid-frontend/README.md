@@ -30,7 +30,7 @@
 
 ## 环境要求
 
-- Node.js：`^18.0.0 || ^20.0.0 || >=22.0.0`
+- Node.js：`>=22.13.0`（PDF.js 文档预览依赖要求；CI 与 Docker 使用 Node 22）
 - npm
 - 联调时需要真实启动 `ruoyi-fastapi-backend`、PostgreSQL 和 Redis
 
@@ -282,3 +282,49 @@ localStorage 为空、退出清理和缩略图空态等历史证据仍可参考�
 - 5xx 或初始化网络故障：进入服务异常页，不回退为空数据或 Mock。
 
 业务契约和后续实施边界见 `docs/领域模型与API契约.md`、`docs/项目完成计划.md` 和 `docs/若依基座分析与实施方案.md`。
+
+
+## 参考附件预览
+
+项目、镜头、任务和审核资料共用鉴权预览组件，点击图标或文件名查看，下载入口保留。
+
+- 图片、MP4/MOV：图片查看与视频播放；实际可播放编码取决于浏览器。
+- PDF：本地 PDF.js 按页渲染与翻页，无需浏览器 PDF 插件。
+- DOCX：正文、表格和内嵌图片内容预览，不承诺 Word 原始分页与精确版式。
+- XLSX：切换工作表查看文字和已保存公式结果，每表最多 1000 行、100 列；不重新计算公式或显示图表。
+- PPTX：按演示文稿顺序逐页查看文字，不包含图片、图表和动画。
+- TXT：UTF-8 / GB18030 纯文本。
+- DOC/XLS/PPT 等未支持格式：提示转换后上传或下载查看。
+
+文档留在当前浏览器内处理，不发送到第三方预览服务。关闭或切换资料释放临时地址及 PDF Worker。新增解析依赖与锁文件已同步，按格式动态加载；ExcelJS 仍有较大异步块的构建提示。
+
+### 2026-10-14 定向验证记录
+
+以下前端命令在本目录执行；测试合计 14 个不同用例（两次命令有重叠）：
+
+```powershell
+npx.cmd vitest run tests/unit/referencePreview.spec.js tests/unit/shotReferenceApi.spec.js
+npx.cmd vitest run tests/unit/reviewReferenceFiles.spec.js tests/unit/referencePreview.spec.js
+npx.cmd eslint src/components/review/ReviewReferenceFiles.vue src/components/review/ReferenceDocumentPreview.vue src/components/review/ReferencePdfPreview.vue src/utils/referencePreview.js src/api/shot-grid/reviews.js tests/unit/reviewReferenceFiles.spec.js tests/unit/referencePreview.spec.js tests/unit/shotReferenceApi.spec.js
+npx.cmd eslint vite.config.js src/components/review/ReferencePdfPreview.vue
+npm.cmd run build:prod
+```
+
+以上最终检查通过，生产构建保留大块提示。后端在 `../ruoyi-fastapi-backend` 执行：
+
+```powershell
+.venv/Scripts/python.exe -m pytest tests/module_shot_grid/test_task_shot_reference_download.py tests/module_shot_grid/test_project_reference_contract.py -q
+.venv/Scripts/python.exe -m ruff check module_shot_grid/controller/task_controller.py tests/module_shot_grid/test_task_shot_reference_download.py
+.venv/Scripts/python.exe -m ruff format tests/module_shot_grid/test_task_shot_reference_download.py module_shot_grid/controller/task_controller.py --check
+```
+
+后端 11 项通过，Ruff 通过；受限环境测试启动无输出，终止后在本机环境执行通过。仓库 `git diff --check` 通过。真实登录页面验证项目剧本 DOCX 正文、参考 PDF 渲染和翻页、任务参考图片恢复，以及 14.09 秒 MP4 完整播放无解码错误。XLSX/PPTX/TXT 为定向解析测试，尚未做真实业务附件浏览器验收；未执行全量测试、完整 E2E 或生产发布。
+
+
+### 2026-10-14 发布前扩展检查
+
+- `npm.cmd run lint`：全量前端 ESLint 通过。
+- `npm.cmd test -- --reporter=dot`：797 通过、17 失败；在提交前 `f6393ef` 工作树对 6 个失败文件复跑，17 项失败名称完全一致，属于既有开工排期、阶段与甘特图相关断言，不是此次新增回归。
+- 后端 `.venv/Scripts/python.exe -m pytest -q`：全量套件在 CLI/TUI 段耗时较长并出现失败，本轮中断，不能声称完整后端测试通过。
+- 后端 `.venv/Scripts/python.exe -m pytest tests/module_shot_grid -q --tb=short`：1311 通过、197 跳过、1 失败。唯一失败为 `test_nas_mount_resolver.py::test_directory_worker_uses_mapped_unc_without_enabling_test_local_root`，在 `f6393ef` 基线复跑同样失败（已有目录缺少项目归属标记）。
+- 本次定向测试、构建和真实本地附件预览验证通过；上述既有失败未混入本次功能修改，生产发布与完整业务 E2E 仍须区分。

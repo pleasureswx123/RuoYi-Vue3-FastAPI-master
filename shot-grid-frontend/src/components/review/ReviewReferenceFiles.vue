@@ -1,9 +1,13 @@
 <script setup>
-import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
+import { defineAsyncComponent, computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { Delete, Document, Download, VideoPlay } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 
 import { downloadReviewReferenceFile } from '@/api/shot-grid/reviews'
+import { referenceKind, referenceBlob, readReferenceDocument } from '@/utils/referencePreview'
+
+const ReferenceDocumentPreview = defineAsyncComponent(() => import('./ReferenceDocumentPreview.vue'))
+const ReferencePdfPreview = defineAsyncComponent(() => import('./ReferencePdfPreview.vue'))
 
 const props = defineProps({
   files: { type: Array, default: () => [] },
@@ -22,6 +26,8 @@ const videoUrl = ref('')
 const videoLoading = ref(false)
 const videoError = ref('')
 const videoElement = ref(null)
+const documentContent = ref(null)
+const previewKind = computed(() => referenceKind(videoFile.value))
 let videoController = null
 
 function isVideo(file) {
@@ -40,6 +46,7 @@ function releaseVideo() {
   if (videoUrl.value) URL.revokeObjectURL(videoUrl.value)
   videoUrl.value = ''
   videoLoading.value = false
+  documentContent.value = null
 }
 
 async function previewVideo(file) {
@@ -51,12 +58,21 @@ async function previewVideo(file) {
   const controller = new AbortController()
   videoController = controller
   try {
+    if (referenceKind(file) === 'unsupported') {
+      videoError.value = '该格式暂不支持在线预览。旧版 DOC/XLS/PPT 请转换为 DOCX/XLSX/PPTX 后上传，或下载查看。'
+      return
+    }
     const blob = await downloadReviewReferenceFile(file, { signal: controller.signal })
     if (videoController !== controller || controller.signal.aborted) return
-    const type = /\.mov$/i.test(file.originalName) ? 'video/quicktime' : 'video/mp4'
-    videoUrl.value = URL.createObjectURL(new Blob([blob], { type: blob.type.startsWith('video/') ? blob.type : type }))
+    const kind = referenceKind(file)
+    if (['video', 'pdf', 'image'].includes(kind)) {
+      videoUrl.value = URL.createObjectURL(referenceBlob(blob, file))
+    } else {
+      const content = await readReferenceDocument(blob, kind)
+      if (videoController === controller && !controller.signal.aborted) documentContent.value = content
+    }
   } catch (error) {
-    if (!controller.signal.aborted && error?.code !== 'ERR_CANCELED') videoError.value = '视频加载失败，请重试或下载文件查看。'
+    if (!controller.signal.aborted && error?.code !== 'ERR_CANCELED') videoError.value = isVideo(file) ? '视频加载失败，请重试或下载文件查看。' : '文件预览失败，请重试或下载文件查看。'
   } finally {
     if (videoController === controller) videoLoading.value = false
   }
@@ -102,7 +118,7 @@ async function loadImagePreview(file) {
   try {
     const blob = await downloadReviewReferenceFile(file, { signal: controller.signal })
     if (controllers.get(file.fileId) !== controller || controller.signal.aborted) return
-    previewUrls[file.fileId] = URL.createObjectURL(blob)
+    previewUrls[file.fileId] = URL.createObjectURL(referenceBlob(blob, file))
     previewStates[file.fileId] = 'ready'
   } catch (error) {
     if (!controller.signal.aborted && error?.code !== 'ERR_CANCELED') previewStates[file.fileId] = 'error'
@@ -171,11 +187,12 @@ onBeforeUnmount(resetPreviews)
           fit="cover"
           preview-teleported
           hide-on-click-modal
+          @error="revokePreview(file.fileId); previewStates[file.fileId] = 'error'"
         />
         <el-button v-else-if="isVideo(file)" class="review-reference-file__icon review-reference-file__video" :icon="VideoPlay" :aria-label="`预览视频 ${file.originalName}`" :title="`播放 ${file.originalName}`" @click="previewVideo(file)" />
-        <div v-else class="review-reference-file__icon" aria-hidden="true"><el-icon><Document /></el-icon></div>
+        <el-button v-else class="review-reference-file__icon" :icon="Document" :aria-label="`预览文件 ${file.originalName}`" :title="previewStates[file.fileId] === 'error' ? '加载失败，点击重试预览' : '点击预览'" @click="previewVideo(file)" />
         <div class="review-reference-file__meta">
-          <strong :title="file.originalName">{{ file.originalName }}</strong>
+          <el-button text class="review-reference-file__name" :title="file.originalName" @click="previewVideo(file)">{{ file.originalName }}</el-button>
           <small>{{ formatFileSize(file.fileSize) }}</small>
         </div>
         <div class="review-reference-file__actions">
@@ -193,13 +210,16 @@ onBeforeUnmount(resetPreviews)
       </article>
     </div>
     <el-dialog v-model="videoVisible" :title="videoFile?.originalName || '视频预览'" width="min(900px, 94vw)" append-to-body destroy-on-close @close="releaseVideo">
-      <div v-loading="videoLoading" class="review-reference-video" element-loading-text="正在加载视频…">
+      <div v-loading="videoLoading" class="review-reference-video" element-loading-text="正在加载预览…">
         <el-alert v-if="videoError" :title="videoError" type="warning" :closable="false" show-icon />
-        <video v-else-if="videoUrl" ref="videoElement" :src="videoUrl" controls autoplay playsinline :aria-label="videoFile?.originalName" @error="videoError = '浏览器无法播放此视频格式，请下载文件后使用本地播放器查看。'" />
+        <video v-else-if="videoUrl && previewKind === 'video'" ref="videoElement" :src="videoUrl" controls autoplay playsinline :aria-label="videoFile?.originalName" @error="videoError = '浏览器无法播放此视频格式，请下载文件后使用本地播放器查看。'" />
+        <el-image v-else-if="videoUrl && previewKind === 'image'" :src="videoUrl" fit="contain" class="reference-full-image" :alt="videoFile?.originalName" @error="videoError = '图片加载失败，请重试或下载查看。'" />
+        <ReferencePdfPreview v-else-if="videoUrl && previewKind === 'pdf'" :src="videoUrl" @error="videoError = 'PDF 预览失败，文件可能已加密或损坏，请下载查看。'" />
+        <ReferenceDocumentPreview v-else-if="documentContent" :key="videoFile?.fileId" :kind="previewKind" :content="documentContent" />
       </div>
       <template #footer>
         <el-button v-if="videoError" @click="previewVideo(videoFile)">重新加载</el-button>
-        <el-button :icon="Download" :loading="downloadingFileId === videoFile?.fileId" :disabled="Boolean(downloadingFileId)" @click="downloadFile(videoFile)">下载视频</el-button>
+        <el-button :icon="Download" :loading="downloadingFileId === videoFile?.fileId" :disabled="Boolean(downloadingFileId)" @click="downloadFile(videoFile)">{{ previewKind === 'video' ? '下载视频' : '下载文件' }}</el-button>
         <el-button @click="videoVisible = false">关闭</el-button>
       </template>
     </el-dialog>
@@ -207,6 +227,7 @@ onBeforeUnmount(resetPreviews)
 </template>
 
 <style scoped>
+.reference-full-image{max-width:100%;max-height:70vh}.review-reference-file__name{justify-content:flex-start;width:100%;height:auto;padding:0;overflow:hidden;font-size:11px}.review-reference-file__name :deep(span){overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .review-reference-file__video{padding:0;border:0;cursor:pointer}.review-reference-video{display:grid;min-height:180px;place-items:center}.review-reference-video video{display:block;width:100%;max-height:70vh;background:#000;border-radius:8px}
 .review-reference-files{display:grid;gap:8px;padding:10px;background:color-mix(in srgb,var(--sg-accent) 6%,transparent);border:1px solid color-mix(in srgb,var(--sg-accent) 26%,var(--sg-border));border-radius:9px}.review-reference-files>header{display:flex;gap:8px;align-items:center;justify-content:space-between}.review-reference-files>header strong{font-size:10px}.review-reference-files>header span{color:var(--sg-text-muted);font-size:8px}.review-reference-files__list{display:grid;gap:7px}.review-reference-file{display:grid;grid-template-columns:38px minmax(0,1fr) auto;gap:8px;align-items:center;min-width:0;padding:7px;background:var(--sg-surface);border:1px solid var(--sg-border);border-radius:8px}.review-reference-file__preview,.review-reference-file__icon{width:38px;height:38px;overflow:hidden;border-radius:6px}.review-reference-file__preview:deep(.el-skeleton__image){width:100%;height:100%}.review-reference-file__icon{display:grid;color:var(--sg-accent);font-size:18px;background:var(--sg-accent-soft);place-items:center}.review-reference-file__meta{display:grid;min-width:0;gap:3px}.review-reference-file__meta strong{overflow:hidden;font-size:9px;text-overflow:ellipsis;white-space:nowrap}.review-reference-file__meta small{color:var(--sg-text-muted);font-size:8px}.review-reference-file__actions{display:flex;gap:3px;align-items:center}.review-reference-file .el-button{margin:0}.review-reference-files.is-compact{padding:8px}.review-reference-files.is-compact .review-reference-file{grid-template-columns:32px minmax(0,1fr) auto}.review-reference-files.is-compact .review-reference-file__preview,.review-reference-files.is-compact .review-reference-file__icon{width:32px;height:32px}
 </style>

@@ -840,3 +840,8 @@ python -m pytest tests/cli -q
 Windows 不得直接绕过 `rmtree.avoids_symlink_attacks` 检查。Windows 分支从卷/UNC共享根开始以 GENERIC_READ 和仅共享读锁住全部祖先目录，OPEN_REPARSE_POINT 打开并按句柄检查重解析点；递归期间持有父目录句柄，通过 SetFileInformationByHandle 标记精确句柄删除。无法获得句柄、文件被写入占用、重解析点或权限不足均失败，不降级无保护递归。Linux 沿用原安全 rmtree/CIFS 门禁。仅 FILE_READ_ATTRIBUTES 不足以阻止重命名，禁止替换 GENERIC_READ。
 
 镜头、资产导入遇到 `ck_sg_target_purge_reserved` 应明确返回 `SG_TARGET_PURGE_PATH_RESERVED` 和清理后重新预览提示，不折叠为普通数据库冲突。真实项目16原失败队列1、2已恢复成功且占用为0；只验证这两个目录和独占文件清理，不代表同号重新上传完整E2E已完成。
+
+
+### 2026-10-14 任务关联镜头附件下载
+
+任务详情的项目归属取自 `detail.project.project_id`，不存在顶层 `detail.project_id`。任务关联镜头参考附件下载继续先执行任务详情权限与项目范围校验，再按嵌套项目 ID、目标镜头 ID 和文件 UUID 校验业务引用及平台 ACL；不增加公开地址或绕过授权。

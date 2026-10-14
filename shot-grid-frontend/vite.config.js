@@ -35,7 +35,10 @@ export default defineConfig(({ mode }) => {
         output: {
           chunkFileNames: 'static/js/[name]-[hash].js',
           entryFileNames: 'static/js/[name]-[hash].js',
-          assetFileNames: 'static/[ext]/[name]-[hash].[ext]'
+          // PDF.js 的模块 Worker 输出为 .js，兼容生产 Nginx 的 JavaScript MIME 映射。
+          assetFileNames: asset => asset.names?.some(name => name.endsWith('.mjs'))
+            ? 'static/js/[name]-[hash].js'
+            : 'static/[ext]/[name]-[hash].[ext]'
         }
       }
     },

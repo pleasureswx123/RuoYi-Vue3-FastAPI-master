@@ -52,3 +52,23 @@ it('加载失败显示重试和下载入口', async () => {
   expect(document.body.textContent).toContain('重新加载')
   expect(document.body.textContent).toContain('下载视频')
 })
+
+it('PDF 图标按需鉴权预览并保留下载', async () => {
+  const pdf = { ...file, originalName: '资料.pdf' }
+  downloadReviewReferenceFile.mockResolvedValue(new Blob(['%PDF'], { type: 'application/octet-stream' }))
+  wrapper = mount(ReviewReferenceFiles, { props: { files: [pdf] }, global: { stubs: { ReferencePdfPreview: { props: ['src'], template: '<div class="pdf-renderer" :data-src="src" />' } } } })
+  expect(downloadReviewReferenceFile).not.toHaveBeenCalled()
+  await wrapper.get('button[aria-label="预览文件 资料.pdf"]').trigger('click')
+  await flushPromises()
+  expect(URL.createObjectURL.mock.calls[0][0].type).toBe('application/pdf')
+  expect(document.querySelector('.pdf-renderer').getAttribute('data-src')).toBe('blob:video')
+  expect(document.body.textContent).toContain('下载文件')
+})
+
+it('旧版 Office 明确提示兼容范围而不发起无效预览', async () => {
+  wrapper = mount(ReviewReferenceFiles, { props: { files: [{ ...file, originalName: '旧资料.doc' }] } })
+  await wrapper.get('button[aria-label="预览文件 旧资料.doc"]').trigger('click')
+  await flushPromises()
+  expect(document.body.textContent).toContain('旧版 DOC/XLS/PPT')
+  expect(downloadReviewReferenceFile).not.toHaveBeenCalled()
+})
