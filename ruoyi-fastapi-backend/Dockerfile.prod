@@ -8,7 +8,8 @@ ARG APP_GID=101
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    TZ=Asia/Shanghai
 
 WORKDIR /app
 
@@ -16,7 +17,9 @@ RUN sed -ri \
         "s#http://deb.debian.org/debian-security#${DEBIAN_SECURITY_MIRROR}#g; s#http://deb.debian.org/debian#${DEBIAN_MIRROR}#g" \
         /etc/apt/sources.list.d/debian.sources \
     && apt-get update \
-    && apt-get install -y --no-install-recommends build-essential ffmpeg gosu libpq-dev \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends build-essential ffmpeg gosu libpq-dev tzdata \
+    && ln -snf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime \
+    && echo Asia/Shanghai > /etc/timezone \
     && rm -rf /var/lib/apt/lists/* \
     && addgroup --system --gid "${APP_GID}" app \
     && adduser --system --uid "${APP_UID}" --ingroup app --home /app app

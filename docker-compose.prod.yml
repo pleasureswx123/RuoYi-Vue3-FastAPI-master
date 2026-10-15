@@ -69,6 +69,8 @@ services:
     init: true
     environment:
       APP_ENV: production
+      # 当前业务使用无时区本地时间，固定后端进程为北京时间。
+      TZ: Asia/Shanghai
       APP_RELEASE_ID: ${APP_RELEASE_ID:-local}
       DB_HOST: postgres
       DB_PORT: 5432

@@ -421,6 +421,28 @@ export RUOYI_DEPLOY_STATE_DIR=/var/lib/ruoyi-shot-grid
 bash deploy/status.sh
 ```
 
+### 后端容器时区与日志时间
+
+当前日志及部分业务使用 `datetime.now()` 写入不带时区的时间字段。生产后端固定使用 `Asia/Shanghai`：`Dockerfile.prod` 安装 `tzdata` 并设置镜像时区，`docker-compose.prod.yml` 显式设置后端 `TZ`。宿主机时区正确不代表容器时区正确。
+
+此修改须通过既有正式发布流程重新构建版本镜像并重建后端容器，保留备份、迁移和健康门禁；仅执行 `docker restart` 不会应用新的镜像及 Compose 配置。不得只在运行中的容器手工安装时区包。
+
+在服务器上使用以下只读命令，按固定 Compose 项目标签定位唯一后端容器（不读取或输出生产密钥）：
+
+```bash
+backend_id=$(docker ps -q --filter label=com.docker.compose.project=ruoyi-shot-grid-prod --filter label=com.docker.compose.service=backend)
+if [ -n "$backend_id" ] && [ "$(printf '%s\n' "$backend_id" | wc -l)" -eq 1 ]; then
+  docker exec "$backend_id" date '+%Y-%m-%d %H:%M:%S %Z %z'
+  docker exec "$backend_id" python -c 'import os,time; from datetime import datetime,timezone; print("TZ:", os.getenv("TZ")); print("本地:", datetime.now().astimezone().isoformat()); print("UTC:", datetime.now(timezone.utc).isoformat()); print("时区:", time.tzname)'
+else
+  echo '未找到唯一的运行中生产后端容器，请先检查本项目容器状态。'
+fi
+```
+
+预期 `TZ` 为 `Asia/Shanghai`，本地偏移为 `+08:00`，`date` 显示 `+0800`。发布前后均记录检查结果；只有发布前确认为 UTC 才能据此确认原偏移原因。发布后再产生一条登录日志及一条正常业务操作日志，对照实际时间、接口原值与页面显示。容器时区检查不是业务验收。
+
+影响范围：后端所有依赖进程本地时间的写入、比较和后台任务均会受影响，不只日志。发布前应检查排期、租约、重试等时间比较及存量数据的时间语义，不能将此配置修改描述为仅影响前端显示。现有历史日志不会自动修正，不执行批量加减八小时；若历史数据混用 UTC 与北京时间，须另行备份并按已确认来源制定修复范围。管理端无时区日志保留原值、带时区日志转北京时间的规则不变，制作前端不修改。
+
 只看本项目后端日志：
 
 ```bash

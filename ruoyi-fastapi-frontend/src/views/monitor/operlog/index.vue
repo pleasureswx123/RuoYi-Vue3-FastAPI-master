@@ -125,7 +125,7 @@
          </el-table-column>
          <el-table-column label="操作日期" align="center" prop="operTime" width="180" sortable="custom" :sort-orders="['descending', 'ascending']">
             <template #default="scope">
-               <span>{{ parseTime(scope.row.operTime) }}</span>
+               <span>{{ formatLogTime(scope.row.operTime) }}</span>
             </template>
          </el-table-column>
          <el-table-column label="消耗时间" align="center" prop="costTime" width="110" :show-overflow-tooltip="true" sortable="custom" :sort-orders="['descending', 'ascending']">
@@ -153,6 +153,7 @@
 </template>
 
 <script setup name="Operlog">
+import { formatLogTime } from "@/utils/logTime";
 import OperlogDetail from "./detail";
 import { list, delOperlog, cleanOperlog } from "@/api/monitor/operlog";
 
