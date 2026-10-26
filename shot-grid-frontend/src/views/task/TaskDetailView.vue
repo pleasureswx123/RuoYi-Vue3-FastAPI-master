@@ -1,8 +1,9 @@
 <script setup>
 import ReopenReviewButton from '@/components/review/ReopenReviewButton.vue'
 import RelatedDetailDrawer from '@/components/RelatedDetailDrawer.vue'
+import { detailNavigationKey } from '@/composables/useDetailNavigation'
 import RevisionTransferDialog from '@/components/version/RevisionTransferDialog.vue'
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { inject, computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { ArrowLeft, Edit, Refresh } from '@element-plus/icons-vue'
@@ -32,7 +33,13 @@ import {
 } from '@/views/task/taskPresentation'
 
 const reopenedReview = ref(null)
-function handleReopened(result) { loadDetail(); reopenedReview.value?.open(`/reviews/${result.autoReviewListId}`); emit('completed') }
+const openParentDetail = inject(detailNavigationKey, null)
+function handleReopened(result) {
+  const target = `/reviews/${result.autoReviewListId}`
+  if (openParentDetail?.(target)) return
+  loadDetail()
+  reopenedReview.value?.open(target)
+}
 
 const WAITING_START_POLL_INTERVAL_MS = 5000
 const STATUS_POLL_MAX_FAILURES = 3
@@ -355,6 +362,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
+  <RelatedDetailDrawer ref="reopenedReview" @closed="loadDetail" />
   <section class="sg-page task-detail-page" :class="{ 'task-detail-page--embedded': embedded }">
     <RevisionTransferDialog ref="transferDialog" @saved="loadDetail" />
     <el-button v-if="!embedded" class="back-link" link :icon="ArrowLeft" @click="router.push('/workbench')">返回任务工作台</el-button>
@@ -383,7 +391,6 @@ onBeforeUnmount(() => {
           <small>更新于 {{ formatTaskDateTime(task.updateTime) }}</small>
         </div>
         <div class="task-hero__actions">
-          <RelatedDetailDrawer ref="reopenedReview" @closed="loadDetail" />
           <ReopenReviewButton v-if="task.latestVersion" :version="task.latestVersion" @reopened="handleReopened" />
           <el-button v-if="allowedActions.has('task.transfer')" type="primary" :disabled="loading" @click="transferDialog.open(task.latestVersion.versionId)">转交修改</el-button>
           <el-button :icon="Refresh" :loading="loading" @click="loadDetail">刷新</el-button>

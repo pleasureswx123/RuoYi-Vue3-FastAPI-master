@@ -1,7 +1,8 @@
 <script setup>
 import ReopenReviewButton from '@/components/review/ReopenReviewButton.vue'
 import RelatedDetailDrawer from '@/components/RelatedDetailDrawer.vue'
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { detailNavigationKey } from '@/composables/useDetailNavigation'
+import { inject, computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ArrowLeft, Refresh } from '@element-plus/icons-vue'
 
@@ -18,7 +19,13 @@ const router = useRouter()
 const sessionStore = useSessionStore()
 const version = ref(null)
 const reviewDrawer = ref(null)
-function reopened(result) { loadVersion(); reviewDrawer.value?.open(`/reviews/${result.autoReviewListId}`) }
+const openParentDetail = inject(detailNavigationKey, null)
+function reopened(result) {
+  const target = `/reviews/${result.autoReviewListId}`
+  if (openParentDetail?.(target)) return
+  loadVersion()
+  reviewDrawer.value?.open(target)
+}
 const loading = ref(false)
 const errorState = ref(null)
 let controller = null

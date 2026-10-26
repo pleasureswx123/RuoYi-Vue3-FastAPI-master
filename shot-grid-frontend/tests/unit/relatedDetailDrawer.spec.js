@@ -7,7 +7,11 @@ import { useSessionStore } from '@/store/modules/session'
 
 vi.mock('@/views/version/VersionDetailView.vue', () => ({ default: { props: { targetVersionId: Number, embedded: Boolean }, template: '<p>版本 {{ targetVersionId }} {{ embedded }}</p>' } }))
 vi.mock('@/views/review/ReviewDetailView.vue', () => ({ default: { props: { targetReviewListId: Number, embedded: Boolean }, emits: ['completed'], template: '<p>审核 {{ targetReviewListId }} {{ embedded }}<button class="acknowledge" @click="$emit(\'completed\')">知道了</button></p>' } }))
-vi.mock('@/views/task/TaskDetailView.vue', () => ({ default: { props: { targetTaskId: Number, embedded: Boolean }, template: '<p>任务 {{ targetTaskId }} {{ embedded }}</p>' } }))
+vi.mock('@/views/task/TaskDetailView.vue', async () => {
+  const { inject } = await import('vue')
+  const { detailNavigationKey } = await import('@/composables/useDetailNavigation')
+  return { default: { props: { targetTaskId: Number, embedded: Boolean }, setup() { return { navigate: inject(detailNavigationKey) } }, template: '<p>任务 {{ targetTaskId }} {{ embedded }}<button class="reopened" @click="navigate(\'/reviews/87\')">重审后继续审核</button></p>' } }
+})
 function render() {
   return mount(RelatedDetailDrawer, { global: { stubs: {
     ElDrawer: { name: 'ElDrawer', props: ['modelValue'], emits: ['update:modelValue', 'closed'], template: '<section v-if="modelValue"><slot name="header" /><slot /><button class="close" @click="$emit(\'update:modelValue\', false); $emit(\'closed\')">关闭</button></section>' },
@@ -66,4 +70,21 @@ describe('镜头关联详情抽屉', () => {
     expect(wrapper.text()).not.toContain('任务 69')
     wrapper.unmount()
   })
+})
+
+it('任务转审核保持同一个打开的抽屉，返回时恢复任务且不触发关闭刷新', async () => {
+  const wrapper = render()
+  wrapper.vm.open('/tasks/69')
+  await flushPromises()
+  const drawer = wrapper.findComponent({ name: 'ElDrawer' }).vm
+  await wrapper.get('.reopened').trigger('click')
+  await flushPromises()
+  expect(wrapper.text()).toContain('审核 87 true')
+  expect(wrapper.findComponent({ name: 'ElDrawer' }).vm).toBe(drawer)
+  expect(wrapper.findComponent({ name: 'ElDrawer' }).props('modelValue')).toBe(true)
+  expect(wrapper.emitted('closed')).toBeUndefined()
+  await wrapper.find('button').trigger('click')
+  await flushPromises()
+  expect(wrapper.text()).toContain('任务 69 true')
+  wrapper.unmount()
 })
