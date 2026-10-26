@@ -102,3 +102,19 @@ async def test_delete_project_graph_removes_schedule_history_before_tasks() -> N
     )
 
     assert schedule_delete_index < task_delete_index
+
+
+@pytest.mark.asyncio
+async def test_delete_project_graph_scopes_review_cycles_through_versions() -> None:
+    db = AsyncMock()
+    db.execute.return_value = SimpleNamespace(rowcount=1)
+
+    await ShotGridProjectPurgeDao.delete_project_graph(db, project_id=9)
+
+    statements = [_sql(call.args[0]) for call in db.execute.await_args_list]
+    cycles = [statement for statement in statements if statement.startswith('DELETE FROM sg_review_cycle ')]
+    assert len(cycles) == 1
+    assert 'sg_review_cycle.version_id IN (SELECT sg_version.version_id' in cycles[0]
+    assert 'sg_version.project_id = 9' in cycles[0]
+    version_delete = next(statement for statement in statements if statement.startswith('DELETE FROM sg_version '))
+    assert statements.index(cycles[0]) < statements.index(version_delete)

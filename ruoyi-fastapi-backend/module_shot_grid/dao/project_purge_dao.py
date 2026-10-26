@@ -304,7 +304,6 @@ class ShotGridProjectPurgeDao:
             ShotGridIssueVerification,
             ShotGridVersionIssueResponse,
             ShotGridReviewAction,
-            ShotGridReviewCycle,
             ShotGridNote,
         ):
             await db.execute(delete(model).where(model.project_id == project_id))

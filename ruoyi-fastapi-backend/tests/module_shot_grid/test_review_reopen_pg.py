@@ -95,6 +95,37 @@ async def command_for(sessions, version_id):
 
 
 @pytest.mark.parametrize('kind', ['asset_image', 'shot_video'])
+async def test_project_purge_after_reopen_is_atomic(pg_sessions, kind):
+    from module_shot_grid.dao.project_purge_dao import ShotGridProjectPurgeDao
+    from module_shot_grid.entity.do.project_do import ShotGridProject
+
+    version_id, _, _ = await approved(pg_sessions, kind)
+    async with pg_sessions() as db:
+        await Reopen.reopen(
+            db,
+            version_id,
+            await command_for(pg_sessions, version_id),
+            'reopen-before-purge',
+            _user(permissions=['shotgrid:version:reopen', 'shotgrid:version:review']),
+        )
+    async with pg_sessions() as db:
+        await ShotGridProjectPurgeDao.delete_project_graph(db, PROJECT_ID)
+        assert await db.get(ShotGridProject, PROJECT_ID) is None
+        assert not list(await db.scalars(select(ShotGridReviewCycle)))
+        await db.rollback()
+    async with pg_sessions() as db:
+        assert await db.get(ShotGridProject, PROJECT_ID) is not None
+        assert len(list(await db.scalars(select(ShotGridReviewCycle)))) == 2
+        assert len(list(await db.scalars(select(ShotGridReviewAction)))) == 2
+        await ShotGridProjectPurgeDao.delete_project_graph(db, PROJECT_ID)
+        await db.commit()
+    async with pg_sessions() as db:
+        assert await db.get(ShotGridProject, PROJECT_ID) is None
+        for model in (ShotGridReviewCycle, ShotGridReviewAction, ShotGridFinalDelivery, ShotGridVersion, ShotGridTask):
+            assert not list(await db.scalars(select(model)))
+
+
+@pytest.mark.parametrize('kind', ['asset_image', 'shot_video'])
 async def test_reopen_reject_history_and_candidate_freeze(pg_sessions, kind):
     version_id, candidates, original = await approved(pg_sessions, kind)
     command = await command_for(pg_sessions, version_id)
