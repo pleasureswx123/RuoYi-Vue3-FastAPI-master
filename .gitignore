@@ -49,6 +49,8 @@ coverage.xml
 *.py,cover
 .hypothesis/
 .pytest_cache/
+# 定向回归测试通过 --basetemp 生成的临时目录
+.pytest_tmp*/
 cover/
 
 # Translations
