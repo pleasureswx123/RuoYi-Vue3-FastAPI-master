@@ -1,4 +1,5 @@
 <script setup>
+import NasFolderMenu from '@/components/NasFolderMenu.vue'
 import ForceDeleteAction from '@/components/ForceDeleteAction.vue'
 import TargetPurgeStatus from '@/components/TargetPurgeStatus.vue'
 import { myProjectRoles, memberRoles } from '@/views/project/projectPresentation'
@@ -38,6 +39,7 @@ const purgeRefresh = ref(0)
 
 const ScheduleBoard = defineAsyncComponent(() => import('@/views/schedule/ScheduleBoard.vue'))
 
+const nasFolderMenu = ref(null)
 const route = useRoute()
 const router = useRouter()
 const sessionStore = useSessionStore()
@@ -905,7 +907,7 @@ onBeforeUnmount(() => {
         <ProjectStatePanel v-else-if="assetsError" :title="assetsError.title" :message="assetsError.message" :retryable="assetsError.retryable" @retry="loadProjectContext" />
         <el-empty v-else-if="!assetsLoading && !assets.length" class="asset-empty" description="当前筛选没有资产"><template #image><el-icon><Box /></el-icon></template><p>调整筛选条件，或在存储就绪的活动项目中新建/导入资产。</p></el-empty>
 
-        <AssetTreeTable v-else-if="viewMode === 'table'" ref="assetTable" :assets="assets" :item-status="appliedItemStatus" :visible-columns="visibleColumns" :column-widths="columnWidths" @header-dragend="saveWidth" @available-width="tableAvailableWidth = $event" :project-id="currentProjectId"
+        <AssetTreeTable @row-contextmenu="(...args) => nasFolderMenu?.open(...args)" v-else-if="viewMode === 'table'" ref="assetTable" :assets="assets" :item-status="appliedItemStatus" :visible-columns="visibleColumns" :column-widths="columnWidths" @header-dragend="saveWidth" @available-width="tableAvailableWidth = $event" :project-id="currentProjectId"
                         :context-key="`${currentProjectId}:${appliedAssetQuery}`" :members="members"
                         :selected-asset-ids="selectedAssetIds" :selectable="canSelectAsset" :selected-item-ids="selectedItemIds" :item-selectable="canSelectItem"
                         :can-query="hasPermission('shotgrid:asset:query')" :loading="assetsLoading" :background-refresh="backgroundAssetRefresh" :selection-disabled="assigning || deleting || itemActionBusy"
@@ -983,6 +985,7 @@ onBeforeUnmount(() => {
       <AssetDetailView v-if="detailAssetId && currentProjectId" embedded :target-project-id="currentProjectId" :target-asset-id="detailAssetId" :target-asset-item-id="detailAssetItemId" @changed="handleDetailChanged" @deleted="handleDetailDeleted" />
     </el-drawer>
   </section>
+  <NasFolderMenu ref="nasFolderMenu" :project-id="Number(currentProjectId) || 0" :can-query="hasPermission('shotgrid:version:query')" />
 </template>
 
 <style scoped>

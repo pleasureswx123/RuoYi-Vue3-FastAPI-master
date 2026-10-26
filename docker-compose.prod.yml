@@ -80,8 +80,15 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: 6379
       REDIS_PASSWORD: ${REDIS_PASSWORD}
+      SHOT_GRID_NAS_SIGNING_KEY_FILE: /run/shot-grid-nas/signing.pem
     volumes:
       - backend_files:/app/vf_admin
+      - type: bind
+        source: ${SHOT_GRID_NAS_SIGNING_HOST_DIR:-/etc/ruoyi-shot-grid/nas-opener}
+        target: /run/shot-grid-nas
+        read_only: true
+        bind:
+          create_host_path: false
       - type: bind
         source: ${SHOT_GRID_NAS_DYNAMIC_HOST_ROOT:-/mnt/ruoyi-shot-grid/dynamic}
         target: ${SHOT_GRID_NAS_DYNAMIC_CONTAINER_ROOT:-/mnt/ruoyi-shot-grid/dynamic}

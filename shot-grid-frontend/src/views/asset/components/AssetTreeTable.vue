@@ -30,7 +30,7 @@ const props = defineProps({
   selectionDisabled: { type: Boolean, default: false },
   backgroundRefresh: { type: Boolean, default: false }
 })
-const emit = defineEmits(['available-width', 'header-dragend', 'selection-change', 'item-selection-change', 'open-item'])
+const emit = defineEmits(['row-contextmenu', 'available-width', 'header-dragend', 'selection-change', 'item-selection-change', 'open-item'])
 const table = ref(null)
 const tableContainer = ref(null)
 let widthObserver = null
@@ -306,7 +306,7 @@ defineExpose({ waitForLoads, refreshLoadedChildren })
 
 <template>
   <div ref="tableContainer" class="asset-table-wrap">
-    <el-table ref="table" :key="tableGeneration" class="asset-data-table" :data="rows"
+    <el-table @row-contextmenu="(...args) => emit('row-contextmenu', ...args)" ref="table" :key="tableGeneration" class="asset-data-table" :data="rows"
               row-key="rowKey" lazy :load="load" :tree-props="treeProps" :indent="20"
               max-height="620" v-loading="loading" empty-text="当前筛选没有资产"
               @header-dragend="(...args) => emit('header-dragend', ...args)" @selection-change="selectionChanged" @select-all="selectAll" @expand-change="expansionChanged">

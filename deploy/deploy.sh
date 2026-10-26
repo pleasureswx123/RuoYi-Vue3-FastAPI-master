@@ -225,6 +225,9 @@ echo '执行生产配置、数据库、Redis 与传输加密预检'
 "${COMPOSE[@]}" run --rm --no-deps backend ruoyi app doctor --env=production --output=json
 "${COMPOSE[@]}" run --rm --no-deps backend ruoyi crypto validate --env=production --output=json
 
+# 使用应用身份检查只读签名密钥，失败时不得切换到缺失 NAS 打开能力的新版本。
+"${COMPOSE[@]}" run --rm --no-deps backend python -c 'from module_shot_grid.service.nas_opener_service import _key; from cryptography.hazmat.primitives import hashes; from cryptography.hazmat.primitives.asymmetric import padding; key = _key(); payload = b"shot-grid-deploy-preflight"; signature = key.sign(payload, padding.PKCS1v15(), hashes.SHA256()); key.public_key().verify(signature, payload, padding.PKCS1v15(), hashes.SHA256()); print("NAS signing preflight OK")'
+
 switch_started=1
 echo '切换到新应用镜像并等待全部健康检查通过'
 "${COMPOSE[@]}" up -d --no-build --wait --wait-timeout 240

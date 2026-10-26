@@ -1,6 +1,14 @@
 import request from '@/utils/request'
 import { assertPositiveId } from '@/api/shot-grid/projects'
 
+export function getNasOpenTicket(versionId, data, options = {}) {
+  return request({ url: `/shot-grid/versions/${assertPositiveId(versionId, '版本')}/nas-open-ticket`, method: 'post', data, headers: { repeatSubmit: false }, signal: options.signal, silentError: true })
+}
+
+export function getNasOpenerPublicKey() {
+  return request({ url: '/shot-grid/nas-opener/public-key', method: 'get', silentError: true })
+}
+
 const IDEMPOTENCY_KEY_MAX_LENGTH = 100
 
 function idempotencyHeaders(idempotencyKey) {

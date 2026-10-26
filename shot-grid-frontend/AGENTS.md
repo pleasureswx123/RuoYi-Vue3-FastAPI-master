@@ -1149,3 +1149,14 @@ Windows 不得直接绕过 `rmtree.avoids_symlink_attacks` 检查。Windows 分�
 - 每次通过写 `FINAL/T{taskId}-V{versionNo:03d}-R{cycle:03d}/` 不可变文件及 FINAL.json；任务级 `FINAL/CURRENT-{taskId}.json` 是可原子替换的有效清单，避免资产多个分项共享目录时互相覆盖。generation 使用交付事件ID，拒绝低代次覆盖，撤销写 valid=false。历史目录不是当前有效终稿依据。
 - 同任务交付按事件顺序执行：前序有效发布或撤销处于 pending/publishing/failed 时后序不执行。失败撤销可从当前版本重试，跨版本展示未完成撤销状态。Worker保留短事务、事务外I/O、心跳、owner+attempt fencing及软超时收敛；后台清单同步不假装数据库与NAS原子一致。
 - PostgreSQL 迁移 20261026_41 回填首周期、扩展约束和权限；新库初始化SQL同步。存在重新审核或新目录交付记录时拒绝降级。永久清理图包含审核周期。未改 MySQL 承诺，未在业务库执行迁移。
+
+
+### 2026-10-26 NAS 文件夹本机打开
+
+镜头表格和资产制作分项共用 NasFolderMenu。先读取鉴权版本详情并核对项目/任务/版本，单目录直接申请短时签名凭证并唤起工具，多目录才弹出选择。正常发起打开后不显示浮动提示；右键“安装／打开帮助”提供安装/更新、重试和复制，失败时显示错误及帮助。网页不推断安装状态或打开成功。
+
+- 新增 POST /shot-grid/versions/{version_id}/nas-open-ticket，body 为 {projectId, taskId, fileId}，不接受客户端 UNC。沿用登录认证、shotgrid:version:query 和版本详情项目/任务可见性；服务端再次确认文件归属与安全目录。响应 data 为 {folder, uri, expiresIn: 60}，Cache-Control: no-store。
+- 新增 GET /shot-grid/nas-opener/public-key，同样鉴权及权限控制，只返回 publicKeyXml。网页将公钥绑定到静态安装模板后下载；直接下载未绑定模板不能安装。
+- 独立 RSA 私钥由 SHOT_GRID_NAS_SIGNING_KEY_FILE 指定，缺失失败关闭，不使用 JWT/传输密钥，不自动生成。PKCS1v15 + SHA256 对固定用途 SGNAS1、签发/过期时间、随机 nonce、完整目录签名。协议为 shotgrid-nas://open-v1/<payload>.<signature>。工具只信任安装时公钥，拒绝旧无签名协议、篡改、过期、错误用途、危险路径；有效期60秒，最多容忍签发时间超前5秒。本机同一用户以原子文件创建阻止凭证重放。
+- 工具只打开已存在的公司 NAS 目录，使用当前 Windows/NAS ACL；正常请求直接打开，不再弹出目录确认。公钥轮换后需升级工具；离线验签无法立即撤销已签发凭证，最长60秒有效窗口。无数据库迁移、无新增角色权限。
+- 详见 docs/NAS文件夹本机打开.md；本地验收不等于生产后端部署验收。

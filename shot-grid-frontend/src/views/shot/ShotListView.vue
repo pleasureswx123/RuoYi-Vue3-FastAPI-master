@@ -1,4 +1,5 @@
 <script setup>
+import NasFolderMenu from '@/components/NasFolderMenu.vue'
 import ForceDeleteAction from '@/components/ForceDeleteAction.vue'
 import TargetPurgeStatus from '@/components/TargetPurgeStatus.vue'
 import { myProjectRoles, memberRoles } from '@/views/project/projectPresentation'
@@ -43,6 +44,7 @@ const purgeRefresh = ref(0)
 
 const ScheduleBoard = defineAsyncComponent(() => import('@/views/schedule/ScheduleBoard.vue'))
 
+const nasFolderMenu = ref(null)
 const route = useRoute()
 const router = useRouter()
 const sessionStore = useSessionStore()
@@ -1523,7 +1525,7 @@ onBeforeUnmount(() => { disposed = true; closeSingleAssign(); destroyRowSortable
         <el-empty v-else-if="viewMode !== 'table' && !shots.length" class="shot-empty" description="当前筛选没有镜头"><p>可以调整集、场次、状态或制作人筛选；项目管理人也可以新建或导入镜头。</p></el-empty>
 
         <div v-else-if="viewMode === 'table'" class="shot-table-wrap">
-          <el-table ref="shotTableRef" v-loading="shotsLoading" class="shot-data-table" :data="shots" row-key="shotId" :height="shotTableHeight" empty-text="当前筛选没有镜头" @selection-change="handleShotSelectionChange" @header-dragend="saveColumnWidth">
+          <el-table @row-contextmenu="(...args) => nasFolderMenu?.open(...args)" ref="shotTableRef" v-loading="shotsLoading" class="shot-data-table" :data="shots" row-key="shotId" :height="shotTableHeight" empty-text="当前筛选没有镜头" @selection-change="handleShotSelectionChange" @header-dragend="saveColumnWidth">
             <template #empty><el-empty class="shot-empty" description="当前筛选没有镜头"><p>可以调整集、场次、状态或制作人筛选；项目管理人也可以新建或导入镜头。</p></el-empty></template>
             <el-table-column type="selection" width="44" fixed="left" align="center" :selectable="isShotSelectable" reserve-selection />
             <el-table-column type="expand" width="40" fixed="left">
@@ -1656,6 +1658,7 @@ onBeforeUnmount(() => { disposed = true; closeSingleAssign(); destroyRowSortable
     <BatchOverallFeedbackDialog :key="currentProjectId" ref="batchFeedbackDialog" @active-change="value => { batchFeedbackOpen = value }" @review="openWork" @saved="handleBatchFeedbackSaved" />
     <RelatedDetailDrawer ref="workDrawer" @closed="handleWorkDrawerClosed" />
   </section>
+  <NasFolderMenu ref="nasFolderMenu" :project-id="Number(currentProjectId) || 0" :can-query="hasPermission('shotgrid:version:query')" />
 </template>
 
 <style scoped>
