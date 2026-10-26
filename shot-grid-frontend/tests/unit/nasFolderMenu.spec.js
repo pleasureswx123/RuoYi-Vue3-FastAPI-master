@@ -1,8 +1,10 @@
 import { mount, flushPromises } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import NasFolderMenu from '@/components/NasFolderMenu.vue'
-import { getVersionDetail, getNasOpenTicket } from '@/api/shot-grid/versions'
-vi.mock('@/api/shot-grid/versions', () => ({ getVersionDetail: vi.fn(), getNasOpenTicket: vi.fn(), getNasOpenerPublicKey: vi.fn() }))
+import { getVersionDetail, getNasOpenTicket, getProjectNasOpenTicket } from '@/api/shot-grid/versions'
+import { getProjectStorage } from '@/api/shot-grid/projects'
+vi.mock('@/api/shot-grid/projects', () => ({ getProjectStorage: vi.fn() }))
+vi.mock('@/api/shot-grid/versions', () => ({ getVersionDetail: vi.fn(), getNasOpenTicket: vi.fn(), getNasOpenerPublicKey: vi.fn(), getProjectNasOpenTicket: vi.fn() }))
 const row = { rowKind: 'item', task: { taskId: 2 }, latestVersion: { versionId: 3 } }
 function render(canQuery = true) {
   return mount(NasFolderMenu, { props: { projectId: 7, canQuery }, global: { directives: { loading: {} }, stubs: {
@@ -131,6 +133,37 @@ describe('列表 NAS 右键入口', () => {
     expect(wrapper.text()).toContain('复制目录')
     expect(wrapper.text()).toContain('下载 Windows 安装工具')
     expect(getNasOpenTicket).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+})
+
+
+describe('NAS 显式按钮目标', () => {
+  it('指定文件只签发该文件的父目录', async () => {
+    getVersionDetail.mockResolvedValue({ data: { projectId: 7, taskId: 2, versionId: 3, files: [
+      { fileId: 'a', nasPath: '\\\\192.168.10.64\\share\\other\\a.png' },
+      { fileId: 'b', nasPath: '\\\\192.168.10.64\\share\\project\\b.png' }
+    ] } })
+    const wrapper = render()
+    await wrapper.vm.openTarget({ taskId: 2, versionId: 3, fileId: 'b' })
+    expect(getNasOpenTicket).toHaveBeenCalledWith(3, { projectId: 7, taskId: 2, fileId: 'b' }, expect.any(Object))
+    wrapper.unmount()
+  })
+  it('项目入口使用项目签名接口且不读取版本', async () => {
+    getProjectStorage.mockResolvedValue({ data: { projectId: 7, storageStatus: 'ready', projectPathSnapshot: '\\\\192.168.10.64\\share\\project' } })
+    getProjectNasOpenTicket.mockResolvedValue({ data: { folder: '\\\\192.168.10.64\\share\\project', uri: 'shotgrid-nas://open-v1/YQ.Yg' } })
+    const wrapper = render()
+    await wrapper.vm.openTarget({ kind: 'project' })
+    expect(getProjectNasOpenTicket).toHaveBeenCalledWith(7, expect.any(Object))
+    expect(getVersionDetail).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+  it('未就绪项目不能签发打开请求', async () => {
+    getProjectStorage.mockResolvedValue({ data: { projectId: 7, storageStatus: 'initializing' } })
+    const wrapper = render()
+    await wrapper.vm.openTarget({ kind: 'project' })
+    expect(getProjectNasOpenTicket).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('尚未就绪')
     wrapper.unmount()
   })
 })

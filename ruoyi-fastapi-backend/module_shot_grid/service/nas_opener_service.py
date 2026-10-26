@@ -13,8 +13,10 @@ from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from module_admin.entity.vo.user_vo import CurrentUserModel
+from module_shot_grid.entity.vo.access_vo import ShotGridProjectAccessModel
 from module_shot_grid.entity.vo.nas_opener_vo import NasOpenCommand
 from module_shot_grid.exceptions import shot_grid_error
+from module_shot_grid.service.project_service import ShotGridProjectService
 from module_shot_grid.service.review_service import ShotGridReviewService
 
 MAX_PATH_LENGTH = 2000
@@ -77,6 +79,22 @@ def sign_folder(path: str) -> str:
 
 
 class ShotGridNasOpenerService:
+    @staticmethod
+    async def issue_project(
+        db: AsyncSession, project_id: int, access: ShotGridProjectAccessModel
+    ) -> dict[str, str | int]:
+        if access.project_id != project_id:
+            raise shot_grid_error(403, 'SG_PROJECT_ACCESS_DENIED', '无权访问该项目')
+        storage = await ShotGridProjectService.get_project_storage_status(db, project_id, access)
+        if storage.storage_status != 'ready' or not storage.project_path_snapshot:
+            raise shot_grid_error(409, 'SG_NAS_NOT_READY', '项目目录尚未就绪，请稍后重试')
+        try:
+            folder = validate_folder(storage.project_path_snapshot)
+        except ValueError:
+            raise shot_grid_error(422, 'SG_NAS_PATH_INVALID', '项目目录不符合安全规则') from None
+        uri = await asyncio.to_thread(sign_folder, folder)
+        return {'folder': folder, 'uri': uri, 'expiresIn': 60}
+
     @staticmethod
     async def issue(
         db: AsyncSession, version_id: int, current_user: CurrentUserModel, command: NasOpenCommand

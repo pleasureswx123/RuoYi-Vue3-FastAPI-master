@@ -1160,3 +1160,10 @@ Windows 不得直接绕过 `rmtree.avoids_symlink_attacks` 检查。Windows 分�
 - 独立 RSA 私钥由 SHOT_GRID_NAS_SIGNING_KEY_FILE 指定，缺失失败关闭，不使用 JWT/传输密钥，不自动生成。PKCS1v15 + SHA256 对固定用途 SGNAS1、签发/过期时间、随机 nonce、完整目录签名。协议为 shotgrid-nas://open-v1/<payload>.<signature>。工具只信任安装时公钥，拒绝旧无签名协议、篡改、过期、错误用途、危险路径；有效期60秒，最多容忍签发时间超前5秒。本机同一用户以原子文件创建阻止凭证重放。
 - 工具只打开已存在的公司 NAS 目录，使用当前 Windows/NAS ACL；正常请求直接打开，不再弹出目录确认。公钥轮换后需升级工具；离线验签无法立即撤销已签发凭证，最长60秒有效窗口。无数据库迁移、无新增角色权限。
 - 详见 docs/NAS文件夹本机打开.md；本地验收不等于生产后端部署验收。
+
+
+### NAS 打开入口扩展（2026-10-26）
+
+项目存储（含文件中心嵌入面板）、文件中心正式文件、自动审核单版本行，以及任务/审核/版本详情共用的 VersionDetailCard，在原复制路径或查看审核按钮后增加 NasOpenButton。项目目录打开自身，文件入口绑定 fileId，只打开该文件父目录；审核版本行无唯一目录时选择。人工批量审核单本身没有唯一版本，需进入详情选择具体版本文件。新建项目的预览路径尚未形成项目绑定，不提供打开入口。
+
+新增 POST /shot-grid/projects/{projectId}/nas-open-ticket：登录 + shotgrid:storage:path + ProjectAccessDependency；重新读取数据库项目存储快照，仅 ready 状态可签发，拒绝客户端指定路径，返回原签名协议及 no-store。公钥接口允许 version:query 或 storage:path，业务签名接口仍分别校验原权限；版本文件入口不扩大文件/版本可见范围。沿用现有密钥、本机工具和协议，无迁移。新按钮只在使用时挂载帮助组件，切换目标取消旧请求；正常发起不弹浮动卡。尚未部署。

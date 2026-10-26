@@ -2,9 +2,10 @@
 import { onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { ElMessage, ElPopover } from 'element-plus'
 import { FolderOpened, QuestionFilled } from '@element-plus/icons-vue'
-import { getVersionDetail, getNasOpenTicket, getNasOpenerPublicKey } from '@/api/shot-grid/versions'
+import { getVersionDetail, getNasOpenTicket, getNasOpenerPublicKey, getProjectNasOpenTicket } from '@/api/shot-grid/versions'
+import { getProjectStorage } from '@/api/shot-grid/projects'
 import { copyTextToClipboard } from '@/utils/clipboard'
-import { versionNasFolders } from '@/utils/nasExplorer'
+import { versionNasFolders, validateNasFolder } from '@/utils/nasExplorer'
 
 const props = defineProps({ projectId: { type: Number, default: 0 }, canQuery: Boolean })
 const menu = ref(false)
@@ -66,7 +67,8 @@ async function loadFolders(autoLaunch = true) {
   folders.value = []
   selected.value = ''
   const current = target.value
-  if (!current || !Object.values(current).every(id => Number.isSafeInteger(id) && id > 0)) {
+  const ids = current?.kind === 'project' ? [current.projectId] : [current?.projectId, current?.taskId, current?.versionId]
+  if (!current || !ids.every(id => Number.isSafeInteger(id) && id > 0)) {
     visible.value = true
     error.value = '当前任务尚无已发布版本文件，暂时无法打开 NAS 目录'
     return
@@ -75,10 +77,19 @@ async function loadFolders(autoLaunch = true) {
   controller = new AbortController()
   loading.value = true
   try {
-    const response = await getVersionDetail(current.versionId, { signal: controller.signal })
+    const response = current.kind === 'project'
+      ? await getProjectStorage(current.projectId, { signal: controller.signal })
+      : await getVersionDetail(current.versionId, { signal: controller.signal })
     if (ticket !== generation) return
-    folders.value = versionNasFolders(response.data, current)
-    files.value = response.data.files || []
+    if (current.kind === 'project') {
+      if (Number(response.data.projectId) !== current.projectId || response.data.storageStatus !== 'ready') throw new Error('项目目录尚未就绪，请刷新后重试')
+      folders.value = [validateNasFolder(response.data.projectPathSnapshot)]
+      files.value = []
+    } else {
+      // 文件入口只打开指定文件的目录，不默认为本版本其他文件。
+      files.value = (response.data.files || []).filter(file => !current.fileId || file.fileId === current.fileId)
+      folders.value = versionNasFolders({ ...response.data, files: files.value }, current)
+    }
     selected.value = folders.value[0] || ''
     if (!selected.value) {
       error.value = '该版本暂无可用的 NAS 文件路径'
@@ -97,11 +108,13 @@ async function launch() {
   const ticket = generation
   const folder = selected.value
   const file = files.value.find(item => item.nasPath?.slice(0, item.nasPath.lastIndexOf('\\')) === folder && !['thumbnail', 'proxy_media'].includes(item.role))
-  if (!file) return
+  if (!file && current.kind !== 'project') return
   loading.value = true
   error.value = ''
   try {
-    const response = await getNasOpenTicket(current.versionId, { projectId: current.projectId, taskId: current.taskId, fileId: file.fileId }, { signal: controller?.signal })
+    const response = current.kind === 'project'
+      ? await getProjectNasOpenTicket(current.projectId, { signal: controller?.signal })
+      : await getNasOpenTicket(current.versionId, { projectId: current.projectId, taskId: current.taskId, fileId: file.fileId }, { signal: controller?.signal })
     if (ticket !== generation) return
     const { uri, folder: signedFolder } = response.data
     if (signedFolder !== folder || !/^shotgrid-nas:\/\/open-v1\/[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(uri) || uri.length > 14000) throw new Error('打开凭证不符合安全规则')
@@ -140,7 +153,13 @@ async function copy() {
   if (await copyTextToClipboard(selected.value)) ElMessage.success('目录已复制，可粘贴到文件资源管理器地址栏')
   else ElMessage.error('复制失败，请手动选择并复制目录')
 }
-defineExpose({ open })
+async function openTarget(value, autoLaunch = true) {
+  if (!props.canQuery || loading.value) return
+  reset()
+  target.value = { ...value, projectId: Number(props.projectId), taskId: Number(value.taskId), versionId: Number(value.versionId) }
+  await loadFolders(autoLaunch)
+}
+defineExpose({ open, openTarget })
 </script>
 
 <template>
@@ -155,7 +174,7 @@ defineExpose({ open })
     <div v-loading="loading">
       <el-alert v-if="error" :title="error" type="warning" :closable="false" />
       <el-form v-if="folders.length" :model="{ folder: selected }" label-position="top">
-        <el-form-item label="最新版本文件所在文件夹" prop="folder">
+        <el-form-item label="NAS 文件夹" prop="folder">
           <el-select v-model="selected" style="width: 100%"><el-option v-for="folder in folders" :key="folder" :label="folder" :value="folder" /></el-select>
         </el-form-item>
         <el-input :model-value="selected" readonly type="textarea" :rows="3" aria-label="NAS 完整目录" />

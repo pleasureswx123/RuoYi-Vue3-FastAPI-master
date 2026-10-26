@@ -1,4 +1,5 @@
 <script setup>
+import NasOpenButton from '@/components/NasOpenButton.vue'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { CopyDocument, Download, Document, VideoPlay } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
@@ -273,6 +274,7 @@ onBeforeUnmount(() => {
               :disabled="Boolean(copyingFileId)"
               @click="copyNasPath(file)"
             >复制 NAS 路径</el-button>
+            <NasOpenButton v-if="file.nasPath" :project-id="version.projectId" :task-id="version.taskId" :version-id="version.versionId" :file-id="file.fileId" />
             <el-button
               v-if="showPreview && versionCandidates.length > 1 && fileCandidate(file)"
               size="small"
@@ -363,7 +365,7 @@ onBeforeUnmount(() => {
 .file-row strong { font-size: 12px; }
 .file-row small { margin-top: 5px; color: var(--sg-text-muted); font-size: 10px; }
 .file-tags { display: flex; align-items: center; justify-content: flex-end; gap: 6px; flex-wrap: wrap; }
-.file-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
+.file-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; }
 .empty-files { padding: 18px; background: rgba(255, 255, 255, 0.02); border-radius: 10px; }
 .download-error { margin-top: 14px; }
 .download-error code { color: inherit; font-size: 10px; }

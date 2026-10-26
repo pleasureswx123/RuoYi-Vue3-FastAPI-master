@@ -176,3 +176,6 @@ export function transferRevision(versionId, data) {
 export function getRevisionAssignees(projectId, params, options = {}) {
   return request({ url: `/shot-grid/projects/${assertPositiveId(projectId, '项目')}/revision-assignee-options`, method: 'get', params, ...options })
 }
+export function getProjectNasOpenTicket(projectId, options = {}) {
+  return request({ url: `/shot-grid/projects/${assertPositiveId(projectId, '项目')}/nas-open-ticket`, method: 'post', headers: { repeatSubmit: false }, signal: options.signal, silentError: true })
+}

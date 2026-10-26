@@ -1,4 +1,5 @@
 <script setup>
+import NasOpenButton from '@/components/NasOpenButton.vue'
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElTable, ElTableColumn } from 'element-plus'
@@ -187,10 +188,11 @@ onBeforeUnmount(() => {
           <template #default="{ row }"><el-tag :type="tagTypeFromTone(cardStatusMeta(row).tone)" size="small">{{ cardStatusMeta(row).label }}</el-tag><small v-if="row.isTask" class="review-tree-hint">{{ query.reviewStatus ? '筛选内最新' : '最新版本' }} {{ row.versionNumber }}</small></template>
         </el-table-column>
         <el-table-column label="创建时间" min-width="160"><template #default="{ row }">{{ formatReviewDateTime(row.createTime) }}</template></el-table-column>
-        <el-table-column label="操作" width="145" fixed="right">
+        <el-table-column label="操作" width="300" fixed="right">
           <template #default="{ row }">
             <el-button v-if="row.isTask && canQueryTask" size="small" @click="taskDrawer?.open(`/tasks/${row.taskId}`)">查看任务</el-button>
             <el-button v-else-if="!row.isTask" size="small" :type="row.reviewStatus === 'active' ? 'primary' : 'default'" @click="router.push(`/reviews/${row.reviewListId}`)">{{ row.reviewStatus === 'active' ? '去审核' : '查看审核' }}</el-button>
+            <NasOpenButton v-if="!row.isTask && row.autoVersionId" :project-id="row.projectId" :task-id="row.taskId" :version-id="row.autoVersionId" />
           </template>
         </el-table-column>
       </el-table>

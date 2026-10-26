@@ -1,6 +1,8 @@
 import { ElButton, ElIcon, ElRadioButton, ElRadioGroup, ElTag } from 'element-plus'
 import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { createPinia, setActivePinia } from 'pinia'
+import { useSessionStore } from '@/store/modules/session'
 
 import { downloadProtectedVersionFile } from '@/api/shot-grid/versions'
 import VersionDetailCard from '@/components/version/VersionDetailCard.vue'
@@ -31,6 +33,7 @@ const mountOptions = {
 function version(versionId = 7, overrides = {}) {
   return {
     versionId,
+    projectId: 8,
     taskId: 31,
     versionNumber: `V00${versionId}`,
     versionStatus: 'pending_review',
@@ -65,6 +68,7 @@ describe('版本详情与受保护下载', () => {
     await wrapper.findAll('button').find(button => button.text() === '复制 NAS 路径').trigger('click')
     await flushPromises()
     expect(copyTextToClipboard).toHaveBeenCalledWith(nasPath)
+    expect(wrapper.text()).toContain('在文件资源管理器中打开')
     await wrapper.setProps({ version: version() })
     expect(wrapper.findAll('button').some(button => button.text() === '复制 NAS 路径')).toBe(false)
     wrapper.unmount()
@@ -87,6 +91,8 @@ describe('版本详情与受保护下载', () => {
   })
 
   beforeEach(() => {
+    setActivePinia(createPinia())
+    useSessionStore().permissions = ['shotgrid:version:query']
     Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: vi.fn(() => 'blob:version-file') })
     Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: vi.fn() })
     downloadProtectedVersionFile.mockResolvedValue(new Blob(['media']))

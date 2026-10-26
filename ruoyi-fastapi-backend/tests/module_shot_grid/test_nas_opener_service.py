@@ -17,6 +17,7 @@ from module_admin.service.login_service import LoginService
 from module_shot_grid.controller.nas_opener_controller import nas_opener_controller
 from module_shot_grid.exceptions import ShotGridDomainException
 from module_shot_grid.service import nas_opener_service as nas
+from module_shot_grid.service.project_access_service import ShotGridProjectAccessService
 
 
 @pytest.fixture
@@ -156,3 +157,42 @@ async def test_http_auth_permission_and_envelope(monkeypatch) -> None:
             headers={'Authorization': 'test'},
         )
         assert response.status_code == 422
+        # 项目入口必须使用存储权限并经过真实项目访问依赖。
+        resolve = AsyncMock(return_value=SimpleNamespace(project_id=7))
+        monkeypatch.setattr(ShotGridProjectAccessService, 'resolve_access', resolve)
+        project_issue = AsyncMock(return_value={'folder': 'project', 'uri': 'signed', 'expiresIn': 60})
+        monkeypatch.setattr(nas.ShotGridNasOpenerService, 'issue_project', project_issue)
+        response = await client.post('/shot-grid/projects/7/nas-open-ticket', headers={'Authorization': 'test'})
+        assert response.status_code == 403
+        project_issue.assert_not_awaited()
+        user.permissions = ['shotgrid:storage:path']
+        response = await client.post('/shot-grid/projects/7/nas-open-ticket', headers={'Authorization': 'test'})
+        assert response.status_code == 200
+        assert response.headers['cache-control'] == 'no-store'
+        resolve.assert_awaited_once_with(None, user, 7)
+        resolve.side_effect = PermissionException(data='', message='无项目权限')
+        response = await client.post('/shot-grid/projects/8/nas-open-ticket', headers={'Authorization': 'test'})
+        assert response.status_code == 403
+        assert project_issue.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_project_folder_requires_matching_access_and_ready_storage(key, monkeypatch) -> None:
+    storage = SimpleNamespace(storage_status='ready', project_path_snapshot=r'\\192.168.10.64\share\项目')
+    read = AsyncMock(return_value=storage)
+    monkeypatch.setattr(nas.ShotGridProjectService, 'get_project_storage_status', read)
+    access = SimpleNamespace(project_id=7)
+    result = await nas.ShotGridNasOpenerService.issue_project(None, 7, access)
+    assert result['folder'] == storage.project_path_snapshot
+    read.assert_awaited_once_with(None, 7, access)
+    with pytest.raises(ShotGridDomainException) as error:
+        await nas.ShotGridNasOpenerService.issue_project(None, 8, access)
+    assert error.value.http_status == 403
+    for status, path in [
+        ('initializing', storage.project_path_snapshot),
+        ('ready', None),
+        ('ready', r'\\evil\share\p'),
+    ]:
+        storage.storage_status, storage.project_path_snapshot = status, path
+        with pytest.raises(ShotGridDomainException):
+            await nas.ShotGridNasOpenerService.issue_project(None, 7, access)

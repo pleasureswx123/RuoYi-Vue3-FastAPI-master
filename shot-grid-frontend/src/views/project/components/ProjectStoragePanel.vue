@@ -1,4 +1,5 @@
 <script setup>
+import NasOpenButton from '@/components/NasOpenButton.vue'
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { CopyDocument, Refresh } from '@element-plus/icons-vue'
@@ -208,7 +209,7 @@ onBeforeUnmount(() => { storageController?.abort(); operationsController?.abort(
         <el-descriptions-item label="存储状态"><el-tag size="small" effect="plain" round :type="tagTypeFromTone(storageMeta(storage.storageStatus).tone)">{{ storageMeta(storage.storageStatus).label }}</el-tag></el-descriptions-item>
         <el-descriptions-item label="最后更新">{{ formatDateTime(storage.updateTime) }}</el-descriptions-item>
         <el-descriptions-item v-if="storage.projectPathSnapshot" label="项目路径" :span="2">
-          <div class="storage-path"><code>{{ storage.projectPathSnapshot }}</code><el-button text :icon="CopyDocument" @click="copyPath">复制路径</el-button></div>
+          <div class="storage-path"><code>{{ storage.projectPathSnapshot }}</code><el-button text :icon="CopyDocument" @click="copyPath">复制路径</el-button><NasOpenButton kind="project" :project-id="projectId" :disabled="storage.storageStatus !== 'ready'" /></div>
         </el-descriptions-item>
       </el-descriptions>
       <el-alert v-if="directoryConflict" title="NAS 项目目录冲突，初始化已暂停" description="请管理员核对上方路径，手动备份或重命名旧目录，使目标路径空出后重新检查。系统不会覆盖或合并旧目录，也不会自动删除文件。" type="warning" show-icon :closable="false" />
@@ -287,7 +288,7 @@ onBeforeUnmount(() => { storageController?.abort(); operationsController?.abort(
 .detail-panel__heading h2 { font-size:19px; }
 .detail-panel__heading span { display:block; margin-top:6px; color:var(--sg-text-muted); font-size:12px; }
 .storage-summary { background:rgba(255,255,255,.025); border-color:var(--sg-border); border-radius:12px; }.storage-summary :deep(.el-card__body){display:grid;gap:14px;padding:16px}
-.storage-path { display:flex; gap:12px; align-items:center; justify-content:space-between; }.storage-path code{overflow-wrap:anywhere;color:var(--sg-text-secondary);font-size:12px}
+.storage-path { display:flex; flex-wrap:wrap; gap:12px; align-items:center; }.storage-path code{flex:1;min-width:180px;overflow-wrap:anywhere;color:var(--sg-text-secondary);font-size:12px}
 .operation-collapse{border:1px solid var(--sg-border);border-radius:12px;overflow:hidden;--el-collapse-header-bg-color:var(--sg-surface-soft);--el-collapse-content-bg-color:var(--sg-surface);--el-collapse-border-color:var(--sg-border)}
 .operation-collapse :deep(.el-collapse-item__header){height:auto;min-height:64px;padding:12px 16px;line-height:1.5}
 .operation-heading{display:flex;flex-direction:column;gap:4px;text-align:left}
