@@ -5055,3 +5055,8 @@ Windows 不得直接绕过 `rmtree.avoids_symlink_attacks` 检查。Windows 分�
 - 定向后端验证：SHOT_GRID_RUN_PG_TESTS=1，test_review_reopen_pg.py、test_final_delivery_path_adapter.py、test_final_delivery_worker_service.py 共 23 项通过。其中新增缺少任一权限的管理人拒绝、持两个权限的制作人拒绝、Worker 领取与重开并发测试。采用隔离 PostgreSQL 与本地临时目录；未访问业务数据库或真实 NAS。
 - 复查确认：服务端权限交集与项目角色门禁、项目协调锁及状态复核、旧审批保留/新增轮次、旧交付失效/撤销顺序和失败重试已有定向证据。本轮未改后端业务逻辑和数据库迁移，也未重复全量构建；不代表真实登录 E2E 或生产 NAS 验收。
 - 未提交、未推送、未部署。
+
+
+### 2026-10-26 重新审核迁移兼容修复
+
+应用启动的 Base.metadata.create_all 可能在 40 版数据库提前创建 sg_review_cycle。41 迁移在事务内锁表并核对字段类型、长度、时间精度、空值、默认值、主键、外键和检查约束；仅接纳结构一致的空表，保留该表并正常回填周期。不通过 DROP TABLE 或 stamp 绕过升级；已有历史数据或结构不一致时明确拒绝。新增隔离 PostgreSQL 用例覆盖启动预建空表、结构漂移和已有数据，加上迁移升降级保护共 4 项通过。用户本地业务库仅做只读核对，修复后仍需停止后端并手动重试升级；本次修复尚未提交或部署。

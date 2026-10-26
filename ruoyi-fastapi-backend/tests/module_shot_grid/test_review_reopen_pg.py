@@ -474,3 +474,59 @@ async def test_reopen_races_worker_claim_without_stale_publish(pg_sessions):
             assert old.delivery_status == 'cancelled' and old.validity_status == 'revoked'
             assert claimed is None or claimed[1] == 'revoke'
             assert version.version_status == 'pending_review'
+
+
+@pytest.mark.parametrize('existing_state', ['empty', 'different_schema', 'has_history'])
+async def test_migration_handles_startup_precreated_cycle_table(pg_sessions, existing_state):
+    import runpy
+
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+    from sqlalchemy import text
+
+    from tests.module_shot_grid.test_asset_manager_start_pg import BACKEND
+
+    version_id, _ = await prepare_round(pg_sessions)
+    migration = runpy.run_path(str(BACKEND / 'alembic/versions/2026_10_26_1000-20261026_41_reopen_review.py'))
+
+    def apply(connection, direction) -> None:
+        with Operations.context(MigrationContext.configure(connection)):
+            migration[direction]()
+
+    async with pg_sessions() as db:
+        connection = await db.connection()
+        await connection.run_sync(apply, 'downgrade')
+        # 复现新后端先启动、ORM 仅创建新表但不升级旧表的真实顺序。
+        await connection.run_sync(ShotGridReviewCycle.__table__.create)
+        if existing_state == 'different_schema':
+            await db.execute(text('ALTER TABLE sg_review_cycle ADD COLUMN unexpected integer'))
+        elif existing_state == 'has_history':
+            await db.execute(
+                text('INSERT INTO sg_review_cycle(version_id,cycle_no,opened_time) VALUES (:id,1,now())'),
+                {'id': version_id},
+            )
+        await db.commit()
+
+    async with pg_sessions() as db:
+        connection = await db.connection()
+        if existing_state == 'empty':
+            await connection.run_sync(apply, 'upgrade')
+            await db.commit()
+            cycle = await db.get(ShotGridReviewCycle, (version_id, 1))
+            assert cycle is not None and cycle.outcome is None
+            assert (await db.get(ShotGridVersion, version_id)).review_cycle == 1
+        else:
+            with pytest.raises(RuntimeError, match='请先核对'):
+                await connection.run_sync(apply, 'upgrade')
+            await db.rollback()
+            assert (
+                await db.scalar(
+                    text(
+                        "SELECT count(*) FROM information_schema.columns WHERE table_name='sg_version' AND column_name='review_cycle'"
+                    )
+                )
+                == 0
+            )
+            assert await db.scalar(text('SELECT count(*) FROM sg_review_cycle')) == (
+                1 if existing_state == 'has_history' else 0
+            )

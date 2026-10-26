@@ -1,6 +1,9 @@
 """重新审核周期、不可变审核历史与最终交付撤销。"""
 
+import re
+
 from alembic import op
+from sqlalchemy import text
 
 revision = '20261026_41'
 down_revision = '20261013_40'
@@ -52,9 +55,66 @@ FROM sys_menu WHERE perms='shotgrid:version:review'
 """
 
 
+def _reuse_precreated_cycle_table() -> bool:
+    """只接纳启动 create_all 提前创建的同构空表，不掩盖结构漂移或历史数据。"""
+    if op.get_context().as_sql:
+        return False
+    connection = op.get_bind()
+    if connection.scalar(text("SELECT to_regclass('sg_review_cycle')")) is None:
+        return False
+    connection.execute(text('LOCK TABLE sg_review_cycle IN ACCESS EXCLUSIVE MODE'))
+    columns = list(
+        connection.execute(
+            text("""
+        SELECT column_name, data_type, is_nullable, character_maximum_length,
+               datetime_precision, column_default
+        FROM information_schema.columns
+        WHERE table_schema=current_schema() AND table_name='sg_review_cycle'
+        ORDER BY ordinal_position
+    """)
+        )
+    )
+    expected = [
+        ('version_id', 'bigint', 'NO', None, None, None),
+        ('cycle_no', 'integer', 'NO', None, None, None),
+        ('opened_by', 'bigint', 'YES', None, None, None),
+        ('reason', 'character varying', 'YES', 1000, None, None),
+        ('opened_time', 'timestamp without time zone', 'NO', None, 0, None),
+        ('closed_time', 'timestamp without time zone', 'YES', None, 0, None),
+        ('outcome', 'character varying', 'YES', 20, None, None),
+    ]
+    definitions = list(
+        connection.scalars(
+            text("""
+        SELECT pg_get_constraintdef(oid) FROM pg_constraint
+        WHERE conrelid='sg_review_cycle'::regclass
+    """)
+        )
+    )
+    expected_definitions = [
+        'PRIMARY KEY (version_id, cycle_no)',
+        'FOREIGN KEY (version_id) REFERENCES sg_version(version_id) ON DELETE RESTRICT',
+        'FOREIGN KEY (opened_by) REFERENCES sys_user(user_id) ON DELETE RESTRICT',
+        'CHECK (cycle_no > 0)',
+        "CHECK (outcome IS NULL OR outcome::text = ANY (ARRAY['approve'::character varying, 'reject'::character varying]::text[]))",
+    ]
+
+    def normalize(value: str) -> str:
+        return re.sub(r'[\s()]', '', value).lower()
+
+    if columns != expected or sorted(map(normalize, definitions)) != sorted(map(normalize, expected_definitions)):
+        raise RuntimeError('sg_review_cycle 已存在但结构不一致，请先核对；迁移未删除或改写该表')
+    if connection.scalar(text('SELECT EXISTS(SELECT 1 FROM sg_review_cycle)')):
+        raise RuntimeError('sg_review_cycle 已存在且包含数据，请先核对；迁移未删除或改写历史')
+    return True
+
+
 def upgrade() -> None:
     if op.get_context().dialect.name == 'postgresql':
+        reuse_cycle = _reuse_precreated_cycle_table()
         for statement in UPGRADE_SQL.split(';'):
+            if reuse_cycle and statement.strip().startswith('CREATE TABLE sg_review_cycle'):
+                continue
             if statement.strip():
                 op.execute(statement)
 

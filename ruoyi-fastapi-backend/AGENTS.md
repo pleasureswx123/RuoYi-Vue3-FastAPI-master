@@ -856,3 +856,8 @@ Windows 不得直接绕过 `rmtree.avoids_symlink_attacks` 检查。Windows 分�
 - 每次通过写 `FINAL/T{taskId}-V{versionNo:03d}-R{cycle:03d}/` 不可变文件及 FINAL.json；任务级 `FINAL/CURRENT-{taskId}.json` 是可原子替换的有效清单，避免资产多个分项共享目录时互相覆盖。generation 使用交付事件ID，拒绝低代次覆盖，撤销写 valid=false。历史目录不是当前有效终稿依据。
 - 同任务交付按事件顺序执行：前序有效发布或撤销处于 pending/publishing/failed 时后序不执行。失败撤销可从当前版本重试，跨版本展示未完成撤销状态。Worker保留短事务、事务外I/O、心跳、owner+attempt fencing及软超时收敛；后台清单同步不假装数据库与NAS原子一致。
 - PostgreSQL 迁移 20261026_41 回填首周期、扩展约束和权限；新库初始化SQL同步。存在重新审核或新目录交付记录时拒绝降级。永久清理图包含审核周期。未改 MySQL 承诺，未在业务库执行迁移。
+
+
+### 2026-10-26 重新审核迁移兼容修复
+
+应用启动的 Base.metadata.create_all 可能在 40 版数据库提前创建 sg_review_cycle。41 迁移在事务内锁表并核对字段类型、长度、时间精度、空值、默认值、主键、外键和检查约束；仅接纳结构一致的空表，保留该表并正常回填周期。不通过 DROP TABLE 或 stamp 绕过升级；已有历史数据或结构不一致时明确拒绝。新增隔离 PostgreSQL 用例覆盖启动预建空表、结构漂移和已有数据，加上迁移升降级保护共 4 项通过。用户本地业务库仅做只读核对，修复后仍需停止后端并手动重试升级；本次修复尚未提交或部署。
