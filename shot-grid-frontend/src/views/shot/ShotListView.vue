@@ -163,6 +163,7 @@ function workAction(shot) {
     const label = shot.status === 'revision' ? '去修改' : '去做任务'
     return { label, type: 'task', tone: shot.status === 'revision' ? 'warning' : 'primary' }
   }
+  if (shot.allowedActions?.includes('task.reopenReview') && hasPermission('shotgrid:version:reopen')) return { label: '重新审核', type: 'review', tone: 'warning' }
   if (shot.allowedActions?.includes('task.review') && shot.latestVersion?.versionId && hasPermission('shotgrid:reviewList:query') && hasPermission('shotgrid:version:query')) {
     return { label: '审核任务', type: 'review', tone: 'primary', color: '#8b5cf6' }
   }

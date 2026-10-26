@@ -3,6 +3,7 @@ from typing import Any
 
 from sqlalchemy import and_, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from module_shot_grid.entity.do.final_delivery_do import ShotGridFinalDelivery
 from module_shot_grid.entity.do.project_do import ShotGridProject
@@ -60,11 +61,28 @@ class ShotGridFinalDeliveryDao:
 
     @staticmethod
     async def get_by_version(db: AsyncSession, version_id: int) -> dict[str, Any] | None:
+        revocation = aliased(ShotGridFinalDelivery)
+        sync_status = (
+            select(revocation.delivery_status)
+            .where(
+                revocation.task_id
+                == select(ShotGridVersion.task_id).where(ShotGridVersion.version_id == version_id).scalar_subquery(),
+                revocation.operation == 'revoke',
+                revocation.delivery_status != 'published',
+            )
+            .order_by(revocation.final_delivery_id.asc())
+            .limit(1)
+            .scalar_subquery()
+        )
         row = (
             (
                 await db.execute(
                     select(
+                        sync_status.label('revocation_status'),
                         ShotGridFinalDelivery.final_delivery_id,
+                        ShotGridFinalDelivery.review_cycle,
+                        ShotGridFinalDelivery.operation,
+                        ShotGridFinalDelivery.validity_status,
                         ShotGridFinalDelivery.version_id,
                         ShotGridFinalDelivery.candidate_id,
                         ShotGridFinalDelivery.business_file_name,
@@ -77,7 +95,10 @@ class ShotGridFinalDeliveryDao:
                         ShotGridFinalDelivery.publish_mode,
                         ShotGridFinalDelivery.approved_time,
                         ShotGridFinalDelivery.published_time,
-                    ).where(ShotGridFinalDelivery.version_id == version_id)
+                    )
+                    .where(ShotGridFinalDelivery.version_id == version_id)
+                    .order_by(ShotGridFinalDelivery.final_delivery_id.desc())
+                    .limit(1)
                 )
             )
             .mappings()
@@ -88,7 +109,11 @@ class ShotGridFinalDeliveryDao:
     @staticmethod
     async def get_for_update(db: AsyncSession, version_id: int) -> ShotGridFinalDelivery | None:
         return await db.scalar(
-            select(ShotGridFinalDelivery).where(ShotGridFinalDelivery.version_id == version_id).with_for_update()
+            select(ShotGridFinalDelivery)
+            .where(ShotGridFinalDelivery.version_id == version_id)
+            .order_by(ShotGridFinalDelivery.final_delivery_id.desc())
+            .limit(1)
+            .with_for_update()
         )
 
     @staticmethod
@@ -111,7 +136,17 @@ class ShotGridFinalDeliveryDao:
         now: datetime,
         lease_seconds: int,
     ) -> ShotGridFinalDelivery | None:
-        due = or_(
+        prior = aliased(ShotGridFinalDelivery)
+        due = and_(
+            or_(ShotGridFinalDelivery.operation == 'revoke', ShotGridFinalDelivery.validity_status == 'current'),
+            ~select(prior.final_delivery_id)
+            .where(
+                prior.task_id == ShotGridFinalDelivery.task_id,
+                prior.final_delivery_id < ShotGridFinalDelivery.final_delivery_id,
+                prior.delivery_status.in_(['pending', 'publishing', 'failed']),
+                or_(prior.operation == 'revoke', prior.validity_status == 'current'),
+            )
+            .exists(),
             and_(ShotGridFinalDelivery.delivery_status == 'pending', ShotGridFinalDelivery.update_time <= now),
         )
         candidates = list(
@@ -172,6 +207,9 @@ class ShotGridFinalDeliveryDao:
                 await db.execute(
                     select(
                         ShotGridFinalDelivery.final_delivery_id,
+                        ShotGridFinalDelivery.review_cycle,
+                        ShotGridFinalDelivery.operation,
+                        ShotGridFinalDelivery.validity_status,
                         ShotGridFinalDelivery.project_id,
                         ShotGridFinalDelivery.task_id,
                         ShotGridFinalDelivery.version_id,
@@ -329,3 +367,13 @@ class ShotGridFinalDeliveryDao:
             )
         )
         return bool(result.rowcount)
+
+    @staticmethod
+    async def get_history(db: AsyncSession, version_id: int) -> list[ShotGridFinalDelivery]:
+        return list(
+            await db.scalars(
+                select(ShotGridFinalDelivery)
+                .where(ShotGridFinalDelivery.version_id == version_id)
+                .order_by(ShotGridFinalDelivery.final_delivery_id.desc())
+            )
+        )

@@ -61,6 +61,7 @@ def _version_context(task_kind: str = 'shot_video') -> dict[str, Any]:
     return {
         'version_id': VERSION_ID,
         'project_id': PROJECT_ID,
+        'project_status': 'active',
         'task_id': TASK_ID,
         'version_no': 1,
         'version_status': 'pending_review',
@@ -437,7 +438,7 @@ async def test_approve_atomically_completes_version_task_and_auto_review_list(
     assert result.final_delivery is not None
     assert result.final_delivery.final_delivery_id == FINAL_DELIVERY_ID
     assert result.final_delivery.delivery_status == 'pending'
-    assert result.final_delivery.final_nas_relative_path.endswith(f'FINAL\\{FINAL_BUSINESS_NAME}')
+    assert result.final_delivery.final_nas_relative_path.endswith(f'FINAL\\T{TASK_ID}-V001-R001\\{FINAL_BUSINESS_NAME}')
     assert version.version_status == 'final'
     assert task.task_status == 'completed'
     assert task.lock_version == UPDATED_TASK_LOCK_VERSION
@@ -452,10 +453,13 @@ async def test_failed_final_delivery_can_be_reset_to_pending_by_director(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     db = AsyncMock()
+    db.scalar.return_value = None
     task, version, _review_list = _locked_graph()
     task.task_status = 'completed'
     version.version_status = 'final'
     delivery = SimpleNamespace(
+        operation='publish',
+        validity_status='current',
         final_delivery_id=FINAL_DELIVERY_ID,
         version_id=VERSION_ID,
         candidate_id=CANDIDATE_ID,
@@ -1202,6 +1206,7 @@ async def test_version_detail_returns_only_safe_file_fields_and_redacts_ai_param
     row = {
         'version_id': VERSION_ID,
         'project_id': PROJECT_ID,
+        'project_status': 'active',
         'task_id': TASK_ID,
         'version_no': 1,
         'version_status': 'pending_review',

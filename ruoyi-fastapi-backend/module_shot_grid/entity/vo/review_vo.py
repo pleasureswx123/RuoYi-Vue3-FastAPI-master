@@ -26,12 +26,12 @@ HTML_TAG = re.compile(r'</?[A-Za-z][^>]*>')
 
 VersionStatus = Literal['pending_review', 'rejected', 'final']
 TaskStatus = Literal['not_started', 'preparing', 'in_progress', 'pending_review', 'revision', 'completed']
-ReviewActionType = Literal['approve', 'reject', 'defer']
+ReviewActionType = Literal['approve', 'reject', 'defer', 'reopen']
 ReviewListStatus = Literal['draft', 'active', 'completed', 'archived']
 ReviewListMode = Literal['auto_single', 'manual_batch']
 NoteStatus = Literal['open', 'resolved']
 IssueVerificationResult = Literal['resolved', 'still_present']
-FinalDeliveryStatus = Literal['pending', 'publishing', 'published', 'failed']
+FinalDeliveryStatus = Literal['pending', 'publishing', 'published', 'failed', 'cancelled']
 
 
 def _reject_embedded_payload(value: str, *, field_name: str) -> str:
@@ -250,12 +250,16 @@ class ShotGridVersionProductionTargetModel(ShotGridApiModel):
 class ShotGridFinalDeliveryModel(ShotGridApiModel):
     """最终版本到 NAS FINAL 目录的可见发布状态。"""
 
+    review_cycle: int = 1
+    operation: Literal['publish', 'revoke'] = 'publish'
+    validity_status: Literal['current', 'revoked'] = 'current'
     final_delivery_id: int
     version_id: int
     candidate_id: int
     business_file_name: str
     final_nas_relative_path: str
     manifest_nas_relative_path: str
+    revocation_status: FinalDeliveryStatus | None = None
     delivery_status: FinalDeliveryStatus
     attempt_count: int
     last_error_key: str | None = None
@@ -267,6 +271,8 @@ class ShotGridFinalDeliveryModel(ShotGridApiModel):
 
 class ShotGridVersionDetailModel(ShotGridVersionListItemModel):
     """版本详情；内部存储路径不进入响应。"""
+
+    review_cycle: int = 1
 
     can_edit_generation_prompt: bool = False
     assignee_user_id: int | None = None
@@ -281,6 +287,7 @@ class ShotGridVersionDetailModel(ShotGridVersionListItemModel):
     media_derivation_status: Literal['pending', 'processing', 'completed', 'failed'] | None = None
     auto_review_list: ShotGridAutoReviewListSummaryModel | None = None
     final_delivery: ShotGridFinalDeliveryModel | None = None
+    final_delivery_history: list[ShotGridFinalDeliveryModel] = Field(default_factory=list)
 
 
 class ShotGridReviewProducerOptionModel(ShotGridApiModel):
@@ -448,6 +455,7 @@ class ShotGridNoteCreateModel(ShotGridApiModel):
 
     model_config = ConfigDict(extra='forbid')
 
+    review_cycle: int = Field(default=1, ge=1)
     issue_scope: Literal['candidate', 'version'] = 'candidate'
     candidate_id: int | None = Field(default=None, gt=0, le=SQL_BIGINT_MAX)
 
@@ -535,6 +543,8 @@ class ShotGridIssueReferenceFileModel(ShotGridApiModel):
 class ShotGridIssueDraftModel(ShotGridApiModel):
     """审核人可修改、制作人不可见的问题草稿。"""
 
+    review_cycle: int = 1
+
     draft_id: int
     project_id: int
     review_list_id: int
@@ -602,6 +612,8 @@ class ShotGridIssueVerificationModel(ShotGridApiModel):
 class ShotGridIssueDetailModel(ShotGridApiModel):
     """包含处理说明与确认历史的完整问题。"""
 
+    review_cycle: int = 1
+
     issue_id: int
     project_id: int
     origin_version_id: int
@@ -626,12 +638,15 @@ class ShotGridIssueDetailModel(ShotGridApiModel):
 
 
 class ShotGridReviewVersionSummaryModel(ShotGridApiModel):
+    review_cycle: int = 1
+
     version_id: int
     version_no: int
     version_number: str
     version_status: VersionStatus
     selected_candidate_id: int | None = None
     final_delivery: ShotGridFinalDeliveryModel | None = None
+    final_delivery_history: list[ShotGridFinalDeliveryModel] = Field(default_factory=list)
     lock_version: int
 
 
@@ -644,6 +659,9 @@ class ShotGridReviewContextModel(ShotGridApiModel):
 
     current_version: ShotGridReviewVersionSummaryModel
     can_append_issues: bool = False
+    can_reopen_review: bool = False
+    reopen_blocked_reason: str | None = None
+    task_lock_version: int = 0
     candidates: list[ShotGridVersionCandidateModel] = Field(default_factory=list)
     carried_issues: list[ShotGridCarriedIssueModel] = Field(default_factory=list)
     current_version_issues: list[ShotGridIssueDetailModel] = Field(default_factory=list)
@@ -757,7 +775,7 @@ class ShotGridReviewActionCreateModel(ShotGridLockVersionModel):
 
     model_config = ConfigDict(extra='forbid')
 
-    action_type: ReviewActionType
+    action_type: Literal['approve', 'reject', 'defer']
     revision_transfer: ShotGridRevisionTransferModel | None = None
     selected_candidate_id: int | None = Field(default=None, gt=0, le=SQL_BIGINT_MAX)
     reason: str | None = Field(default=None, max_length=1000)
@@ -797,6 +815,8 @@ class ShotGridReviewActionQueryModel(ShotGridPageQueryModel):
 class ShotGridReviewActionModel(ShotGridApiModel):
     """不可变审核动作历史。"""
 
+    review_cycle: int = 1
+
     action_id: int
     project_id: int
     version_id: int
@@ -819,6 +839,7 @@ class ShotGridReviewActionResultModel(ShotGridReviewActionModel):
     review_status: ReviewListStatus
     lock_version: int
     final_delivery: ShotGridFinalDeliveryModel | None = None
+    final_delivery_history: list[ShotGridFinalDeliveryModel] = Field(default_factory=list)
     replayed: bool = False
 
 
@@ -839,3 +860,19 @@ class ShotGridCandidatePromptUpdateModel(ShotGridApiModel):
     _normalize_prompt = field_validator('generation_prompt', 'previous_generation_prompt', mode='before')(
         _normalize_generation_prompt
     )
+
+
+class ShotGridReviewReopenModel(ShotGridLockVersionModel):
+    """重新审核命令，原因和页面快照必须明确。"""
+
+    model_config = ConfigDict(extra='forbid')
+    task_lock_version: int = Field(ge=0)
+    review_cycle: int = Field(ge=1)
+    reason: str = Field(min_length=1, max_length=1000)
+
+    @field_validator('reason')
+    @classmethod
+    def require_reason(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError('请填写重新审核原因')
+        return value.strip()

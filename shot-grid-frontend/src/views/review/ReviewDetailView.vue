@@ -1,4 +1,5 @@
 <script setup>
+import ReopenReviewButton from '@/components/review/ReopenReviewButton.vue'
 import RevisionTransferDialog from '@/components/version/RevisionTransferDialog.vue'
 import { showWorkflowSuccess } from '@/utils/workflowSuccess'
 import { useVersionRealtime } from '@/composables/useVersionRealtime'
@@ -131,6 +132,12 @@ const finalDelivery = computed(() => reviewContext.value?.currentVersion?.finalD
 const finalDeliveryAlert = computed(() => {
   const delivery = finalDelivery.value
   if (!delivery) return null
+  if (delivery.revocationStatus === 'failed') return { type: 'error', title: '旧终稿撤销清单同步失败', description: '后续交付已暂停，请重试同步撤销清单。' }
+  if (delivery.operation === 'revoke' || delivery.validityStatus === 'revoked') {
+    return { type: 'warning', title: '原最终交付已失效', description: delivery.deliveryStatus === 'published'
+      ? 'NAS 当前有效清单已同步撤销；历史文件仅供追溯。' : delivery.deliveryStatus === 'failed'
+        ? 'NAS 撤销清单同步失败，请重试；不要使用旧终稿。' : 'NAS 撤销清单同步中，历史文件保留。' }
+  }
   if (delivery.deliveryStatus === 'published') {
     return {
       type: 'success',
@@ -530,6 +537,7 @@ async function submitIssue() {
       return
     }
     const payload = {
+      reviewCycle: reviewContext.value?.currentVersion?.reviewCycle || 1,
       issueScope: issueScope.value,
       candidateId: issueScope.value === 'version' ? null : activeCandidate.value.candidateId,
       content,
@@ -814,7 +822,8 @@ async function submitDecision(actionType, revisionTransfer = null, confirmed = f
 }
 
 async function retryFailedFinalDelivery() {
-  if (finalDeliveryRetryBusy.value || finalDelivery.value?.deliveryStatus !== 'failed') return
+  if (finalDeliveryRetryBusy.value || !canRetryFinalDelivery.value ||
+    (finalDelivery.value?.deliveryStatus !== 'failed' && finalDelivery.value?.revocationStatus !== 'failed')) return
   finalDeliveryRetryBusy.value = true
   try {
     await retryFinalDelivery(version.value.versionId)
@@ -945,7 +954,7 @@ onBeforeUnmount(() => {
 
           <el-card class="action-history" shadow="never">
             <header><div><p class="sg-eyebrow">HISTORY</p><h3>审核动作记录</h3></div><span>{{ actions.length }} 条</span></header>
-            <el-timeline v-if="actions.length" class="action-list"><el-timeline-item v-for="item in actions" :key="item.actionId" :type="tagTypeFromTone(reviewActionMeta(item.actionType).tone)" :timestamp="formatReviewDateTime(item.createTime)" placement="top"><strong>{{ reviewActionMeta(item.actionType).label }}</strong><p>{{ item.reason || '未填写整体说明' }}</p><small>{{ item.reviewerName || `用户 #${item.reviewerUserId}` }}</small><span class="action-transition"><el-tag size="small" effect="plain" round :type="tagTypeFromTone(taskVersionStatusMeta(item.fromStatus).tone)">{{ taskVersionStatusMeta(item.fromStatus).label }}</el-tag><span aria-hidden="true">→</span><el-tag size="small" effect="plain" round :type="tagTypeFromTone(taskVersionStatusMeta(item.toStatus).tone)">{{ taskVersionStatusMeta(item.toStatus).label }}</el-tag></span></el-timeline-item></el-timeline>
+            <el-timeline v-if="actions.length" class="action-list"><el-timeline-item v-for="item in actions" :key="item.actionId" :type="tagTypeFromTone(reviewActionMeta(item.actionType).tone)" :timestamp="formatReviewDateTime(item.createTime)" placement="top"><strong>{{ reviewActionMeta(item.actionType).label }} · 第 {{ item.reviewCycle || 1 }} 次审核</strong><p>{{ item.reason || '未填写整体说明' }}</p><small>{{ item.reviewerName || `用户 #${item.reviewerUserId}` }}</small><span class="action-transition"><el-tag size="small" effect="plain" round :type="tagTypeFromTone(taskVersionStatusMeta(item.fromStatus).tone)">{{ taskVersionStatusMeta(item.fromStatus).label }}</el-tag><span aria-hidden="true">→</span><el-tag size="small" effect="plain" round :type="tagTypeFromTone(taskVersionStatusMeta(item.toStatus).tone)">{{ taskVersionStatusMeta(item.toStatus).label }}</el-tag></span></el-timeline-item></el-timeline>
             <el-empty v-else class="empty-block" :image-size="44" description="尚无审核动作" />
           </el-card>
         </main>
@@ -1056,6 +1065,17 @@ onBeforeUnmount(() => {
             </ElTabs>
 
             <section v-if="canReview" class="assistant-section decision-panel">
+              <el-collapse v-if="reviewContext?.currentVersion?.finalDeliveryHistory?.length > 1">
+                <el-collapse-item title="最终交付历史" name="deliveries">
+                  <el-table :data="reviewContext.currentVersion.finalDeliveryHistory" row-key="finalDeliveryId" size="small">
+                    <el-table-column prop="reviewCycle" label="审核次数" width="80" />
+                    <el-table-column label="记录"><template #default="{ row }">{{ row.operation === 'revoke' ? '撤销有效终稿' : row.validityStatus === 'revoked' ? '历史交付（已失效）' : '本次交付' }}</template></el-table-column>
+                    <el-table-column label="执行状态"><template #default="{ row }">{{ ({ pending: '等待同步', publishing: '执行中', published: '已同步', failed: '失败', cancelled: '已取消' })[row.deliveryStatus] }}</template></el-table-column>
+                  </el-table>
+                </el-collapse-item>
+              </el-collapse>
+              <el-alert v-if="(reviewContext?.currentVersion?.reviewCycle || 1) > 1" type="warning" :closable="false" :title="`重新审核 · 第 ${reviewContext.currentVersion.reviewCycle} 次审核；原候选文件已冻结`" />
+              <ReopenReviewButton v-if="version" :version="version" @reopened="loadReview" />
               <header class="assistant-section-heading"><span class="step-number">3</span><div><h3>提交审核结论</h3><p>确认所有问题后，再完成本轮审核。</p></div></header>
               <el-alert
                 v-if="finalDeliveryAlert"
@@ -1068,7 +1088,7 @@ onBeforeUnmount(() => {
                 <code v-if="finalDeliveryAlert.path" class="final-delivery-path" aria-label="NAS 发布路径">{{ finalDeliveryAlert.path }}</code>
                 <span class="final-delivery-note">{{ finalDeliveryAlert.description }}</span>
               </el-alert>
-              <el-button v-if="finalDelivery?.deliveryStatus === 'failed' && canRetryFinalDelivery" type="warning" plain :loading="finalDeliveryRetryBusy" @click="retryFailedFinalDelivery">重新发布最终版本</el-button>
+              <el-button v-if="(finalDelivery?.deliveryStatus === 'failed' || finalDelivery?.revocationStatus === 'failed') && canRetryFinalDelivery" type="warning" plain :loading="finalDeliveryRetryBusy" @click="retryFailedFinalDelivery">{{ finalDelivery?.operation === 'revoke' || finalDelivery?.revocationStatus === 'failed' ? '重试同步撤销清单' : '重新发布最终版本' }}</el-button>
               <div class="decision-summary">
                 <template v-if="isReviewDecisionOpen">
                   <span v-if="carriedIssues.length">上轮已确认 {{ completedVerificationCount }}/{{ carriedIssues.length }} 条</span>

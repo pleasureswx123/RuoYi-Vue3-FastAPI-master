@@ -38,6 +38,9 @@ class ShotGridFinalDelivery(Base):
     manifest_nas_relative_path = Column(String(1200), nullable=False, comment='FINAL.json清单NAS相对路径')
     source_sha256 = Column(CHAR(64), nullable=False, comment='候选源文件SHA-256摘要')
     source_file_size = Column(BigInteger, nullable=False, comment='候选源文件字节数')
+    review_cycle = Column(Integer, nullable=False, server_default='1', comment='审核周期')
+    operation = Column(String(20), nullable=False, server_default='publish', comment='发布或撤销有效清单')
+    validity_status = Column(String(20), nullable=False, server_default='current', comment='交付业务有效性')
     delivery_status = Column(String(20), nullable=False, server_default='pending', comment='最终交付状态')
     attempt_count = Column(Integer, nullable=False, server_default='0', comment='发布尝试次数')
     lease_owner = Column(String(100), nullable=True, comment='Worker租约持有者')
@@ -93,7 +96,7 @@ class ShotGridFinalDelivery(Base):
         CheckConstraint("source_sha256 ~ '^[0-9a-f]{64}$'", name='ck_sg_final_delivery_sha256'),
         CheckConstraint('source_file_size > 0', name='ck_sg_final_delivery_file_size'),
         CheckConstraint(
-            "delivery_status in ('pending', 'publishing', 'published', 'failed')",
+            "delivery_status in ('pending', 'publishing', 'published', 'failed', 'cancelled')",
             name='ck_sg_final_delivery_status',
         ),
         CheckConstraint('attempt_count >= 0', name='ck_sg_final_delivery_attempt_count'),
@@ -115,7 +118,9 @@ class ShotGridFinalDelivery(Base):
             "(delivery_status <> 'published' and published_time is null and publish_mode is null)",
             name='ck_sg_final_delivery_result',
         ),
-        Index('uk_sg_final_delivery_version', 'version_id', unique=True),
+        CheckConstraint("operation in ('publish', 'revoke')", name='ck_sg_final_delivery_operation'),
+        CheckConstraint("validity_status in ('current', 'revoked')", name='ck_sg_final_delivery_validity'),
+        Index('uk_sg_final_delivery_cycle_operation', 'version_id', 'review_cycle', 'operation', unique=True),
         Index('idx_sg_final_delivery_status_lease_update', 'delivery_status', 'lease_until', 'update_time'),
         Index('idx_sg_final_delivery_project_task', 'project_id', 'task_id'),
         {'comment': 'Shot Grid最终版本NAS交付Outbox与执行记录'},

@@ -16,7 +16,12 @@ from module_shot_grid.entity.do.project_do import (
     ShotGridScene,
     ShotGridShot,
 )
-from module_shot_grid.entity.do.review_do import ShotGridNote, ShotGridReviewList, ShotGridVersionIssueResponse
+from module_shot_grid.entity.do.review_do import (
+    ShotGridNote,
+    ShotGridReviewCycle,
+    ShotGridReviewList,
+    ShotGridVersionIssueResponse,
+)
 from module_shot_grid.entity.do.storage_do import (
     ShotGridProjectStorage,
     ShotGridStorageOperation,
@@ -165,18 +170,23 @@ class ShotGridVersionSubmissionDao:
                 ShotGridEpisode.episode_no,
                 ShotGridEpisode.storage_dir_name.label('episode_storage_dir_name'),
                 ShotGridEpisode.lifecycle_status.label('episode_lifecycle_status'),
+                ShotGridEpisode.del_flag.label('episode_del_flag'),
                 ShotGridScene.scene_no,
                 ShotGridScene.lifecycle_status.label('scene_lifecycle_status'),
+                ShotGridScene.del_flag.label('scene_del_flag'),
                 ShotGridShot.shot_no,
                 ShotGridShot.storage_dir_name.label('shot_storage_dir_name'),
                 ShotGridShot.lifecycle_status.label('shot_lifecycle_status'),
+                ShotGridShot.del_flag.label('shot_del_flag'),
                 ShotGridAsset.asset_id,
                 ShotGridAsset.asset_type,
                 ShotGridAsset.asset_name,
                 ShotGridAsset.storage_dir_name.label('asset_storage_dir_name'),
                 ShotGridAsset.lifecycle_status.label('asset_lifecycle_status'),
+                ShotGridAsset.del_flag.label('asset_del_flag'),
                 ShotGridAssetItem.production_item,
                 ShotGridAssetItem.lifecycle_status.label('asset_item_lifecycle_status'),
+                ShotGridAssetItem.del_flag.label('asset_item_del_flag'),
                 ShotGridProjectStorage.storage_status,
                 ShotGridProjectStorage.root_path_snapshot,
                 ShotGridProjectStorage.project_relative_path,
@@ -960,6 +970,8 @@ class ShotGridVersionSubmissionDao:
     @staticmethod
     async def add_version(db: AsyncSession, version: ShotGridVersion) -> ShotGridVersion:
         db.add(version)
+        await db.flush()
+        db.add(ShotGridReviewCycle(version_id=version.version_id, cycle_no=1, opened_time=version.submitted_time))
         await db.flush()
         return version
 

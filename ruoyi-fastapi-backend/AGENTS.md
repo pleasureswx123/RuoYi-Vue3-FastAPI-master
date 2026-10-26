@@ -845,3 +845,14 @@ Windows 不得直接绕过 `rmtree.avoids_symlink_attacks` 检查。Windows 分�
 ### 2026-10-14 任务关联镜头附件下载
 
 任务详情的项目归属取自 `detail.project.project_id`，不存在顶层 `detail.project_id`。任务关联镜头参考附件下载继续先执行任务详情权限与项目范围校验，再按嵌套项目 ID、目标镜头 ID 和文件 UUID 校验业务引用及平台 ACL；不增加公开地址或绕过授权。
+
+
+### 2026-10-26 重新审核（PostgreSQL 41，尚未部署）
+
+- 镜头任务与资产制作分项共用 `POST /shot-grid/versions/{versionId}/reopen-review`；权限为 `shotgrid:version:reopen` 与 `shotgrid:version:review` 交集，并锁内复核有效 director/全部范围。权限种子不自动给角色授权。已完成/归档项目、非活动或删除目标、无效制作人、非最新最终版本、未决提交或正在执行的最终交付均拒绝。
+- 命令携带版本 lockVersion、taskLockVersion、reviewCycle、必填原因与 X-Idempotency-Key；项目→任务→版本→审核单/交付短事务锁顺序，原 final/completed/completed 转 pending_review/pending_review/active。只操作目标任务；资产父状态仍派生聚合。事务写 reopen 审核历史、周期和审计，提交后实时通知。原通过与已解决问题不改写；新问题绑定新周期，正式退回才对制作人发布。
+- sg_review_cycle 保存周期，sg_version.review_cycle 指向当前周期；版本创建建立周期1，通过/退回关闭周期，reopen追加新周期。草稿创建携带 reviewCycle（兼容默认1），旧周期请求拒绝。重新审核期间不允许追加候选，提交预检/受理/重试/落库共用校验，退回后提交下一版本。
+- sg_final_delivery 同时承担 publish/revoke Outbox，按 version_id+review_cycle+operation 唯一；validity_status 与 delivery_status 分离。重开立即使原交付 revoked，pending 发布取消，历史 published/failed 保留；新增 revoke 事件异步同步。发布中一律拒绝重开，租约过期不接管。
+- 每次通过写 `FINAL/T{taskId}-V{versionNo:03d}-R{cycle:03d}/` 不可变文件及 FINAL.json；任务级 `FINAL/CURRENT-{taskId}.json` 是可原子替换的有效清单，避免资产多个分项共享目录时互相覆盖。generation 使用交付事件ID，拒绝低代次覆盖，撤销写 valid=false。历史目录不是当前有效终稿依据。
+- 同任务交付按事件顺序执行：前序有效发布或撤销处于 pending/publishing/failed 时后序不执行。失败撤销可从当前版本重试，跨版本展示未完成撤销状态。Worker保留短事务、事务外I/O、心跳、owner+attempt fencing及软超时收敛；后台清单同步不假装数据库与NAS原子一致。
+- PostgreSQL 迁移 20261026_41 回填首周期、扩展约束和权限；新库初始化SQL同步。存在重新审核或新目录交付记录时拒绝降级。永久清理图包含审核周期。未改 MySQL 承诺，未在业务库执行迁移。

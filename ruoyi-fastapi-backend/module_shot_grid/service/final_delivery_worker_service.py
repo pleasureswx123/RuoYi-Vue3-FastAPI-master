@@ -331,9 +331,15 @@ class ShotGridFinalDeliveryWorkerService:
             and row['delivery_status'] == 'publishing'
             and row['attempt_count'] == claimed.attempt_count
             and row['lease_owner'] == claimed.lease_owner
-            and row['version_status'] == 'final'
-            and row['task_status'] == 'completed'
-            and row['selected_candidate_id'] == row['candidate_id']
+            and (
+                row.get('operation') == 'revoke'
+                or (
+                    row.get('validity_status', 'current') == 'current'
+                    and row['version_status'] == 'final'
+                    and row['task_status'] == 'completed'
+                    and row['selected_candidate_id'] == row['candidate_id']
+                )
+            )
         )
         if not valid or row is None:
             raise VersionPublishPathAdapterError(
@@ -343,6 +349,8 @@ class ShotGridFinalDeliveryWorkerService:
             )
         approved_time = row['approved_time']
         return FinalDeliveryPathContext(
+            operation=str(row.get('operation', 'publish')),
+            review_cycle=int(row.get('review_cycle', 1)),
             final_delivery_id=int(row['final_delivery_id']),
             attempt_count=int(row['attempt_count']),
             project_id=int(row['project_id']),

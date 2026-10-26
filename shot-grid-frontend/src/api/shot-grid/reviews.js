@@ -256,3 +256,8 @@ export function getMineReviewProjects(options = {}) {
 export function getMineReviewProducers(params = {}, options = {}) {
   return request({ url: '/shot-grid/review-lists/mine/producers', method: 'get', params, signal: options.signal, silentError: true })
 }
+
+export function reopenVersionReview(versionId, data, idempotencyKey, options = {}) {
+  return request({ url: `/shot-grid/versions/${assertPositiveId(versionId, '版本')}/reopen-review`,
+    method: 'post', data, headers: idempotencyHeaders(idempotencyKey), signal: options.signal, silentError: true })
+}

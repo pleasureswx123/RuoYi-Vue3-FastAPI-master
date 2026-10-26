@@ -1,4 +1,6 @@
 <script setup>
+import ReopenReviewButton from '@/components/review/ReopenReviewButton.vue'
+import RelatedDetailDrawer from '@/components/RelatedDetailDrawer.vue'
 import RevisionTransferDialog from '@/components/version/RevisionTransferDialog.vue'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -28,6 +30,9 @@ import {
   taskPriorityMeta,
   taskStatusMeta
 } from '@/views/task/taskPresentation'
+
+const reopenedReview = ref(null)
+function handleReopened(result) { loadDetail(); reopenedReview.value?.open(`/reviews/${result.autoReviewListId}`); emit('completed') }
 
 const WAITING_START_POLL_INTERVAL_MS = 5000
 const STATUS_POLL_MAX_FAILURES = 3
@@ -65,7 +70,7 @@ const taskId = computed(() => {
 })
 const wildcard = computed(() => sessionStore.permissions.includes('*:*:*'))
 const hasPermission = permission => wildcard.value || sessionStore.permissions.includes(permission)
-const issueRealtimeVersionId = computed(() => hasPermission('shotgrid:version:query') && ['pending_review', 'revision'].includes(task.value?.taskStatus)
+const issueRealtimeVersionId = computed(() => hasPermission('shotgrid:version:query') && ['pending_review', 'revision', 'completed'].includes(task.value?.taskStatus)
   ? task.value?.latestVersion?.versionId : null)
 useVersionRealtime(issueRealtimeVersionId, async versionId => {
   const targetTaskId = taskId.value
@@ -378,6 +383,8 @@ onBeforeUnmount(() => {
           <small>更新于 {{ formatTaskDateTime(task.updateTime) }}</small>
         </div>
         <div class="task-hero__actions">
+          <RelatedDetailDrawer ref="reopenedReview" @closed="loadDetail" />
+          <ReopenReviewButton v-if="task.latestVersion" :version="task.latestVersion" @reopened="handleReopened" />
           <el-button v-if="allowedActions.has('task.transfer')" type="primary" :disabled="loading" @click="transferDialog.open(task.latestVersion.versionId)">转交修改</el-button>
           <el-button :icon="Refresh" :loading="loading" @click="loadDetail">刷新</el-button>
           <el-button v-if="canEdit" :icon="Edit" :disabled="loading" @click="openEditDialog">编辑任务</el-button>

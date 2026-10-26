@@ -1121,6 +1121,21 @@ class ShotGridAssetCrudService:
         ):
             actions.append('task.adjust')
         if (
+            task_status == 'completed'
+            and has_versions
+            and not has_uncommitted_submission
+            and all(
+                cls._has_permission(current_user, permission)
+                for permission in (
+                    'shotgrid:version:reopen',
+                    'shotgrid:version:review',
+                    'shotgrid:version:query',
+                    'shotgrid:reviewList:query',
+                )
+            )
+        ):
+            actions.append('task.reopenReview')
+        if (
             task_status == 'pending_review'
             and not has_uncommitted_submission
             and cls._has_permission(current_user, 'shotgrid:version:review')

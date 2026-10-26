@@ -42,6 +42,7 @@ from module_shot_grid.entity.vo.review_vo import (
     ShotGridReviewProducerOptionModel,
     ShotGridReviewProducerQueryModel,
     ShotGridReviewProjectOptionModel,
+    ShotGridReviewReopenModel,
     ShotGridReviewVersionSummaryModel,
     ShotGridRevisionTransferCommand,
     ShotGridVersionCandidateSelectModel,
@@ -49,6 +50,7 @@ from module_shot_grid.entity.vo.review_vo import (
     ShotGridVersionListItemModel,
     ShotGridVersionListQueryModel,
 )
+from module_shot_grid.service.review_reopen_service import ShotGridReviewReopenService
 from module_shot_grid.service.review_service import ShotGridReviewService
 from module_shot_grid.service.revision_transfer_service import ShotGridRevisionTransferService
 from utils.response_util import ResponseUtil
@@ -746,4 +748,19 @@ async def transfer_shot_grid_revision(
 ) -> Response:
 
     result = await ShotGridRevisionTransferService.transfer(query_db, version_id, command, current_user)
+    return ResponseUtil.success(data=result)
+
+
+@review_controller.post(
+    '/versions/{versionId}/reopen-review',
+    dependencies=[UserInterfaceAuthDependency(['shotgrid:version:reopen', 'shotgrid:version:review'], is_strict=True)],
+)
+async def reopen_shot_grid_review(
+    version_id: Annotated[int, Path(alias='versionId', gt=0)],
+    command: ShotGridReviewReopenModel,
+    query_db: Annotated[AsyncSession, DBSessionDependency()],
+    current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
+    idempotency_key: Annotated[str | None, Header(alias='X-Idempotency-Key')] = None,
+) -> Response:
+    result = await ShotGridReviewReopenService.reopen(query_db, version_id, command, idempotency_key, current_user)
     return ResponseUtil.success(data=result)

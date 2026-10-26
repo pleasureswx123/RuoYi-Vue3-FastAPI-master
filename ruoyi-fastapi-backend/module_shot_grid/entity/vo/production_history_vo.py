@@ -64,8 +64,9 @@ class ShotGridProductionHistoryReviewListModel(ShotGridApiModel):
 
 
 class ShotGridProductionHistoryReviewActionModel(ShotGridApiModel):
+    review_cycle: int = 1
     action_id: int
-    action_type: Literal['approve', 'reject', 'defer']
+    action_type: Literal['approve', 'reject', 'defer', 'reopen']
     from_status: Literal['pending_review', 'rejected', 'final']
     to_status: Literal['pending_review', 'rejected', 'final']
     reason: str | None = None

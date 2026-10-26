@@ -105,3 +105,49 @@ async def test_final_delivery_rejects_target_outside_final_directory(tmp_path: P
         await adapter.publish(replace(context, final_nas_relative_path=context.source_nas_relative_path))
 
     assert exc_info.value.error_key == 'SG_STORAGE_PATH_INVALID'
+
+
+@pytest.mark.asyncio
+async def test_reopen_revokes_manifest_and_reapproval_preserves_both_deliveries(tmp_path: Path) -> None:
+    context, project, content = _prepare_context(tmp_path)
+    source_directory = Path(context.source_nas_relative_path.replace('\\', '/')).parent
+    first_dir = source_directory / 'FINAL' / 'T10-V001-R001'
+    first = replace(
+        context,
+        final_nas_relative_path=str(first_dir / context.business_file_name),
+        manifest_nas_relative_path=str(first_dir / 'FINAL.json'),
+    )
+    adapter = ShotGridFinalDeliveryPathAdapter(allow_local_root=True)
+    await adapter.publish(first)
+    current = project / source_directory / 'FINAL' / 'CURRENT-10.json'
+    assert json.loads(current.read_text(encoding='utf-8'))['valid'] is True
+    revoke = replace(first, final_delivery_id=20, review_cycle=2, operation='revoke')
+    await adapter.publish(revoke)
+    assert json.loads(current.read_text(encoding='utf-8'))['valid'] is False
+    assert (project / first_dir / context.business_file_name).read_bytes() == content
+    second_dir = source_directory / 'FINAL' / 'T10-V001-R002'
+    second = replace(
+        first,
+        final_delivery_id=21,
+        review_cycle=2,
+        final_nas_relative_path=str(second_dir / context.business_file_name),
+        manifest_nas_relative_path=str(second_dir / 'FINAL.json'),
+    )
+    await adapter.publish(second)
+    assert json.loads(current.read_text(encoding='utf-8'))['generation'] == second.final_delivery_id
+    with pytest.raises(Exception, match='旧清单操作'):
+        await adapter.publish(revoke)
+    assert json.loads(current.read_text(encoding='utf-8'))['valid'] is True
+    assert (project / second_dir / context.business_file_name).read_bytes() == content
+
+
+@pytest.mark.asyncio
+async def test_shared_asset_directory_has_independent_task_manifests(tmp_path: Path) -> None:
+    context, project, _ = _prepare_context(tmp_path)
+    adapter = ShotGridFinalDeliveryPathAdapter(allow_local_root=True)
+    await adapter.publish(context)
+    other = replace(context, task_id=11, final_delivery_id=20, operation='revoke')
+    await adapter.publish(other)
+    directory = project / Path(context.final_nas_relative_path.replace('\\', '/')).parent
+    assert json.loads((directory / 'CURRENT-10.json').read_text(encoding='utf-8'))['valid'] is True
+    assert json.loads((directory / 'CURRENT-11.json').read_text(encoding='utf-8'))['valid'] is False

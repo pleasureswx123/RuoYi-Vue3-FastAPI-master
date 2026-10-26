@@ -57,6 +57,7 @@ const IMPORT_BATCH_STATUS_META = Object.freeze({
 const REVIEW_ACTION_META = Object.freeze({
   approve: Object.freeze({ label: '确认通过', tone: 'success' }),
   reject: Object.freeze({ label: '退回修改', tone: 'danger' }),
+  reopen: Object.freeze({ label: '重新审核', tone: 'warning' }),
   defer: Object.freeze({ label: '稍后决定', tone: 'warning' })
 })
 

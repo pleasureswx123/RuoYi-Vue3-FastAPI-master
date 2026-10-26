@@ -249,13 +249,14 @@ let detailController = null
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / props.pageSize)))
 const historyFilters = computed(() => ({ versionStatus: statusFilter.value }))
 const historyFormRef = ref(null)
-const latestDecision = computed(() => feedbackActions.value.find(item => ['approve', 'reject', 'defer'].includes(item.actionType)) || null)
+const latestDecision = computed(() => feedbackActions.value.find(item => ['approve', 'reject', 'defer', 'reopen'].includes(item.actionType)) || null)
 const hasFeedback = computed(() => Boolean(feedbackNotes.value.length || latestDecision.value))
 const pendingFeedbackCount = computed(() => feedbackNotes.value.filter(item => item.displayScope === 'pending').length)
 const decisionPresentation = computed(() => {
   const decision = latestDecision.value
   if (!decision) return null
   const reason = String(decision.reason || '').trim()
+  if (decision.actionType === 'reopen') return { title: '本版已重新审核', badge: '等待审核', tone: 'warning', message: reason || '原交付已失效，等待审核人补充并发送问题。' }
   if (decision.actionType === 'approve') {
     return {
       title: '本版审核已通过',

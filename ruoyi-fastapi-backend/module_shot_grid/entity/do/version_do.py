@@ -229,6 +229,7 @@ class ShotGridVersion(Base):
     task_id = Column(BigInteger, nullable=False, comment='任务ID')
     submission_id = Column(BigInteger, nullable=False, comment='来源版本提交ID')
     version_no = Column(Integer, nullable=False, comment='任务内版本序号')
+    review_cycle = Column(Integer, nullable=False, server_default='1', comment='当前审核周期')
     version_status = Column(String(20), nullable=False, server_default='pending_review', comment='版本状态')
     changelog = Column(Text, nullable=False, comment='修改说明')
     ai_params = Column(SHOT_GRID_JSON, nullable=True, comment='AI生成参数快照')

@@ -1,4 +1,5 @@
 <script setup>
+import AssetReviewEntry from './components/AssetReviewEntry.vue'
 import ForceDeleteAction from '@/components/ForceDeleteAction.vue'
 import { myProjectRoles } from '@/views/project/projectPresentation'
 import AssetItemReferences from './components/AssetItemReferences.vue'
@@ -31,6 +32,8 @@ import AssetItemDeleteDialog from '@/views/asset/components/AssetItemDeleteDialo
 import ProtectedAssetThumbnail from '@/views/asset/components/ProtectedAssetThumbnail.vue'
 import { assetCompletionSummary, assetDirectoryStatusMeta, assetErrorState, assetItemStatusEntries, assetStatusMeta, assetTypeMeta, formatAssetDateTime, memberUserName } from '@/views/asset/assetPresentation'
 import { taskPriorityMeta, taskStatusMeta, taskVersionStatusMeta } from '@/views/task/taskPresentation'
+
+const reopenEntry = ref(null)
 
 const props = defineProps({
   targetProjectId: { type: [Number, String], default: null },
@@ -390,6 +393,7 @@ onBeforeUnmount(() => {
 <template>
   <AssetItemBatchWorkspace ref="batchWorkspace" :project-id="projectId || 0" :context-key="`${projectId}:${assetId}`" @changed="loadDetail()" @active-change="batchWorkspaceOpen = $event" />
   <AssetItemScheduleDialog ref="scheduleDialog" :project-id="projectId || 0" :context-key="`${projectId}:${assetId}`" :members="members" @changed="loadDetail()" @busy-change="scheduleBusy = $event" />
+  <AssetReviewEntry v-if="asset" ref="reopenEntry" :project-id="Number(asset.projectId)" @changed="loadDetail" />
   <RelatedDetailDrawer ref="taskDrawer" @closed="loadDetail()" />
   <TaskStartDialog v-if="startDialog" :context="startDialog" @close="closeStartDialog" @started="finishStartDialog" @failed="failStartDialog" />
   <section class="sg-page asset-detail-page" :class="{ 'asset-detail-page--embedded': embedded }">
@@ -494,6 +498,7 @@ onBeforeUnmount(() => {
               <el-button v-if="itemCanEdit(item)" size="small" text :type="item.productionItem ? 'default' : 'warning'" :icon="Edit" :disabled="startDisabled || scheduleBusy" @click="openItemForm(item)">{{ item.productionItem ? '编辑分项信息' : '完善信息' }}</el-button>
               <el-button v-if="item.task?.taskId && hasPermission('shotgrid:task:query')" size="small" text :icon="View" @click="taskDrawer.open(`/tasks/${item.task.taskId}`)">查看任务</el-button>
               <el-button v-if="canAdvancedItem(item, 'adjust')" size="small" text type="warning" :disabled="batchWorkspaceOpen" @click="batchWorkspace.open([asset], [item.assetItemId], 'adjust')">制作要求与参考资料</el-button>
+              <el-button v-if="item.allowedActions?.includes('task.reopenReview')" size="small" type="warning" @click="reopenEntry.open(asset, item.assetItemId, 'reopen')">重新审核</el-button>
               <el-button v-if="canAdvancedItem(item, 'review')" size="small" text type="primary" :disabled="batchWorkspaceOpen" @click="batchWorkspace.open([asset], [item.assetItemId], 'review')">反馈与复核</el-button>
               <el-button v-if="canAdvancedItem(item, 'appendIssue')" size="small" text type="warning" :disabled="batchWorkspaceOpen" @click="batchWorkspace.open([asset], [item.assetItemId], 'append')">追加问题</el-button>
               <el-button v-if="itemCanDelete(item)" size="small" text type="danger" :icon="Delete" :disabled="startDisabled || scheduleBusy" @click="openDeleteItem(item)">删除分项</el-button>

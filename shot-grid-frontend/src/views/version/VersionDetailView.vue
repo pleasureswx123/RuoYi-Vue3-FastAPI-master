@@ -1,4 +1,6 @@
 <script setup>
+import ReopenReviewButton from '@/components/review/ReopenReviewButton.vue'
+import RelatedDetailDrawer from '@/components/RelatedDetailDrawer.vue'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ArrowLeft, Refresh } from '@element-plus/icons-vue'
@@ -15,6 +17,8 @@ const route = useRoute()
 const router = useRouter()
 const sessionStore = useSessionStore()
 const version = ref(null)
+const reviewDrawer = ref(null)
+function reopened(result) { loadVersion(); reviewDrawer.value?.open(`/reviews/${result.autoReviewListId}`) }
 const loading = ref(false)
 const errorState = ref(null)
 let controller = null
@@ -77,9 +81,10 @@ onBeforeUnmount(() => {
 
 <template>
   <section class="sg-page version-detail-view">
+    <RelatedDetailDrawer ref="reviewDrawer" @closed="loadVersion" />
     <header class="view-heading">
       <div><p class="sg-eyebrow">VERSION</p><h2>版本详情</h2><p>查看版本文件、提交说明与审核信息，历史版本始终保留。</p></div>
-      <div><el-button v-if="!embedded" :icon="ArrowLeft" @click="router.back()">返回</el-button><el-button :icon="Refresh" :loading="loading" @click="loadVersion">刷新</el-button></div>
+      <div><ReopenReviewButton v-if="version" :version="version" @reopened="reopened" /><el-button v-if="!embedded" :icon="ArrowLeft" @click="router.back()">返回</el-button><el-button :icon="Refresh" :loading="loading" @click="loadVersion">刷新</el-button></div>
     </header>
     <el-skeleton v-if="loading" class="view-state" :rows="6" animated />
     <el-alert v-else-if="errorState" class="view-state is-error" :title="errorState.title" :description="errorState.message" type="error" :closable="false" show-icon />

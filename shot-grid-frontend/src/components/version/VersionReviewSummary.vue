@@ -34,7 +34,7 @@ async function load() {
   ])
   if (request.signal.aborted || controller !== request) return
   const [actions, issues] = results
-  if (actions.status === 'fulfilled') decision.value = actions.value.rows?.find(item => ['approve', 'reject', 'defer'].includes(item.actionType)) || null
+  if (actions.status === 'fulfilled') decision.value = actions.value.rows?.find(item => ['approve', 'reject', 'defer', 'reopen'].includes(item.actionType)) || null
   if (issues.status === 'fulfilled' && issues.value) issueCount.value = (issues.value.data || []).filter(item => Number(item.originVersionId) === Number(versionId)).length
   failed.value = results.some(item => item.status === 'rejected')
   loading.value = false

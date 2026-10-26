@@ -1135,6 +1135,7 @@ class ShotGridTaskService:
             actions.append('task.start')
         if (
             row['task_status'] in {'in_progress', 'revision', 'pending_review'}
+            and not (row['task_status'] == 'pending_review' and int(row.get('latest_review_cycle') or 1) > 1)
             and target_ready
             and owner_creator
             and not row['has_uncommitted_submission']

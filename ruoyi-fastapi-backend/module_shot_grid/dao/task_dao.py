@@ -46,6 +46,7 @@ class ShotGridTaskDao:
             ShotGridVersion.version_id,
             ShotGridVersion.version_no,
             ShotGridVersion.version_status,
+            ShotGridVersion.review_cycle,
             ShotGridVersion.submitted_time,
             func.row_number()
             .over(
@@ -60,6 +61,7 @@ class ShotGridTaskDao:
                 ranked_versions.c.version_id,
                 ranked_versions.c.version_no,
                 ranked_versions.c.version_status,
+                ranked_versions.c.review_cycle,
                 ranked_versions.c.submitted_time,
             )
             .where(ranked_versions.c.row_no == 1)
@@ -71,6 +73,7 @@ class ShotGridTaskDao:
                 ShotGridVersion.version_id,
                 ShotGridVersion.version_no,
                 ShotGridVersion.version_status,
+                ShotGridVersion.review_cycle,
                 ShotGridVersion.submitted_time,
             )
             .where(ShotGridVersion.version_status == 'final')
@@ -159,6 +162,7 @@ class ShotGridTaskDao:
                 latest_version.c.version_id.label('latest_version_id'),
                 latest_version.c.version_no.label('latest_version_no'),
                 latest_version.c.version_status.label('latest_version_status'),
+                latest_version.c.review_cycle.label('latest_review_cycle'),
                 latest_version.c.submitted_time.label('latest_submitted_time'),
                 final_version.c.version_id.label('final_version_id'),
                 final_version.c.version_no.label('final_version_no'),

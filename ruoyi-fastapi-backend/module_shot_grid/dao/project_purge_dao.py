@@ -27,6 +27,7 @@ from module_shot_grid.entity.do.review_do import (
     ShotGridIssueVerification,
     ShotGridNote,
     ShotGridReviewAction,
+    ShotGridReviewCycle,
     ShotGridReviewIssueDraft,
     ShotGridReviewList,
     ShotGridReviewListVersion,
@@ -303,6 +304,7 @@ class ShotGridProjectPurgeDao:
             ShotGridIssueVerification,
             ShotGridVersionIssueResponse,
             ShotGridReviewAction,
+            ShotGridReviewCycle,
             ShotGridNote,
         ):
             await db.execute(delete(model).where(model.project_id == project_id))
@@ -315,6 +317,7 @@ class ShotGridProjectPurgeDao:
         await db.execute(delete(ShotGridReviewList).where(ShotGridReviewList.project_id == project_id))
         await db.execute(delete(ShotGridFinalDelivery).where(ShotGridFinalDelivery.project_id == project_id))
         await db.execute(delete(ShotGridMediaDerivation).where(ShotGridMediaDerivation.version_id.in_(version_ids)))
+        await db.execute(delete(ShotGridReviewCycle).where(ShotGridReviewCycle.version_id.in_(version_ids)))
         await db.execute(delete(ShotGridVersionFile).where(ShotGridVersionFile.version_id.in_(version_ids)))
         await db.execute(
             update(ShotGridVersion)

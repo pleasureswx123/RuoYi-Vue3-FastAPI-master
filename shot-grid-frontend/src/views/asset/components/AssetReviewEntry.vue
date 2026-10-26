@@ -10,7 +10,8 @@ const emit = defineEmits(['changed'])
 const session = useSessionStore()
 const visible = ref(false), loading = ref(false), opening = ref(false), error = ref(''), asset = ref(null), review = ref(null)
 const allowed = () => ['shotgrid:asset:query', 'shotgrid:version:query', 'shotgrid:reviewList:query', 'shotgrid:version:review'].every(permission => session.permissions.includes('*:*:*') || session.permissions.includes(permission))
-const items = computed(() => (asset.value?.items || []).filter(row => row.allowedActions?.includes('task.review') && row.task?.taskStatus === 'pending_review' && row.latestVersion?.versionId))
+const reviewMode = ref('review')
+const items = computed(() => (asset.value?.items || []).filter(row => row.allowedActions?.includes(reviewMode.value === 'reopen' ? 'task.reopenReview' : 'task.review') && row.task?.taskStatus === (reviewMode.value === 'reopen' ? 'completed' : 'pending_review') && row.latestVersion?.versionId))
 let generation = 0, controller, disposed = false
 function close() { generation++; controller?.abort(); visible.value = false; loading.value = false }
 onBeforeUnmount(() => { disposed = true; close() })
@@ -30,8 +31,9 @@ async function openReview(row) {
   } catch (failure) { if (!disposed && token === generation) error.value = failure.message || '审核入口加载失败，请重试' }
   finally { if (token === generation) opening.value = false }
 }
-async function open(parent, itemId = null) {
+async function open(parent, itemId = null, mode = 'review') {
   if (loading.value || opening.value || !allowed() || Number(parent.projectId) !== props.projectId) return
+  reviewMode.value = mode
   close(); visible.value = true; loading.value = true; error.value = ''; asset.value = null
   const token = generation
   controller = new AbortController()
@@ -48,7 +50,7 @@ function reviewed() { close(); emit('changed') }
 defineExpose({ open })
 </script>
 <template>
-  <ProjectDrawer v-if="visible" title="选择分项审核" :description="asset?.assetName || '正在加载'" :busy="opening" wide @close="close">
+  <ProjectDrawer v-if="visible" :title="reviewMode === 'reopen' ? '选择分项重新审核' : '选择分项审核'" :description="asset?.assetName || '正在加载'" :busy="opening" wide @close="close">
     <el-alert v-if="error" :title="error" type="error" :closable="false" />
     <el-table v-loading="loading" :data="items" row-key="assetItemId">
       <el-table-column prop="productionItem" label="制作分项" min-width="180" />

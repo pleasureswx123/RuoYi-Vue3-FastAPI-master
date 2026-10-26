@@ -397,7 +397,7 @@ describe('版本审核页面', () => {
     await wrapper.findAllComponents(ElButton).find(button => button.text() === '保存问题草稿').trigger('click')
     await flushPromises()
     expect(addVersionIssueDraft).toHaveBeenCalledWith(33, {
-      issueScope: 'version', candidateId: null, content: '本版整体节奏需要更紧凑',
+      reviewCycle: 1, issueScope: 'version', candidateId: null, content: '本版整体节奏需要更紧凑',
       mediaTimeMs: null, annotations: null, referenceFileIds: []
     })
     expect(selectVersionCandidate).not.toHaveBeenCalled()
@@ -579,7 +579,7 @@ describe('版本审核页面', () => {
 
     expect(addVersionIssueDraft).toHaveBeenCalledWith(33, {
       candidateId: 3301,
-      issueScope: 'candidate',
+      reviewCycle: 1, issueScope: 'candidate',
       content: '这里需要降低高光',
       mediaTimeMs: 3250,
       annotations,
@@ -614,7 +614,7 @@ describe('版本审核页面', () => {
     }))
     expect(addVersionIssueDraft).toHaveBeenCalledWith(33, {
       candidateId: 3301,
-      issueScope: 'candidate',
+      reviewCycle: 1, issueScope: 'candidate',
       content: '请参考附件调整灯光层次',
       mediaTimeMs: null,
       annotations: null,
@@ -679,7 +679,7 @@ describe('版本审核页面', () => {
 
     expect(updateVersionIssueDraft).toHaveBeenCalledWith(33, 502, {
       candidateId: 3301,
-      issueScope: 'candidate',
+      reviewCycle: 1, issueScope: 'candidate',
       content: '画面主体仍然偏暗',
       mediaTimeMs: 3250,
       annotations,
@@ -850,6 +850,24 @@ describe('版本审核页面', () => {
 
     expect(retryFinalDelivery).toHaveBeenCalledWith(33)
     wrapper.unmount()
+  })
+
+  it('旧版撤销失败且当前发布等待时，重试按钮实际调用接口', async () => {
+    const finalVersion = { ...version, versionStatus: 'final', finalDelivery: {
+      operation: 'publish', deliveryStatus: 'pending', revocationStatus: 'failed'
+    } }
+    getReviewListDetail.mockResolvedValue({ data: { ...review, reviewStatus: 'completed', version: finalVersion } })
+    getVersionDetail.mockResolvedValue({ data: finalVersion })
+    getVersionReviewContext.mockResolvedValue({ data: { currentVersion: finalVersion, candidates: finalVersion.candidates,
+      carriedIssues: [], currentVersionIssues: [], currentVersionDrafts: [] } })
+    const { wrapper } = await mountDetail(['shotgrid:reviewList:query', 'shotgrid:version:query',
+      'shotgrid:version:review', 'shotgrid:version:retry', 'shotgrid:note:list'])
+    try {
+      expect(wrapper.text()).toContain('旧终稿撤销清单同步失败')
+      await wrapper.findAllComponents(ElButton).find(button => button.text() === '重试同步撤销清单').trigger('click')
+      await flushPromises()
+      expect(retryFinalDelivery).toHaveBeenCalledWith(33)
+    } finally { wrapper.unmount() }
   })
 
   it('人工审核单由按钮显式触发 ElForm 字段校验并阻止无效请求', async () => {

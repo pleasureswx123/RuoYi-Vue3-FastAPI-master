@@ -1092,6 +1092,8 @@ class ShotGridVersionSubmissionService:
             or version.version_status != 'pending_review'
         ):
             raise shot_grid_error(409, 'SG_VERSION_APPEND_CLOSED', '该轮次已不能追加候选，请刷新任务')
+        if int(getattr(version, 'review_cycle', 1) or 1) > 1:
+            raise shot_grid_error(409, 'SG_REVIEW_REOPEN_FROZEN', '重新审核期间不能追加候选，请等待退回后提交下一版')
         last_no = await ShotGridVersionSubmissionDao.get_last_candidate_no(db, version.version_id)
         if last_no + candidate_count > MAX_CANDIDATE_NUMBER:
             raise shot_grid_error(422, 'SG_VERSION_CANDIDATE_LIMIT', '单轮候选总数不能超过99个')

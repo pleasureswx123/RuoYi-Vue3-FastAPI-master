@@ -505,6 +505,7 @@ class ShotGridProductionHistoryService:
     @staticmethod
     def _build_review_action(row: dict[str, Any]) -> ShotGridProductionHistoryReviewActionModel:
         return ShotGridProductionHistoryReviewActionModel(
+            reviewCycle=int(row.get('review_cycle', 1)),
             actionId=int(row['action_id']),
             actionType=row['action_type'],
             fromStatus=row['from_status'],

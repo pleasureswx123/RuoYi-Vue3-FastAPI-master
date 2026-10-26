@@ -5017,3 +5017,41 @@ Windows 不得直接绕过 `rmtree.avoids_symlink_attacks` 检查。Windows 分�
 项目资料、镜头与任务参考附件统一复用 ReviewReferenceFiles：点击图标或文件名按原鉴权下载接口读取后在浏览器内预览，保留下载。图片、MP4/MOV 使用带明确 MIME 的临时 Blob 地址，PDF 通过本地 PDF.js Worker 按页渲染到 canvas，避免内嵌浏览器缺少 PDF 插件时空白；DOCX 展示净化后的正文及内嵌图片（隔离 iframe、禁止脚本和外部资源），TXT 支持 UTF-8/GB18030，XLSX 使用 ElTable 展示工作表文字与已保存公式结果（每表最多 1000 行、100 列），PPTX 提供逐页文字预览。Office 内容预览不承诺原始分页、图表、动画或精确版式；旧 DOC/XLS/PPT 提示转换或下载，不调用外部在线 Office 服务。关闭、切换文件及卸载须取消请求、隔离迟到响应并释放对象 URL。
 
 基座对齐：继续沿用已有项目/任务/镜头查询权限、项目数据范围、精确业务引用及平台文件 ACL；任务详情项目 ID 位于 detail.project.project_id，任务关联镜头附件下载必须按该嵌套结构访问。下载返回 JSON 错误时不得当作媒体 Blob 播放。无数据库字段、迁移、公开文件地址或权限扩展。
+
+
+### 2026-10-26 重新审核（PostgreSQL 41，尚未部署）
+
+- 镜头任务与资产制作分项共用 `POST /shot-grid/versions/{versionId}/reopen-review`；权限为 `shotgrid:version:reopen` 与 `shotgrid:version:review` 交集，并锁内复核有效 director/全部范围。权限种子不自动给角色授权。已完成/归档项目、非活动或删除目标、无效制作人、非最新最终版本、未决提交或正在执行的最终交付均拒绝。
+- 命令携带版本 lockVersion、taskLockVersion、reviewCycle、必填原因与 X-Idempotency-Key；项目→任务→版本→审核单/交付短事务锁顺序，原 final/completed/completed 转 pending_review/pending_review/active。只操作目标任务；资产父状态仍派生聚合。事务写 reopen 审核历史、周期和审计，提交后实时通知。原通过与已解决问题不改写；新问题绑定新周期，正式退回才对制作人发布。
+- sg_review_cycle 保存周期，sg_version.review_cycle 指向当前周期；版本创建建立周期1，通过/退回关闭周期，reopen追加新周期。草稿创建携带 reviewCycle（兼容默认1），旧周期请求拒绝。重新审核期间不允许追加候选，提交预检/受理/重试/落库共用校验，退回后提交下一版本。
+- sg_final_delivery 同时承担 publish/revoke Outbox，按 version_id+review_cycle+operation 唯一；validity_status 与 delivery_status 分离。重开立即使原交付 revoked，pending 发布取消，历史 published/failed 保留；新增 revoke 事件异步同步。发布中一律拒绝重开，租约过期不接管。
+- 每次通过写 `FINAL/T{taskId}-V{versionNo:03d}-R{cycle:03d}/` 不可变文件及 FINAL.json；任务级 `FINAL/CURRENT-{taskId}.json` 是可原子替换的有效清单，避免资产多个分项共享目录时互相覆盖。generation 使用交付事件ID，拒绝低代次覆盖，撤销写 valid=false。历史目录不是当前有效终稿依据。
+- 同任务交付按事件顺序执行：前序有效发布或撤销处于 pending/publishing/failed 时后序不执行。失败撤销可从当前版本重试，跨版本展示未完成撤销状态。Worker保留短事务、事务外I/O、心跳、owner+attempt fencing及软超时收敛；后台清单同步不假装数据库与NAS原子一致。
+- PostgreSQL 迁移 20261026_41 回填首周期、扩展约束和权限；新库初始化SQL同步。存在重新审核或新目录交付记录时拒绝降级。永久清理图包含审核周期。未改 MySQL 承诺，未在业务库执行迁移。
+
+
+接口响应增加 reviewCycle、canReopenReview、reopenBlockedReason、taskLockVersion；版本详情和审核上下文增加 finalDeliveryHistory。交付响应包括 operation、validityStatus、revocationStatus；不得仅凭 deliveryStatus=published 显示当前终稿。历史动作增加 reopen；普通 review-actions 不接受 reopen，必须调用专用入口。
+
+前端入口覆盖镜头列表/任务详情、资产分项列表/详情、版本详情和已完成审核详情。共享 ReopenReviewButton 使用 ElForm/ElFormItem 与显式按钮校验原因，冻结上下文锁号；禁止并发提交，未知结果同负载重用幂等键，409要求刷新。进入原审核单后沿用草稿、参考附件、批注和退回流程。权限不足不显示入口，最终资格以服务端为准。
+
+上线需先备份并执行迁移，再发布应用，显式给受管管理角色配置重新审核权限；本次代码实施不包含授权、提交、推送或部署。历史NAS文件不搬移、不删除，外部复制文件无法自动召回。数据库撤销与清单同步存在时间差，使用者必须查看 CURRENT-{taskId}.json 和平台当前有效状态。
+
+### 重新审核定向验证记录（2026-10-26）
+
+- 后端：在后端目录设置 `SHOT_GRID_RUN_PG_TESTS=1`，使用 `.venv/Scripts/python.exe -m pytest -q` 运行 `tests/module_shot_grid/` 下的 `test_review_reopen_pg.py`、`test_review_service.py`、`test_review_dao.py`、`test_review_vo.py`、`test_review_router.py`、`test_final_delivery_path_adapter.py`、`test_final_delivery_worker_service.py`、`test_task_dao.py`、`test_task_service.py`、`test_review_all_candidates_pg.py`：**275 通过、12 跳过**。跳过为既有参数化测试中不适用的编辑/删除组合。
+- 新增 PostgreSQL 集成用例共 9 项，使用自动创建并销毁的隔离数据库；覆盖镜头/资产分项、幂等与并发、权限及过期版本、执行中交付阻断、审核轮次与后续制作版本、事务回滚、旧轮次迟到草稿、迁移升降级保护。NAS 测试使用本地临时目录，不代表生产 SMB 验收。
+- 前端：`node node_modules/vitest/vitest.mjs run` 运行 `reopenReview.spec.js`、`reviewViews.spec.js`、`versionReviewSummary.spec.js`、`versionHistoryPanel.spec.js`、`assetViews.spec.js`：**167 通过**；新增资产入口模式测试 2 项通过，既有 `assetReviewEntry.spec.js` 4 项通过，合计 **173 项通过**。
+- 扩展运行 `taskViews.spec.js`：42 通过、4 失败。用原始 HEAD 任务页源码通过独立 Vite alias 再运行，仍为相同 4 项失败：工作台标签、制作人任务附件区、未排期开工、取消/失败排期。记录为既有基线问题，不声明该套件全部通过。
+- 改动 Python 文件 Ruff 检查通过，前端改动文件 ESLint 检查通过；`npm.cmd run build:prod` 通过，仍有大于 500 kB 的既有分包警告。
+- 未提交、未推送、未部署，未对业务数据库执行迁移。发布时需执行 PostgreSQL `20261026_41`，并由平台管理员显式配置 `shotgrid:version:reopen`；未默认扩大已有角色权限。
+- 尚未执行真实登录全链路 E2E、生产 NAS 发布/撤销及多 Worker 现场验收；上述结果仅代表定向单元、组件、隔离 PostgreSQL 集成和构建验证。
+
+
+### 重新审核二轮代码审查（2026-10-26）
+
+- 修复：旧版撤销清单失败、当前版本发布仍为 pending 时，按钮虽然显示但处理函数提前返回。重试处理现同时接纳 deliveryStatus=failed 或 revocationStatus=failed，并复核重试权限。
+- 修复：重新审核表单原先在异步 validate 完成后才置 busy，快速连续点击可进入两次提交；校验期间切换版本也可能使用失效上下文。现从校验开始防重复，并在校验后检查 generation 和权限，再使用校验前冻结的上下文。
+- 定向前端验证：reopenReview.spec.js 与 reviewViews.spec.js 共 30 项通过，包括上述两个回归场景与旧版本迟到提交隔离；对应文件 ESLint 通过。
+- 定向后端验证：SHOT_GRID_RUN_PG_TESTS=1，test_review_reopen_pg.py、test_final_delivery_path_adapter.py、test_final_delivery_worker_service.py 共 23 项通过。其中新增缺少任一权限的管理人拒绝、持两个权限的制作人拒绝、Worker 领取与重开并发测试。采用隔离 PostgreSQL 与本地临时目录；未访问业务数据库或真实 NAS。
+- 复查确认：服务端权限交集与项目角色门禁、项目协调锁及状态复核、旧审批保留/新增轮次、旧交付失效/撤销顺序和失败重试已有定向证据。本轮未改后端业务逻辑和数据库迁移，也未重复全量构建；不代表真实登录 E2E 或生产 NAS 验收。
+- 未提交、未推送、未部署。

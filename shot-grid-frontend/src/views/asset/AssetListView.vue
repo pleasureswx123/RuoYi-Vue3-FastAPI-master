@@ -267,6 +267,7 @@ function assetTableActions(row) {
   const disabled = assetsLoading.value || deleting.value || assigning.value || itemActionBusy.value || editingAssetId.value !== null
   const add = (key, allowed, button, run) => { if (allowed) actions.push({ key, button, run }) }
   const counts = row.itemStatusCounts || {}
+  add('reopen', canReviewAssets(row) && hasPermission('shotgrid:version:reopen') && Number(counts.completed) > 0, { label: '重新审核', type: 'warning', icon: View, disabled }, () => reviewEntry.value.open(row, null, 'reopen'))
   add('review', canOpenAssetReview(row), { label: Number(counts.reviewing) > 1 ? `选择审核（${counts.reviewing}）` : '审核任务', type: 'primary', plain: false, icon: View, disabled }, () => reviewEntry.value.open(row))
   add('complete', matchesItemStatus('pending_info') && (row.assetStatus === 'pending_info' || counts.pending_info > 0) && canEditAsset(row) && hasPermission('shotgrid:asset:query'), { label: '完善信息', type: 'warning', plain: false, icon: Edit, disabled }, () => openAsset(row))
   add('assign', matchesItemStatus('unassigned') && (row.assetStatus === 'unassigned' || counts.unassigned > 0) && canAssignAsset(row) && canManageItemWorkspace(row), { label: '分配制作人', type: 'primary', plain: false, icon: User, disabled }, () => batchWorkspace.value.open([row], [], 'assign'))
@@ -302,6 +303,7 @@ function assetItemTableActions(asset, row) {
   add('history', hasPermission('shotgrid:asset:query'), { label: '制作履历', color: '#159b94', icon: Clock }, () => { historyTarget.value = { projectId: currentProjectId.value, assetId: asset.assetId, itemId: row.assetItemId, title: `${asset.assetName} · ${row.productionItem || '未命名分项'}` } })
   add('detail', true, { label: '分项详情', color: '#159b94', icon: Clock }, () => openAsset(row))
   add('adjust', canItemWorkspace(asset, row, 'adjust'), { label: '制作要求与参考资料', type: 'warning', icon: Edit }, () => openItemAdjustment(asset, row))
+  add('reopen', row.allowedActions?.includes('task.reopenReview') && hasPermission('shotgrid:version:reopen'), { label: '重新审核', type: 'warning', icon: View }, () => reviewEntry.value.open(asset, row.assetItemId, 'reopen'))
   add('review', canReviewAssets(asset) && row.allowedActions?.includes('task.review') && row.task?.taskStatus === 'pending_review' && row.latestVersion?.versionId, { label: '审核任务', type: 'primary', plain: false, icon: View }, () => reviewEntry.value.open(asset, row.assetItemId))
   add('append', canItemWorkspace(asset, row, 'appendIssue'), { label: '追加问题', type: 'warning', icon: Edit }, () => batchWorkspace.value.open([asset], [row.assetItemId], 'append'))
   add('delete', itemCan(asset, row, 'assetItem.delete'), { label: '删除分项', type: 'danger', icon: Delete }, () => itemOperations.value.run('assetItem.delete', asset, row))

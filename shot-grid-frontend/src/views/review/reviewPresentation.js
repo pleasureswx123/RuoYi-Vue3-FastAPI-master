@@ -18,6 +18,7 @@ const MEDIA_DERIVATION_STATUS = Object.freeze({
 })
 
 const ACTION_META = Object.freeze({
+  reopen: { label: '重新审核', tone: 'warning' },
   approve: { label: '确认通过', tone: 'success' },
   reject: { label: '退回修改', tone: 'danger' },
   defer: { label: '稍后决定', tone: 'warning' }

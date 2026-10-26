@@ -31,6 +31,7 @@ class ShotGridReviewIssueDraft(Base):
     __tablename__ = 'sg_review_issue_draft'
 
     draft_id = Column(BigInteger, primary_key=True, nullable=False, autoincrement=True, comment='问题草稿ID')
+    review_cycle = Column(Integer, nullable=False, server_default='1', comment='问题来源审核周期')
     project_id = Column(BigInteger, nullable=False, comment='项目ID')
     review_list_id = Column(BigInteger, nullable=False, comment='所属自动审核单ID')
     version_id = Column(BigInteger, nullable=False, comment='当前审核版本ID')
@@ -104,6 +105,7 @@ class ShotGridNote(Base):
     __tablename__ = 'sg_note'
 
     note_id = Column(BigInteger, primary_key=True, nullable=False, autoincrement=True, comment='审核意见ID')
+    review_cycle = Column(Integer, nullable=False, server_default='1', comment='问题来源审核周期')
     project_id = Column(BigInteger, nullable=False, comment='项目ID')
     version_id = Column(BigInteger, nullable=False, comment='版本ID')
     origin_candidate_id = Column(BigInteger, nullable=True, comment='来源候选ID，空表示本版整体反馈')
@@ -262,6 +264,7 @@ class ShotGridReviewAction(Base):
         nullable=False,
         comment='操作用户ID',
     )
+    review_cycle = Column(Integer, nullable=False, server_default='1', comment='审核周期')
     action_type = Column(String(20), nullable=False, comment='审核动作')
     from_status = Column(String(20), nullable=False, comment='操作前版本状态')
     to_status = Column(String(20), nullable=False, comment='操作后版本状态')
@@ -284,7 +287,7 @@ class ShotGridReviewAction(Base):
             name='fk_sg_review_action_candidate_version',
             ondelete='RESTRICT',
         ),
-        CheckConstraint("action_type in ('approve', 'reject', 'defer')", name='ck_sg_review_action_type'),
+        CheckConstraint("action_type in ('approve', 'reject', 'defer', 'reopen')", name='ck_sg_review_action_type'),
         CheckConstraint(
             "from_status in ('pending_review', 'rejected', 'final')",
             name='ck_sg_review_action_from_status',
@@ -294,6 +297,7 @@ class ShotGridReviewAction(Base):
             name='ck_sg_review_action_to_status',
         ),
         CheckConstraint(
+            "(action_type = 'reopen' and from_status = 'final' and to_status = 'pending_review') or "
             "(action_type = 'approve' and from_status = 'pending_review' and to_status = 'final') or "
             "(action_type = 'reject' and from_status = 'pending_review' and to_status = 'rejected') or "
             "(action_type = 'defer' and from_status = 'pending_review' and to_status = 'pending_review')",
@@ -466,4 +470,21 @@ class ShotGridReviewListVersion(ShotGridCreateAuditMixin, Base):
         CheckConstraint('sort_order >= 0', name='ck_sg_review_list_version_sort_order'),
         Index('idx_sg_review_list_version_version', 'version_id'),
         {'comment': 'Shot Grid审核单与版本有序关系表'},
+    )
+
+
+class ShotGridReviewCycle(Base):
+    """同一制作版本的审核周期；通过和重开均保留历史。"""
+
+    __tablename__ = 'sg_review_cycle'
+    version_id = Column(BigInteger, ForeignKey('sg_version.version_id', ondelete='RESTRICT'), primary_key=True)
+    cycle_no = Column(Integer, primary_key=True)
+    opened_by = Column(BigInteger, ForeignKey('sys_user.user_id', ondelete='RESTRICT'), nullable=True)
+    reason = Column(String(1000), nullable=True)
+    opened_time = Column(SHOT_GRID_DATETIME, nullable=False, default=datetime.now)
+    closed_time = Column(SHOT_GRID_DATETIME, nullable=True)
+    outcome = Column(String(20), nullable=True)
+    __table_args__ = (
+        CheckConstraint('cycle_no > 0', name='ck_sg_review_cycle_no'),
+        CheckConstraint("outcome is null or outcome in ('approve', 'reject')", name='ck_sg_review_cycle_outcome'),
     )

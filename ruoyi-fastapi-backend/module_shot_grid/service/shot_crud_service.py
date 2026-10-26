@@ -1484,6 +1484,15 @@ class ShotGridShotCrudService:
         if not (access.has_all_scope or access.has_role('director')):
             return [action for action, permission in candidates if cls._has_permission(current_user, permission)]
         if (
+            row.get('task_status') == 'completed'
+            and row.get('latest_version_status') == 'final'
+            and all(
+                cls._has_permission(current_user, permission)
+                for permission in ('shotgrid:version:reopen', 'shotgrid:version:review', 'shotgrid:version:query')
+            )
+        ):
+            candidates.append(('task.reopenReview', 'shotgrid:reviewList:query'))
+        if (
             row.get('task_id') is not None
             and row.get('task_status') == 'pending_review'
             and cls._has_permission(current_user, 'shotgrid:version:review')

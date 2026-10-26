@@ -292,6 +292,7 @@ class ShotGridProductionHistoryDao:
                     SysUser.user_name.label('reviewer_user_name'),
                     SysUser.nick_name.label('reviewer_nick_name'),
                     ShotGridReviewAction.action_type,
+                    ShotGridReviewAction.review_cycle,
                     ShotGridReviewAction.from_status,
                     ShotGridReviewAction.to_status,
                     ShotGridReviewAction.reason,

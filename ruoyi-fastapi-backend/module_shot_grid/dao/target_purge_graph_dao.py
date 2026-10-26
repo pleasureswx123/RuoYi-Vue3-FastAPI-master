@@ -194,6 +194,7 @@ class ShotGridTargetPurgeGraphDao:
         await db.execute(
             delete(models.ShotGridMediaDerivation).where(models.ShotGridMediaDerivation.version_id.in_(versions))
         )
+        await db.execute(delete(models.ShotGridReviewCycle).where(models.ShotGridReviewCycle.version_id.in_(versions)))
         await db.execute(delete(models.ShotGridVersionFile).where(models.ShotGridVersionFile.version_id.in_(versions)))
         await db.execute(
             update(models.ShotGridVersion)

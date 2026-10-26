@@ -7,7 +7,7 @@ from pathlib import PureWindowsPath
 from typing import Any
 
 from fastapi import Request
-from sqlalchemy import and_, true
+from sqlalchemy import and_, select, true
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -31,6 +31,7 @@ from module_shot_grid.entity.do.review_do import (
     ShotGridIssueVerification,
     ShotGridNote,
     ShotGridReviewAction,
+    ShotGridReviewCycle,
     ShotGridReviewIssueDraft,
     ShotGridReviewList,
     ShotGridReviewListVersion,
@@ -251,6 +252,10 @@ class ShotGridReviewService:
             ShotGridAutoReviewListSummaryModel.model_validate(summary) if summary is not None else None
         )
         values['final_delivery'] = cls._final_delivery_model(final_delivery)
+        values['final_delivery_history'] = [
+            ShotGridFinalDeliveryModel.model_validate(item)
+            for item in await ShotGridFinalDeliveryDao.get_history(db, version_id)
+        ]
         return ShotGridVersionDetailModel.model_validate(values)
 
     @staticmethod
@@ -800,15 +805,28 @@ class ShotGridReviewService:
             and await ShotGridReviewDao.get_latest_version_no(db, int(context['task_id'])) == int(context['version_no'])
             and not await ShotGridVersionSubmissionDao.has_unresolved_submission(db, int(context['task_id']))
         )
+        from module_shot_grid.service.review_reopen_service import (  # noqa: PLC0415 - 避免服务循环导入
+            ShotGridReviewReopenService,
+        )
+
+        blocked = await ShotGridReviewReopenService.blocked_reason(db, context, current_user, access)
         return ShotGridReviewContextModel(
+            canReopenReview=blocked is None,
+            reopenBlockedReason=blocked,
+            taskLockVersion=int(context.get('task_lock_version', 0)),
             canAppendIssues=can_append,
             currentVersion=ShotGridReviewVersionSummaryModel(
+                reviewCycle=int(context.get('review_cycle', 1)),
                 versionId=version_id,
                 versionNo=int(context['version_no']),
                 versionNumber=f'V{int(context["version_no"]):03d}',
                 versionStatus=context['version_status'],
                 selectedCandidateId=context.get('selected_candidate_id'),
                 finalDelivery=cls._final_delivery_model(final_delivery),
+                finalDeliveryHistory=[
+                    ShotGridFinalDeliveryModel.model_validate(item)
+                    for item in await ShotGridFinalDeliveryDao.get_history(db, version_id)
+                ],
                 lockVersion=int(context['lock_version']),
             ),
             candidates=cls._candidate_models(
@@ -1019,7 +1037,11 @@ class ShotGridReviewService:
                 await cls.add_issue_draft(
                     db,
                     int(version.version_id),
-                    ShotGridNoteCreateModel(issueScope='version', content=command.content),
+                    ShotGridNoteCreateModel(
+                        issueScope='version',
+                        content=command.content,
+                        reviewCycle=int(getattr(version, 'review_cycle', 1) or 1),
+                    ),
                     current_user,
                     commit=False,
                 )
@@ -1089,7 +1111,10 @@ class ShotGridReviewService:
                         db,
                         item.version_id,
                         ShotGridNoteCreateModel(
-                            issueScope='version', content=command.content, referenceFileIds=command.reference_file_ids
+                            reviewCycle=int(getattr(version, 'review_cycle', 1) or 1),
+                            issueScope='version',
+                            content=command.content,
+                            referenceFileIds=command.reference_file_ids,
                         ),
                         current_user,
                         commit=False,
@@ -1145,6 +1170,7 @@ class ShotGridReviewService:
         try:
             project_id, task, version, access = await cls._lock_version_graph(db, context, current_user, access)
             cls._require_director(access)
+            cls._ensure_lock_version(int(getattr(version, 'review_cycle', 1) or 1), command.review_cycle)
             if version.version_status != 'pending_review' or task.task_status != 'pending_review':
                 raise cls._invalid_transition('只有当前待审核版本可以记录问题草稿')
             candidate_id = (
@@ -1170,6 +1196,7 @@ class ShotGridReviewService:
                     project_id=project_id,
                     review_list_id=review_list.review_list_id,
                     version_id=version_id,
+                    review_cycle=int(getattr(version, 'review_cycle', 1) or 1),
                     candidate_id=candidate_id,
                     reviewer_user_id=user_id,
                     content=command.content,
@@ -1195,6 +1222,7 @@ class ShotGridReviewService:
                 else []
             )
             result = ShotGridIssueDraftModel(
+                reviewCycle=int(getattr(draft, 'review_cycle', 1) or 1),
                 draftId=draft.draft_id,
                 projectId=project_id,
                 reviewListId=review_list.review_list_id,
@@ -1290,6 +1318,7 @@ class ShotGridReviewService:
                     ShotGridNote(
                         project_id=project_id,
                         version_id=version_id,
+                        review_cycle=int(getattr(version, 'review_cycle', 1) or 1),
                         origin_candidate_id=candidate_id,
                         reviewer_user_id=user_id,
                         content=command.content,
@@ -1325,6 +1354,7 @@ class ShotGridReviewService:
             version.lock_version += 1
             version.update_time = now
             result = ShotGridIssueDetailModel(
+                reviewCycle=int(note.review_cycle or 1),
                 issueId=note.note_id,
                 projectId=project_id,
                 originVersionId=version_id,
@@ -1461,6 +1491,7 @@ class ShotGridReviewService:
             # AsyncSession 默认会在 commit 后过期 ORM 属性。响应必须在提交前完成快照，
             # 避免序列化时隐式发起数据库 I/O 并触发 MissingGreenlet。
             result = ShotGridIssueDraftModel(
+                reviewCycle=int(getattr(draft, 'review_cycle', 1) or 1),
                 draftId=draft.draft_id,
                 projectId=draft.project_id,
                 reviewListId=draft.review_list_id,
@@ -1623,11 +1654,28 @@ class ShotGridReviewService:
         try:
             _project_id, task, version, access = await cls._lock_version_graph(db, context, current_user, access)
             cls._require_director(access)
-            if version.version_status != 'final' or task.task_status != 'completed':
-                raise cls._invalid_transition('只有已通过的最终版本可以重试 NAS 最终交付')
             delivery = await ShotGridFinalDeliveryDao.get_for_update(db, version_id)
+            failed_revoke = await db.scalar(
+                select(ShotGridFinalDelivery)
+                .where(
+                    ShotGridFinalDelivery.task_id == task.task_id,
+                    ShotGridFinalDelivery.operation == 'revoke',
+                    ShotGridFinalDelivery.delivery_status == 'failed',
+                )
+                .order_by(ShotGridFinalDelivery.final_delivery_id)
+                .limit(1)
+                .with_for_update()
+            )
+            if failed_revoke is not None:
+                delivery = failed_revoke
             if delivery is None:
                 raise shot_grid_error(404, 'SG_FINAL_DELIVERY_NOT_FOUND', '最终交付记录不存在')
+            if delivery.operation == 'publish' and (
+                delivery.validity_status != 'current'
+                or version.version_status != 'final'
+                or task.task_status != 'completed'
+            ):
+                raise cls._invalid_transition('已失效的最终交付不能重新发布')
             if delivery.delivery_status != 'failed':
                 raise shot_grid_error(409, 'SG_FINAL_DELIVERY_NOT_FAILED', '最终交付当前不处于失败状态')
             now = datetime.now().replace(microsecond=0)
@@ -1721,6 +1769,7 @@ class ShotGridReviewService:
                 await ShotGridReviewDao.set_primary_candidate_file(
                     db, version_id=version_id, candidate_id=command.selected_candidate_id
                 )
+            await cls._close_review_cycle(db, version, command.action_type)
             from_status = str(version.version_status)
             cls._apply_review_action_transition(task, version, review_list, command, to_status, actor_name)
             if command.revision_transfer is not None:
@@ -1748,6 +1797,7 @@ class ShotGridReviewService:
                     selected_candidate_id=command.selected_candidate_id,
                     reviewer_user_id=user_id,
                     action_type=command.action_type,
+                    review_cycle=int(getattr(version, 'review_cycle', 1) or 1),
                     from_status=from_status,
                     to_status=to_status,
                     reason=command.reason,
@@ -2000,6 +2050,7 @@ class ShotGridReviewService:
         final_delivery: ShotGridFinalDelivery | None,
     ) -> ShotGridReviewActionResultModel:
         return ShotGridReviewActionResultModel(
+            reviewCycle=int(getattr(version, 'review_cycle', 1) or 1),
             actionId=action.action_id,
             projectId=project_id,
             versionId=version.version_id,
@@ -2053,7 +2104,8 @@ class ShotGridReviewService:
         source_path = PureWindowsPath(str(source['nas_relative_path']))
         if source_path.name != str(source['business_file_name']) or source_path.parent == PureWindowsPath('.'):
             raise shot_grid_error(409, 'SG_FINAL_DELIVERY_SOURCE_INVALID', '当前最佳候选的 NAS 路径不合法')
-        final_directory = source_path.parent / 'FINAL'
+        cycle = int(getattr(version, 'review_cycle', 1) or 1)
+        final_directory = source_path.parent / 'FINAL' / f'T{task.task_id}-V{version.version_no:03d}-R{cycle:03d}'
         now = datetime.now().replace(microsecond=0)
         return await ShotGridFinalDeliveryDao.add(
             db,
@@ -2069,6 +2121,9 @@ class ShotGridReviewService:
                 manifest_nas_relative_path=str(final_directory / 'FINAL.json'),
                 source_sha256=str(source['nas_sha256']).casefold(),
                 source_file_size=int(source['nas_file_size']),
+                review_cycle=cycle,
+                operation='publish',
+                validity_status='current',
                 delivery_status='pending',
                 approved_by=approved_by,
                 approved_time=now,
@@ -2489,6 +2544,7 @@ class ShotGridReviewService:
                     pending_version_number = f'V{int(row["origin_version_no"]):03d}'
             hydrated.append(
                 ShotGridIssueDetailModel(
+                    reviewCycle=int(row.get('review_cycle', 1)),
                     issueId=row['issue_id'],
                     projectId=row['project_id'],
                     originVersionId=row['origin_version_id'],
@@ -2639,3 +2695,17 @@ class ShotGridReviewService:
             oper_param=payload,
             result=result,
         )
+
+    @staticmethod
+    async def _close_review_cycle(db: AsyncSession, version: Any, action_type: str) -> None:
+        if action_type == 'defer':
+            return
+        cycle_no = int(getattr(version, 'review_cycle', 1) or 1)
+        cycle = await db.get(ShotGridReviewCycle, (version.version_id, cycle_no))
+        if cycle is None:
+            cycle = ShotGridReviewCycle(
+                version_id=version.version_id, cycle_no=cycle_no, opened_time=version.submitted_time
+            )
+            db.add(cycle)
+        cycle.closed_time = datetime.now()
+        cycle.outcome = action_type

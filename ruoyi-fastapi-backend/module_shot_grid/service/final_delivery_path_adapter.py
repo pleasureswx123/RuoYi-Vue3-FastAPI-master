@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import re
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -43,6 +44,8 @@ class FinalDeliveryPathContext:
     project_relative_path: str
     project_path_snapshot: str
     root_del_flag: str
+    operation: str = 'publish'
+    review_cycle: int = 1
 
 
 @dataclass(frozen=True)
@@ -71,7 +74,63 @@ class ShotGridFinalDeliveryPathAdapter(ShotGridVersionPublishPathAdapter):
 
     async def publish(self, context: FinalDeliveryPathContext) -> FinalDeliveryPublishResult:
         plan = self._build_final_plan(context)
-        return await asyncio.to_thread(self._publish_final_sync, plan)
+        return await asyncio.to_thread(self._execute_delivery_sync, plan)
+
+    @classmethod
+    def _execute_delivery_sync(cls, plan: _FinalDeliveryPlan) -> FinalDeliveryPublishResult:
+        # 同任务按 Outbox ID 串行，发布和撤销共用不可自动接管的执行租约。
+        result = (
+            FinalDeliveryPublishResult(plan.context.source_sha256, plan.context.source_file_size, 'reused')
+            if plan.context.operation == 'revoke'
+            else cls._publish_final_sync(plan)
+        )
+        cls._write_current_manifest(plan)
+        return result
+
+    @classmethod
+    def _write_current_manifest(cls, plan: _FinalDeliveryPlan) -> None:
+        if plan.mount_resolver is not None:
+            plan.mount_resolver.ensure_mount_ready(plan.mapped_mount_root)
+        directory = plan.source_path.parent / 'FINAL'
+        cls._reject_reparse_chain(plan.containment_root, directory.parent)
+        if os.path.lexists(directory):
+            cls._reject_link_or_reparse_point(directory)
+        directory.mkdir(exist_ok=True)
+        cls._assert_resolved_containment(plan.containment_root, directory)
+        current = directory / f'CURRENT-{plan.context.task_id}.json'
+        if os.path.lexists(current):
+            cls._reject_link_or_reparse_point(current)
+        payload = {
+            'schemaVersion': 1,
+            'generation': plan.context.final_delivery_id,
+            'taskId': plan.context.task_id,
+            'versionId': plan.context.version_id,
+            'reviewCycle': plan.context.review_cycle,
+            'valid': plan.context.operation == 'publish',
+            'finalNasRelativePath': plan.context.final_nas_relative_path
+            if plan.context.operation == 'publish'
+            else None,
+            'notice': '仅本清单 valid=true 所指文件为当前有效终稿；其他文件仅供历史追溯',
+        }
+        if current.exists():
+            previous = json.loads(current.read_text(encoding='utf-8'))
+            if int(previous['generation']) > plan.context.final_delivery_id:
+                raise VersionPublishPathAdapterError(
+                    error_key='SG_FINAL_MANIFEST_STALE', safe_message='旧清单操作不能覆盖新代次', retryable=False
+                )
+            if int(previous['generation']) == plan.context.final_delivery_id:
+                if previous != payload:
+                    raise cls._invalid_path_error()
+                return
+        temporary = directory / f'.current-{uuid.uuid4().hex}.part'
+        try:
+            with temporary.open('xb') as stream:
+                stream.write(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode('utf-8'))
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, current)
+        finally:
+            temporary.unlink(missing_ok=True)
 
     def _build_final_plan(self, context: FinalDeliveryPathContext) -> _FinalDeliveryPlan:
         if context.protocol != 'smb_unc' or context.storage_status != 'ready' or context.root_del_flag != '0':
@@ -102,12 +161,20 @@ class ShotGridFinalDeliveryPathAdapter(ShotGridVersionPublishPathAdapter):
         source_parts = self._relative_parts_for_publish(context.source_nas_relative_path)
         target_parts = self._relative_parts_for_publish(context.final_nas_relative_path)
         manifest_parts = self._relative_parts_for_publish(context.manifest_nas_relative_path)
+        generation_directory = f'T{context.task_id}-V{context.version_no:03d}-R{context.review_cycle:03d}'
+        legacy = target_parts == (*source_parts[:-1], 'FINAL', context.business_file_name)
+        if context.operation == 'revoke' and len(target_parts) == FINAL_RELATIVE_PARTS + 1:
+            match = re.fullmatch(rf'T{context.task_id}-V{context.version_no:03d}-R([0-9]+)', target_parts[-2])
+            if match and 0 < int(match.group(1)) <= context.review_cycle:
+                generation_directory = target_parts[-2]
+        expected_parent = (
+            (*source_parts[:-1], 'FINAL') if legacy else (*source_parts[:-1], 'FINAL', generation_directory)
+        )
         if (
             len(source_parts) != SOURCE_RELATIVE_PARTS
-            or len(target_parts) != FINAL_RELATIVE_PARTS
             or source_parts[-1] != context.business_file_name
-            or target_parts != (*source_parts[:-1], 'FINAL', context.business_file_name)
-            or manifest_parts != (*source_parts[:-1], 'FINAL', 'FINAL.json')
+            or target_parts != (*expected_parent, context.business_file_name)
+            or manifest_parts != (*expected_parent, 'FINAL.json')
         ):
             raise self._invalid_path_error()
         for parts in (source_parts, target_parts, manifest_parts):
@@ -147,6 +214,12 @@ class ShotGridFinalDeliveryPathAdapter(ShotGridVersionPublishPathAdapter):
                     retryable=True,
                 ) from exc
             cls._validate_source(plan)
+            final_root = plan.source_path.parent / 'FINAL'
+            if os.path.lexists(final_root):
+                cls._reject_link_or_reparse_point(final_root)
+            final_root.mkdir(exist_ok=True)
+            if os.path.lexists(plan.final_directory):
+                cls._reject_link_or_reparse_point(plan.final_directory)
             plan.final_directory.mkdir(exist_ok=True)
             cls._reject_reparse_chain(plan.containment_root, plan.final_directory)
             cls._assert_resolved_containment(plan.containment_root, plan.final_directory)
