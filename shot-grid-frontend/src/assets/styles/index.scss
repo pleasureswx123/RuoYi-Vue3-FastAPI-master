@@ -540,3 +540,8 @@ input:focus-visible,
 .shot-status-tag--pending_schedule.el-tag,
 .asset-status-tag--pending_info.el-tag,
 .asset-status-tag--pending_schedule.el-tag { --sg-shot-status-color: var(--el-color-warning); }
+
+/* 镜头及资产分项状态完整展示；较矮窗口保留滚动空间。 */
+.sg-production-status-options .el-select-dropdown__wrap {
+  max-height: min(360px, 50vh);
+}

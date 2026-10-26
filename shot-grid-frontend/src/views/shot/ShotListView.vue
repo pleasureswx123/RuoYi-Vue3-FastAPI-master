@@ -1491,7 +1491,7 @@ onBeforeUnmount(() => { disposed = true; closeSingleAssign(); destroyRowSortable
             </el-form-item>
           </div>
           <el-form-item class="shot-filter-item" label="镜头状态" prop="shotStatus">
-            <el-select v-model="query.shotStatus" placeholder="全部状态" aria-label="按状态筛选" @change="submitFilters"><el-option label="全部状态" value="" /><el-option v-for="status in ['pending_info', 'unassigned','pending_schedule','not_started','in_progress','reviewing','revision','completed']" :key="status" :label="shotStatusMeta(status).label" :value="status" /></el-select>
+            <el-select popper-class="sg-production-status-options" v-model="query.shotStatus" placeholder="全部状态" aria-label="按状态筛选" @change="submitFilters"><el-option label="全部状态" value="" /><el-option v-for="status in ['pending_info', 'unassigned','pending_schedule','not_started','in_progress','reviewing','revision','completed']" :key="status" :label="shotStatusMeta(status).label" :value="status" /></el-select>
           </el-form-item>
           <el-form-item class="shot-filter-item" label="制作人" prop="assigneeUserId">
             <el-select v-model="query.assigneeUserId" placeholder="全部制作人" aria-label="按制作人筛选" @change="submitFilters"><el-option label="全部制作人" value="" /><el-option v-for="member in creatorMembers" :key="member.userId" :label="shotAssigneeOptionLabel(member)" :value="String(member.userId)" /></el-select>
