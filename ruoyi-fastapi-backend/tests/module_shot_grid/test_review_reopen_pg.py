@@ -3,6 +3,7 @@
 import asyncio
 import os
 from datetime import datetime, timedelta
+from pathlib import PureWindowsPath
 from uuid import uuid4
 
 import pytest
@@ -92,6 +93,33 @@ async def command_for(sessions, version_id):
             reviewCycle=version.review_cycle,
             reason='复查发现新问题',
         )
+
+
+@pytest.mark.parametrize('legacy', [True, False])
+async def test_retry_manifest_conflict_only_relocates_legacy_delivery(pg_sessions, legacy):
+    version_id, _, original = await approved(pg_sessions)
+    async with pg_sessions() as db:
+        delivery = await db.get(ShotGridFinalDelivery, original.final_delivery.final_delivery_id)
+        expected_target = delivery.final_nas_relative_path
+        expected_manifest = delivery.manifest_nas_relative_path
+        if legacy:
+            source = PureWindowsPath(delivery.source_nas_relative_path)
+            delivery.final_nas_relative_path = str(source.parent / 'FINAL' / source.name)
+            delivery.manifest_nas_relative_path = str(source.parent / 'FINAL' / 'FINAL.json')
+        delivery.delivery_status = 'failed'
+        delivery.last_error_key = 'SG_FINAL_MANIFEST_CONFLICT'
+        delivery.last_error_message = '旧清单冲突'
+        await db.commit()
+    async with pg_sessions() as db:
+        result = await Review.retry_final_delivery(db, version_id, _user())
+        assert result.delivery_status == 'pending'
+    async with pg_sessions() as db:
+        delivery = await db.get(ShotGridFinalDelivery, original.final_delivery.final_delivery_id)
+        assert delivery.final_nas_relative_path == expected_target
+        assert delivery.manifest_nas_relative_path == expected_manifest
+        assert delivery.last_error_key is None
+        assert delivery.validity_status == 'current'
+        assert (await db.get(ShotGridVersion, version_id)).version_status == 'final'
 
 
 @pytest.mark.parametrize('kind', ['asset_image', 'shot_video'])

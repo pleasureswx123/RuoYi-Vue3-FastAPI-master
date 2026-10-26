@@ -88,6 +88,7 @@ from module_shot_grid.service.project_service import ShotGridProjectService
 from utils.file_util import FileDownloadResult
 
 MAX_IDEMPOTENCY_KEY_LENGTH = 100
+FINAL_DELIVERY_SOURCE_PATH_PARTS = 4
 REVIEW_ISSUE_DRAFT_REFERENCE_TYPE = 'shot_grid_review_issue_draft'
 REVIEW_ISSUE_REFERENCE_TYPE = 'shot_grid_review_issue'
 MAX_REVIEW_ISSUE_REFERENCE_FILES = 5
@@ -1678,6 +1679,7 @@ class ShotGridReviewService:
                 raise cls._invalid_transition('已失效的最终交付不能重新发布')
             if delivery.delivery_status != 'failed':
                 raise shot_grid_error(409, 'SG_FINAL_DELIVERY_NOT_FAILED', '最终交付当前不处于失败状态')
+            previous_paths = cls._repair_legacy_delivery_paths(delivery, version)
             now = datetime.now().replace(microsecond=0)
             await ShotGridFinalDeliveryDao.reset_failed(delivery, now=now)
             await cls._audit(
@@ -1687,14 +1689,42 @@ class ShotGridReviewService:
                 business_type=BusinessType.UPDATE.value,
                 method='retry_final_delivery',
                 oper_url=f'/shot-grid/versions/{version_id}/final-delivery/retry',
-                payload={'versionId': version_id},
-                result={'finalDeliveryId': delivery.final_delivery_id, 'deliveryStatus': 'pending'},
+                payload={'versionId': version_id, 'previousLegacyPaths': previous_paths},
+                result={
+                    'finalDeliveryId': delivery.final_delivery_id,
+                    'deliveryStatus': 'pending',
+                    'finalNasRelativePath': delivery.final_nas_relative_path,
+                    'manifestNasRelativePath': delivery.manifest_nas_relative_path,
+                },
             )
             await db.commit()
             return ShotGridFinalDeliveryModel.model_validate(delivery)
         except Exception:
             await db.rollback()
             raise
+
+    @staticmethod
+    def _repair_legacy_delivery_paths(delivery: ShotGridFinalDelivery, version: Any) -> dict[str, str] | None:
+        """旧分项共用清单冲突时改用独立交付目录，不覆盖或删除历史 NAS 文件。"""
+        if delivery.operation != 'publish' or delivery.last_error_key != 'SG_FINAL_MANIFEST_CONFLICT':
+            return None
+        source = PureWindowsPath(delivery.source_nas_relative_path)
+        legacy = source.parent / 'FINAL'
+        if (
+            len(source.parts) != FINAL_DELIVERY_SOURCE_PATH_PARTS
+            or source.name != delivery.business_file_name
+            or PureWindowsPath(delivery.final_nas_relative_path) != legacy / source.name
+            or PureWindowsPath(delivery.manifest_nas_relative_path) != legacy / 'FINAL.json'
+        ):
+            return None
+        previous = {
+            'finalNasRelativePath': delivery.final_nas_relative_path,
+            'manifestNasRelativePath': delivery.manifest_nas_relative_path,
+        }
+        directory = legacy / f'T{delivery.task_id}-V{version.version_no:03d}-R{delivery.review_cycle:03d}'
+        delivery.final_nas_relative_path = str(directory / source.name)
+        delivery.manifest_nas_relative_path = str(directory / 'FINAL.json')
+        return previous
 
     @classmethod
     async def create_review_action(  # noqa: PLR0912, PLR0915 - 审核、问题确认和最终交付入队必须保持同一事务

@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
+import { RefreshLeft } from '@element-plus/icons-vue'
 import { getVersionReviewContext, reopenVersionReview } from '@/api/shot-grid/reviews'
 import { useSessionStore } from '@/store/modules/session'
 import { createIdempotencyState } from '@/utils/idempotency'
@@ -55,7 +56,7 @@ async function submit() {
 }
 </script>
 <template>
-  <el-button v-if="allowed" type="warning" plain :loading="loading" @click="open">重新审核</el-button>
+  <el-button v-if="allowed" class="reopen-review-button" type="warning" size="large" :icon="RefreshLeft" :loading="loading" @click="open">重新审核</el-button>
   <el-dialog v-model="visible" title="重新审核" width="520px" append-to-body destroy-on-close :close-on-click-modal="false" :close-on-press-escape="!busy" :show-close="!busy" @closed="reset">
     <div v-loading="loading">
       <el-alert type="warning" :closable="false" title="确认后任务回到待审核，原交付立即失效。历史文件保留，NAS 有效清单异步同步；正式发送问题后制作人才进入修改。" />
@@ -68,3 +69,6 @@ async function submit() {
     <template #footer><el-button :disabled="busy" @click="visible = false">取消</el-button><el-button type="warning" :loading="busy" :disabled="loading || !snapshot?.canReopenReview" @click="submit">确认重新审核</el-button></template>
   </el-dialog>
 </template>
+<style scoped>
+.reopen-review-button.el-button { min-height: 44px; padding: 12px 20px; font-size: 15px; font-weight: 700; }
+</style>

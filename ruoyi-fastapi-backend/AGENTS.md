@@ -861,3 +861,7 @@ Windows 不得直接绕过 `rmtree.avoids_symlink_attacks` 检查。Windows 分�
 ### 2026-10-26 重新审核迁移兼容修复
 
 应用启动的 Base.metadata.create_all 可能在 40 版数据库提前创建 sg_review_cycle。41 迁移在事务内锁表并核对字段类型、长度、时间精度、空值、默认值、主键、外键和检查约束；仅接纳结构一致的空表，保留该表并正常回填周期。不通过 DROP TABLE 或 stamp 绕过升级；已有历史数据或结构不一致时明确拒绝。新增隔离 PostgreSQL 用例覆盖启动预建空表、结构漂移和已有数据，加上迁移升降级保护共 4 项通过。用户本地业务库仅做只读核对，修复后仍需停止后端并手动重试升级；本次修复尚未提交或部署。
+
+### 2026-10-26 旧最终交付清单冲突修复
+
+旧失败 publish 记录若错误为 SG_FINAL_MANIFEST_CONFLICT，且源文件、旧 FINAL 文件与 FINAL.json 路径严格匹配旧布局，人工重试在任务/版本/交付行锁内将目标改为现行 T{taskId}-V{versionNo}-R{reviewCycle} 目录，并记录旧、新路径审计，同事务重置为 pending。仍复核项目管理范围、当前 final 版本和 completed 任务。非旧布局、已失效交付和 revoke 不通过此分支迁移；保留旧 NAS 文件和清单，Worker 继续校验摘要与无覆盖发布。不改表，不需要数据库迁移。
