@@ -28,13 +28,13 @@ async function openReview(row) {
     if (!allowed()) throw new Error('审核权限已变化，请刷新列表')
     if (items.value.length === 1) visible.value = false
     review.value.open(`/reviews/${id}`)
-  } catch (failure) { if (!disposed && token === generation) error.value = failure.message || '审核入口加载失败，请重试' }
+  } catch (failure) { if (!disposed && token === generation) { error.value = failure.message || '审核入口加载失败，请重试'; visible.value = true } }
   finally { if (token === generation) opening.value = false }
 }
 async function open(parent, itemId = null, mode = 'review') {
   if (loading.value || opening.value || !allowed() || Number(parent.projectId) !== props.projectId) return
   reviewMode.value = mode
-  close(); visible.value = true; loading.value = true; error.value = ''; asset.value = null
+  close(); loading.value = true; error.value = ''; asset.value = null
   const token = generation
   controller = new AbortController()
   try {
@@ -43,7 +43,8 @@ async function open(parent, itemId = null, mode = 'review') {
     if (Number(data.projectId) !== props.projectId || Number(data.assetId) !== Number(parent.assetId)) throw new Error('资产范围已变化，请刷新')
     asset.value = { ...data, items: data.items.filter(item => !itemId || Number(item.assetItemId) === Number(itemId)) }
     if (items.value.length === 1) await openReview(items.value[0])
-  } catch (failure) { if (!disposed && token === generation) error.value = failure.message || '分项加载失败，请关闭重试' }
+    else visible.value = true
+  } catch (failure) { if (!disposed && token === generation) { error.value = failure.message || '分项加载失败，请关闭重试'; visible.value = true } }
   finally { if (token === generation) loading.value = false }
 }
 function reviewed() { close(); emit('changed') }
