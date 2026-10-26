@@ -1697,8 +1697,10 @@ class ShotGridReviewService:
                     'manifestNasRelativePath': delivery.manifest_nas_relative_path,
                 },
             )
+            await db.flush()
+            result = ShotGridFinalDeliveryModel.model_validate(delivery)
             await db.commit()
-            return ShotGridFinalDeliveryModel.model_validate(delivery)
+            return result
         except Exception:
             await db.rollback()
             raise

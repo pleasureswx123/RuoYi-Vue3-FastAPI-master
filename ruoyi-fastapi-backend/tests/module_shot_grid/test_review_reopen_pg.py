@@ -111,6 +111,7 @@ async def test_retry_manifest_conflict_only_relocates_legacy_delivery(pg_session
         delivery.last_error_message = '旧清单冲突'
         await db.commit()
     async with pg_sessions() as db:
+        db.sync_session.expire_on_commit = True
         result = await Review.retry_final_delivery(db, version_id, _user())
         assert result.delivery_status == 'pending'
     async with pg_sessions() as db:
