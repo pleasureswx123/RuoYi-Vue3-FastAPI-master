@@ -20,6 +20,7 @@ const narrativeSpan = computed(() => props.layout === 'dialog' ? 2 : 2)
 
 <template>
   <div class="shot-production-info" :class="`shot-production-info--${layout}`" aria-label="镜头完整制作信息">
+    <el-alert v-if="!shot.description?.trim()" title="制作内容待补充：可先分配制作人和排期，确认开工前必须补齐。" type="warning" :closable="false" show-icon />
     <el-descriptions :column="columnCount" :label-width="layout === 'dialog' ? '92px' : '84px'" border>
       <el-descriptions-item label="制作内容" :span="contentSpan">
         <span class="shot-production-info__description">{{ shot.description || '—' }}</span>

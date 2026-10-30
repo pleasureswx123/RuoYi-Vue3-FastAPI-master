@@ -6,7 +6,9 @@ describe('镜头分配前阶段', () => {
   it('列表和履历一致显示待完善，并明确下一步', () => {
     expect(shotStatusMeta({ status: 'pending_info' }).label).toBe('待完善')
     expect(historyStageMeta('pending_info').label).toBe('待完善')
-    expect(currentProductionHandoff({ currentStage: 'pending_info' }).next).toContain('完善制作内容')
+    expect(currentProductionHandoff({ laneType: 'shot', currentStage: 'pending_info' }).next).toContain('完善制作内容')
+    expect(currentProductionHandoff({ laneType: 'shot', currentStage: 'pending_info' }).next).toContain('可先分配制作人和排期')
+    expect(currentProductionHandoff({ laneType: 'assetItem', currentStage: 'pending_info' }).next).toBe('请先完善制作内容，再分配制作人。')
     expect(productionHistoryActiveStep('pending_info')).toBe(1)
     expect(productionHistoryActiveStep('unassigned')).toBe(2)
   })

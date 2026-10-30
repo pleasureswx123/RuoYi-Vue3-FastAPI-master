@@ -42,6 +42,20 @@ beforeEach(() => {
 })
 
 describe('镜头批量开工', () => {
+  it('空制作内容且没有开工权限时仍可独立保存排期', async () => {
+    getShotDetail.mockResolvedValue({ data: { ...shots[0], description: '', allowedActions: ['task.assign'], task: { taskId: 11, lockVersion: 1 } } })
+    updateTaskSchedule.mockImplementation((id, data) => Promise.resolve({ data: { taskId: id, lockVersion: data.lockVersion + 1, currentStart: data.expectedStartTime, currentEnd: data.expectedEndTime } }))
+    const wrapper = await open(() => true, { mode: 'schedule', single: true, shots: [shots[0]] })
+    try {
+      wrapper.findComponent({ name: 'ScheduleDateRangePicker' }).vm.$emit('update:modelValue', ['2026-11-01T09:00:00', '2026-11-02T18:00:00'])
+      await flushPromises()
+      await button(wrapper, '保存排期').trigger('click')
+      await flushPromises()
+      expect(updateTaskSchedule).toHaveBeenCalledTimes(1)
+      expect(startTask).not.toHaveBeenCalled()
+    } finally { wrapper.unmount() }
+  })
+
   it('已排期任务聚焦开工核对，不展示排期工具和调整入口', async () => {
     const wrapper = await open()
     try {

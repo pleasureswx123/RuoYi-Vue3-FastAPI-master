@@ -155,7 +155,7 @@ export function currentProductionHandoff(lane) {
   const producer = `制作人：${assigneeDisplayName(lane.task?.assignee)}`
   // 当前处理方由任务状态确定，不使用历史审核人推断本轮待办归属。
   const states = {
-    pending_info: { stage: '待完善', owner: '项目管理人员', next: '请先完善制作内容，再分配制作人。', type: 'warning' },
+    pending_info: { stage: '待完善', owner: '项目管理人员', next: lane.laneType === 'shot' ? '可先分配制作人和排期，确认开工前请完善制作内容。' : '请先完善制作内容，再分配制作人。', type: 'warning' },
     unassigned: { stage: '待分配', owner: '项目管理人员', next: '制作内容已填写，请分配制作人。', type: 'info' },
     pending_schedule: { stage: '待排期', owner: '项目管理人员', next: `先设置计划起止时间，再确认开工；受派${producer}。`, type: 'warning' },
     not_started: { stage: '待开工', owner: '项目管理人员', next: `由管理人员确认开工；受派${producer}。`, type: 'warning' },

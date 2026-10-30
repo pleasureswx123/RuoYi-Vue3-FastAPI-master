@@ -28,7 +28,7 @@ from module_shot_grid.entity.vo.production_history_vo import (
     ShotGridProductionHistoryVersionRefModel,
 )
 from module_shot_grid.exceptions import shot_grid_error
-from module_shot_grid.service.shot_task_rules import missing_shot_assignment_fields
+from module_shot_grid.service.shot_task_rules import missing_shot_production_fields
 from module_shot_grid.shot_number import format_shot_code
 
 
@@ -148,7 +148,7 @@ class ShotGridProductionHistoryService:
                 has_final_version=final_version_row is not None,
             )
             if subject_type == 'shot' and task_id is None:
-                current_stage = 'pending_info' if missing_shot_assignment_fields(subject_row) else 'unassigned'
+                current_stage = 'pending_info' if missing_shot_production_fields(subject_row) else 'unassigned'
                 active_step = 0
             task_model = cls._build_task_model(lane_row) if task_id is not None else None
             lane_models.append(

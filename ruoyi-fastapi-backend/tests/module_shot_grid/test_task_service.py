@@ -426,8 +426,10 @@ async def test_project_mine_scope_cannot_query_another_assignee() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('description', ['镜头原始制作内容', '', '   ', None])
 async def test_assign_shot_locks_project_target_task_then_member_and_audits(
     monkeypatch: pytest.MonkeyPatch,
+    description: str | None,
 ) -> None:
     events: list[str] = []
 
@@ -440,7 +442,7 @@ async def test_assign_shot_locks_project_target_task_then_member_and_audits(
             SimpleNamespace(
                 shot_no=1,
                 storage_dir_name='001_0001',
-                description='镜头原始制作内容',
+                description=description,
                 shot_size='近景',
                 camera_position='平视',
                 camera_movement='固定',
@@ -518,7 +520,7 @@ async def test_assign_shot_locks_project_target_task_then_member_and_audits(
     assigned_task = audit.await_args.kwargs['task']
     assert assigned_task.task_name == 'EP001-001-0001 镜头视频制作'
     assert assigned_task.task_status == 'not_started'
-    assert assigned_task.requirements == '镜头原始制作内容'
+    assert assigned_task.requirements == description
     assert assigned_task.lock_version == 0
     db.commit.assert_awaited_once()
     db.rollback.assert_not_awaited()
@@ -995,6 +997,7 @@ async def test_start_shot_allows_manager_and_increments_lock_in_same_transaction
         shot_id=SHOT_ID,
         shot_no=1,
         storage_dir_name=existing_directory,
+        description='制作内容',
         update_by='old',
         update_time=None,
         lock_version=0,
@@ -1611,6 +1614,9 @@ async def test_unknown_integrity_error_is_rolled_back_and_preserved(
 @pytest.mark.parametrize(
     ('case', 'error_key'),
     [
+        ('empty_content', 'SG_SHOT_PRODUCTION_FIELDS_REQUIRED'),
+        ('blank_content', 'SG_SHOT_PRODUCTION_FIELDS_REQUIRED'),
+        ('null_content', 'SG_SHOT_PRODUCTION_FIELDS_REQUIRED'),
         ('unconfirmed', 'SG_SHOT_START_CONFIRMATION_REQUIRED'),
         ('missing_shot_version', 'SG_SHOT_START_CONFIRMATION_REQUIRED'),
         ('changed_shot', 'SG_OPTIMISTIC_LOCK_CONFLICT'),
@@ -1650,7 +1656,12 @@ async def test_shot_start_blocks_stale_unconfirmed_and_unauthorized_requests(
         prefix + 'ShotGridTaskDao.get_assignable_member',
         AsyncMock(return_value=None if case == 'inactive_assignee' else {'producer_code': 'YJF'}),
     )
-    shot = SimpleNamespace(shot_id=SHOT_ID, lock_version=1 if case == 'changed_shot' else 0, storage_dir_name=None)
+    shot = SimpleNamespace(
+        shot_id=SHOT_ID,
+        lock_version=1 if case == 'changed_shot' else 0,
+        storage_dir_name=None,
+        description={'empty_content': '', 'blank_content': '   ', 'null_content': None}.get(case, '制作内容'),
+    )
     monkeypatch.setattr(
         prefix + 'ShotGridTaskDao.lock_shot_target',
         AsyncMock(return_value=(shot, SimpleNamespace(), SimpleNamespace())),
@@ -1680,44 +1691,55 @@ async def test_shot_start_blocks_stale_unconfirmed_and_unauthorized_requests(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('field', ['description'])
 @pytest.mark.parametrize('value', [None, '', '   '])
 @pytest.mark.parametrize('batch', [False, True])
-async def test_shot_assignment_rejects_incomplete_production_fields(
-    monkeypatch: pytest.MonkeyPatch, field: str, value: str | None, *, batch: bool
+async def test_empty_content_can_be_assigned(
+    monkeypatch: pytest.MonkeyPatch, value: str | None, *, batch: bool
 ) -> None:
-    shot = SimpleNamespace(
-        description='制作内容', shot_size='近景', camera_position='平视', camera_movement='固定', focal_length='35'
-    )
-    setattr(shot, field, value)
+    shot = SimpleNamespace(description=value, shot_no=1)
+    prefix = 'module_shot_grid.service.task_service.'
     monkeypatch.setattr(ShotGridTaskService, '_lock_mutable_project', AsyncMock())
     _patch_locked_access(monkeypatch, _access(role='director'))
     monkeypatch.setattr(
-        'module_shot_grid.service.task_service.ShotGridTaskDao.lock_shot_target',
-        AsyncMock(return_value=(shot, SimpleNamespace(), SimpleNamespace())),
+        prefix + 'ShotGridTaskDao.lock_shot_target',
+        AsyncMock(return_value=(shot, SimpleNamespace(episode_no=1), SimpleNamespace(scene_no=1))),
     )
-    assign = AsyncMock()
+    monkeypatch.setattr(prefix + 'ShotGridTaskDao.get_task_for_shot_update', AsyncMock(return_value=None))
+    assign = AsyncMock(return_value=(_task(), None))
     monkeypatch.setattr(ShotGridTaskService, '_assign_task', assign)
+    monkeypatch.setattr(ShotGridTaskService, '_audit_assignment', AsyncMock())
+    monkeypatch.setattr(ShotGridTaskService, '_audit', AsyncMock())
+    monkeypatch.setattr(ShotGridTaskService, '_require_task_detail', AsyncMock(return_value=_task_row()))
     db = AsyncMock()
-    with pytest.raises(ShotGridDomainException) as exc_info:
-        if batch:
-            await ShotGridTaskService.batch_assign_shots(
-                db,
-                PROJECT_ID,
-                ShotGridShotTaskBatchAssignModel(assigneeUserId=ASSIGNEE_USER_ID, items=[{'shotId': SHOT_ID}]),
-                _current_user(),
-                _access(role='director'),
-            )
-        else:
-            await ShotGridTaskService.assign_shot(
-                db,
-                PROJECT_ID,
-                SHOT_ID,
-                ShotGridTaskAssignModel(assigneeUserId=ASSIGNEE_USER_ID),
-                _current_user(),
-                _access(role='director'),
-            )
-    assert exc_info.value.error_key == 'SG_SHOT_PRODUCTION_FIELDS_REQUIRED'
-    assign.assert_not_awaited()
-    db.commit.assert_not_awaited()
-    db.rollback.assert_awaited_once()
+    if batch:
+        result = await ShotGridTaskService.batch_assign_shots(
+            db,
+            PROJECT_ID,
+            ShotGridShotTaskBatchAssignModel(assigneeUserId=ASSIGNEE_USER_ID, items=[{'shotId': SHOT_ID}]),
+            _current_user(),
+            _access(role='director'),
+        )
+        assert result.created_task_count == 1
+    else:
+        await ShotGridTaskService.assign_shot(
+            db,
+            PROJECT_ID,
+            SHOT_ID,
+            ShotGridTaskAssignModel(assigneeUserId=ASSIGNEE_USER_ID),
+            _current_user(),
+            _access(role='director'),
+        )
+    assign.assert_awaited_once()
+    assert assign.await_args.kwargs['command'].task_description == value
+    db.commit.assert_awaited_once()
+    db.rollback.assert_not_awaited()
+
+
+@pytest.mark.parametrize('description', [None, '', '   '])
+def test_empty_shot_content_only_blocks_start_action(description: str | None) -> None:
+    row = {**_task_row(), 'shot_description': description, 'task_status': 'not_started'}
+    actions = ShotGridTaskService._allowed_actions(row, _current_user(), _access())
+    assert 'task.assign' in actions
+    assert 'task.start' not in actions
+    row['shot_description'] = '补齐后的制作内容'
+    assert 'task.start' in ShotGridTaskService._allowed_actions(row, _current_user(), _access())

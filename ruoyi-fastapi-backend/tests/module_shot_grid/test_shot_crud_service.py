@@ -21,7 +21,7 @@ from module_shot_grid.entity.vo.shot_crud_vo import (
 )
 from module_shot_grid.exceptions import ShotGridDomainException
 from module_shot_grid.service.shot_crud_service import ShotGridShotCrudService
-from module_shot_grid.service.shot_task_rules import require_shot_assignment_fields
+from module_shot_grid.service.shot_task_rules import require_shot_start_fields
 
 PROJECT_ID = 1001
 
@@ -1230,12 +1230,15 @@ async def test_create_rejects_duplicate_number_before_writing(monkeypatch: pytes
 
 @pytest.mark.parametrize('field', ['description'])
 @pytest.mark.parametrize('value', [None, '', '   '])
-def test_assignment_action_hidden_until_production_fields_complete(field: str, value: str | None) -> None:
+def test_empty_content_allows_assignment_but_blocks_start(field: str, value: str | None) -> None:
     row = {**_shot_projection_row(), 'task_status': 'not_started', field: value}
     user = _current_user()
     user.permissions.append('shotgrid:task:assign')
-    assert 'task.assign' not in ShotGridShotCrudService._allowed_actions(row, user, _access())
+    user.permissions.append('shotgrid:task:start')
+    assert 'task.assign' in ShotGridShotCrudService._allowed_actions(row, user, _access())
+    assert 'task.start' not in ShotGridShotCrudService._allowed_actions(row, user, _access())
     row[field] = '已填写'
+    assert 'task.start' in ShotGridShotCrudService._allowed_actions(row, user, _access())
     assert 'task.assign' in ShotGridShotCrudService._allowed_actions(row, user, _access())
 
 
@@ -1252,7 +1255,7 @@ def test_assignment_allows_empty_optional_production_fields(value: str | None) -
     user = _current_user()
     user.permissions.append('shotgrid:task:assign')
     assert 'task.assign' in ShotGridShotCrudService._allowed_actions(row, user, _access())
-    require_shot_assignment_fields(row)
+    require_shot_start_fields(row)
 
 
 @pytest.mark.parametrize(
