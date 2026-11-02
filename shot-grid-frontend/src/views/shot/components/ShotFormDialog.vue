@@ -275,7 +275,7 @@ onBeforeUnmount(() => {
       </div>
       </el-card>
       <el-card shadow="never" class="shot-form__section shot-form__section--content">
-        <template #header><div class="shot-form__section-heading"><strong>制作内容</strong><span>可先分配制作人和排期，确认开工前必须填写</span></div></template>
+        <template #header><div class="shot-form__section-heading"><strong>制作内容</strong><span>制作内容可选，不影响分配制作人、排期和确认开工</span></div></template>
       <el-form-item class="shot-form__full" label="制作内容描述" prop="description"><el-input v-model="form.description" type="textarea" :autosize="{ minRows: 4, maxRows: 8 }" placeholder="描述画面主体、动作与场景，让制作人明确本镜头要完成什么" :disabled="busy" /></el-form-item>
       </el-card>
       <el-card shadow="never" class="shot-form__section">

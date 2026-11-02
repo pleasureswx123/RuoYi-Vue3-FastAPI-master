@@ -968,11 +968,13 @@ async def test_reassignment_is_blocked_after_start_or_by_uncommitted_submission(
 @pytest.mark.parametrize('all_scope', [False, True])
 @pytest.mark.parametrize('existing_directory', [None, '001_S001'])
 @pytest.mark.parametrize('overlap_task_ids', [[], [999]])
+@pytest.mark.parametrize('description', [None, '', '   ', '制作内容'])
 async def test_start_shot_allows_manager_and_increments_lock_in_same_transaction(
     monkeypatch: pytest.MonkeyPatch,
     all_scope: bool,
     existing_directory: str | None,
     overlap_task_ids: list[int],
+    description: str | None,
 ) -> None:
     monkeypatch.setattr(ShotGridTaskService, '_now', staticmethod(lambda: datetime(2026, 8, 28, 10)))
     task = _task(assignee_user_id=ASSIGNEE_USER_ID, lock_version=INITIAL_TASK_LOCK_VERSION)
@@ -997,7 +999,7 @@ async def test_start_shot_allows_manager_and_increments_lock_in_same_transaction
         shot_id=SHOT_ID,
         shot_no=1,
         storage_dir_name=existing_directory,
-        description='制作内容',
+        description=description,
         update_by='old',
         update_time=None,
         lock_version=0,
@@ -1614,9 +1616,6 @@ async def test_unknown_integrity_error_is_rolled_back_and_preserved(
 @pytest.mark.parametrize(
     ('case', 'error_key'),
     [
-        ('empty_content', 'SG_SHOT_PRODUCTION_FIELDS_REQUIRED'),
-        ('blank_content', 'SG_SHOT_PRODUCTION_FIELDS_REQUIRED'),
-        ('null_content', 'SG_SHOT_PRODUCTION_FIELDS_REQUIRED'),
         ('unconfirmed', 'SG_SHOT_START_CONFIRMATION_REQUIRED'),
         ('missing_shot_version', 'SG_SHOT_START_CONFIRMATION_REQUIRED'),
         ('changed_shot', 'SG_OPTIMISTIC_LOCK_CONFLICT'),
@@ -1660,7 +1659,7 @@ async def test_shot_start_blocks_stale_unconfirmed_and_unauthorized_requests(
         shot_id=SHOT_ID,
         lock_version=1 if case == 'changed_shot' else 0,
         storage_dir_name=None,
-        description={'empty_content': '', 'blank_content': '   ', 'null_content': None}.get(case, '制作内容'),
+        description='制作内容',
     )
     monkeypatch.setattr(
         prefix + 'ShotGridTaskDao.lock_shot_target',
@@ -1736,10 +1735,10 @@ async def test_empty_content_can_be_assigned(
 
 
 @pytest.mark.parametrize('description', [None, '', '   '])
-def test_empty_shot_content_only_blocks_start_action(description: str | None) -> None:
+def test_empty_shot_content_allows_start_action(description: str | None) -> None:
     row = {**_task_row(), 'shot_description': description, 'task_status': 'not_started'}
     actions = ShotGridTaskService._allowed_actions(row, _current_user(), _access())
     assert 'task.assign' in actions
-    assert 'task.start' not in actions
+    assert 'task.start' in actions
     row['shot_description'] = '补齐后的制作内容'
     assert 'task.start' in ShotGridTaskService._allowed_actions(row, _current_user(), _access())

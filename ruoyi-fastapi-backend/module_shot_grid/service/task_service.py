@@ -42,7 +42,6 @@ from module_shot_grid.service.project_access_service import ShotGridProjectAcces
 from module_shot_grid.service.project_reference_service import ShotGridProjectReferenceService
 from module_shot_grid.service.project_service import ShotGridProjectService
 from module_shot_grid.service.shot_reference_service import ShotGridShotReferenceService
-from module_shot_grid.service.shot_task_rules import missing_shot_production_fields, require_shot_start_fields
 from module_shot_grid.service.task_reference_service import ShotGridTaskReferenceService
 from module_shot_grid.shot_number import format_shot_code
 
@@ -581,7 +580,6 @@ class ShotGridTaskService:
                         '请确认已在线下核对资产齐备，并提交当前镜头版本',
                     )
                 cls._require_lock_version(shot.lock_version, command.shot_lock_version)
-                require_shot_start_fields(shot)
                 member = await ShotGridTaskDao.get_assignable_member(db, project_id, task.assignee_user_id)
                 if member is None:
                     raise shot_grid_error(
@@ -1096,15 +1094,6 @@ class ShotGridTaskService:
         owner = row['assignee_user_id'] == access.user_id
         owner_creator = access.has_role('creator') and owner
         target_ready = row['task_kind'] != 'asset_image' or is_asset_production_item_ready(row.get('production_item'))
-        start_ready = row['task_kind'] != 'shot_video' or not missing_shot_production_fields(
-            {
-                'description': row.get('shot_description'),
-                'shot_size': row.get('shot_size'),
-                'camera_position': row.get('shot_camera_position'),
-                'camera_movement': row.get('shot_camera_movement'),
-                'focal_length': row.get('shot_focal_length'),
-            }
-        )
         actions: list[str] = []
         if (
             director
@@ -1128,7 +1117,6 @@ class ShotGridTaskService:
             and target_ready
             and director
             and row.get('assignee_valid')
-            and start_ready
             and cls._has_permission(current_user, 'shotgrid:task:start')
         ):
             actions.append('task.start')

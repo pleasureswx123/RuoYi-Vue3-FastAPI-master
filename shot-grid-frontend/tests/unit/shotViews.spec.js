@@ -2186,13 +2186,13 @@ describe('镜头详情跨项目请求隔离', () => {
     wrapper.unmount()
   })
 
-  it('空内容镜头可以打开分配，保留完善入口并提示开工前补齐', async () => {
+  it('空内容镜头可以打开分配，保留完善入口并提示内容可选', async () => {
     setActivePinia(createPinia())
     getShotDetail.mockResolvedValue({ data: { ...shotDetail(8, 41, '0001', ''), description: '', status: 'pending_info', allowedActions: ['shot.edit', 'task.assign'] } })
     const { wrapper } = await mountDetailView()
     try {
       expect(wrapper.text()).toContain('完善信息')
-      expect(wrapper.text()).toContain('确认开工前必须补齐')
+      expect(wrapper.text()).toContain('不影响分配制作人、排期和确认开工')
       await wrapper.findAll('button').find(button => button.text().includes('分配制作人')).trigger('click')
       expect(wrapper.findComponent(ShotAssignDialog).exists()).toBe(true)
     } finally { wrapper.unmount() }

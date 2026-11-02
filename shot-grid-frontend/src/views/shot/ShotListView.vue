@@ -104,7 +104,7 @@ function shotActions(shot) {
     loading: startingOperation.value?.shotId === shot.shotId, disabled: startDisabled.value
   }, () => confirmStartShot(shot))
   add('edit', canEditShot(shot), {
-    label: !shot.description?.trim() ? '完善信息' : '编辑', title: !shot.description?.trim() ? '可先分配和排期，确认开工前须补齐制作内容' : '编辑镜头', type: 'warning', plain: false, icon: Edit, loading: editingShotId.value === Number(shot.shotId), disabled: deleting.value
+    label: !shot.description?.trim() ? '完善信息' : '编辑', title: !shot.description?.trim() ? '制作内容可选，不影响分配、排期和确认开工' : '编辑镜头', type: 'warning', plain: false, icon: Edit, loading: editingShotId.value === Number(shot.shotId), disabled: deleting.value
   }, () => openEditDialog(shot))
   const hasSchedule = Boolean((shot.expectedStartTime || shot.task?.expectedStartTime) && (shot.expectedEndTime || shot.task?.expectedEndTime))
   add('schedule', canScheduleShot(shot), {

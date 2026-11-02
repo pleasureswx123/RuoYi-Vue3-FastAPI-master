@@ -40,7 +40,6 @@ from module_shot_grid.entity.vo.shot_crud_vo import (
 )
 from module_shot_grid.exceptions import ShotGridDomainException, shot_grid_error
 from module_shot_grid.service.shot_reference_service import ShotGridShotReferenceService
-from module_shot_grid.service.shot_task_rules import missing_shot_production_fields
 from module_shot_grid.service.task_reference_service import ShotGridTaskReferenceService
 from module_shot_grid.shot_number import format_shot_code
 
@@ -1515,11 +1514,7 @@ class ShotGridShotCrudService:
             and not row.get('has_uncommitted_submission')
         ):
             candidates.append(('task.adjust', 'shotgrid:task:edit'))
-        if (
-            row.get('task_id') is not None
-            and row.get('task_status') == 'not_started'
-            and not missing_shot_production_fields(row)
-        ):
+        if row.get('task_id') is not None and row.get('task_status') == 'not_started':
             candidates.append(('task.start', 'shotgrid:task:start'))
         if row.get('task_status') in {None, 'not_started'} and not row['has_uncommitted_submission']:
             candidates.append(('task.assign', 'shotgrid:task:assign'))
