@@ -107,12 +107,11 @@ FastAPI（端口 9099）
 
 ### 日常启动速查（Windows PowerShell）
 
-以下步骤适用于已完成首次环境配置、后端 `.venv` 和前端依赖安装的本机开发环境。先打开 Docker Desktop，再按顺序启动 PostgreSQL、Redis、后端、管理端和制作平台端。首次安装参见下方环境要求与“方式二”。
+以下步骤适用于已完成首次环境配置、后端 `.venv` 和前端依赖安装的本机开发环境。先打开 Docker Desktop，再按顺序启动 PostgreSQL、Redis、后端、管理端和制作平台端。以下每个终端均从仓库根目录开始执行，目录命令使用相对路径。首次安装参见下方环境要求与“方式二”。
 
 **1. 启动 PostgreSQL 和 Redis**
 
 ```powershell
-cd D:\work\RuoYi-Vue3-FastAPI-master\RuoYi-Vue3-FastAPI-master
 docker compose -f docker-compose.dev.yml up -d postgres redis
 docker compose -f docker-compose.dev.yml ps
 ```
@@ -122,8 +121,9 @@ docker compose -f docker-compose.dev.yml ps
 **2. 启动后端**
 
 ```powershell
-cd D:\work\RuoYi-Vue3-FastAPI-master\RuoYi-Vue3-FastAPI-master\ruoyi-fastapi-backend
+cd .\ruoyi-fastapi-backend
 .\.venv\Scripts\Activate.ps1
+ruoyi app doctor --env=dev
 ruoyi app run --env=dev
 ```
 
@@ -132,20 +132,26 @@ ruoyi app run --env=dev
 **3. 启动管理端（另开一个 PowerShell 终端）**
 
 ```powershell
-cd D:\work\RuoYi-Vue3-FastAPI-master\RuoYi-Vue3-FastAPI-master\ruoyi-fastapi-frontend
-npm.cmd run dev
+cd .\ruoyi-fastapi-frontend
+npm.cmd run dev -- --host 127.0.0.1 --port 80 --strictPort
 ```
 
 **4. 启动制作平台端（再开一个 PowerShell 终端）**
 
 ```powershell
-cd D:\work\RuoYi-Vue3-FastAPI-master\RuoYi-Vue3-FastAPI-master\shot-grid-frontend
-npm.cmd run dev
+cd .\shot-grid-frontend
+npm.cmd run dev -- --host 127.0.0.1 --port 5174 --strictPort
 ```
 
-PowerShell 中使用 `npm.cmd` 执行 npm 命令。两个前端终端均需保持运行，访问地址以各自终端实际输出为准。
+两个前端统一使用 npm，PowerShell 中通过 `npm.cmd` 执行。管理端依赖使用 `npm.cmd install`，制作平台依赖使用 `npm.cmd ci`；不要混用 pnpm 锁文件。两个前端终端均需保持运行，默认本机访问地址分别为 <http://127.0.0.1:80> 和 <http://127.0.0.1:5174>，API 代理均指向 `127.0.0.1:9099`。端口被占用时，`--strictPort` 会退出，避免静默切换端口。
 
 停止开发时，在后端和两个前端终端分别按 `Ctrl+C`；PostgreSQL 和 Redis 的停止方式见下方“停止本地环境”。
+
+### 交接代码的隔离验收环境
+
+上述日常启动命令不用于恢复隔离验收环境。2026-11-16 的交接验证使用独立 PostgreSQL（25432）、Redis（26379）、后端（9199）和制作平台前端（5274），页面入口为 <http://127.0.0.1:5274>。日常开发的 `.env.dev` 与隔离验收连接配置分别维护，启动前应确认目标数据库。
+
+隔离环境的恢复方式、迁移与业务验证结果，以及真实 NAS 等未验证边界，见 [本地隔离验收记录](docs/本地隔离验收记录-20261116.md)。其中运行脚本与连接配置仅保存在当前 checkout，不随仓库分发。
 
 ### 环境要求
 
