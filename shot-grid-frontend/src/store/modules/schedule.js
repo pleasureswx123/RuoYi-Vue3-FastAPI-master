@@ -4,6 +4,8 @@ import { getProjectSchedule } from '@/api/shot-grid/schedules'
 import { assertPositiveId } from '@/api/shot-grid/projects'
 
 const DEFAULT_FILTERS = Object.freeze({
+  productionFrom: undefined,
+  productionTo: undefined,
   assigneeUserIds: [],
   taskKinds: [],
   taskStatuses: [],

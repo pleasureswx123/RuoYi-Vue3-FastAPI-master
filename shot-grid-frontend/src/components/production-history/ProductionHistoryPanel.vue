@@ -61,7 +61,10 @@ const selectedLane = computed(() => {
 })
 const stageSource = computed(() => selectedLane.value || history.value?.summary || null)
 const currentStage = computed(() => productionHistoryStage(stageSource.value))
-const activeStep = computed(() => productionHistoryActiveStep(currentStage.value, stageSource.value?.activeStep))
+const steps = computed(() => isAsset.value ? PRODUCTION_HISTORY_STEPS : ['创建/导入', '分配制作人', '制作', '提交版本', '审核', '完成'])
+const activeStep = computed(() => isAsset.value
+  ? productionHistoryActiveStep(currentStage.value, stageSource.value?.activeStep)
+  : ({ created: 0, unassigned: 1, assigned: 2, preparing: 2, production: 2, revision: 2, review: 4, final: 6 }[currentStage.value] ?? 1))
 const currentStageMeta = computed(() => historyStageMeta(currentStage.value))
 const currentAssignee = computed(() => assigneeDisplayName(selectedLane.value?.task?.assignee))
 const currentHandoff = computed(() => currentProductionHandoff(selectedLane.value))
@@ -286,7 +289,7 @@ function taskForEvent(event) {
         </section>
         <el-alert v-else-if="allAssetLanesSelected" class="history-handoff" type="info" :closable="false" title="各制作分项独立流转，请选择具体分项查看当前处理方与下一步。" show-icon />
         <el-steps class="history-stage__steps" :active="activeStep" align-center finish-status="success" :process-status="currentStage === 'final' ? 'success' : 'process'" aria-label="制作阶段">
-          <el-step v-for="step in PRODUCTION_HISTORY_STEPS" :key="step" :title="step" />
+          <el-step v-for="step in steps" :key="step" :title="step" />
         </el-steps>
       </section>
 

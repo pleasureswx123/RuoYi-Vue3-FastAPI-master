@@ -261,3 +261,12 @@ export function reopenVersionReview(versionId, data, idempotencyKey, options = {
   return request({ url: `/shot-grid/versions/${assertPositiveId(versionId, '版本')}/reopen-review`,
     method: 'post', data, headers: idempotencyHeaders(idempotencyKey), signal: options.signal, silentError: true })
 }
+
+
+export function getIssueComments(versionId, issueId, params = {}, options = {}) {
+  return request({ url: `/shot-grid/versions/${assertPositiveId(versionId, '版本')}/issues/${assertPositiveId(issueId, '反馈')}/comments`, method: 'get', params, signal: options.signal, silentError: true })
+}
+
+export function addIssueComment(versionId, issueId, data, options = {}) {
+  return request({ url: `/shot-grid/versions/${assertPositiveId(versionId, '版本')}/issues/${assertPositiveId(issueId, '反馈')}/comments`, method: 'post', data, signal: options.signal, headers: { repeatSubmit: false }, silentError: true })
+}

@@ -18,11 +18,14 @@ const serverNavigation = [
 ]
 
 describe('Shot Grid 本地路由白名单', () => {
-  it('只接受六个稳定键并按后端顺序排序', () => {
+  it('兼容原导航并接受每日记录和统计的稳定键', () => {
     const navigation = normalizeNavigation(serverNavigation)
 
-    expect(navigation.map(item => item.routeKey)).toEqual(SHOT_GRID_ROUTE_KEYS)
-    expect(getFirstAuthorizedPath(navigation)).toBe('/workbench')
+    expect(navigation.map(item => item.routeKey)).toEqual(['workbench', 'projects', 'shots', 'assets', 'reviews', 'files'])
+    expect(SHOT_GRID_ROUTE_KEYS).toContain('daily-records')
+    expect(SHOT_GRID_ROUTE_KEYS).toContain('production-statistics')
+    expect(normalizeNavigation([{routeKey: 'daily-records', path: '/daily-records'}, {routeKey: 'production-statistics', path: '/production-statistics'}])).toHaveLength(2)
+    expect(getFirstAuthorizedPath(navigation)).toBe('/projects')
     expect(getRouteKeyByPath('/reviews')).toBe('reviews')
     expect(getRouteKeyByPath('/projects/11/schedule')).toBe('projects')
   })

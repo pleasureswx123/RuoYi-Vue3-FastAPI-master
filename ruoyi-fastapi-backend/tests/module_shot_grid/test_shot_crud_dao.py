@@ -3,7 +3,7 @@ from sqlalchemy.dialects import postgresql
 from module_shot_grid.dao.shot_crud_dao import ShotGridShotCrudDao
 from module_shot_grid.entity.vo.shot_crud_vo import ShotGridShotListQueryModel
 
-EXPECTED_LATERAL_JOIN_COUNT = 6
+EXPECTED_LATERAL_JOIN_COUNT = 7
 
 
 def test_list_statement_uses_status_asset_filters_and_latest_directory_operation() -> None:
@@ -101,6 +101,41 @@ def test_pending_info_filter_is_applied_before_pagination() -> None:
                 dialect=postgresql.dialect(), compile_kwargs={'literal_binds': True}
             )
         )
-        assert "btrim(coalesce(sg_shot.description, '')," in sql
+        assert "btrim(coalesce(sg_shot.description, '')," not in sql
         assert 'shot_list_task.task_id IS NULL' in sql
         assert f"END = '{phase}'" in sql
+
+
+def test_multiple_status_filter_keeps_project_scope_and_task_phase() -> None:
+    query = ShotGridShotListQueryModel(shotStatuses='unassigned,pending_schedule,not_started')
+    sql = str(
+        ShotGridShotCrudDao.build_list_statement(1001, query).compile(
+            dialect=postgresql.dialect(), compile_kwargs={'literal_binds': True}
+        )
+    )
+    assert 'sg_shot.project_id = 1001' in sql
+    assert "= 'unassigned'" in sql and "= 'pending_schedule'" in sql and "= 'not_started'" in sql
+    assert 'shot_list_task.expected_start_time IS NULL' in sql
+
+
+def test_approved_filter_keeps_project_and_task_scope_including_reopened_versions() -> None:
+    for flag in (True, False):
+        sql = str(
+            ShotGridShotCrudDao.build_list_statement(1001, ShotGridShotListQueryModel(hasFinal=flag)).compile(
+                dialect=postgresql.dialect(), compile_kwargs={'literal_binds': True}
+            )
+        )
+        assert 'sg_version.task_id = shot_list_task.task_id' in sql
+        assert 'sg_version.project_id = 1001' in sql
+        assert 'sg_final_delivery.approved_time IS NOT NULL' in sql
+        assert "sg_version.version_status = 'final'" in sql
+        assert 'NOT (EXISTS' in sql if not flag else 'NOT (EXISTS' not in sql
+
+
+def test_approved_projection_exposes_summary_without_disk_paths() -> None:
+    statement = ShotGridShotCrudDao.build_read_projection_statement(1001, [3001])
+    keys = statement.selected_columns.keys()
+    assert {'approved_version_id', 'approved_version_no', 'approved_delivery_status', 'approved_approved_time'} <= set(
+        keys
+    )
+    assert all('nas' not in name for name in keys)

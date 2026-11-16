@@ -1,7 +1,7 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage, ElMessageBox, ElSubMenu } from 'element-plus'
 import {
   Fold,
   Expand,
@@ -21,11 +21,14 @@ import {
 import { useSessionStore } from '@/store/modules/session'
 import GlobalSearchDialog from '@/components/search/GlobalSearchDialog.vue'
 import ThemeModeSwitch from '@/components/theme/ThemeModeSwitch.vue'
+import { getEpisodePage, getScenePage, listShotAssignees } from '@/api/shot-grid/shots'
+import { listAssetAssignees } from '@/api/shot-grid/assets'
+import { getMineReviewProducers } from '@/api/shot-grid/reviews'
 
 const route = useRoute()
 const router = useRouter()
 const sessionStore = useSessionStore()
-const collapsed = ref(false)
+const collapsed = ref(typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 820px)').matches)
 const searchVisible = ref(false)
 const fullscreenSupported = ref(false)
 const isFullscreen = ref(false)
@@ -37,6 +40,8 @@ const companyLogoMaskStyle = Object.freeze({
 })
 
 const localNavigation = Object.freeze({
+  'daily-records': { title: '每日记录', path: '/daily-records', icon: Reading },
+  'production-statistics': { title: '产出统计', path: '/production-statistics', icon: Tickets },
   workbench: { title: '工作台', path: '/workbench', icon: Grid },
   projects: { title: '项目', path: '/projects', icon: Collection },
   shots: { title: '镜头管理', path: '/shots', icon: Film },
@@ -47,6 +52,17 @@ const localNavigation = Object.freeze({
 
 const navigationItems = computed(() => {
   const serverItems = Array.isArray(sessionStore.navigation) ? sessionStore.navigation : []
+  if (sessionStore.isCreatorWorkspace) {
+    const keys = new Set(serverItems.map(item => item.routeKey))
+    return [
+      ...(keys.has('workbench') ? [{ ...localNavigation.workbench, routeKey: 'workbench', title: '我的任务', index: '/workbench' }] : []),
+      ...(keys.has('daily-records') ? [{ ...localNavigation['daily-records'], routeKey: 'daily-records' }] : []),
+      ...(keys.has('shots') ? [{ ...localNavigation.shots, routeKey: 'shots' }] : []),
+      ...(keys.has('assets') ? [{ ...localNavigation.assets, routeKey: 'assets' }] : []),
+      ...(keys.has('workbench') && sessionStore.permissions.includes('shotgrid:version:list')
+        ? [{ ...localNavigation.workbench, icon: Tickets, routeKey: 'submissions', title: '提交记录', index: 'submissions', query: { tab: 'submissions' } }] : [])
+    ]
+  }
 
   return serverItems
     .map((item, index) => {
@@ -61,15 +77,135 @@ const navigationItems = computed(() => {
       }
     })
     .filter(Boolean)
-    .sort((left, right) => left.orderNum - right.orderNum)
+    .sort((left, right) => (left.routeKey === 'projects' ? -1 : right.routeKey === 'projects' ? 1 : left.orderNum - right.orderNum))
 })
+
+// 项目与筛选使用现有 Pinia 会话作用域；退出登录清空，链接携带项目 ID。
+const activeProject = ref(null)
+const episodes = ref([])
+const sceneGroups = reactive({})
+const producers = ref([])
+const catalogLoading = ref(false)
+const catalogError = ref('')
+const filterForm = ref(null)
+const applyingFilters = ref(false)
+const filterDraft = reactive({ assigneeUserId: '', dates: [] })
+const filterRules = {
+  dates: [{ validator: (_rule, value, done) => {
+    done(value?.length && (value.length !== 2 || value[0] > value[1]) ? new Error('请选择有效的制作周期') : undefined)
+  }, trigger: 'change' }]
+}
+const hasPermission = permission => sessionStore.permissions.includes('*:*:*') || sessionStore.permissions.includes(permission)
+const showProductionFilters = computed(() => !sessionStore.isCreatorWorkspace && sessionStore.activeProjectId && ['shots', 'assets', 'workbench'].includes(route.name))
+const workspaceKey = computed(() => `${sessionStore.activeProjectId}:${route.name === 'workbench' && !sessionStore.isCreatorWorkspace ? JSON.stringify(sessionStore.workspaceFilters) : ''}`)
+let catalogController
+async function allPages(loader, signal) {
+  const rows = []
+  for (let pageNum = 1; ; pageNum += 1) {
+    const response = await loader({ pageNum, pageSize: 100 }, { signal })
+    if (signal.aborted) return []
+    rows.push(...(response.rows || []))
+    if (!response.hasNext && rows.length >= Number(response.total || rows.length)) return rows
+    if (!(response.rows || []).length) return rows
+  }
+}
+async function loadWorkspaceCatalog() {
+  catalogController?.abort()
+  const request = new AbortController()
+  catalogController = request
+  const id = sessionStore.activeProjectId
+  activeProject.value = null
+  episodes.value = []
+  producers.value = []
+  Object.keys(sceneGroups).forEach(key => delete sceneGroups[key])
+  catalogError.value = ''
+  if (!id) { catalogLoading.value = false; return }
+  catalogLoading.value = true
+  try {
+    const projectRows = await sessionStore.loadWorkspaceProjects({ signal: request.signal })
+    if (request.signal.aborted) return
+    activeProject.value = projectRows[0] || null
+    if (hasPermission('shotgrid:episode:list')) {
+      const rows = await allPages((params, options) => getEpisodePage(id, { ...params, lifecycleStatus: 'active', orderByColumn: 'episodeNo', isAsc: 'ascending' }, options), request.signal)
+      if (request.signal.aborted) return
+      episodes.value = rows
+    }
+    if (sessionStore.isCreatorWorkspace) return
+    const loader = hasPermission('shotgrid:shot:list') ? listShotAssignees : hasPermission('shotgrid:asset:list') ? listAssetAssignees : null
+    let rows = []
+    if (loader) rows = await allPages((params, options) => loader(id, params, options), request.signal)
+    else if (hasPermission('shotgrid:version:review') && hasPermission('shotgrid:reviewList:list')) {
+      rows = (await getMineReviewProducers({ projectId: id }, { signal: request.signal })).data || []
+    } else if (sessionStore.user) rows = [sessionStore.user]
+    if (!request.signal.aborted) producers.value = rows
+  } catch (error) {
+    if (!request.signal.aborted) catalogError.value = error.message || '筛选选项加载失败'
+  } finally {
+    if (catalogController === request) catalogLoading.value = false
+  }
+}
+async function loadSceneGroup(index) {
+  if (!index.startsWith('episode:') || !hasPermission('shotgrid:scene:list')) return
+  const episodeId = index.slice(8)
+  if (sceneGroups[episodeId]?.loading || sceneGroups[episodeId]?.loaded) return
+  const request = catalogController
+  const id = sessionStore.activeProjectId
+  if (!request || !id) return
+  sceneGroups[episodeId] = { loading: true, loaded: false, error: '', rows: [] }
+  try {
+    const rows = await allPages((params, options) => getScenePage(id, episodeId, { ...params, lifecycleStatus: 'active', orderByColumn: 'sceneNo', isAsc: 'ascending' }, options), request.signal)
+    if (request.signal.aborted) return
+    sceneGroups[episodeId] = { loading: false, loaded: true, error: '', rows }
+  } catch (error) {
+    if (!request.signal.aborted) sceneGroups[episodeId] = { loading: false, loaded: false, error: error.message || '场次加载失败', rows: [] }
+  }
+}
+function moduleLocation(path) {
+  return { path, query: path === '/projects' ? {} : { projectId: sessionStore.activeProjectId } }
+}
+async function selectShotScope(episodeId = '', sceneId = '') {
+  Object.assign(sessionStore.workspaceFilters, { episodeId: String(episodeId), sceneId: String(sceneId) })
+  await router.push(moduleLocation('/shots'))
+}
+async function selectAssetType(assetType = '') {
+  sessionStore.workspaceFilters.assetType = assetType
+  await router.push(moduleLocation('/assets'))
+}
+async function applyProductionFilters() {
+  if (applyingFilters.value) return
+  applyingFilters.value = true
+  try {
+    if (!await filterForm.value.validate().catch(() => false)) return
+    Object.assign(sessionStore.workspaceFilters, { assigneeUserId: filterDraft.assigneeUserId,
+      productionFrom: filterDraft.dates?.[0] || '', productionTo: filterDraft.dates?.[1] || '' })
+  } finally { applyingFilters.value = false }
+}
+function resetProductionFilters() {
+  filterForm.value?.resetFields()
+  filterDraft.assigneeUserId = ''
+  filterDraft.dates = []
+  filterForm.value?.clearValidate()
+  void applyProductionFilters()
+}
+watch(() => sessionStore.activeProjectId, loadWorkspaceCatalog, { immediate: true })
+watch(() => sessionStore.workspaceFilters, value => {
+  filterDraft.assigneeUserId = value.assigneeUserId
+  filterDraft.dates = value.productionFrom && value.productionTo ? [value.productionFrom, value.productionTo] : []
+}, { deep: true, immediate: true })
 
 const userDisplayName = computed(() => sessionStore.displayName)
 
-const pageTitle = computed(() => route.meta?.title || 'Shot Grid')
+const pageTitle = computed(() => sessionStore.isCreatorWorkspace && route.name === 'workbench'
+  ? route.query.tab === 'submissions' ? '提交记录' : '我的任务' : route.meta?.title || 'Shot Grid')
 const activeNavigationPath = computed(() => {
+  if (sessionStore.isCreatorWorkspace && route.name === 'workbench') return route.query.tab === 'submissions' ? 'submissions' : '/workbench'
   const routeKey = route.meta?.routeKey
   const matchedByKey = navigationItems.value.find(item => item.routeKey === routeKey)
+  if (route.name === 'shots') {
+    const { episodeId, sceneId } = sessionStore.workspaceFilters
+    return sceneId ? `shots:${episodeId}:${sceneId}` : episodeId ? `shots:${episodeId}` : 'shots:all'
+  }
+  if (route.name === 'assets') return `assets:${sessionStore.workspaceFilters.assetType || 'all'}`
   if (matchedByKey) return matchedByKey.path
   return navigationItems.value.find(item => route.path === item.path || route.path.startsWith(`${item.path}/`))?.path || ''
 })
@@ -148,6 +284,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  catalogController?.abort()
   window.removeEventListener('keydown', handleSearchShortcut)
   document.removeEventListener('fullscreenchange', syncFullscreenState)
   if (document.fullscreenElement === document.documentElement && typeof document.exitFullscreen === 'function') {
@@ -170,28 +307,50 @@ onBeforeUnmount(() => {
       </div>
 
       <nav id="shot-grid-navigation" class="app-navigation">
-        <p v-show="!collapsed" class="app-navigation__label">制作工作区</p>
+        <p v-show="!collapsed" class="app-navigation__label">{{ activeProject?.projectName || (sessionStore.isCreatorWorkspace ? '我的全部项目任务' : '请先选择项目') }}</p>
+        <el-button v-if="sessionStore.isCreatorWorkspace && sessionStore.allowedRouteKeys.has('projects')" link type="primary" aria-label="切换项目" @click="router.push('/projects')">{{ collapsed ? '项目' : '选择 / 切换项目' }}</el-button>
+        <el-alert v-if="catalogError && !collapsed" :title="catalogError" type="error" :closable="false"><el-button link @click="loadWorkspaceCatalog">重新加载</el-button></el-alert>
         <el-menu
           v-if="navigationItems.length"
           class="app-navigation__menu"
-          router
+          @open="loadSceneGroup"
           :collapse="collapsed"
           :collapse-transition="false"
           :default-active="activeNavigationPath"
         >
-          <el-menu-item
-            v-for="item in navigationItems"
-            :key="item.routeKey"
-            :index="item.path"
-            :route="{ path: item.path }"
-            :aria-label="item.title"
-          >
-            <el-icon><component :is="item.icon" /></el-icon>
-            <template #title><span>{{ item.title }}</span></template>
-          </el-menu-item>
+          <template v-for="item in navigationItems" :key="item.routeKey">
+            <el-sub-menu v-if="item.routeKey === 'shots' && sessionStore.activeProjectId" index="/shots">
+              <template #title><el-icon><Film /></el-icon><span>镜头管理</span></template>
+              <el-menu-item index="shots:all" @click="selectShotScope()">全部镜头</el-menu-item>
+              <el-sub-menu v-for="episode in episodes" :key="episode.episodeId" :index="`episode:${episode.episodeId}`">
+                <template #title>{{ episode.episodeName || `第 ${episode.episodeNo} 集` }}</template>
+                <el-menu-item :index="`shots:${episode.episodeId}`" @click="selectShotScope(episode.episodeId)">本集全部场次</el-menu-item>
+                <el-menu-item v-if="sceneGroups[episode.episodeId]?.loading" disabled :index="`scene-loading:${episode.episodeId}`">场次加载中…</el-menu-item>
+                <el-menu-item v-else-if="sceneGroups[episode.episodeId]?.error" :index="`retry:${episode.episodeId}`" @click="loadSceneGroup(`episode:${episode.episodeId}`)">加载失败，点击重试</el-menu-item>
+                <el-menu-item v-else-if="sceneGroups[episode.episodeId]?.loaded && !sceneGroups[episode.episodeId].rows.length" disabled :index="`empty:${episode.episodeId}`">暂无场次</el-menu-item>
+                <el-menu-item v-for="scene in sceneGroups[episode.episodeId]?.rows || []" :key="scene.sceneId" :index="`shots:${episode.episodeId}:${scene.sceneId}`" @click="selectShotScope(episode.episodeId, scene.sceneId)">场 {{ scene.sceneNo }} · {{ scene.sceneName || '未命名' }}</el-menu-item>
+              </el-sub-menu>
+              <el-menu-item v-if="!catalogLoading && !episodes.length" disabled index="episodes-empty">暂无可选集与场次</el-menu-item>
+            </el-sub-menu>
+            <el-sub-menu v-else-if="item.routeKey === 'assets' && sessionStore.activeProjectId" index="/assets">
+              <template #title><el-icon><Box /></el-icon><span>资产库管理</span></template>
+              <el-menu-item index="assets:all" @click="selectAssetType()">全部资产</el-menu-item>
+              <el-menu-item v-for="type in [{ value: 'Character', label: '角色' }, { value: 'Environment', label: '场景' }, { value: 'Prop', label: '道具' }]" :key="type.value" :index="`assets:${type.value}`" @click="selectAssetType(type.value)">{{ type.label }}</el-menu-item>
+            </el-sub-menu>
+            <el-menu-item v-else :index="item.index || item.path" :disabled="!sessionStore.isCreatorWorkspace && item.routeKey !== 'projects' && !sessionStore.activeProjectId" :aria-label="item.title" @click="router.push({ ...moduleLocation(item.path), query: { ...moduleLocation(item.path).query, ...item.query } })">
+              <el-icon><component :is="item.icon" /></el-icon>
+              <template #title><span>{{ item.routeKey === 'projects' ? '全部项目 / 切换项目' : item.title }}</span></template>
+            </el-menu-item>
+          </template>
         </el-menu>
 
         <el-empty v-else-if="!collapsed" class="app-navigation__empty" :image-size="42" description="当前账号没有可访问的业务模块" />
+        <el-form v-if="showProductionFilters && !collapsed" ref="filterForm" :model="filterDraft" :rules="filterRules" label-position="top" class="workspace-filters" aria-label="制作筛选">
+          <el-form-item label="制作人" prop="assigneeUserId"><el-select v-model="filterDraft.assigneeUserId" filterable clearable placeholder="全部制作人" :loading="catalogLoading"><el-option v-for="producer in producers" :key="producer.userId" :value="String(producer.userId)" :label="producer.userName || producer.nickName" /></el-select></el-form-item>
+          <el-form-item label="制作周期（预期）" prop="dates"><el-date-picker v-model="filterDraft.dates" type="daterange" value-format="YYYY-MM-DD" start-placeholder="开始日期" end-placeholder="结束日期" unlink-panels /></el-form-item>
+          <el-form-item><el-button type="primary" :loading="applyingFilters" @click="applyProductionFilters">应用筛选</el-button><el-button :disabled="applyingFilters" @click="resetProductionFilters">重置</el-button></el-form-item>
+          <small>按预期制作时间交集筛选；我的任务和提交记录仍保留本人权限范围。</small>
+        </el-form>
       </nav>
 
       <div
@@ -260,7 +419,7 @@ onBeforeUnmount(() => {
       <el-alert v-if="passwordNotice" class="app-security-notice" :title="passwordNotice" type="warning" :closable="false" show-icon />
 
       <el-main class="app-content">
-        <router-view />
+        <router-view :key="workspaceKey" />
       </el-main>
     </el-container>
     <GlobalSearchDialog v-model="searchVisible" :permissions="sessionStore.permissions" />
@@ -631,7 +790,6 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 820px) {
-  .app-shell,
   .app-shell.is-collapsed {
     --app-sidebar-width: 68px;
   }
@@ -640,22 +798,22 @@ onBeforeUnmount(() => {
     padding: 0 16px;
   }
 
-  .app-brand__copy,
-  .app-navigation__label,
-  .app-navigation__empty,
-  .app-company-brand,
+  .app-shell.is-collapsed .app-brand__copy,
+  .app-shell.is-collapsed .app-navigation__label,
+  .app-shell.is-collapsed .app-navigation__empty,
+  .app-shell.is-collapsed .app-company-brand,
   .app-account__name {
     display: none;
   }
 
   .app-search-trigger kbd { display: none; }
 
-  .app-navigation__menu:deep(.el-menu-item) {
+  .app-shell.is-collapsed .app-navigation__menu:deep(.el-menu-item) {
     justify-content: center;
     padding: 0;
   }
 
-  .app-navigation__menu:deep(.el-menu-item > span) {
+  .app-shell.is-collapsed .app-navigation__menu:deep(.el-menu-item > span) {
     display: none;
   }
 
@@ -691,4 +849,12 @@ onBeforeUnmount(() => {
     display: none;
   }
 }
+</style>
+
+<style scoped>
+.workspace-filters { padding: 16px 12px; border-top: 1px solid var(--sg-border); }
+.workspace-filters :deep(.el-select), .workspace-filters :deep(.el-date-editor) { width: 100%; min-width: 0; }
+.workspace-filters :deep(.el-range-input) { font-size: 12px; }
+.workspace-filters small { color: var(--sg-text-muted); line-height: 1.6; }
+.app-navigation__label { white-space: normal; overflow-wrap: anywhere; }
 </style>

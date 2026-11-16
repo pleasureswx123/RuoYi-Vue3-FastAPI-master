@@ -15,6 +15,8 @@ function loginLocation(to) {
 
 export function installRouterGuard(router, pinia) {
   const session = useSessionStore(pinia)
+  const landingPath = () => session.isCreatorWorkspace && session.allowedRouteKeys.has('workbench')
+    ? '/workbench' : getFirstAuthorizedPath(session.navigation)
 
   setSessionExpiredHandler(() => {
     const current = router.currentRoute.value
@@ -42,7 +44,7 @@ export function installRouterGuard(router, pinia) {
     if (to.name === 'login') {
       try {
         await session.bootstrap()
-        return sanitizeInternalRedirect(to.query.redirect, getFirstAuthorizedPath(session.navigation))
+        return sanitizeInternalRedirect(to.query.redirect, landingPath())
       } catch (error) {
         if (error.status === 401) {
           return true
@@ -69,15 +71,27 @@ export function installRouterGuard(router, pinia) {
     }
 
     if (to.name === 'root') {
-      return getFirstAuthorizedPath(session.navigation)
+      return landingPath()
     }
     if (to.meta.routeKey && !session.allowedRouteKeys.has(to.meta.routeKey)) {
       return { name: 'forbidden' }
     }
+    if (to.meta.routeKey) {
+      const projectId = to.params.projectId || to.query.projectId
+      if (['shots', 'assets', 'workbench', 'reviews', 'files'].includes(to.name) && !projectId && !session.activeProjectId && !(to.name === 'workbench' && session.isCreatorWorkspace)) {
+        return session.allowedRouteKeys.has('projects') ? { name: 'projects' } : { name: 'forbidden' }
+      }
+    }
     return true
   })
 
-  router.afterEach(to => {
+  // 导航真正成功后才切项目，取消离开时保留旧项目及草稿上下文。
+  router.afterEach((to, _from, failure) => {
+    if (!failure && to.meta.routeKey) {
+      const projectId = to.params.projectId || to.query.projectId
+      if (projectId) session.selectProject(projectId)
+      if (to.name === 'projects') session.selectProject('')
+    }
     const applicationTitle = import.meta.env.VITE_APP_TITLE || 'Shot Grid'
     document.title = to.meta.title ? `${to.meta.title} · ${applicationTitle}` : applicationTitle
     NProgress.done()

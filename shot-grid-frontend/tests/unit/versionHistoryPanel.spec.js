@@ -55,12 +55,49 @@ function detail(versionId, taskId = 31, overrides = {}) {
 }
 
 describe('版本历史面板', () => {
+  it('快捷反馈定位整体意见时自动切到整体反馈页签', async () => {
+    const issue = { issueId: 60, originVersionId: 2, originCandidateId: null, status: 'open', pendingVersionId: 2, content: '全版节奏需要加快' }
+    getTaskIssues.mockResolvedValue({ data: [issue] })
+    const wrapper = mount(VersionHistoryPanel, { ...mountOptions, props: { taskId: 31, canList: true, canQuery: true, canListNotes: true } })
+    await flushPromises()
+    await wrapper.vm.focusIssue(issue)
+    await flushPromises()
+    expect(wrapper.get('#tab-overall-feedback').attributes('aria-selected')).toBe('true')
+    expect(wrapper.get('.overall-feedback').text()).toContain(issue.content)
+    wrapper.unmount()
+  })
   beforeEach(() => {
     Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1280 })
     getTaskVersions.mockResolvedValue({ rows: [listItem(2), listItem(1)], total: 2 })
     getVersionDetail.mockImplementation(versionId => Promise.resolve(detail(versionId)))
     getReviewActions.mockResolvedValue({ rows: [], total: 0 })
     getTaskIssues.mockResolvedValue({ data: [] })
+  })
+
+  it('紧凑反馈模式显示提交说明与问题，不重复显示文件表或播放器，点击问题保留原画入口', async () => {
+    getVersionDetail.mockImplementation(id => Promise.resolve(detail(id, 31, { candidates: [{ candidateId: 202, candidateNumber: 'V002_02', files: [] }] })))
+    getTaskIssues.mockResolvedValueOnce({ data: [{ issueId: 51, originVersionId: 2, originCandidateId: 202, pendingVersionId: 2, status: 'open', content: '需要调整灯光' }] })
+    const wrapper = mount(VersionHistoryPanel, { ...mountOptions, props: { taskId: 31, initialVersionId: 2, compactFeedback: true, canList: true, canQuery: true, canListNotes: true } })
+    try {
+      await flushPromises()
+      expect(wrapper.text()).toContain('提交说明：版本 2 修改说明')
+      expect(wrapper.text()).toContain('需要调整灯光')
+      expect(wrapper.find('.feedback-media').exists()).toBe(false)
+      expect(wrapper.findComponent({ name: 'VersionDetailCard' }).exists()).toBe(false)
+      await wrapper.find('.feedback-item__select').trigger('click')
+      await flushPromises()
+      expect(getVersionDetail).toHaveBeenLastCalledWith(2, expect.anything())
+      expect(wrapper.findComponent({ name: 'ElDrawer' }).props('modelValue')).toBe(true)
+    } finally { wrapper.unmount() }
+  })
+
+  it('镜头成果入口可定位指定历史版本，即使不在版本列表第一页', async () => {
+    const wrapper = mount(VersionHistoryPanel, { ...mountOptions, props: { taskId: 31, initialVersionId: 8, canList: true, canQuery: true, canListNotes: true } })
+    await flushPromises()
+    expect(getVersionDetail).toHaveBeenCalledWith(8, expect.anything())
+    expect(wrapper.get('.version-tabs > .el-tabs__header .is-active').text()).toContain('V008')
+    expect(wrapper.findComponent({ name: 'VersionDetailCard' }).props('version').versionId).toBe(8)
+    wrapper.unmount()
   })
 
   it('拆分新增与遗留数量，并从旧版直达后续版本的未修复问题', async () => {

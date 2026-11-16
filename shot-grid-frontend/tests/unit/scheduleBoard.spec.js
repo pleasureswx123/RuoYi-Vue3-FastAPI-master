@@ -3,13 +3,16 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { ElButton, ElCheckbox, ElDatePicker, ElSelect } from 'element-plus'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { getProjectSchedule, getTaskScheduleChanges, updateTaskSchedule } from '@/api/shot-grid/schedules'
+import { getProjectSchedule, getUnscheduledScheduleTasks, getTaskScheduleChanges, updateTaskSchedule } from '@/api/shot-grid/schedules'
 import ScheduleBoard from '@/views/schedule/ScheduleBoard.vue'
 import PersonnelSwimlane from '@/views/schedule/components/PersonnelSwimlane.vue'
 import ScheduleTaskDrawer from '@/views/schedule/components/ScheduleTaskDrawer.vue'
 import ScheduleEditDialog from '@/views/schedule/components/ScheduleEditDialog.vue'
+import ScheduleBatchDialog from '@/views/schedule/components/ScheduleBatchDialog.vue'
 import ScheduleToolbar from '@/views/schedule/components/ScheduleToolbar.vue'
 import TaskGantt from '@/views/schedule/components/TaskGantt.vue'
+import UnscheduledTaskDrawer from '@/views/schedule/components/UnscheduledTaskDrawer.vue'
+import { useScheduleStore } from '@/store/modules/schedule'
 
 vi.mock('@/views/schedule/components/ScheduleGanttAdapter.vue', () => ({
   default: {
@@ -74,10 +77,84 @@ describe('共享任务排期面板', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
+    getUnscheduledScheduleTasks.mockResolvedValue({ data: { rows: [], total: 0 } })
     getProjectSchedule.mockResolvedValue({
       data: { rows, groups: [{ groupKey: 'assignee:7', groupName: '杨景锋', sortOrder: 0, taskCount: 2 }], total: 2, unscheduledCount: 1, serverTime: '2026-09-02T09:00:00' }
     })
     getTaskScheduleChanges.mockResolvedValue({ rows: [], total: 0, hasNext: false })
+  })
+
+  it('制作人选项包含没有排期的项目成员', async () => {
+    const wrapper = mount(ScheduleBoard, { props: { projectId: 11, assigneeOptions: [{ userId: 99, userName: '尚未排期制作人' }] } })
+    await flushPromises()
+    expect(wrapper.getComponent(ScheduleToolbar).props('filterOptions').assignees).toContainEqual({ value: 99, label: '尚未排期制作人' })
+    wrapper.unmount()
+  })
+
+  it('批量周期合并当前任务和已加载未排期项，隔离项目并在写入后刷新', async () => {
+    const wrapper = mount(ScheduleBoard, { props: { projectId: 11, editableAllowed: true, initialWindowStart: '2026-09-01T00:00:00', initialWindowEnd: '2026-09-08T00:00:00' }, global: { stubs: { ScheduleBatchDialog: true } } })
+    await flushPromises()
+    wrapper.getComponent(UnscheduledTaskDrawer).vm.$emit('rows-change', [rows[0], { ...rows[0], taskId: 33, currentStart: null, currentEnd: null }, { ...rows[0], taskId: 34, projectId: 99 }])
+    await flushPromises()
+    expect(wrapper.getComponent(ScheduleToolbar).props('batchEnabled')).toBe(true)
+    wrapper.getComponent(ScheduleToolbar).vm.$emit('open-batch')
+    await flushPromises()
+    const context = wrapper.getComponent(ScheduleBatchDialog).props('context')
+    expect(context.tasks.map(task => task.taskId)).toEqual([31, 32, 33])
+    expect(context.validateContext()).toBe(true)
+    await wrapper.setProps({ editableAllowed: false })
+    expect(context.validateContext()).toBe(false)
+    const count = getProjectSchedule.mock.calls.length
+    wrapper.getComponent(ScheduleBatchDialog).vm.$emit('close', { attempted: true })
+    await flushPromises()
+    expect(getProjectSchedule.mock.calls.length).toBeGreaterThan(count)
+    wrapper.getComponent(ScheduleToolbar).vm.$emit('open-batch')
+    await flushPromises()
+    expect(wrapper.findComponent(ScheduleBatchDialog).exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('排期与未设周期任务复用成果侧栏，取消草稿离开不更换选中任务', async () => {
+    const opener = vi.fn().mockResolvedValue(true)
+    const wrapper = mount(ScheduleBoard, { props: { projectId: 11, taskOpener: opener, initialWindowStart: '2026-09-01T00:00:00', initialWindowEnd: '2026-09-08T00:00:00' } })
+    await flushPromises()
+    wrapper.getComponent(PersonnelSwimlane).vm.$emit('task-click', { taskId: 31 })
+    await flushPromises()
+    expect(opener).toHaveBeenCalledWith(expect.objectContaining({ taskId: 31 }))
+    expect(wrapper.getComponent(ScheduleTaskDrawer).props('visible')).toBe(false)
+    expect(useScheduleStore().selectedTaskId).toBe(31)
+    opener.mockResolvedValue(false)
+    wrapper.getComponent(PersonnelSwimlane).vm.$emit('task-click', { taskId: 32 })
+    await flushPromises()
+    expect(useScheduleStore().selectedTaskId).toBe(31)
+    opener.mockResolvedValue(true)
+    wrapper.getComponent(UnscheduledTaskDrawer).vm.$emit('open-task', { ...rows[0], taskId: 33, currentStart: null, currentEnd: null })
+    await flushPromises()
+    expect(opener).toHaveBeenLastCalledWith(expect.objectContaining({ taskId: 33 }))
+    wrapper.getComponent(UnscheduledTaskDrawer).vm.$emit('open-task', { ...rows[0], taskId: 34, projectId: 99 })
+    await flushPromises()
+    expect(opener).toHaveBeenCalledTimes(3)
+    wrapper.unmount()
+  })
+
+  it('同项目返回排期恢复日期和滚动位置，筛选变化时丢弃旧位置', async () => {
+    const props = { projectId: 11, initialWindowStart: '2026-09-01T00:00:00', initialWindowEnd: '2026-09-08T00:00:00' }
+    const wrapper = mount(ScheduleBoard, { props })
+    await flushPromises()
+    wrapper.get('.schedule-board__viewport').element.scrollTop = 60
+    wrapper.get('.schedule-board__viewport').element.scrollLeft = 120
+    wrapper.unmount()
+    const browseState = wrapper.emitted('remember')[0][0]
+    expect(browseState.position).toMatchObject({ top: 60, left: 120 })
+    const restored = mount(ScheduleBoard, { props: { ...props, browseState } })
+    await flushPromises()
+    expect(restored.get('.schedule-board__viewport').element.scrollTop).toBe(60)
+    restored.unmount()
+    const changed = mount(ScheduleBoard, { props: { ...props, browseState, initialFilters: { keyword: '新查询' } } })
+    await flushPromises()
+    expect(changed.get('.schedule-board__viewport').element.scrollTop).toBe(0)
+    expect(useScheduleStore().filters.keyword).toBe('新查询')
+    changed.unmount()
   })
 
   it('点击图例立即筛选并同步下拉框，再次点击恢复全部状态', async () => {
@@ -239,7 +316,7 @@ describe('共享任务排期面板', () => {
     expect(swimlane.props('editable')).toBe(false)
     expect(wrapper.findAll('[data-testid="personnel-lane"]')).toHaveLength(1)
     expect(wrapper.find('[data-testid="personnel-lane"]').attributes('data-track-count')).toBe('2')
-    expect(wrapper.text()).toContain('拖动编辑未开启')
+    expect(wrapper.text()).toContain('同一人的时间重叠仅作提醒')
   })
 
   it('切换甘特模式更新查询状态，点击任务打开同一详情抽屉', async () => {
@@ -304,7 +381,7 @@ describe('共享任务排期面板', () => {
     })
   })
 
-  it('“回到今天”按当前缩放恢复未来偏重的默认窗口', async () => {
+  it('“回到今天”按当前缩放恢复本周默认窗口', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date(2026, 7, 31, 16, 20, 30))
     try {
@@ -324,8 +401,8 @@ describe('共享任务排期面板', () => {
 
       expect(wrapper.emitted('query-change').at(-1)[0]).toMatchObject({
         scale: 'day',
-        windowStart: '2026-08-24T00:00:00',
-        windowEnd: '2026-09-24T00:00:00'
+        windowStart: '2026-08-31T00:00:00',
+        windowEnd: '2026-09-07T00:00:00'
       })
       wrapper.unmount()
     } finally {
@@ -416,7 +493,7 @@ describe('共享任务排期面板', () => {
     await flushPromises()
     expect(wrapper.getComponent(PersonnelSwimlane).props('selectedTaskId')).toBe(saved.taskId)
     expect(wrapper.getComponent(PersonnelSwimlane).props('editable')).toBe(false)
-    expect(wrapper.emitted('query-change').at(-1)[0].windowStart).toBe('2026-10-25T00:00:00')
+    expect(wrapper.emitted('query-change').at(-1)[0].windowStart).toBe('2026-10-26T00:00:00')
     wrapper.unmount()
   })
 

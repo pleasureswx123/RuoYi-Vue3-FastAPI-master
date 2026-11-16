@@ -4,7 +4,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { getProjectFilePage } from '@/api/shot-grid/files'
-import { getProjectPage } from '@/api/shot-grid/projects'
+import { getProjectDetail } from '@/api/shot-grid/projects'
 import { downloadProtectedVersionFile } from '@/api/shot-grid/versions'
 import { useSessionStore } from '@/store/modules/session'
 import { copyTextToClipboard } from '@/utils/clipboard'
@@ -14,7 +14,7 @@ import { setElSelectValue } from '../helpers/elementPlus'
 vi.mock('@/api/shot-grid/files', () => ({ getProjectFilePage: vi.fn() }))
 vi.mock('@/api/shot-grid/projects', () => ({
   assertPositiveId: value => Number(value),
-  getProjectPage: vi.fn()
+  getProjectDetail: vi.fn()
 }))
 vi.mock('@/api/shot-grid/versions', () => ({ downloadProtectedVersionFile: vi.fn() }))
 vi.mock('@/utils/clipboard', () => ({ copyTextToClipboard: vi.fn() }))
@@ -58,6 +58,7 @@ async function mountView(permissions = ['shotgrid:storage:path', 'shotgrid:file:
   setActivePinia(pinia)
   const session = useSessionStore()
   session.permissions = permissions
+  session.selectProject(8)
   const wrapper = mount(FileCenterView, {
     global: {
       plugins: [pinia],
@@ -73,7 +74,7 @@ describe('文件与 NAS 一级页', () => {
   beforeEach(() => {
     Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: vi.fn(() => 'blob:file-thumbnail') })
     Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: vi.fn() })
-    getProjectPage.mockResolvedValue({ rows: [project], total: 1 })
+    getProjectDetail.mockResolvedValue({ data: project })
     getProjectFilePage.mockResolvedValue({ rows: [file], total: 1 })
     downloadProtectedVersionFile.mockResolvedValue(new Blob(['file']))
     copyTextToClipboard.mockResolvedValue(true)

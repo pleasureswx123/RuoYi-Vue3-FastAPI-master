@@ -12,6 +12,7 @@ drop table if exists sg_media_derivation;
 drop table if exists sg_version_file;
 drop table if exists sg_review_list;
 drop table if exists sg_review_action;
+drop table if exists sg_issue_comment;
 drop table if exists sg_note;
 drop table if exists sg_version_candidate;
 drop table if exists sg_version;
@@ -19,6 +20,7 @@ drop table if exists sg_version_submission_file;
 drop table if exists sg_version_submission;
 drop table if exists sg_task;
 drop table if exists sg_shot_asset_requirement;
+drop table if exists sg_asset_relation;
 drop table if exists sg_shot_asset;
 drop table if exists sg_shot;
 drop table if exists sg_scene;
@@ -2712,6 +2714,25 @@ COMMENT ON COLUMN sg_note.resolved_in_version_id IS '实际解决该问题的版
 COMMENT ON COLUMN sg_note.create_time IS '创建时间';
 COMMENT ON COLUMN sg_note.update_time IS '更新时间';
 
+-- sg_issue_comment
+
+CREATE TABLE sg_issue_comment (
+ comment_id BIGSERIAL PRIMARY KEY,
+ project_id BIGINT NOT NULL,
+ note_id BIGINT NOT NULL,
+ author_id BIGINT NOT NULL REFERENCES sys_user(user_id) ON DELETE RESTRICT,
+ author_name VARCHAR(64) NOT NULL,
+ content VARCHAR(2000) NOT NULL,
+ request_id VARCHAR(100) NOT NULL,
+ create_time TIMESTAMP(0) WITHOUT TIME ZONE NOT NULL,
+ CONSTRAINT fk_sg_issue_comment_note_project FOREIGN KEY(note_id,project_id)
+   REFERENCES sg_note(note_id,project_id) ON DELETE RESTRICT,
+ CONSTRAINT uk_sg_issue_comment_request UNIQUE(note_id,author_id,request_id),
+ CONSTRAINT ck_sg_issue_comment_content CHECK(btrim(content) <> '' AND btrim(request_id) <> '')
+);
+CREATE INDEX idx_sg_issue_comment_note_id ON sg_issue_comment(note_id,comment_id);
+COMMENT ON TABLE sg_issue_comment IS 'Shot Grid审核反馈讨论记录';
+
 -- sg_version_issue_response
 CREATE TABLE sg_version_issue_response (
 	response_id BIGSERIAL PRIMARY KEY,
@@ -3185,6 +3206,7 @@ values
     ('reviews', 5, '审核版本', 'shotgrid:version:review'),
     ('reviews', 6, '查看版本审核意见', 'shotgrid:note:list'),
     ('reviews', 7, '添加审核意见', 'shotgrid:note:add'),
+    ('reviews', 98, '评论审核反馈', 'shotgrid:note:comment'),
     ('reviews', 9, '查看审核单详情', 'shotgrid:reviewList:query'),
     ('reviews', 10, '创建人工批量审核单', 'shotgrid:reviewList:add'),
     ('reviews', 11, '修改草稿审核单和顺序', 'shotgrid:reviewList:edit'),
@@ -3273,7 +3295,7 @@ create table if not exists alembic_version (
     constraint alembic_version_pkc primary key (version_num)
 );
 delete from alembic_version;
-insert into alembic_version(version_num) values ('20261013_40');
+insert into alembic_version(version_num) values ('20261116_44');
 
 
 CREATE OR REPLACE FUNCTION "find_in_set"(int8, varchar)
@@ -3489,10 +3511,10 @@ ALTER TABLE sg_note ADD COLUMN review_cycle integer NOT NULL DEFAULT 1;
 ALTER TABLE sg_review_issue_draft ADD COLUMN review_cycle integer NOT NULL DEFAULT 1;
 CREATE TABLE sg_review_cycle (
  version_id bigint NOT NULL REFERENCES sg_version(version_id) ON DELETE RESTRICT,
- cycle_no integer NOT NULL CHECK (cycle_no > 0),
+ cycle_no integer NOT NULL CONSTRAINT ck_sg_review_cycle_no CHECK (cycle_no > 0),
  opened_by bigint REFERENCES sys_user(user_id) ON DELETE RESTRICT,
  reason varchar(1000), opened_time timestamp(0) NOT NULL, closed_time timestamp(0),
- outcome varchar(20) CHECK (outcome IS NULL OR outcome IN ('approve','reject')),
+ outcome varchar(20) CONSTRAINT ck_sg_review_cycle_outcome CHECK (outcome IS NULL OR outcome IN ('approve','reject')),
  PRIMARY KEY(version_id,cycle_no)
 );
 INSERT INTO sg_review_cycle(version_id,cycle_no,opened_time,closed_time,outcome)
@@ -3523,3 +3545,43 @@ SELECT '重新审核',parent_id,99,'#','','','',1,0,'F','0','0','shotgrid:versio
  'shotgrid_migration_20261026_41',current_timestamp,'独立授权；不自动扩大制作人权限'
 FROM sys_menu WHERE perms='shotgrid:version:review'
  AND NOT EXISTS(SELECT 1 FROM sys_menu WHERE perms='shotgrid:version:reopen') LIMIT 1;
+
+CREATE TABLE sg_asset_relation (
+ project_id BIGINT NOT NULL,
+ asset_id BIGINT NOT NULL,
+ related_asset_id BIGINT NOT NULL,
+ create_by VARCHAR(64) NOT NULL DEFAULT '',
+ create_time TIMESTAMP(0) WITHOUT TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ PRIMARY KEY (asset_id, related_asset_id),
+ CONSTRAINT fk_sg_asset_relation_source FOREIGN KEY (asset_id, project_id) REFERENCES sg_asset(asset_id, project_id) ON DELETE CASCADE,
+ CONSTRAINT fk_sg_asset_relation_target FOREIGN KEY (related_asset_id, project_id) REFERENCES sg_asset(asset_id, project_id) ON DELETE CASCADE,
+ CONSTRAINT ck_sg_asset_relation_not_self CHECK (asset_id <> related_asset_id)
+);
+CREATE INDEX idx_sg_asset_relation_target ON sg_asset_relation(project_id, related_asset_id);
+COMMENT ON TABLE sg_asset_relation IS '资产之间的资料关联，不阻止开工';
+
+-- 20261111_43 每日制作记录
+CREATE TABLE sg_daily_record (
+ record_id VARCHAR(36) PRIMARY KEY, project_id BIGINT NOT NULL, task_id BIGINT NOT NULL,
+ user_id BIGINT NOT NULL REFERENCES sys_user(user_id), record_date DATE NOT NULL,
+ platform VARCHAR(80) NOT NULL, account VARCHAR(80) NOT NULL DEFAULT '', model VARCHAR(80) NOT NULL DEFAULT '',
+ media_type VARCHAR(10) NOT NULL CHECK (media_type IN ('image','video')),
+ generated_count INTEGER NOT NULL CHECK (generated_count BETWEEN 0 AND 1000000),
+ actual_points NUMERIC(16,4) CHECK (actual_points >= 0), unit_points NUMERIC(16,4) CHECK (unit_points >= 0),
+ history JSONB NOT NULL DEFAULT '[]', create_by VARCHAR(64) NOT NULL DEFAULT '', create_time TIMESTAMP(0) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ update_by VARCHAR(64) NOT NULL DEFAULT '', update_time TIMESTAMP(0) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ remark VARCHAR(500), lock_version INTEGER NOT NULL DEFAULT 0 CHECK(lock_version >= 0), del_flag CHAR(1) NOT NULL DEFAULT '0',
+ CONSTRAINT fk_sg_daily_task FOREIGN KEY(task_id,project_id) REFERENCES sg_task(task_id,project_id) ON DELETE CASCADE,
+ CHECK(btrim(platform) <> ''), CHECK(actual_points IS NOT NULL OR unit_points IS NOT NULL), CHECK(del_flag IN ('0','2'))
+);
+CREATE INDEX ix_sg_daily_scope_date ON sg_daily_record(project_id,record_date,user_id);
+CREATE UNIQUE INDEX uq_sg_daily_dimensions ON sg_daily_record(project_id,task_id,user_id,record_date,platform,account,model,media_type) WHERE del_flag='0';
+WITH seed(title,route,perm,sort) AS (VALUES ('每日记录','daily-records','shotgrid:daily:write',2),('产出统计','production-statistics','shotgrid:daily:stats',7))
+INSERT INTO sys_menu(menu_name,parent_id,order_num,path,component,query,route_name,is_frame,is_cache,menu_type,visible,status,perms,icon,create_by,create_time,remark)
+SELECT seed.title,p.menu_id,seed.sort,'/'||seed.route,NULL,'',seed.route,1,0,'C','0','0',seed.perm,'chart','daily_43',CURRENT_TIMESTAMP,'每日记录与统计'
+FROM seed CROSS JOIN LATERAL (SELECT menu_id FROM sys_menu WHERE route_name='ShotGrid' AND menu_type='M' ORDER BY menu_id LIMIT 1) p
+WHERE NOT EXISTS(SELECT 1 FROM sys_menu m WHERE m.route_name=seed.route);
+INSERT INTO sys_role_menu(role_id,menu_id)
+SELECT DISTINCT rm.role_id,new.menu_id FROM sys_role_menu rm JOIN sys_menu old ON old.menu_id=rm.menu_id
+JOIN sys_menu new ON (new.perms='shotgrid:daily:write' AND old.perms='shotgrid:task:list') OR (new.perms='shotgrid:daily:stats' AND old.perms='shotgrid:task:schedule')
+ON CONFLICT DO NOTHING;

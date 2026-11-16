@@ -44,6 +44,15 @@ beforeEach(() => {
 })
 afterEach(() => { wrapper?.unmount(); vi.unstubAllGlobals() })
 describe('资产分项批量工作区', () => {
+  it('明确选择的分项中任一失去动作权限时禁止只处理剩余项', async () => {
+    getAssetDetail.mockResolvedValue({ data: { ...asset, items: [items[0], { ...items[1], allowedActions: [] }] } })
+    wrapper = mount(AssetItemBatchWorkspace, { attachTo: document.body, props: { projectId: 6, contextKey: '6' } })
+    await wrapper.vm.open([asset], [11, 12], 'assign')
+    await flushPromises()
+    expect(document.body.textContent).toContain('部分所选分项的状态或权限已变化')
+    expect(button('确认保存')).toBeUndefined()
+    expect(batchAssignAssetItemTasks).not.toHaveBeenCalled()
+  })
   it('内网 HTTP 缺少 randomUUID 时仍显示所选排期行并生成独立请求键', async () => {
     vi.stubGlobal('crypto', { getRandomValues: globalThis.crypto.getRandomValues.bind(globalThis.crypto) })
     await open()

@@ -4,7 +4,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { getProjectPage } from '@/api/shot-grid/projects'
+import { getProjectDetail } from '@/api/shot-grid/projects'
 import {
   addVersionIssueDraft,
   appendVersionIssue,
@@ -50,7 +50,7 @@ vi.mock('@/api/shot-grid/projects', () => ({
     if (!Number.isSafeInteger(result) || result <= 0) throw new TypeError('ID 无效')
     return result
   },
-  getProjectPage: vi.fn()
+  getProjectDetail: vi.fn()
 }))
 vi.mock('@/api/shot-grid/reviews', () => ({
   addVersionIssueDraft: vi.fn(),
@@ -154,6 +154,7 @@ function installSession(permissions) {
   const session = useSessionStore()
   session.user = { userId: 1, userName: 'admin', nickName: '管理员' }
   session.permissions = permissions
+  session.selectProject(8)
   return pinia
 }
 
@@ -201,7 +202,7 @@ describe('版本审核页面', () => {
     objectUrlSequence = 0
     Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: vi.fn(() => `blob:review-candidate-${++objectUrlSequence}`) })
     Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: vi.fn() })
-    getProjectPage.mockResolvedValue({ rows: [project], total: 1 })
+    getProjectDetail.mockResolvedValue({ data: project })
     getReviewListPage.mockResolvedValue({ rows: [review], total: 1 })
     getReviewListDetail.mockResolvedValue({ data: { ...review, version } })
     getVersionDetail.mockResolvedValue({ data: version })
@@ -801,12 +802,22 @@ describe('版本审核页面', () => {
 
     expect(alert.props()).toMatchObject({ type: 'success', title: '最终版本已发布到 NAS', closable: false, showIcon: true })
     expect(alert.get('.final-delivery-path').text()).toBe(finalNasRelativePath)
-    expect(alert.get('.final-delivery-note').text()).toBe('同目录 FINAL.json 记录最终候选和文件摘要。')
+    expect(alert.get('.final-delivery-note').text()).toBe('同目录交付清单记录本版最终候选和文件摘要。')
     expect(alert.get('.final-delivery-note').text()).not.toContain(finalNasRelativePath)
     expect(wrapper.findAllComponents(ElButton).some(button => button.text() === '重新发布最终版本')).toBe(false)
     wrapper.unmount()
   })
 
+  it('已通过镜头反馈后将原交付标为历史且不显示重新发布', async () => {
+    const revised = { ...version, versionStatus: 'rejected', finalDelivery: { deliveryStatus: 'failed', lastErrorKey: 'SG_FINAL_DELIVERY_REOPENED' } }
+    getReviewListDetail.mockResolvedValue({ data: { ...review, reviewStatus: 'completed', version: revised } })
+    getVersionDetail.mockResolvedValue({ data: revised })
+    getVersionReviewContext.mockResolvedValue({ data: { currentVersion: revised, candidates: revised.candidates, carriedIssues: [], currentVersionIssues: [], currentVersionDrafts: [] } })
+    const { wrapper } = await mountDetail(['shotgrid:reviewList:query', 'shotgrid:version:query', 'shotgrid:version:retry', 'shotgrid:version:review', 'shotgrid:note:list'])
+    expect(wrapper.text()).toContain('此版本已收到后续反馈')
+    expect(wrapper.findAllComponents(ElButton).some(button => button.text() === '重新发布最终版本')).toBe(false)
+    wrapper.unmount()
+  })
   it('最终交付失败时明确展示 NAS 状态并允许有权限用户重试', async () => {
     const failedDelivery = {
       finalDeliveryId: 701,

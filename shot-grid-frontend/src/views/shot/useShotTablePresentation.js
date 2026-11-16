@@ -10,12 +10,13 @@ export const shotDetailColumns = [
 ]
 
 // 只记忆当前账号的展示偏好，不保存业务数据，也不改变查询与权限。
-export function useShotTablePresentation(userId, availableWidth) {
+export function useShotTablePresentation(userId, _availableWidth) {
   const mode = ref('auto')
   const customColumns = ref([])
   const widths = ref({})
+  const rowHeight = ref(88)
   const storageKey = computed(() => `shot-grid:shot-table:v1:${userId.value ?? 'guest'}`)
-  const columnKeys = new Set(['identity', 'description', 'plan', 'assignee', 'status', 'actions', ...shotDetailColumns.map(item => item.key)])
+  const columnKeys = new Set(['identity', 'shotNo', 'scene', 'duration', 'description', 'plan', 'assignee', 'status', ...shotDetailColumns.map(item => item.key)])
 
   watch(storageKey, key => {
     let saved = {}
@@ -23,11 +24,12 @@ export function useShotTablePresentation(userId, availableWidth) {
     mode.value = ['auto', 'compact', 'full', 'custom'].includes(saved.mode) ? saved.mode : 'auto'
     customColumns.value = Array.isArray(saved.columns) ? saved.columns.filter(key => shotDetailColumns.some(item => item.key === key)) : []
     widths.value = Object.fromEntries(Object.entries(saved.widths || {}).filter(([key, value]) => columnKeys.has(key) && Number.isFinite(value) && value >= 80 && value <= 800))
+    rowHeight.value = Number.isFinite(saved.rowHeight) && saved.rowHeight >= 72 && saved.rowHeight <= 240 ? saved.rowHeight : 88
   }, { immediate: true })
 
-  watch([mode, customColumns, widths], () => {
+  watch([mode, customColumns, widths, rowHeight], () => {
     try {
-      localStorage.setItem(storageKey.value, JSON.stringify({ mode: mode.value, columns: customColumns.value, widths: widths.value }))
+      localStorage.setItem(storageKey.value, JSON.stringify({ mode: mode.value, columns: customColumns.value, widths: widths.value, rowHeight: rowHeight.value }))
     } catch { /* 不让浏览器存储限制影响表格操作。 */ }
   }, { deep: true })
 
@@ -35,7 +37,7 @@ export function useShotTablePresentation(userId, availableWidth) {
     if (mode.value === 'full') return shotDetailColumns.map(item => item.key)
     if (mode.value === 'custom') return customColumns.value
     if (mode.value === 'compact') return []
-    return availableWidth.value >= 1700 ? ['parameters'] : []
+    return [] // 默认固定八个基础栏目，附加列由用户主动选择。
   })
 
   function setColumns(columns) {
@@ -43,12 +45,13 @@ export function useShotTablePresentation(userId, availableWidth) {
     mode.value = 'custom'
   }
   function saveWidth(width, _oldWidth, column) {
-    if (columnKeys.has(column.columnKey)) widths.value = { ...widths.value, [column.columnKey]: Math.min(800, Math.max(80, width)) }
+    if (Number.isFinite(width) && columnKeys.has(column.columnKey)) widths.value = { ...widths.value, [column.columnKey]: Math.min(800, Math.max(80, width)) }
   }
   function resetPresentation() {
     mode.value = 'auto'
     customColumns.value = []
     widths.value = {}
+    rowHeight.value = 88
   }
-  return { mode, widths, visibleColumns, setColumns, saveWidth, resetPresentation }
+  return { mode, widths, rowHeight, visibleColumns, setColumns, saveWidth, resetPresentation }
 }

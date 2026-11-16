@@ -31,8 +31,12 @@ from module_shot_grid.entity.vo.asset_crud_vo import (
     ShotGridAssetItemUpdateModel,
     ShotGridAssetListItemModel,
     ShotGridAssetListQueryModel,
+    ShotGridAssetRelationsModel,
+    ShotGridAssetRelationsUpdateModel,
     ShotGridAssetThumbnailModel,
     ShotGridAssetUpdateModel,
+    ShotGridRelatedAssetItemModel,
+    ShotGridRelatedAssetModel,
     ShotGridTaskSummaryModel,
     ShotGridVersionSummaryModel,
 )
@@ -212,6 +216,8 @@ class ShotGridAssetCrudService:
                     actor_name=actor_name,
                     now=now,
                 )
+            if command.related_asset_ids:
+                await cls._save_relations(db, project_id, asset.asset_id, command.related_asset_ids, actor_name)
             await cls._audit(
                 db,
                 actor_name=actor_name,
@@ -235,6 +241,141 @@ class ShotGridAssetCrudService:
             await db.rollback()
             raise
         return result
+
+    @classmethod
+    async def _save_relations(
+        cls, db: AsyncSession, project_id: int, asset_id: int, ids: list[int], actor: str
+    ) -> None:
+        if asset_id in ids:
+            raise shot_grid_error(422, 'SG_ASSET_RELATION_INVALID', '资产不能关联自身')
+        targets = await ShotGridAssetCrudDao.relation_targets(db, project_id, ids)
+        previous = {row.asset_id for row in await ShotGridAssetCrudDao.related_assets(db, project_id, asset_id)}
+        if len(targets) != len(ids) or any(
+            row.lifecycle_status != 'active' and row.asset_id not in previous for row in targets
+        ):
+            raise shot_grid_error(422, 'SG_ASSET_RELATION_INVALID', '只能选择本项目中有效的活动资产，请刷新后重试')
+        await ShotGridAssetCrudDao.replace_relations(db, project_id, asset_id, ids, actor)
+
+    @classmethod
+    async def get_relations(
+        cls,
+        db: AsyncSession,
+        project_id: int,
+        asset_id: int,
+        current_user: CurrentUserModel,
+        access: ShotGridProjectAccessModel,
+    ) -> ShotGridAssetRelationsModel:
+        actor_id, _, _ = ShotGridProjectService._actor(current_user)
+        if (
+            access.project_id != project_id
+            or access.user_id != actor_id
+            or not cls._has_permission(current_user, 'shotgrid:asset:query')
+        ):
+            raise shot_grid_error(403, 'SG_PROJECT_ACCESS_DENIED', '没有查看当前项目资产关联的权限')
+        source = await ShotGridAssetCrudDao.get_asset(db, project_id, asset_id)
+        if source is None:
+            raise shot_grid_error(404, 'SG_ASSET_NOT_FOUND', '资产不存在或不可见')
+        project_status, storage_status = await cls._get_project_read_context(db, project_id)
+        targets = await ShotGridAssetCrudDao.related_assets(db, project_id, asset_id)
+        items = (
+            await cls._build_item_models(
+                db,
+                project_id,
+                [row.asset_id for row in targets],
+                current_user=current_user,
+                access=access,
+                project_status=project_status,
+                storage_status=storage_status,
+                asset_lifecycle_status='archived',
+            )
+            if targets
+            else []
+        )
+        grouped: dict[int, list[ShotGridRelatedAssetItemModel]] = defaultdict(list)
+        for item in items:
+            if item.lifecycle_status != 'active':
+                continue
+            grouped[item.asset_id].append(
+                ShotGridRelatedAssetItemModel(
+                    assetItemId=item.asset_item_id,
+                    productionItem=item.production_item,
+                    assetStatus=item.asset_status,
+                    task=item.task,
+                    version=item.final_version or item.latest_version,
+                )
+            )
+        can_edit = 'asset.edit' in cls._asset_allowed_actions(
+            current_user,
+            access,
+            project_id=project_id,
+            project_status=project_status,
+            storage_status=storage_status,
+            lifecycle_status=source.lifecycle_status,
+            has_archive_blockers=True,
+            can_assign_items=False,
+            can_start_items=False,
+        )
+        return ShotGridAssetRelationsModel(
+            projectId=project_id,
+            assetId=asset_id,
+            lockVersion=source.lock_version,
+            canEdit=can_edit,
+            relatedAssets=[
+                ShotGridRelatedAssetModel(
+                    assetId=row.asset_id,
+                    projectId=project_id,
+                    assetName=row.asset_name,
+                    assetType=row.asset_type,
+                    lifecycleStatus=row.lifecycle_status,
+                    items=grouped[row.asset_id],
+                )
+                for row in targets
+            ],
+        )
+
+    @classmethod
+    async def update_relations(
+        cls,
+        db: AsyncSession,
+        project_id: int,
+        asset_id: int,
+        command: ShotGridAssetRelationsUpdateModel,
+        current_user: CurrentUserModel,
+        access: ShotGridProjectAccessModel,
+    ) -> ShotGridAssetRelationsModel:
+        actor_id, actor, dept = ShotGridProjectService._actor(current_user)
+        cls._require_write_access(access, project_id, actor_id)
+        if not cls._has_permission(current_user, 'shotgrid:asset:edit') or not cls._has_permission(
+            current_user, 'shotgrid:asset:query'
+        ):
+            raise shot_grid_error(403, 'SG_PROJECT_ACCESS_DENIED', '没有修改资产关联的权限')
+        try:
+            await cls._lock_writable_project(db, project_id, current_user, actor_id)
+            source = await cls._lock_active_asset(db, project_id, asset_id)
+            cls._require_lock_version(source.lock_version, command.lock_version)
+            old = [row.asset_id for row in await ShotGridAssetCrudDao.related_assets(db, project_id, asset_id)]
+            await cls._save_relations(db, project_id, asset_id, command.related_asset_ids, actor)
+            source.lock_version += 1
+            source.update_by = actor
+            source.update_time = datetime.now().replace(microsecond=0)
+            await db.flush()
+            await cls._audit(
+                db,
+                actor_name=actor,
+                dept_name=dept,
+                business_type=BusinessType.UPDATE.value,
+                method='update_relations',
+                request_method='PUT',
+                oper_url=f'/shot-grid/projects/{project_id}/assets/{asset_id}/relations',
+                payload={'oldRelatedAssetIds': old, **command.model_dump(mode='json', by_alias=True)},
+                result={'assetId': asset_id},
+            )
+            result = await cls.get_relations(db, project_id, asset_id, current_user, access)
+            await db.commit()
+            return result
+        except Exception:
+            await db.rollback()
+            raise
 
     @classmethod
     async def update_asset(
@@ -791,6 +932,16 @@ class ShotGridAssetCrudService:
             lifecycleStatus=asset.lifecycle_status,
             assetStatus=cls._aggregate_asset_status(active_statuses),
             itemCount=len(active_statuses),
+            finalizedItemCount=sum(
+                item.lifecycle_status == 'active'
+                and item.asset_status == 'completed'
+                and item.approved_version is not None
+                and item.approved_version.delivery_status == 'published'
+                for item in items
+            ),
+            approvedItemCount=sum(
+                item.approved_version is not None for item in items if item.lifecycle_status == 'active'
+            ),
             itemStatusCounts={status: active_statuses.count(status) for status in ASSET_ITEM_STATUSES},
             itemTimeGroups=cls._item_time_groups(
                 (
@@ -831,7 +982,7 @@ class ShotGridAssetCrudService:
         cls,
         db: AsyncSession,
         project_id: int,
-        asset_id: int,
+        asset_id: int | list[int],
         *,
         current_user: CurrentUserModel,
         access: ShotGridProjectAccessModel,
@@ -887,6 +1038,16 @@ class ShotGridAssetCrudService:
                     assetStatus=item_status,
                     task=task,
                     latestVersion=versions[0] if versions else None,
+                    approvedVersion=next(
+                        (
+                            version
+                            for version in version_rows_by_task.get(int(row['task_id']), [])
+                            if version.get('approved_time') or version['version_status'] == 'final'
+                        ),
+                        None,
+                    )
+                    if row['task_id']
+                    else None,
                     finalVersion=final_version,
                     thumbnail=thumbnail,
                     allowedActions=cls._item_allowed_actions(
@@ -1058,8 +1219,6 @@ class ShotGridAssetCrudService:
             actions.append('assetItem.add')
         if can_assign_items and cls._has_permission(current_user, 'shotgrid:task:assign'):
             actions.append('task.assign')
-        if can_start_items and cls._has_permission(current_user, 'shotgrid:task:start'):
-            actions.append('task.start')
         return actions
 
     @classmethod
@@ -1175,14 +1334,6 @@ class ShotGridAssetCrudService:
             and cls._has_permission(current_user, 'shotgrid:task:assign')
         ):
             actions.append('task.assign')
-        if (
-            task_status == 'not_started'
-            and has_schedule
-            and assignee_valid
-            and is_asset_production_item_ready(production_item)
-            and cls._has_permission(current_user, 'shotgrid:task:start')
-        ):
-            actions.append('task.start')
         return actions
 
     @staticmethod

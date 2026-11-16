@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, reactive, ref } from 'vue'
 import { Plus } from '@element-plus/icons-vue'
 
+import AssetRelationSelect from './AssetRelationSelect.vue'
 import { createAsset, updateAsset } from '@/api/shot-grid/assets'
 import ProjectModal from '@/views/project/components/ProjectModal.vue'
 import { assetErrorState } from '@/views/asset/assetPresentation'
@@ -9,6 +10,9 @@ import { assetErrorState } from '@/views/asset/assetPresentation'
 const props = defineProps({
   projectId: { type: Number, required: true },
   operationGeneration: { type: Number, required: true },
+  canLink: { type: Boolean, default: false },
+  canAssign: { type: Boolean, default: false },
+  initialType: { type: String, default: 'Character' },
   asset: { type: Object, default: null }
 })
 const emit = defineEmits(['close', 'saved', 'refresh'])
@@ -28,19 +32,25 @@ const operationContext = Object.freeze({
 })
 let nextItemKey = 1
 const form = reactive({
-  assetType: props.asset?.assetType || 'Character',
+  assetType: props.asset?.assetType || (['Character', 'Environment', 'Prop'].includes(props.initialType) ? props.initialType : 'Character'),
   assetName: props.asset?.assetName || '',
   description: props.asset?.description || '',
   sortOrder: Number(props.asset?.sortOrder || 0),
   remark: props.asset?.remark || '',
-  items: isEdit.value ? [] : [newItem()]
+  relatedAssetIds: [],
+  items: isEdit.value ? [] : [newItem('基础设定')]
 })
+const moreSettings = ref([])
+const itemPresets = computed(() => ({ Character: ['正面', '侧面', '背面', '表情'], Environment: ['全景', '近景', '细节'], Prop: ['整体', '多视图', '细节'] })[form.assetType] || [])
+const hasItem = name => form.items.some(item => item.productionItem.trim() === name)
 const assetForm = ref(null)
 const saving = ref(false)
+const continueAssign = ref(false)
 const requestError = ref(null)
 let disposed = false
 onBeforeUnmount(() => { disposed = true })
 const assetFormRules = {
+  relatedAssetIds: [{ validator: (_rule, ids, done) => done(Array.isArray(ids) && ids.length <= 50 && ids.every(id => Number.isSafeInteger(id) && id > 0) && new Set(ids).size === ids.length ? undefined : new Error('请选择有效且不重复的关联资产（最多 50 项）')), trigger: 'change' }],
   assetType: [{ required: true, message: '请选择资产类型', trigger: 'change' }],
   assetName: [{
     validator: (_rule, value, callback) => {
@@ -64,10 +74,10 @@ const assetFormRules = {
   }]
 }
 
-function newItem() {
+function newItem(name = '') {
   const item = {
     localKey: nextItemKey++,
-    productionItem: '',
+    productionItem: name,
     description: '',
     sortOrder: 0,
     remark: ''
@@ -76,6 +86,7 @@ function newItem() {
     productionItem: [{
       validator: (_rule, value, callback) => {
         const normalized = String(value || '').trim()
+        if (continueAssign.value && !normalized) { callback(new Error('请填写制作分项名称后再分配')); return }
         if (normalized) {
           const normalizedName = normalized.toLocaleLowerCase()
           const duplicated = form.items.some(candidate => (
@@ -109,8 +120,9 @@ function optionalText(value) {
   return normalized || null
 }
 
-function addItem() {
-  form.items.push(newItem())
+function addItem(name = '') {
+  if (saving.value || form.items.length >= 200 || (name && hasItem(name))) return
+  form.items.push(newItem(name))
   assetForm.value?.clearValidate()
 }
 
@@ -122,6 +134,7 @@ function removeItem(index) {
 
 function buildCreatePayload() {
   return {
+    ...(form.relatedAssetIds.length ? { relatedAssetIds: [...form.relatedAssetIds] } : {}),
     assetType: form.assetType,
     assetName: form.assetName.trim(),
     description: optionalText(form.description),
@@ -136,9 +149,12 @@ function buildCreatePayload() {
   }
 }
 
-async function submit() {
+async function submit(nextAction = '') {
   if (saving.value || disposed) return
+  if (nextAction === 'assign' && (!props.canAssign || isEdit.value)) return
+  if (nextAction === 'assign' && form.items.length > 100) return
   saving.value = true
+  continueAssign.value = nextAction === 'assign'
   requestError.value = null
   try {
     const isValid = await assetForm.value?.validate().catch(() => false)
@@ -152,7 +168,7 @@ async function submit() {
           lockVersion: Number(props.asset.lockVersion)
         })
       : await createAsset(operationContext.projectId, buildCreatePayload())
-    if (!disposed) emit('saved', response.data, operationContext)
+    if (!disposed) emit('saved', response.data, operationContext, nextAction === 'assign' ? 'assign' : '')
   } catch (error) {
     if (disposed) return
     requestError.value = assetErrorState(error, isEdit.value ? '资产修改失败' : '资产创建失败')
@@ -175,41 +191,51 @@ function closeDialog() {
 </script>
 
 <template>
-  <ProjectModal :title="isEdit ? `编辑资产 · ${asset.assetName}` : '新建资产'" :description="isEdit ? '名称可修改，已有 NAS 目录及文件保留原名称；资产类型只读，资产描述仅在全部分项未开工时可改。' : '先创建未分配资产及制作分项；保存后再通过“分配任务”完成委派。'" :busy="saving" wide @close="closeDialog">
-    <el-form ref="assetForm" :model="form" :rules="assetFormRules" class="asset-form" size="large" label-position="top" aria-label="资产信息表单">
+  <ProjectModal :title="isEdit ? `编辑资产 · ${asset.assetName}` : '新建资产'" :description="isEdit ? '' : '先填写资产名称和要制作的内容，创建后可直接分配制作人。'" :busy="saving" wide @close="closeDialog">
+    <el-form ref="assetForm" :model="form" :rules="assetFormRules" class="asset-form" label-position="top" :disabled="saving" aria-label="资产信息表单">
       <el-alert v-if="requestError" :title="requestError.title" type="error" show-icon :closable="false"><span>{{ requestError.message }}</span><el-button v-if="requestError.status === 409" link type="danger" @click="emit('refresh')">刷新后重试</el-button></el-alert>
-
       <section class="asset-form__grid">
-        <el-form-item label="资产类型" prop="assetType"><el-select v-model="form.assetType" class="sg-select" :disabled="isEdit || saving"><el-option label="角色" value="Character" /><el-option label="场景" value="Environment" /><el-option label="道具" value="Prop" /></el-select></el-form-item>
-        <el-form-item label="资产名称" prop="assetName"><el-input v-model="form.assetName" maxlength="200" show-word-limit :disabled="saving" placeholder="例如：动力舱室内" /></el-form-item>
-        <el-form-item label="项目内排序" prop="sortOrder"><el-input-number v-model="form.sortOrder" :min="0" :step="1" step-strictly controls-position="right" :disabled="saving" /></el-form-item>
-        <el-form-item class="asset-form__wide" label="资产描述" prop="description">
-          <el-input v-model="form.description" type="textarea" :rows="3" :readonly="descriptionLocked" :disabled="saving" placeholder="填写所有制作分项共用的资产描述" />
+        <el-form-item label="资产名称" prop="assetName"><el-input v-model="form.assetName" maxlength="200" show-word-limit :disabled="saving" placeholder="例如：女主角、街道、飞船" /></el-form-item>
+        <el-form-item label="资产分类" prop="assetType"><el-select v-model="form.assetType" :disabled="isEdit || saving"><el-option label="角色" value="Character" /><el-option label="场景" value="Environment" /><el-option label="道具" value="Prop" /></el-select></el-form-item>
+        <el-form-item class="asset-form__wide" label="制作要求（选填）" prop="description">
+          <el-input v-model="form.description" type="textarea" :rows="2" :readonly="descriptionLocked" :disabled="saving" placeholder="描述这份资产的整体效果或共用要求" />
           <p v-if="descriptionLocked" class="asset-form__lock-hint">{{ descriptionLockHint }}</p>
         </el-form-item>
-        <el-form-item class="asset-form__wide" label="备注" prop="remark"><el-input v-model="form.remark" type="textarea" :rows="2" maxlength="500" show-word-limit :disabled="saving" placeholder="内部备注，可留空" /></el-form-item>
       </section>
-
-      <el-card v-if="!isEdit" class="asset-items-editor" shadow="never">
-        <template #header><header><div><strong>首批制作分项</strong><p>新建分项统一保持未分配；分项名称可稍后补齐，但委派任务前必须填写完整。</p></div><el-button :icon="Plus" :disabled="saving || form.items.length >= 200" @click="addItem">添加分项</el-button></header></template>
-        <el-card v-for="(item,index) in form.items" :key="item.localKey" class="asset-item-editor" shadow="never">
-          <template #header><div class="asset-items-editor__heading"><strong>分项 {{ index + 1 }}</strong><el-button link type="danger" :disabled="saving || form.items.length <= 1" @click="removeItem(index)">移除</el-button></div></template>
-          <div class="asset-items-editor__grid">
-            <el-form-item label="制作分项" :prop="`items.${index}.productionItem`" :rules="item.formRules.productionItem"><el-input v-model="item.productionItem" maxlength="240" :disabled="saving" placeholder="允许稍后补齐" /></el-form-item>
-            <el-form-item label="排序" :prop="`items.${index}.sortOrder`" :rules="item.formRules.sortOrder"><el-input-number v-model="item.sortOrder" :min="0" :step="1" step-strictly controls-position="right" :disabled="saving" /></el-form-item>
-            <el-form-item class="asset-items-editor__wide" label="分项补充要求" :prop="`items.${index}.description`"><el-input v-model="item.description" type="textarea" :rows="2" :disabled="saving" /></el-form-item>
-            <el-form-item class="asset-items-editor__wide" label="备注" :prop="`items.${index}.remark`"><el-input v-model="item.remark" maxlength="500" :disabled="saving" /></el-form-item>
+      <section v-if="!isEdit" class="asset-items-editor">
+        <header><div><strong>需要制作什么</strong><p>每项可以分别分配制作人、提交成果和记录反馈。</p></div><el-button :icon="Plus" :disabled="saving || form.items.length >= 200" @click="addItem()">添加分项</el-button></header>
+        <div class="asset-item-presets" aria-label="常用制作分项"><span>快速添加</span><el-button v-for="name in itemPresets" :key="name" size="small" :disabled="saving || hasItem(name) || form.items.length >= 200" @click="addItem(name)">{{ name }}</el-button></div>
+        <section v-for="(item,index) in form.items" :key="item.localKey" class="asset-item-editor">
+          <div class="asset-item-main">
+            <el-form-item label="制作分项" :prop="`items.${index}.productionItem`" :rules="item.formRules.productionItem"><el-input v-model="item.productionItem" maxlength="240" placeholder="例如：基础设定、正面、不同服装" /></el-form-item>
+            <el-form-item label="补充要求（选填）" :prop="`items.${index}.description`"><el-input v-model="item.description" type="textarea" :autosize="{ minRows: 1, maxRows: 3 }" placeholder="只对这一项的要求" /></el-form-item>
+            <el-button link type="danger" :disabled="saving || form.items.length <= 1" :aria-label="`移除分项 ${index + 1}`" @click="removeItem(index)">移除</el-button>
           </div>
-        </el-card>
-      </el-card>
-      <el-alert v-if="!isEdit" title="创建后状态：未分配" description="创建资产和制作分项不会同时创建任务；请在资产列表批量分配，或进入资产详情逐项分配。" type="info" show-icon :closable="false" />
-
-      <footer><el-button :disabled="saving" @click="closeDialog">取消</el-button><el-button type="primary" :loading="saving" @click="submit">{{ isEdit ? '保存资产' : '创建资产' }}</el-button></footer>
+          <el-collapse class="asset-item-more"><el-collapse-item title="排序与备注" :name="item.localKey"><div class="asset-items-editor__grid">
+            <el-form-item label="排序" :prop="`items.${index}.sortOrder`" :rules="item.formRules.sortOrder"><el-input-number v-model="item.sortOrder" :min="0" :step="1" step-strictly controls-position="right" /></el-form-item>
+            <el-form-item label="备注" :prop="`items.${index}.remark`"><el-input v-model="item.remark" maxlength="500" /></el-form-item>
+          </div></el-collapse-item></el-collapse>
+        </section>
+      </section>
+      <el-form-item v-if="!isEdit && canLink" label="关联资产（选填）" prop="relatedAssetIds"><AssetRelationSelect v-model="form.relatedAssetIds" :project-id="projectId" :disabled="saving" /></el-form-item>
+      <el-collapse v-model="moreSettings"><el-collapse-item title="更多信息" name="more"><div class="asset-form__grid">
+        <el-form-item label="项目内排序" prop="sortOrder"><el-input-number v-model="form.sortOrder" :min="0" :step="1" step-strictly controls-position="right" :disabled="saving" /></el-form-item>
+        <el-form-item label="备注" prop="remark"><el-input v-model="form.remark" type="textarea" :rows="2" maxlength="500" :disabled="saving" placeholder="内部备注，可留空" /></el-form-item>
+      </div></el-collapse-item></el-collapse>
+      <footer><el-button :disabled="saving" @click="closeDialog">取消</el-button><el-button :type="!isEdit && canAssign ? 'default' : 'primary'" :loading="saving" @click="submit()">{{ isEdit ? '保存资产' : '创建资产' }}</el-button><el-tooltip v-if="!isEdit && canAssign" content="单次分配最多 100 个分项，更多分项请先创建后分批分配" :disabled="form.items.length <= 100"><span><el-button type="primary" :disabled="saving || form.items.length > 100" :loading="saving" @click="submit('assign')">创建并分配制作人</el-button></span></el-tooltip></footer>
     </el-form>
   </ProjectModal>
 </template>
 
 <style scoped>
-.asset-form__lock-hint{margin:6px 0 0;color:var(--sg-text-muted);font-size:12px;line-height:1.5}
-.asset-form{display:grid;gap:18px}.asset-form :deep(.el-alert__description){display:grid;gap:4px}.asset-form :deep(.el-alert code){font-size:10px}.asset-form__grid,.asset-items-editor__grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}.asset-form:deep(.el-form-item){min-width:0;margin-bottom:0}.asset-form:deep(.el-form-item__label){color:var(--sg-text-muted);font-size:11px}.asset-form:deep(.el-select),.asset-form:deep(.el-input-number){width:100%}.asset-form:deep(.el-textarea__inner){resize:vertical}.asset-form__wide,.asset-items-editor__wide{grid-column:1/-1}.asset-items-editor{background:rgba(255,255,255,.015);border-color:var(--sg-border)}.asset-items-editor:deep(>.el-card__header){padding:14px 16px;border-bottom-color:var(--sg-border)}.asset-items-editor:deep(>.el-card__body){display:grid;gap:12px;padding:14px}.asset-items-editor header,.asset-items-editor__heading,footer{display:flex;gap:12px;align-items:center;justify-content:space-between}.asset-items-editor header p{margin:4px 0 0;color:var(--sg-text-muted);font-size:11px}.asset-item-editor{background:rgba(255,255,255,.025);border-color:var(--sg-border);border-radius:11px}.asset-item-editor:deep(.el-card__header){padding:10px 14px;border-bottom-color:var(--sg-border)}.asset-item-editor:deep(.el-card__body){padding:14px}.asset-items-editor__heading{width:100%}footer{justify-content:flex-end}@media(max-width:760px){.asset-form__grid,.asset-items-editor__grid{grid-template-columns:1fr}.asset-form__wide,.asset-items-editor__wide{grid-column:auto}}
+.asset-form{display:grid;gap:16px}.asset-form__grid,.asset-items-editor__grid{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1fr);gap:14px}.asset-form__wide{grid-column:1/-1}
+.asset-form :deep(.el-form-item){min-width:0;margin-bottom:0}.asset-form :deep(.el-select),.asset-form :deep(.el-input-number){width:100%}
+.asset-form__lock-hint{margin:6px 0 0;color:var(--sg-text-muted);font-size:12px}
+.asset-items-editor{display:grid;gap:10px}.asset-items-editor header,footer{display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap}
+.asset-items-editor header p{margin:4px 0 0;color:var(--sg-text-muted);font-size:12px}
+.asset-item-presets{display:flex;gap:6px;align-items:center;flex-wrap:wrap}.asset-item-presets>span{font-size:12px;color:var(--sg-text-muted)}.asset-item-presets .el-button{margin:0}
+.asset-item-editor{padding:12px;border:1px solid var(--sg-border);border-radius:8px}.asset-item-main{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.6fr) auto;align-items:end;gap:12px}
+.asset-item-more{margin-top:6px}.asset-item-more :deep(.el-collapse-item__header){height:32px;font-size:12px;color:var(--sg-text-muted)}
+.asset-form :deep(.el-collapse-item__content){padding:8px 0}.asset-form :deep(.el-form-item__error){position:static;line-height:1.5}
+footer{justify-content:flex-end}@media(max-width:640px){.asset-form__grid,.asset-items-editor__grid,.asset-item-main{grid-template-columns:minmax(0,1fr)}.asset-item-main>.el-button{justify-self:end}}
 </style>

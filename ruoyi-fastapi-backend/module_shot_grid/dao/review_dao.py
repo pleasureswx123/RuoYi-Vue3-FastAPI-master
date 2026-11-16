@@ -7,6 +7,7 @@ from sqlalchemy.orm import aliased
 
 from module_admin.entity.do.file_do import SysFileInfo, SysFileReference
 from module_admin.entity.do.user_do import SysUser
+from module_shot_grid.dao.schedule_phase import production_period_conditions
 from module_shot_grid.entity.do.asset_do import ShotGridAsset, ShotGridAssetItem
 from module_shot_grid.entity.do.project_do import (
     ShotGridEpisode,
@@ -16,6 +17,7 @@ from module_shot_grid.entity.do.project_do import (
     ShotGridShot,
 )
 from module_shot_grid.entity.do.review_do import (
+    ShotGridIssueComment,
     ShotGridIssueVerification,
     ShotGridNote,
     ShotGridReviewAction,
@@ -197,6 +199,9 @@ class ShotGridReviewDao:
             )
         if query.task_kind:
             content = content.where(task.task_kind == query.task_kind)
+        content = content.where(*production_period_conditions(task, query))
+        if query.assignee_user_id is not None:
+            content = content.where(task.assignee_user_id == query.assignee_user_id)
         if query.submitted_by is not None:
             content = content.where(version.submitted_by == query.submitted_by)
         if query.submitter_keyword and query.submitter_keyword.strip():
@@ -212,6 +217,9 @@ class ShotGridReviewDao:
                 query.task_kind,
                 query.submitted_by,
                 query.submitter_keyword,
+                query.production_from,
+                query.production_to,
+                query.assignee_user_id,
                 query.submitted_from,
                 query.submitted_to,
             )
@@ -381,6 +389,9 @@ class ShotGridReviewDao:
                 ShotGridTask.del_flag == '0',
             )
         )
+        statement = statement.where(*production_period_conditions(ShotGridTask, query))
+        if query.assignee_user_id is not None:
+            statement = statement.where(ShotGridTask.assignee_user_id == query.assignee_user_id)
         if query.project_id is not None:
             statement = statement.where(ShotGridVersion.project_id == query.project_id)
         if query.project_keyword and query.project_keyword.strip():
@@ -490,6 +501,35 @@ class ShotGridReviewDao:
             .one_or_none()
         )
         return dict(row) if row is not None else None
+
+    @classmethod
+    async def get_issue_comments(
+        cls, db: AsyncSession, project_id: int, note_id: int, before_id: int | None, limit: int
+    ) -> list[ShotGridIssueComment]:
+        statement = select(ShotGridIssueComment).where(
+            ShotGridIssueComment.project_id == project_id, ShotGridIssueComment.note_id == note_id
+        )
+        if before_id is not None:
+            statement = statement.where(ShotGridIssueComment.comment_id < before_id)
+        return list((await db.scalars(statement.order_by(ShotGridIssueComment.comment_id.desc()).limit(limit))).all())
+
+    @classmethod
+    async def get_issue_comment_request(
+        cls, db: AsyncSession, note_id: int, author_id: int, request_id: str
+    ) -> ShotGridIssueComment | None:
+        return await db.scalar(
+            select(ShotGridIssueComment).where(
+                ShotGridIssueComment.note_id == note_id,
+                ShotGridIssueComment.author_id == author_id,
+                ShotGridIssueComment.request_id == request_id,
+            )
+        )
+
+    @classmethod
+    async def add_issue_comment(cls, db: AsyncSession, comment: ShotGridIssueComment) -> ShotGridIssueComment:
+        db.add(comment)
+        await db.flush()
+        return comment
 
     @classmethod
     async def get_note_context(cls, db: AsyncSession, note_id: int) -> dict[str, Any] | None:

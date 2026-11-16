@@ -51,14 +51,14 @@ def test_item_time_groups_compress_equal_task_inputs_without_changing_time_or_st
 @pytest.mark.parametrize(
     ('role', 'permitted', 'valid_assignee', 'can_start'),
     [
-        ('director', True, True, True),
+        ('director', True, True, False),
         ('creator', True, True, False),
         ('director', False, True, False),
         ('director', True, False, False),
     ],
 )
 @pytest.mark.parametrize('has_schedule', [False, True])
-def test_asset_item_start_action_requires_manager_permission_and_valid_assignee(
+def test_asset_item_does_not_offer_manual_start(
     role: str, *, permitted: bool, valid_assignee: bool, can_start: bool, has_schedule: bool
 ) -> None:
     user = _current_user()
@@ -85,7 +85,7 @@ def test_asset_item_start_action_requires_manager_permission_and_valid_assignee(
     assert ('task.start' in actions) is (can_start and has_schedule)
 
 
-def test_asset_parent_start_action_only_opens_selection_when_a_startable_item_exists() -> None:
+def test_asset_parent_does_not_offer_manual_start() -> None:
     user = _current_user()
     for has_startable_item in [True, False]:
         actions = ShotGridAssetCrudService._asset_allowed_actions(
@@ -99,7 +99,7 @@ def test_asset_parent_start_action_only_opens_selection_when_a_startable_item_ex
             can_assign_items=False,
             can_start_items=has_startable_item,
         )
-        assert ('task.start' in actions) is has_startable_item
+        assert 'task.start' not in actions
 
 
 def _current_user() -> CurrentUserModel:
@@ -1120,3 +1120,43 @@ def test_asset_review_entry_matches_shot_review_permissions(missing: str | None,
         has_uncommitted_submission=False,
     )
     assert ('task.review' in actions) is (role == 'director' and missing is None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('has_final', [True, False])
+async def test_asset_relations_prefer_approved_result_and_skip_archived_items(
+    monkeypatch: pytest.MonkeyPatch, *, has_final: bool
+) -> None:
+    user = _current_user()
+    user.permissions.append('shotgrid:asset:query')
+    source = SimpleNamespace(lock_version=4, lifecycle_status='active')
+    target = SimpleNamespace(asset_id=31, asset_name='关联角色', asset_type='Character', lifecycle_status='active')
+    latest = {
+        'versionId': 102,
+        'versionNo': 2,
+        'versionStatus': 'pending_review',
+        'submittedTime': datetime(2026, 11, 2),
+    }
+    final = {'versionId': 101, 'versionNo': 1, 'versionStatus': 'final', 'submittedTime': datetime(2026, 11, 1)}
+    items = [
+        SimpleNamespace(
+            asset_id=31,
+            asset_item_id=32,
+            lifecycle_status='active',
+            production_item='人物设定',
+            asset_status='reviewing',
+            task=None,
+            final_version=final if has_final else None,
+            latest_version=latest,
+        ),
+        SimpleNamespace(lifecycle_status='archived'),
+    ]
+    monkeypatch.setattr(ShotGridAssetCrudDao, 'get_asset', AsyncMock(return_value=source))
+    monkeypatch.setattr(ShotGridAssetCrudDao, 'related_assets', AsyncMock(return_value=[target]))
+    monkeypatch.setattr(
+        ShotGridAssetCrudService, '_get_project_read_context', AsyncMock(return_value=('active', 'ready'))
+    )
+    monkeypatch.setattr(ShotGridAssetCrudService, '_build_item_models', AsyncMock(return_value=items))
+    result = await ShotGridAssetCrudService.get_relations(AsyncMock(), PROJECT_ID, ASSET_ID, user, _access())
+    assert len(result.related_assets[0].items) == 1
+    assert result.related_assets[0].items[0].version.version_id == (101 if has_final else 102)

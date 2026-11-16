@@ -55,6 +55,18 @@ class ShotGridVersionSubmissionDao:
         return (await db.execute(statement)).scalars().first()
 
     @staticmethod
+    async def get_version_source_path(db: AsyncSession, version_id: int) -> str | None:
+        return await db.scalar(
+            select(ShotGridVersionFile.nas_relative_path)
+            .where(
+                ShotGridVersionFile.version_id == version_id,
+                ShotGridVersionFile.file_role == 'review_media',
+            )
+            .order_by(ShotGridVersionFile.file_id)
+            .limit(1)
+        )
+
+    @staticmethod
     async def get_last_candidate_no(db: AsyncSession, version_id: int) -> int:
         return int(
             (

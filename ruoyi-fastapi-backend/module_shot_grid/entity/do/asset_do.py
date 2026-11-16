@@ -87,6 +87,31 @@ class ShotGridAsset(ShotGridMutableAuditMixin, Base):
     )
 
 
+class ShotGridAssetRelation(ShotGridCreateAuditMixin, Base):
+    """同项目资产间资料关联；不构成制作开工依赖。"""
+
+    __tablename__ = 'sg_asset_relation'
+    project_id = Column(BigInteger, nullable=False)
+    asset_id = Column(BigInteger, primary_key=True, nullable=False)
+    related_asset_id = Column(BigInteger, primary_key=True, nullable=False)
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ['asset_id', 'project_id'],
+            ['sg_asset.asset_id', 'sg_asset.project_id'],
+            name='fk_sg_asset_relation_source',
+            ondelete='CASCADE',
+        ),
+        ForeignKeyConstraint(
+            ['related_asset_id', 'project_id'],
+            ['sg_asset.asset_id', 'sg_asset.project_id'],
+            name='fk_sg_asset_relation_target',
+            ondelete='CASCADE',
+        ),
+        CheckConstraint('asset_id <> related_asset_id', name='ck_sg_asset_relation_not_self'),
+        Index('idx_sg_asset_relation_target', 'project_id', 'related_asset_id'),
+    )
+
+
 class ShotGridAssetItem(ShotGridMutableAuditMixin, Base):
     """
     Shot Grid 资产制作分项表。

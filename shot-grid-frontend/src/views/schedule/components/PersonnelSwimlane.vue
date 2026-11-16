@@ -178,6 +178,11 @@ function openTask(task) {
   emit('task-click', { taskId: task.taskId })
 }
 
+function laneSummary(lane) {
+  return [['in_progress', '制作中'], ['pending_review', '待审核'], ['revision', '反馈'], ['completed', '通过']]
+    .map(([status, label]) => ({ label, count: lane.tasks.filter(task => task.taskStatus === status).length }))
+    .filter(item => item.count).map(item => `${item.label} ${item.count}`).join(' · ')
+}
 function taskTooltipContent(task) {
   return `${task.text} · ${taskStatusMeta(task).label} · 负责人：${task.assigneeName} · 排期：${formatTaskDateTime(task.start)} 至 ${formatTaskDateTime(task.end)}`
 }
@@ -214,7 +219,7 @@ onBeforeUnmount(() => dragCleanup?.())
       :data-track-count="lane.trackCount"
       :style="{ minHeight: `${laneHeight(lane)}px` }"
     >
-      <header><strong>{{ groupBy === 'task_kind' ? lane.assigneeName : lane.groupName }}</strong><small>{{ lane.tasks.length }} 项任务</small></header>
+      <header><strong>{{ groupBy === 'task_kind' ? lane.assigneeName : lane.groupName }}</strong><small>{{ lane.tasks.length }} 项任务</small><small class="personnel-lane__summary">{{ laneSummary(lane) }}</small></header>
       <div class="personnel-lane__timeline">
         <span v-for="tick in ticks" :key="tick.key" class="personnel-lane__gridline" :style="{ left: tick.left }" aria-hidden="true" />
         <template v-for="task in lane.tasks" :key="task.id">

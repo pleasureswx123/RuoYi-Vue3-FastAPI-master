@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Warning } from '@element-plus/icons-vue'
 
+import { useSessionStore } from '@/store/modules/session'
 import { useScheduleStore } from '@/store/modules/schedule'
 import { matchesScheduleDeadline, scheduleErrorState, scheduleStatusOptions, scheduleStatusStyle } from '@/views/schedule/schedulePresentation'
 import { useScheduleCatalog } from '@/views/schedule/useScheduleCatalog'
@@ -14,6 +15,7 @@ import TaskGantt from '@/views/schedule/components/TaskGantt.vue'
 import ScheduleTaskDrawer from '@/views/schedule/components/ScheduleTaskDrawer.vue'
 import UnscheduledTaskDrawer from '@/views/schedule/components/UnscheduledTaskDrawer.vue'
 import ScheduleEditDialog from '@/views/schedule/components/ScheduleEditDialog.vue'
+import ScheduleBatchDialog from '@/views/schedule/components/ScheduleBatchDialog.vue'
 
 const props = defineProps({
   projectId: { type: [Number, String], required: true },
@@ -24,21 +26,30 @@ const props = defineProps({
   initialWindowStart: { type: String, default: '' },
   initialWindowEnd: { type: String, default: '' },
   initialFilters: { type: Object, default: () => ({}) },
+  assigneeOptions: { type: Array, default: () => [] },
   editableAllowed: Boolean,
+  browseState: { type: Object, default: null },
+  taskOpener: { type: Function, default: null },
   actionLoader: { type: Function, default: null },
   actionFactory: { type: Function, default: null }
 })
 
 defineExpose({ refresh })
 
-const emit = defineEmits(['query-change'])
+const emit = defineEmits(['query-change', 'remember'])
 const store = useScheduleStore()
+const sessionStore = useSessionStore()
+const unscheduledPanel = ref(null)
+const unscheduledRows = ref([])
+const batchContext = ref(null)
+const standaloneTask = ref(null)
 const mutation = useScheduleMutation(store, { onSaved: revealSavedTask, onRefresh: refresh })
 const detailVisible = ref(false)
-const unscheduledVisible = ref(false)
 const accessNotice = ref('')
 const showBaseline = ref(false)
 const draftResetToken = ref(0)
+const modeGroups = ref({})
+let openingTask = 0
 const isPanning = ref(false)
 let stopPan = null
 
@@ -95,7 +106,12 @@ function scrollCanvasHorizontally(event) {
 
 watch(() => [store.mode, store.loading, props.projectId], () => stopPan?.())
 onBeforeUnmount(() => stopPan?.())
-const defaultWindow = scheduleWindowForScale(props.initialScale)
+const remembered = props.browseState?.projectId === Number(props.projectId)
+  && props.browseState?.targetKind === props.targetKind
+  && props.browseState?.userId === sessionStore.user?.userId
+  && props.browseState?.permissions === sessionStore.permissions.join('|')
+  && props.browseState?.filterKey === JSON.stringify(props.initialFilters) ? props.browseState : null
+const defaultWindow = remembered || scheduleWindowForScale(props.initialScale)
 const windowStart = ref(props.initialWindowStart || defaultWindow.windowStart)
 const windowEnd = ref(props.initialWindowEnd || defaultWindow.windowEnd)
 const viewportRef = ref(null)
@@ -106,15 +122,38 @@ const visibleTasks = computed(() => store.tasks.filter(task =>
   && new Date(task.currentEnd) > new Date(windowStart.value)
   && matchesScheduleDeadline(task, deadlineFilter.value, store.serverTime || new Date())
 ))
+const batchTasks = computed(() => [...new Map([...visibleTasks.value, ...unscheduledRows.value]
+  .filter(task => Number(task.projectId) === Number(props.projectId))
+  .map(task => [task.taskId, task])).values()])
+const batchEnabled = computed(() => props.editableAllowed && !store.loading && !batchContext.value && !mutation.visible.value
+  && batchTasks.value.some(task => task.taskStatus !== 'completed' && task.allowedActions?.includes('schedule')))
+function batchScopeKey() {
+  return JSON.stringify([props.projectId, props.targetKind, effectiveQuery.value, deadlineFilter.value, sessionStore.user?.userId, sessionStore.permissions])
+}
+function openBatchSchedule() {
+  if (!batchEnabled.value) return
+  const scope = batchScopeKey()
+  batchContext.value = {
+    projectId: Number(props.projectId), tasks: JSON.parse(JSON.stringify(batchTasks.value)),
+    validateContext: () => props.editableAllowed && batchScopeKey() === scope
+  }
+}
+async function closeBatchSchedule(result) {
+  batchContext.value = null
+  if (result?.attempted) await refresh()
+}
 const selectedIndex = computed(() => visibleTasks.value.findIndex(task => task.taskId === store.selectedTaskId))
 const statusCounts = computed(() => catalog.rows.value.reduce((counts, task) => {
   counts[task.taskStatus] = (counts[task.taskStatus] || 0) + 1
   return counts
 }, {}))
-const selectedTask = computed(() => store.tasks.find(task => task.taskId === store.selectedTaskId) || null)
+const selectedTask = computed(() => store.tasks.find(task => task.taskId === store.selectedTaskId) || (standaloneTask.value?.taskId === store.selectedTaskId ? standaloneTask.value : null))
 const errorState = computed(() => store.error ? scheduleErrorState(store.error) : null)
 const filterOptions = computed(() => {
   const assignees = new Map()
+  for (const member of props.assigneeOptions) {
+    if (member.userId) assignees.set(Number(member.userId), member.nickName || member.userName || `制作人 ${member.userId}`)
+  }
   const episodes = new Map()
   const scenes = new Map()
   const assetTypes = new Set()
@@ -155,8 +194,12 @@ function publishQuery() {
 }
 
 function setMode(mode) {
+  if (mode === store.mode) return
+  modeGroups.value[store.mode] = store.groupBy
   store.setMode(mode)
+  store.setGrouping(modeGroups.value[mode] || (mode === 'gantt' && props.targetKind === 'shot' ? 'scene' : props.initialGroupBy))
   publishQuery()
+  load()
 }
 
 function setScale(scale) {
@@ -209,6 +252,8 @@ function filterByLegend(status) {
 function applyInitialFilters(value) {
   const source = value && typeof value === 'object' ? value : {}
   store.setFilters({
+    productionFrom: source.productionFrom || undefined,
+    productionTo: source.productionTo || undefined,
     assigneeUserIds: Array.isArray(source.assigneeUserIds) ? source.assigneeUserIds : [],
     taskKinds: Array.isArray(source.taskKinds) ? source.taskKinds : [],
     taskStatuses: Array.isArray(source.taskStatuses) ? source.taskStatuses : [],
@@ -235,9 +280,23 @@ function toggleEdit(enabled) {
   if (!enabled) mutation.close()
 }
 
-function openTask({ taskId }) {
-  store.selectedTaskId = taskId
+async function openTask(payload) {
+  const opening = ++openingTask
+  const task = store.tasks.find(row => row.taskId === payload.taskId) || payload
+  if (Number(task.projectId) !== Number(props.projectId)) return
+  if (props.taskOpener) {
+    try {
+      const opened = await props.taskOpener(task)
+      if (opened !== false && opening === openingTask && Number(task.projectId) === Number(props.projectId)) store.selectedTaskId = task.taskId
+    } catch { if (opening === openingTask) ElMessage.error('任务打开失败，请刷新后重试') }
+    return
+  }
+  store.selectedTaskId = task.taskId
+  standaloneTask.value = task
   detailVisible.value = true
+}
+function showUnscheduled() {
+  unscheduledPanel.value?.$el?.scrollIntoView?.({ behavior: 'smooth', block: 'nearest' })
 }
 
 function requestRangeChange(payload) {
@@ -255,7 +314,7 @@ function openEdit(task) {
     return
   }
   accessNotice.value = ''
-  if (mutation.open(task, { operationSource: 'dialog' })) unscheduledVisible.value = false
+  mutation.open(task, { operationSource: 'dialog' })
 }
 
 async function revealSavedTask(saved) {
@@ -300,6 +359,7 @@ function handleRejected(payload) {
 }
 
 async function refresh() {
+  unscheduledPanel.value?.refresh?.()
   const viewport = viewportRef.value
   const positions = [viewport, viewport?.querySelector('.wx-gantt'), viewport?.querySelector('.wx-chart')]
     .filter(Boolean).map(element => ({ element, top: element.scrollTop, left: element.scrollLeft }))
@@ -316,23 +376,37 @@ function navigateTask(direction) {
   if (task) store.selectedTaskId = task.taskId
 }
 
-onMounted(() => {
+onMounted(async () => {
   store.setProject(props.projectId)
   store.setMode(props.initialMode)
-  store.setScale(props.initialScale)
-  store.setGrouping(props.initialGroupBy)
+  store.setScale(remembered?.scale || props.initialScale)
+  store.setGrouping(remembered?.groupBy || (props.initialMode === 'gantt' && props.targetKind === 'shot' ? 'scene' : props.initialGroupBy))
   store.setTargetKind(props.targetKind)
+  applyInitialFilters(remembered?.filters || props.initialFilters)
+  showBaseline.value = Boolean(remembered?.showBaseline)
+  deadlineFilter.value = remembered?.deadlineFilter || ''
+  await load()
+  await nextTick()
+  if (remembered?.position && Number(store.projectId) === Number(props.projectId)) {
+    const viewport = viewportRef.value
+    if (viewport) { viewport.scrollTop = remembered.position.top; viewport.scrollLeft = remembered.position.left }
+    const chart = viewport?.querySelector('.wx-chart')
+    if (chart) { chart.scrollLeft = remembered.position.chartLeft || 0; chart.scrollTop = remembered.position.chartTop || 0 }
+  }
+})
+
+watch(() => props.projectId, projectId => {
+  openingTask++
+  modeGroups.value = {}
+  standaloneTask.value = null
+  detailVisible.value = false
+  store.setProject(projectId)
   applyInitialFilters(props.initialFilters)
   load()
 })
 
-watch(() => props.projectId, projectId => {
-  store.setProject(projectId)
-  load()
-})
-
 watch(() => props.initialMode, mode => {
-  store.setMode(mode)
+  setMode(mode)
 })
 
 watch(() => props.initialScale, scale => {
@@ -373,6 +447,15 @@ watch(() => props.editableAllowed, allowed => {
 })
 
 onBeforeUnmount(() => {
+  openingTask++
+  const viewport = viewportRef.value
+  const chart = viewport?.querySelector('.wx-chart')
+  emit('remember', { projectId: Number(props.projectId), targetKind: props.targetKind,
+    userId: sessionStore.user?.userId, permissions: sessionStore.permissions.join('|'),
+    filterKey: JSON.stringify(props.initialFilters), filters: JSON.parse(JSON.stringify(store.filters)),
+    scale: store.scale, groupBy: store.groupBy, windowStart: windowStart.value, windowEnd: windowEnd.value,
+    showBaseline: showBaseline.value, deadlineFilter: deadlineFilter.value,
+    position: { top: viewport?.scrollTop || 0, left: viewport?.scrollLeft || 0, chartLeft: chart?.scrollLeft || 0, chartTop: chart?.scrollTop || 0 } })
   mutation.dispose()
   store.dispose()
 })
@@ -381,6 +464,9 @@ onBeforeUnmount(() => {
 <template>
   <section class="schedule-board" data-testid="schedule-board">
     <ScheduleToolbar
+      :target-kind="targetKind"
+      :embedded="Boolean(taskOpener)"
+      :current-user-id="Number(sessionStore.user?.userId) || null"
       :mode="store.mode"
       :scale="store.scale"
       :group-by="store.groupBy"
@@ -390,6 +476,7 @@ onBeforeUnmount(() => {
       :loading="store.loading"
       :edit-mode="store.editMode"
       :editable-allowed="editableAllowed"
+      :batch-enabled="batchEnabled"
       :unscheduled-count="store.unscheduledCount"
       :filter-options="filterOptions"
       :show-baseline="showBaseline"
@@ -402,7 +489,8 @@ onBeforeUnmount(() => {
       @baseline-change="value => { showBaseline = value }"
       @refresh="refresh"
       @edit-toggle="toggleEdit"
-      @open-unscheduled="unscheduledVisible = true"
+      @open-unscheduled="showUnscheduled"
+      @open-batch="openBatchSchedule"
     >
       <template #deadline-filter>
       <el-radio-group v-model="deadlineFilter" size="small" aria-label="当前窗口到期筛选">
@@ -428,7 +516,7 @@ onBeforeUnmount(() => {
     <div class="schedule-board__caption">
       <div v-if="!accessNotice" class="schedule-board__mode-hint">
         <el-icon><Warning /></el-icon>
-        <span>{{ store.editMode ? '拖动编辑已开启；拖动只生成草稿，确认原因后才会保存。' : '拖动编辑未开启；当前排期为实色条，开启对比后细线表示最初排期，允许同一制作人安排重叠任务。' }}</span>
+        <span>{{ store.editMode ? '拖动后确认保存。' : '点击任务查看成果；同一人的时间重叠仅作提醒。' }}</span>
         <span>拖动空白处或 Shift＋滚轮可左右移动。</span>
       </div>
       <div class="schedule-board__legend" aria-label="任务状态颜色图例" title="数量为当前项目时间窗口内的状态总数，不随其他筛选变化">
@@ -447,6 +535,8 @@ onBeforeUnmount(() => {
         ><span class="schedule-board__swatch" aria-hidden="true" />{{ status.label }} {{ catalog.loading.value || catalog.error.value ? '—' : statusCounts[status.value] || 0 }}</el-button>
       </div>
     </div>
+    <UnscheduledTaskDrawer ref="unscheduledPanel" inline :visible="true" :project-id="projectId" :query="effectiveQuery" :editable-allowed="editableAllowed" @rows-change="unscheduledRows = $event" @open-task="openTask" @edit-task="openEdit" />
+
     <el-alert
       v-if="errorState"
       type="error"
@@ -459,7 +549,7 @@ onBeforeUnmount(() => {
     </el-alert>
     <el-skeleton v-else-if="store.loading && !store.tasks.length" class="schedule-board__skeleton" animated :rows="10" />
     <el-empty v-else-if="!visibleTasks.length" :image-size="72" description="当前时间窗口没有符合筛选条件的排期任务">
-      <p>可调整日期、筛选条件，或打开未排期任务池安排时间。</p>
+      <p>可调整日期或筛选；没有计划时间的任务显示在上方，不影响制作提交。</p>
     </el-empty>
     <div
       v-else
@@ -511,12 +601,7 @@ onBeforeUnmount(() => {
       :can-edit="Boolean(selectedTask?.allowedActions?.includes('schedule') && editableAllowed)"
       @edit="openEdit"
     />
-    <UnscheduledTaskDrawer
-      v-model:visible="unscheduledVisible"
-      :project-id="projectId"
-      :query="effectiveQuery"
-      @edit-task="openEdit"
-    />
+    <ScheduleBatchDialog v-if="batchContext" :context="batchContext" @close="closeBatchSchedule" />
     <ScheduleEditDialog
       :visible="mutation.visible.value"
       :task="mutation.activeTask.value"

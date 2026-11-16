@@ -1,4 +1,5 @@
 import hashlib
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -137,6 +138,7 @@ async def test_directory_worker_uses_mapped_unc_without_enabling_test_local_root
         project_relative_path=PROJECT_RELATIVE_PATH,
         project_path_snapshot=f'{UNC_ROOT}\\{PROJECT_RELATIVE_PATH}',
         storage_status='initializing',
+        project_storage_created_time=datetime(2026, 11, 16),
         protocol='smb_unc',
         configured_root_path=UNC_ROOT,
         root_status='enabled',

@@ -1,5 +1,13 @@
+import asyncio
+import os
+
+import pytest
+from pydantic import ValidationError
+from sqlalchemy import DateTime, Integer, select, text
 from sqlalchemy.dialects import postgresql
 
+from config.database import async_engine
+from module_shot_grid.dao.schedule_phase import production_period_conditions
 from module_shot_grid.dao.task_dao import ShotGridTaskDao
 from module_shot_grid.entity.vo.task_vo import (
     ShotGridMineTaskListQueryModel,
@@ -120,3 +128,50 @@ def test_schedule_phases_filter_before_pagination_without_mutating_task_status()
         assert 'sg_task.expected_start_time is null' in sql
         assert 'sg_task.expected_end_time is null' in sql
         assert f"else sg_task.task_status end = '{phase}'" in sql
+
+
+def test_workspace_filters_intersect_mine_scope_and_planned_period() -> None:
+    query = ShotGridMineTaskListQueryModel(
+        projectId=10, assigneeUserId=8, productionFrom='2026-10-01', productionTo='2026-10-31'
+    )
+    sql = _compile(ShotGridTaskDao.build_task_statement(query, mine_user_id=9))
+    assert 'sg_task.project_id = 10' in sql
+    assert 'sg_task.assignee_user_id = 8' in sql
+    assert 'sg_task.assignee_user_id = 9' in sql
+    assert 'task_assignee_member.user_id = 9' in sql
+    assert "sg_task.expected_end_time >= '2026-10-01 00:00:00'" in sql
+    assert "sg_task.expected_start_time <= '2026-10-31 23:59:59.999999'" in sql
+    assert 'sg_task.expected_start_time is not null' in sql
+
+
+def test_planned_period_rejects_reversed_dates() -> None:
+
+    with pytest.raises(ValidationError, match='制作周期开始日期不能晚于结束日期'):
+        ShotGridMineTaskListQueryModel(productionFrom='2026-11-01', productionTo='2026-10-01')
+
+
+async def _verify_period_on_postgresql() -> None:
+
+    tasks = (
+        text("""SELECT * FROM (VALUES
+        (1, TIMESTAMP '2026-09-30', TIMESTAMP '2026-10-01'),
+        (2, TIMESTAMP '2026-10-31 23:59:59', TIMESTAMP '2026-11-01'),
+        (3, TIMESTAMP '2026-09-01', TIMESTAMP '2026-09-30 23:59:59'),
+        (4, NULL::timestamp, NULL::timestamp),
+        (5, TIMESTAMP '2026-09-01', TIMESTAMP '2026-11-30'),
+        (6, TIMESTAMP '2026-11-01', TIMESTAMP '2026-11-30')
+    ) AS fixture(task_id, expected_start_time, expected_end_time)""")
+        .columns(task_id=Integer, expected_start_time=DateTime, expected_end_time=DateTime)
+        .subquery('task')
+    )
+    query = ShotGridMineTaskListQueryModel(productionFrom='2026-10-01', productionTo='2026-10-31')
+    statement = select(tasks.c.task_id).where(*production_period_conditions(tasks.c, query)).order_by(tasks.c.task_id)
+    async with async_engine.connect() as connection:
+        assert list((await connection.execute(statement)).scalars()) == [1, 2, 5]
+
+
+def test_period_boundaries_on_real_postgresql() -> None:
+
+    if os.getenv('SHOT_GRID_RUN_PG_TESTS') != '1':
+        pytest.skip('显式开启才连接本地 PostgreSQL；仅执行只读 VALUES 查询')
+    asyncio.run(_verify_period_on_postgresql())

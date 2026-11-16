@@ -6,8 +6,9 @@ import AssetItemReferences from './components/AssetItemReferences.vue'
 import AssetItemScheduleDialog from '@/views/asset/components/AssetItemScheduleDialog.vue'
 import AssetItemBatchWorkspace from '@/views/asset/components/AssetItemBatchWorkspace.vue'
 import RelatedDetailDrawer from '@/components/RelatedDetailDrawer.vue'
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { defineAsyncComponent, computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useLeaveProtection } from '@/composables/useLeaveProtection'
 import { ElMessage } from 'element-plus'
 import { ArrowLeft, Delete, Edit, Lock, Plus, Refresh, Clock, View, UserFilled, VideoPlay } from '@element-plus/icons-vue'
 
@@ -35,6 +36,11 @@ import { taskPriorityMeta, taskStatusMeta, taskVersionStatusMeta } from '@/views
 
 const reopenEntry = ref(null)
 
+
+const AssetRelationsPanel = defineAsyncComponent(() => import('./components/AssetRelationsPanel.vue'))
+const relations = ref(null)
+const canLeave = useLeaveProtection(() => relations.value?.canLeave?.() ?? true, () => Boolean(relations.value?.dirty))
+defineExpose({ canLeave })
 const props = defineProps({
   targetProjectId: { type: [Number, String], default: null },
   targetAssetId: { type: [Number, String], default: null },
@@ -169,6 +175,7 @@ function refreshAfterConflict() {
 }
 
 async function loadDetail({ background = false, requestController = null, resetContext = false } = {}) {
+  if (!background && !resetContext && (await relations.value?.canLeave?.()) === false) return
   const generation = ++loadGeneration
   if (!background) {
     controller?.abort()
@@ -456,6 +463,7 @@ onBeforeUnmount(() => {
         </div>
       </el-card>
 
+      <el-card shadow="never"><AssetRelationsPanel ref="relations" :key="`${projectId}:${assetId}`" :project-id="projectId" :asset-id="assetId" @updated="loadDetail({ background: true })" /></el-card>
       <ProductionHistoryPanel
         :project-id="projectId"
         :subject-id="assetId"

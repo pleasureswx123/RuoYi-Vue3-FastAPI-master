@@ -1,5 +1,24 @@
 # 后端 Codex 协作指南
 
+## 2026-11-16 交接合并后的现行规则
+
+本节经用户确认，优先于本文后续历史记录中的冲突描述；历史测试记录仅说明当时环境，不是本次合并验收结果。
+
+- 镜头与资产制作分项分配有效制作人后自动准备目录，不再以管理员确认开工、强制排期或完整制作信息作为额外门禁；目录成功后才能提交，提交和重试仍仅限当前有效制作人本人。
+- 镜头待审核时允许继续提交新轮次；已完成镜头可由有权限的管理人发送正式反馈进入修改，普通评论不改变任务状态。资产同轮追加策略保持其独立契约。
+- 保留主线独立的重新审核、审核周期、历史文件和撤销 Outbox。正式反馈遇到正在执行的最终交付时拒绝；撤销必须落入 Outbox，不得抢占 NAS I/O 或把失效终稿继续显示为有效。
+- 新成果按版本目录隔离，FINAL 位于对应版本目录内，同时保留任务及审核周期子目录与 CURRENT 清单用于不可变历史和撤销；兼容历史路径。生产目录打开沿用签名 NAS 工具，交接包本地模拟工具不代表真实 NAS 验收。
+- PostgreSQL 两侧迁移保留原编号，新增 `20261116_44` 汇合 `20261026_41` 与 `20261111_43`，不重写已执行历史。已在独立 PostgreSQL 实例验证两条升级路径及新库初始化，业务表结构与约束一致；没有升级现有业务库。此次使用合成测试数据，正式升级前仍须用生产备份的隔离恢复库验证。
+- 每日多平台记录与成果提交独立，实际积分 0 有效；统计积分按平台分开，提交轮次和期间曾通过任务独立计算。权限、项目隔离、乐观锁、文件安全和事务约束继续有效。
+
+
+## 2026-11-16 本地验证补充
+
+- 任务详情的 `allowedActions` 必须允许有权限管理人对已完成镜头执行 `task.feedback`；关闭项目、归档目标、活动提交及非管理范围仍禁止。不能提前以任务已完成返回空动作，造成列表与反馈弹窗不一致。
+- 兼容的资产人工开工接口不再要求排期，但不得借开工请求设置排期；有排期时保留首版基线与当前排期完整性检查。正常新任务仍走分配自动准备目录。
+- FINAL 清单冲突重试使用现有版本路径校验器识别旧、新布局，并沿用任务/审核周期隔离目录与版本清单名。
+- 真实 PostgreSQL 测试通过 `SHOT_GRID_TEST_ENV_FILE` 指向隔离连接配置；随机测试库的创建、断言与精确清理保护保持不变。完整记录见根目录 `docs/本地隔离验收记录-20261116.md`。
+
 ## 1. 适用范围
 
 本文件适用于 `ruoyi-fastapi-backend/` 及其所有子目录，并补充仓库根目录的 `AGENTS.md`。根目录规则仍然有效；涉及后端代码时，还必须遵循本文件。
@@ -887,3 +906,167 @@ Windows 不得直接绕过 `rmtree.avoids_symlink_attacks` 检查。Windows 分�
 ### 2026-10-30 镜头先分配后完善
 
 首次分配的任务要求快照允许为空，改派不覆盖任务补充要求。任务详情继续以 `shotProduction` 展示镜头最新制作信息，补齐后刷新即可显示；不将补充后的镜头描述回填覆盖独立任务要求。单个、批量分配复用原事务和审计；分配不自动开工或创建 NAS 目录。
+
+### 2026-10-27 项目工作区与侧边栏筛选
+
+- 登录默认进入授权项目列表；所有项目仅指当前账号可访问的项目。选定项目后，镜头、资产、工作台、审核和文件页面固定该项目，切换统一返回项目列表。现有会话 Pinia 保存当前项目及筛选，导航携带 projectId；退出/切换项目清空筛选，旧请求取消或隔离，不回退其他项目。
+- 镜头侧边栏按集展开场次，资产按 Character/Environment/Prop 分类；制作人与预期制作周期使用 Element Plus Form 按钮校验后应用，复用现有鉴权选项接口。失败与空选项分别展示，可重试。
+- 新增可选 productionFrom/productionTo 日期筛选，含首尾日，以任务 expectedStartTime/expectedEndTime 与日期区间有交集为准；未排期任务不匹配，倒置日期返回校验错误。镜头、资产、本人任务、工作台审核/提交记录及排期查询在数据库分页前筛选。资产的负责人和周期必须由同一个活动未删除分项任务同时满足。
+- 本人任务新增可选 projectId/assigneeUserId，均与服务端本人及活动成员范围取交集，绝不扩大为他人任务。审核、提交查询保留原范围与权限。复用原 Controller → Service → DAO、响应与参数绑定，无表结构、迁移或新权限。
+- 本次只调整现有业务文件，不新增业务目录；运行数据目录允许生成。
+
+
+### 2026-10-27 本机 Windows 流程联调环境
+
+- 当前工作目录没有 Git 元数据。本机开发服务为 PostgreSQL 15432、Redis 16379/db2、后端 9099、Shot Grid 前端 5174；不得将这些本地配置作为公司生产部署配置。
+- 使用既有管理 API 新增并启用 shotgrid_admin/shotgrid_creator 角色包；仅含 Shot Grid 业务权限，未授予跨项目全部范围、平台管理权限、NAS 配置写权限或永久删除权限。项目创建/成员同步仍经过既有角色保护和事务服务。
+- 根目录 LOCAL_DEV（本地联调存储（当前电脑））通过既有 Windows 共享 `\\localhost\D$\lqh\shot-grid-main\shot-grid\output\local-runtime\local-nas` 真实探测后登记。没有新增 Windows 共享或扩大共享 ACL，也没有写死 healthy 状态。它是本机磁盘上的联调存储，不是公司 NAS 验收。
+- 本机 .env.dev 已开启目录、版本发布及媒体派生 Worker；FFmpeg 由当前 .venv 内 imageio-ffmpeg 提供，并配置绝对可执行路径。仍使用 Application Leader、租约和 owner/attempt fencing；没有修改工作器实现或放宽权限。Linux/生产继续遵守原 CIFS 挂载规则。
+- 本地流程演示项目 LOCALDEMO / projectId=1：1 集、2 场、4 镜头、3 类资产、5 个已排期任务，admin 是项目管理人兼制作人。图片版本 1 已审核通过并完成最终交付，视频版本 2 保留待审核以便交互验证。所有内容均为标注清楚的本地演示数据。
+- 已通过真实鉴权 API 验证登录、角色选项、根目录探测、项目初始化、集/场/镜头/资产创建、分配、排期、镜头与分项开工、图片/视频上传和版本发布、自动审核单、图片审核通过及最终交付；图片最终文件 SHA-256 与源文件一致。视频缩略图/代理完成且鉴权 Range 返回 206/1024 字节；匿名请求返回 JSON code=401，未返回文件（平台当前 HTTP envelope 为 200）。本轮不是完整浏览器 E2E，也不消除之前记录的 8 项扩展回归失败。
+- 启动脚本位于既有 output/local-runtime/start-local.ps1，只启动缺失服务、复用数据，不安装依赖或重启已有服务。已验证重复执行保持当前进程和数据。
+
+### 2026-10-28 本机数据库中断恢复
+
+- 本机 PostgreSQL 于 15:05 因子进程异常码 `0xC0000135` 退出；前端、后端和 Redis 仍监听，但数据库连接被拒绝。日志未指出具体缺失依赖，不能将某个 DLL 或系统组件认定为已确认根因。故障记录保留在 `output/local-runtime/postgres-crash-20261028.err`。
+- 使用原数据目录，经 `pg_ctl -w` 启动并完成 PostgreSQL 自身崩溃恢复，没有初始化、迁移、删除或回填数据。启动脚本改用绝对数据目录、进程级 PostgreSQL PATH、追加式服务日志、数据库就绪及 `SELECT 1` 检查，并验证前端代理的验证码接口；普通服务再次启动前保留旧日志，进程提前退出时报告失败。
+- 已验证实际登录、用户信息、项目列表和项目详情通过 5174 前端代理返回 HTTP 200 / code 200；数据库保留 1 项目、4 镜头、3 资产、5 任务和 2 版本。脚本语法和重复执行通过，四个已有服务进程保持不变。仅代表本次恢复及接口验证，不代表完整浏览器 E2E 或系统异常已永久消除。
+
+
+### 2026-10-28 镜头表格逐列编辑
+
+- 默认基础列固定为镜头预览、镜头号、场次、时长、制作内容、计划时间、制作人、镜头状态。表头“添加列”选择已有镜头参数、台词、音效、色调、参考内容及备注，不新增任意自定义字段。展示偏好继续按账号保存；业务值不存入浏览器缓存。
+- 取消独立操作列。基础信息通过单元格锚定的 Element Plus Popover/Form 编辑，读取最新详情后保留完整字段、附件及资产快照并提交 lockVersion。制作人复用分配/改派，计划时间复用排期，制作中信息修改复用原制作调整事务；状态菜单只暴露原业务动作，不提供任意写状态接口。详情、履历及删除入口保留在预览与更多菜单中。
+- 制作人与预期制作周期表头筛选和侧边栏共用会话 Store；镜头页面监听变更重新查询，不因同项目筛选而重建整页。状态多选新增兼容查询参数 shotStatuses（逗号分隔的既有状态）；未知状态拒绝，多个值取并集，与旧 shotStatus 及项目/场次/制作人/日期条件取交集，在数据库分页前生效。
+- 兼容扩展原 PUT /shot-grid/projects/{projectId}/shots/{shotId}：允许无冻结目录、无任何目录操作记录、无已开工任务/版本/提交记录的镜头修改 sceneId/shotNo。锁内复核活动项目与目标场次、同项目范围、制作状态、lockVersion 和编号唯一性；更新 sceneId/episodeId/shotNo/sortOrder，保持 shotId、任务、附件和资产关联。只递增镜头锁版本，审计修改前后身份。不重排其他镜头，不迁移或改写已有 NAS 目录；目录冻结或已开工继续拒绝。
+- 沿用登录、shotgrid:shot:edit、项目 director/全部范围、项目协调锁、统一异常和响应；增加 allowedActions 中的 shot.editIdentity 提示能力，不增加权限码或绕过服务端校验。无表结构和迁移变更，本次仅承诺 PostgreSQL。编号上限与创建一致，为 214748364，保证排序键乘 10 不溢出。
+
+- 本轮定向验证：前端 125 项、后端 134 项通过，相关 ESLint/Ruff 和生产构建通过（仍有大分包警告）；真实 PostgreSQL 改号/换场次/冲突/状态筛选验证完成，演示字段已恢复。完整浏览器 E2E 未执行，详见前端 docs/领域模型与API契约.md 的本轮验证记录。
+
+### 2026-10-30 镜头右侧栏与反馈评论（兼容扩展）
+
+- 删除镜头管理下方成果面板，点击镜头只打开右侧栏；仅保留成果展示、反馈说明、制作参考三个页签。成果逐版本显示提交日期/说明/候选，媒体按需预览；制作参考仅显示镜头与任务已有参考文字/图片，不展示路径、提示词或其他操作。
+- 已核实：20260814_10 曾删除旧 sg_note_reply，自由讨论不是现有处理说明能力。新建 PostgreSQL sg_issue_comment（迁移 20261030_41），评论只追加，归属已发布 sg_note，通过 note 的 version/project 保持归属；不修改问题状态、版本号、任务或锁版本，不替代正式返修处理说明与审核确认。
+- GET/POST /shot-grid/versions/{versionId}/issues/{issueId}/comments；读取要求 note:list，写入额外要求 note:comment。项目访问和有效 director/creator/all-scope 通过既有项目访问服务验证；写入沿用项目→任务→版本→问题锁，锁后复核成员、目标和归档状态，同事务写评论与审计。查询按 commentId 倒序游标分页，每次最多 50 条。
+- 写入 {content, requestId}，正文去首尾空白后 1–2000 字，允许换行，不接受其他控制字符；按 issue+author+requestId 唯一，同内容重试返回原结果，不同内容返回409。服务端生成作者及时间。客户端失败保留草稿和幂等键，成功后清空；跨镜头/版本迟到响应不得写入新上下文。
+- 角色菜单增加独立 note:comment；仅给已有 note:list 的活动受管 shotgrid_admin/shotgrid_creator 角色补充，其他角色不自动授权。接口身份仍以原认证、平台权限及项目范围交集为准。同步 schema、PostgreSQL 初始化 SQL、清理依赖顺序及定向测试；不扩展 MySQL。已有库升级前备份，降级若已有评论则拒绝，避免丢失讨论记录。
+
+- 本轮验证：前端 15 项侧栏/评论组件测试及 1 项列表交互测试通过，后端 52 项定向测试及 1 项降级保护测试通过，含真实 PostgreSQL 评论持久化/幂等/范围隔离；Ruff、ESLint、生产构建通过（保留既有大分包警告）。数据库已备份并升级至 20261030_41；运行服务已重载并刷新权限缓存。完整 E2E 未执行，命令与边界见前端 docs/领域模型与API契约.md 的 2026-10-30 本轮验证记录。
+
+### 2026-10-30 镜头分配后直接制作（替代旧开工前置规则）
+
+- 按用户最新决定，仅镜头取消“完善信息 → 排期 → 确认开工”门禁：未分配镜头统一为 unassigned，制作内容及参考参数可空；首次分配或历史 not_started 任务重新分配时，在原分配事务内自动冻结镜头目录并创建/复用目录 Outbox。目录成功直接 in_progress，否则 preparing，Worker 成功后进入 in_progress。排期保持可选；不伪造首次排期或实际制作日期。
+- 不新增表/字段/API，不需要 Alembic 结构迁移。原镜头 start 兼容接口拒绝写入并提示自动制作，allowedActions 不再返回 task.start。资产任务仍需原开工确认与排期，版本提交仍限有效当前制作人且目录就绪；权限、项目范围、项目协调锁、乐观锁、事务审计和文件安全不放宽。
+- 本条取代此前镜头待完善、待排期与管理人手动开工规定；资产规则、审核/返修、普通改派与删除的状态保护不变。前端保留可选排期编辑，但不将其作为镜头下一步；制作优先进入任务。
+- 存量数据使用 scripts/activate_assigned_shots.py --project-id <ID> 先预览，备份后追加 --apply；只扫描指定项目未删除 shot_video/not_started 任务，复用原分配服务以同负责人转换，不直接 SQL 批量改状态。每镜头独立事务并同事务审计，失败即停，重跑只处理剩余待开工任务；未就绪存储、归档目标、失效制作人不强行放行。回退须先停 Worker 并评审数据库备份恢复，已创建目录不自动删除。
+
+- 本轮定向验证：后端 200 + 29 项通过（另 1 项环境跳过），前端 109 + 7 项通过，Ruff/ESLint 和生产构建通过；本地已备份并转换唯一历史待开工镜头，真实 Worker 完成目录准备、提交入口可用。未执行完整 E2E，详细命令及范围见 docs/领域模型与API契约.md 本节验证记录。
+
+### 2026-10-30 镜头任务直接反馈（兼容扩展）
+
+- 镜头状态展示及筛选统一把 revision 标为“反馈”、completed 标为“通过”，保留原查询值和数据库状态，不新增状态或迁移。资产状态名称不变。
+- 镜头列表状态菜单、任务详情与右侧反馈页签共用 ShotTaskFeedbackDialog；当前项目可跨场次多选 1–100 颗镜头。填写共同反馈、逐镜头补充及共用参考附件；只有最新 pending_review 或 rejected 版本可发送，不允许对无版本/已通过镜头伪造返修。
+- 已核实并复用 getTaskDetail、版本 review-context、既有项目 batch feedback（每次一颗镜头）及 append issue API。pending_review 发送正式问题并退回 revision；rejected 仅追加正式问题。后端 task.allowedActions 增加 task.feedback 展示能力，要求活动镜头、活动项目、director/全部范围、无未完成提交，且具备 note:add、version:review、version:query、task:query。最终写权限、项目归属和版本状态仍由既有服务在锁内验证，不新增写接口或权限码。
+- 读取时冻结项目、镜头、任务、最新版本和 lockVersion；旧问题必须逐条复核，仍需修改必须填原因，已有草稿明确确认后才一起发布。草稿/历史问题保留附件与画面查看入口，禁止默认批量判定已解决。评论继续是独立讨论记录，不改变审核状态。
+- 混选待审核和已退回镜头时逐镜头独立事务，不承诺整批原子性。首个失败即停止，展示已发送、未执行或结果未知；结果未知要求刷新核对，不自动重放。附件上传失败保留输入，可重试；项目切换、卸载和迟到读取隔离，发送中禁止重复点击和关闭。无新增业务目录，无本次业务数据回填。
+
+
+### 2026-11-02 资产分配即制作与分项成果侧栏（替代资产人工开工前置规则）
+
+- 按用户最新授权，资产分项分配制作人后自动进入制作流程。单项/批量分配均在原项目协调锁、资产/分项/任务锁和分配事务内创建或复用 ensure_asset_directory Outbox；共享目录已成功则 in_progress，否则 preparing，由原 Worker 完成后转入 in_progress。只启动本次分配分项，不启动同资产未选分项。计划时间、制作说明均不作为分配门禁；分项名称仍为必要的制作对象标识。
+- 已核对现有 assign_asset_item/batch_assign_asset_items、DAO 的目录状态读取、目录 Worker fencing 及正式任务模型。沿用 active creator、管理范围、taskLockVersion、事务回滚与审计，不新增表/字段/API、权限码、依赖或业务目录。分配不修改资产和分项元数据 lockVersion，不伪造排期/首版基线；制作中普通改派、审核和只允许当前活动制作人提交的限制保持。
+- task/asset/item allowedActions 不再暴露 task.start。正常页面无需确认开工；原资产 start API 作为旧客户端兼容路径保留原锁和确认校验，不用于新流程。历史 not_started/pending_schedule 投影保留兼容，列表常用筛选增加 preparing 并去掉旧待开工/待排期入口；revision/completed 展示为“反馈/通过”。本条取代此前“资产仍需排期与确认开工”的说明。
+- 资产列表点击制作分项行、名称或缩略图打开 440px（最多 92vw）的非遮罩右侧栏。复用现有 ShotResultsPanel，以 projectId+assetId+assetItemId 隔离，保留镜头模式。三页签为成果展示（提交日期/内容/候选图片及按需预览）、反馈说明（按版本的问题/评论与历史）、制作参考（父资产、分项、任务文字及图片）。提交成果进入原任务详情，添加反馈复用原审核/追加问题入口，旧版只读。评论沿用来源版本、幂等键及未发送离开门禁。
+- 侧栏校验项目、父资产、分项、任务和版本归属；不匹配停止展示，跨分项/项目/权限切换取消旧请求、忽略迟到结果。文件与评论继续原鉴权。资产文件夹暂沿用只读位置演示，不借用镜头本地模拟目录身份、不接正式 NAS；镜头本地模拟入口保持。
+- 历史转换复用 scripts/activate_assigned_shots.py，新增 --target-kind asset（默认仍 shot）。先 --project-id <ID> --target-kind asset 预览，备份后加 --apply。只处理指定项目未删除 asset_image/not_started 任务，逐项复用分配服务，同负责人、独立事务、失败即停。恢复需停 Worker 并评审备份，生成的目录不自动删除，不自动迁移其他项目。
+
+
+### 2026-11-02 资产间关联（本轮对齐及实现契约）
+
+已核实 sg_shot_asset 仅描述镜头→资产，不能复用来表达资产间关系。本轮兼容扩展 PostgreSQL sg_asset_relation，来源资产→引用资产的有向资料关系，同项目复合外键、禁止自关联/重复，最多 50 项。资产下所有制作分项共用；允许互相关联但不递归展开，不形成开工依赖。createAsset 可传 relatedAssetIds 与资产同事务保存；后续独立 GET/PUT /projects/{projectId}/assets/{assetId}/relations，写入沿用 asset:edit、director/all-scope、项目协调锁、来源资产 lockVersion、活动目标校验与审计；读取沿用 asset:query 和项目访问依赖。不改变开工状态、制作分配或排期。移除关联仅移除关系，不删除资产/文件；永久删除资产通过双向 FK CASCADE 删除关系，软删除目标不展示，已归档目标保留只读标记但不可新选。读取批量使用现有分项/任务/版本摘要，成果优先 finalVersion，否则 latestVersion 明确标注未通过。查看成果继续已有版本与文件鉴权，不通过关系绕过权限。新增 PostgreSQL Alembic 20261102_42 并同步初始化 SQL；不扩展 MySQL。前端继续 Element Plus，选择器可搜索/分页多选，任务与右侧栏复用关联区域。现有目录结构不变。
+
+
+#### 资产关联交付与验证（2026-11-02）
+
+- 已实现：新建资产可选 relatedAssetIds；资产详情、任务详情和资产任务右侧栏“关联资产”可查看；有管理权限可调整。关联挂在父资产，所有制作分项共用。每个引用资产显示分类、活动分项、制作人、状态和成果入口；优先通过版本，无通过版本时展示最新提交并明确标注“未通过，仅供参考”。不复制文件，不触发开工，不建立递归依赖。
+- GET/PUT 完整入口为 `/shot-grid/projects/{projectId}/assets/{assetId}/relations`。PUT 请求 `{lockVersion, relatedAssetIds}`，成功返回标准 data envelope，包含 projectId、assetId、lockVersion、canEdit、relatedAssets；relatedAssets 的 items 包含 task/version 只读摘要。写入要求 asset:edit 与 asset:query，前端搜索另需 asset:list；沿用 ProjectRoleDependency、项目访问范围和现有文件权限。移除后原资产、任务及文件保持。
+- 表单采用 Element Plus Form model/rules/validate；校验失败不请求，保存 loading/重复提交拦截，失败保留草稿，409 或网络结果未知必须刷新核对。读取支持取消、项目/资产归属核验和迟到响应隔离。选择器支持搜索、分页和最多 50 项；关联本身不可选当前资产。
+- 已备份本地 PostgreSQL 为 `output/local-runtime/before-asset-relations-20261102-115629.dump`（pg_restore --list 验证可读），执行 `.venv/Scripts/python.exe -m alembic upgrade head`，实库版本 20261102_42。仅新增关系表，未回填任何业务关系。重启本仓库 9099 后端，5174 前端继续运行；数据库 SELECT 1、前端代理/Redis 验证通过，OpenAPI 可见新 GET/PUT。仅证明本地服务/接口注册就绪。
+- 后端实际执行：`.venv/Scripts/python.exe -m pytest -q tests/module_shot_grid/test_asset_crud_service.py --tb=short` 原回归 118 passed；新增成果优先级测试用 `-k asset_relations` 为 2 passed。启用 `SHOT_GRID_RUN_PG_TESTS=1` 后执行 `pytest -q tests/module_shot_grid/test_asset_manager_start_pg.py -k asset_relations --tb=short` 为 9 passed，均使用独立临时 PostgreSQL 数据库。迁移精度同步后单独重跑 migration 用例 1 passed，增加新建失败整体回滚断言后 create/read 用例 1 passed。覆盖来源乐观锁、权限/管理范围、无效/归档目标、自关联、跨项目复合 FK、双向删除清理和有数据拒绝降级。
+- 前端实际执行（前端目录，使用本机 Node）：`node node_modules/vitest/vitest.mjs run tests/unit/assetRelations.spec.js tests/unit/shotResultsPanel.spec.js --reporter=dot` 首轮 24 passed/1 failed（新建弹窗测试缺少异步挂载等待），补齐等待后 assetRelations 7 passed；shotResultsPanel 18 passed。`node node_modules/vitest/vitest.mjs run tests/unit/assetViews.spec.js --reporter=dot` 最终 130 passed；修正旧测试误选名称按钮/隐藏列占位内容、同步反馈/通过文案，并修复 AssetTreeTable 在卸载后延迟回调重复销毁 Sortable。已有删除状态组件测试产生未 Mock 网络警告，未出现未捕获错误，未将其作为真实网络验证。
+- 修改范围 ESLint --max-warnings=0、Ruff check 和 format 定向检查通过。首轮 Ruff 的测试注解与 dict 写法已修正。执行 `node node_modules/vite/bin/vite.js build --mode production` 成功，仍有既有大包警告，未提高限制或新增依赖。修改表单未使用原生 submit。
+- 代码备份 `output/local-runtime/before-asset-relations-20261102-114549.zip`，额外 AssetDetailView、AssetListView、AssetTreeTable 和 service 单测原件保存在同运行目录。无 .git 元数据，无法执行有效 git status/diff；使用备份比对与新增行空白检查。未新增业务目录、未推送远程、未接入正式 NAS、未执行浏览器自动化或完整 E2E。不能把定向测试或构建成功描述为发布验收通过。
+- 回退边界：有关系数据时迁移拒绝 downgrade；需先停止应用/Worker、备份并评审恢复，不允许通过直接删除关系数据强行降级。
+
+### 2026-11-02 镜头连续提交与完成后直接反馈（替代旧限制）
+
+- 镜头任务 pending_review 时，制作端默认提交下一轮版本，不再默认追加同轮候选；无需等待制片或总监审核。共用提交服务 targetVersionNo 省略表示 new_round，可在 in_progress/revision/pending_review 执行预检、受理、失败重试和发布；显式 targetVersionNo 的旧同轮追加契约继续兼容。资产前端仍保持既有同轮追加行为。服务端编号以实际保留序列为准，前端预计编号不作为路径或版本身份。
+- 新版正式发布事务才将前一待审核版本的自动审核单归档、推进旧版本和旧审核单锁；旧文件、候选、意见草稿和审核记录保留，旧版状态仍记录其最后状态，不伪造退回或通过结论。任务保持 pending_review，新轮自动审核单 active。原最新版本校验及未完成提交门禁阻止旧审核操作污染新轮次；发布失败事务回滚，旧轮次不提前归档。新轮次提交若有未关闭历史问题必须逐条携带处理说明，继续反馈快照/幂等/锁版本校验；同轮追加不重复处理问题。
+- 复用 POST /versions/{versionId}/additional-issues 支持最新 final/completed 镜头直接正式反馈，前端镜头任务反馈弹窗支持与待审核/返修镜头跨场次混选。服务端在原项目→任务→版本锁内复核 director/all-scope、额外 version:review 权限、当前项目/集/场/镜头活动状态、最新版本、lockVersion 和无正在受理提交；仅新增问题可触发，编辑历史问题不触发重新制作。写问题、附件引用、版本 final→rejected、任务 completed→revision、版本/任务锁及审计在同一事务提交；原制作人不变，原通过审核动作保留。普通评论接口不变，不改变状态。
+- 完成后反馈保留已 published 的历史交付；pending/publishing 交付在同一事务置 failed（SG_FINAL_DELIVERY_REOPENED）、递增 attempt、清除租约，旧 Worker 无法以原 owner/attempt 回写。已经进行的 NAS I/O 不能硬中断，可能留下历史文件，不能把目录残留当作当前已通过结果。新轮再通过时，V002 及以后使用 FINAL/FINAL-Vnnn.json，V001 保留 FINAL.json；路径适配器只接受原 FINAL.json 或与当前版本号严格匹配的清单，不覆盖旧交付文件和清单。数据库指向当前审核版本；正式 NAS 操作仍走既有 Worker 和路径校验。
+- 制作任务和列表提供“继续提交新版本”；不依赖选中最新历史版本才能看到镜头提交入口。未完成提交恢复和原草稿保护继续有效。已返修的历史交付显示为历史资料，不再提供旧最终版本重新发布按钮。
+- 创建后直接分配沿用已实现的自动目录准备，不强制制作内容、时长、计划时间或参考资料，不新增确认开工步骤。目录由系统自动准备，未就绪时不伪造可提交；目录就绪即可由当前活动制作人本人提交，管理人不能代提交。已通过任务收到正式反馈前不允许绕过完成状态自行提交。
+- 本次与现有 VO、Controller、Service、DAO、PG 状态约束、审核动作、文件引用及最终交付租约逐项对齐：无新 API、权限码、表字段、迁移或业务目录。新增隔离 PG 测试位于现有 tests/module_shot_grid。旧版回退代码前应停止新提交和 Worker 并备份；已发送正式反馈和历史记录不得通过回退代码删除。
+
+本轮验证与交付记录：
+- 后端：`.venv/Scripts/python.exe -m pytest -q tests/module_shot_grid/test_version_submission_service.py tests/module_shot_grid/test_review_service.py tests/module_shot_grid/test_shot_crud_service.py tests/module_shot_grid/test_task_service.py tests/module_shot_grid/test_final_delivery_path_adapter.py --tb=short`：383 passed、12 skipped（既有不适用参数组合）。首轮 3 失败为旧“待审核禁止新轮次”断言及旧夹具缺少版本状态字段，更新后通过；日志 continuous-shot-backend-tests.log。
+- 隔离 PostgreSQL：设置 SHOT_GRID_RUN_PG_TESTS=1，运行 test_continuous_shot_pg.py 最初 5 passed；补充旧 Worker fencing、已交付保留、关闭项目/归档镜头保护后，用 `-k 'complete_feedback or project_closed or shot_archived'` 为 3 passed / 4 deselected（含 1 个加强后复测），共 7 个不同用例有通过证据。覆盖空制作说明/无排期直接分配、自动目录准备、本人连续 V001→V002、旧版审核拒绝、通过后并发反馈、返修 V003→待审核再交 V004、历史问题处理说明不遗漏、再通过与分版本交付清单；同时验证创作者/无审核权限/过期锁/坏附件失败不改变已通过状态。初轮夹具的空值持久化、目录适配器方法名和审核候选参数不完整已修正。随机测试库均由夹具清理，没有修改本地演示业务数据。NAS 检查和发布 I/O 使用测试替身，该链路不是实际上传或真实 NAS E2E。日志 continuous-shot-pg.log、continuous-shot-pg-extra.log。
+- 前端：versionSubmissionPanel/versionWorkspace/shotTaskFeedback/taskViews/shotViews 五文件首轮 218 passed；新增快捷入口和交付历史提示定向首轮 4 passed / 1 failed（只读测试账号未带审核权限，交付提示位于审核区）；补齐测试权限后 reviewViews/shotViews 相关 3 passed / 132 skipped。补测有重叠，不累计为全量测试数。日志 continuous-shot-frontend.log、continuous-shot-extra-frontend.log、continuous-shot-feedback-frontend.log。已有直接挂载夹具仍提示无 router-view，不将组件验证当作浏览器 E2E。
+- 修改范围 Ruff check、Ruff format --check（9 文件）、ESLint --max-warnings=0 通过；Vite production build 通过，保留既有大包警告。最终清单适配器另验证旧 FINAL.json 不变、新版本清单创建及错误版本编号拒绝。
+- 已重启仅本工作区 9099 后端，复用原 PostgreSQL/Redis/5174 前端。重启前确认无 pending/publishing/committing 本地提交；启动脚本的数据库 SELECT 1、前端代理/后端/Redis 检查通过。未执行验证码登录或完整浏览器 E2E，未操作公司 NAS、远程部署或推送。
+- 备份 output/local-runtime/before-continuous-shot-submit-20261102.zip，补充审核页面备份 before-continuous-shot-review-view-20261102.zip。无 Git 元数据，git status 失败；通过备份比对和新增行空白检查代替 git diff --check。无数据库迁移或业务目录新增。
+
+
+### 2026-11-02 提交目录按分项与版本分层（替代平铺布局）
+
+- 新轮次镜头文件路径为项目冻结目录下 `SHOT/EPxxx/场次号/镜头号/Vxxx/业务文件名`；场次至少三位、镜头至少四位。资产为 `ASSET/类型/资产冻结目录/分项名称__分项ID/Vxxx/业务文件名`。分项名称按既有 Windows 文件名规则清洗并截取 80 字符，稳定 ID 防止字符清洗、长名称或归档后复用名称导致不同分项混放。版本号仍以每任务的保留序列分配，不使用版本数据库 ID。
+- 同轮全部候选同目录、不同轮次隔离。旧提交快照、旧版本、文件引用均不迁移、不删除；失败重试/正式提交只允许本任务精确匹配的新旧两种布局。旧版本显式追加读取该版本冻结原文件目录，不能把同一历史轮次拆到两个布局。新轮次一律新布局。
+- 复用原提交 Outbox 和 Worker，不增加 API、表字段、迁移、权限或业务目录。版本受理冻结实际文件相对路径；事务外发布在既有项目根中逐段创建新目录，每段检查 reparse/symlink 与根目录约束。原 SHA-256、无覆盖、幂等、租约及 owner+attempt fencing 不变。原目录准备 Outbox 仍兼容 VIDEO 与父资产快照；不会为历史空目录自动执行删除。
+- 最终交付由原文件父目录派生，因此新布局交付位于对应 `Vxxx/FINAL/`，旧布局仍按原位置；分版本交付清单策略保持。目标永久清理在原精确归属基础上同时核对该镜头 VIDEO 旧目录及 SHOT 四级新目录，不扩大到整场/整集；其他目标路径冲突仍失败关闭。这里只修改代码与隔离测试，不对本地演示或公司 NAS 执行实际删除。
+- 版本文件 VO 增加可空 `folderRelativePath`，仅原始 review_media 投影冻结项目目录名与业务相对文件夹，拒绝异常路径，不暴露磁盘/容器绝对路径。原 nasPath、受保护下载与预览不变。镜头侧栏和版本文件入口在本机 DEV 优先使用该字段，通过 `demo-layout/<base64url相对目录>` 映射已配置的本地演示根；打开器再验证层级、目录段、磁盘根约束与链接。无字段旧响应继续兼容 ID 演示协议。非本机环境仍只预览 NAS 位置，不改变当前用户要求的本地模拟边界。
+- 本次为兼容扩展；事实已核对 Submission/File DO、DAO 任务与文件归属、VO、审核交付适配器、目录和清理适配器、前端文件权限及现有打开器协议。无需数据库迁移；不搬移已有业务文件，回退代码前需停止提交/发布 Worker 并保留本次新布局的读取能力，不能以旧适配器继续消费新路径快照。
+
+
+本轮验证与本地交付：
+- 后端定向命令 `.venv/Scripts/python.exe -m pytest -q tests/module_shot_grid/test_version_submission_service.py tests/module_shot_grid/test_version_publish_path_adapter.py tests/module_shot_grid/test_final_delivery_path_adapter.py tests/module_shot_grid/test_target_purge_path_adapter.py tests/module_shot_grid/test_storage_path_adapter.py tests/module_shot_grid/test_version_nas_path.py --tb=short`：最终 152 passed / 2 skipped。初轮遗漏旧镜头目录快照必填校验已补回。随后新增版本内 FINAL 和精确镜头清理用例，对 final_delivery_path_adapter / target_purge_path_adapter 两文件定向复测 13 passed（与前一组重叠）。review_service / version_publish_worker_service 另 112 passed / 12 skipped。日志 version-folders-tests.log、version-folders-review-tests.log。
+- 隔离 PostgreSQL（SHOT_GRID_RUN_PG_TESTS=1）：continuous_shot_pg / append_candidates_pg / target_purge_graph_pg 的 complete_feedback、real_append_preserves、exclusive_files 最终 3 passed / 14 deselected；新增 two_asset_items、legacy_pending 两例通过。共 5 个不同场景验证镜头连续轮次及新旧目录精确清理范围、两个资产分项各自 V001/V002、旧目录追加、引用与审核保护。初轮两个连接超时和补测夹具 task_id 名称错误分别经重跑/修正后通过；随机测试库均清理，未修改演示业务数据。日志 version-folders-pg-final.log、version-folders-assets-pg.log。PG 发布 I/O 为替身；临时本机文件适配器测试另验证真实字节复制、SHA-256、重入无覆盖和目录隔离，不是公司 NAS 验收。
+- 前端 `node node_modules/vitest/vitest.mjs run tests/unit/folderOpener.spec.js tests/unit/versionFolderButton.spec.js --reporter=dot` 23 passed；更新入口字段断言后，versionFolderButton / shotResultsPanel 两文件 21 passed（重叠不累加）。修改范围 ESLint --max-warnings=0、17 个 Python 文件 Ruff check 和 format --check 通过。Vite production build 成功，保留既有大包警告。日志 version-folders-frontend.log、version-folders-entrances.log、version-folders-build.log。
+- Windows 打开器 `powershell.exe -NoProfile -ExecutionPolicy Bypass -File shot-grid-frontend/public/shot-grid-folder-opener.ps1 -Mode Test` 验证 3 个命名目录、5 个非法层级及旧协议/NAS 2 合法、24 非法请求。已备份旧 exe 并更新当前用户安装，保留原 DemoRoot。通过运行脚本 verify-version-folders-demo.ps1 真正在既有 folder-preview/目录分层演示 下创建镜头 V001/V002、资产正面 V001/V002 和侧面 V001 演示副本，没有打开 Explorer、连接公司 NAS 或写业务记录。此前直接在 PowerShell 7 编译演示源码因引用差异失败，改用 Windows PowerShell 5.1 脚本验证成功，不把失败输出当作目录创建证据。
+- 本地重启前确认没有活动提交；仅重启本工作区 9099 后端。启动脚本使用 PowerShell 7（Windows PowerShell 5.1 不能解析其现有编码），最终数据库 SELECT 1、Redis、前端代理检查成功。运行中 OpenAPI 已包含 folderRelativePath，三个相关前端资源 HTTP 200。未执行浏览器自动化、真实 HTTP 上传或完整 E2E。
+- 无 Git 元数据，git status 失败；代码备份 before-version-folders-20261102.zip，打开器备份 before-version-folders-opener-20261102.exe 均位于 output/local-runtime。按备份比对新增行无尾随空白，保留全部原目录与业务文件；无数据库迁移、远程发布或推送。
+
+
+### 2026-11-02 交付清单默认隐藏（Windows）
+
+- 最终交付保留原 FINAL.json / FINAL-Vxxx.json 名称、内容、数据库路径与校验规则；文件与清单发布并验证成功后，Windows 设置 FILE_ATTRIBUTE_HIDDEN，保留其他属性。重入复用与文件竞争恢复路径也设置隐藏。媒体成果不隐藏，隐藏失败仅记录通用警告，不把完整交付误报为失败。
+- 该展示属性仅适用于 Windows 后端/本机示例；Linux/CIFS 不声称具有相同隐藏行为。资源管理器启用“隐藏的项目”时仍能看到记录。没有删除记录、改迁移、改变文件权限或新增业务目录。
+- 已隐藏本地“目录分层演示”镜头及资产正面分项 V002/FINAL 中的两份清单，并验证隐藏标志和 SHA-256 未变。`python -m pytest -q tests/module_shot_grid/test_final_delivery_path_adapter.py --tb=short` 6 passed，覆盖新发布/重复发布隐藏、清单不变及媒体可见；修改两文件 Ruff check --fix 与 format 通过。确认无活动提交后仅重启本工作区后端，启动脚本数据库/Redis/代理检查通过。未进行正式 NAS 或浏览器完整 E2E。
+- 代码和文档备份 output/local-runtime/before-hide-final-manifest-20261102.zip。无 Git 元数据，按备份比较新增行空白。
+
+### 2026-11-03 定稿只读摘要与列表筛选
+
+- 现有镜头/资产列表查询兼容增加 hasFinal: bool | None，分页前按同任务、同项目版本 final 或既有 sg_final_delivery.approved_time 过滤；含重新反馈后的历史通过记录。未更改 Controller 认证、接口权限、项目访问范围或任何写入流程。
+- common_vo.ShotGridApprovedVersionModel 为只读摘要，镜头列表/详情与资产分项新增 approvedVersion。资产父级 approvedItemCount 统计有通过记录的活动未删除分项，finalizedItemCount 仅统计当前 completed、版本 final、交付 published 的活动分项。旧状态计数不变；未知归档不等于已完成。未新增数据库字段、索引、迁移或接口路径，PostgreSQL 为实际验证范围。
+- 版本详情/最终交付原契约仍为 source.parent/FINAL，前端只据此构造已归档版本的本地模拟目录入口。文件权限、业务引用、SHA-256、只读摘要范围及 Worker fencing 不变。正式契约同步 shot-grid-frontend/docs/领域模型与API契约.md。
+- 验证：CRUD DAO/Service/VO 首轮 282 passed；增加 lateral 后更新旧数量断言。后续 DAO/Asset Service/Router 159 passed，既有资产关联两路由旧断言 12 与实际 14 不符，补齐关联接口权限断言后 Router 16 passed；非全量后端测试。Ruff 通过。当前演示 PostgreSQL 使用只读事务验证筛选分区数量与投影、计数关系，无业务写入。未执行完整 E2E 或 NAS 验收。日志与备份见 output/local-runtime/final-display-*。
+
+
+### 2026-11-11 每日多平台记录与产出统计（实施对齐）
+
+- 兼容扩展：在现有 DO/VO/DAO/Service/Controller 及 Vue/Element Plus 目录增加每日记录，不新增业务目录。PostgreSQL 迁移 20261111_43，基于 20261102_42；初始化 SQL 同步。新增 sg_daily_record，task_id/project_id 复合 FK 与任务删除级联；平台积分 NUMERIC(16,4)，实际 0 不回退估算，日期用 DATE，时间沿用 TIMESTAMP(0)。
+- 新权限 shotgrid:daily:write（本人记录读写）和 shotgrid:daily:stats（项目统计），迁移将已有任务列表角色授予本人记录、已有排期角色授予统计；仍由当前项目成员/管理范围及当前制作人校验，角色不跨项目扩大。菜单由既有导航查询返回。现有会话需刷新权限或重新登录。
+- 一天/任务/本人/平台/账号/模型/类型一条累计记录；不同平台独立，单次保存最多 30 行原子事务，UUID 防重复、lockVersion 防覆盖；记录可补填、改正、作废，保留历史，不设日报审批。只关联已有任务，不产生任务/版本/文件。
+- 明细与统计按项目和日期（含首尾，最大 366 天）查；积分按平台分组，不提供跨平台积分总数；生成图片和视频分开。提交轮次与通过任务数从版本/交付事实单独计算，不与记录 join，不归因到平台。通过统计表示期间曾通过的不同任务，不是当前完成数量。
+- 截图上传不作为首版步骤，备注选填；不接外部平台自动扣费。仅支持 PostgreSQL；本轮验证结果在实施后追加。
+
+
+实施与验证结果（2026-11-11）：
+- 已新增每日记录 /daily-records 与产出统计 /production-statistics；菜单来自 sys_menu 和现有 navigation，工作台及本人任务有快捷入口。当前项目范围继承路由和会话。多平台行一次保存，实际积分/单次估算二选一，免费填 0；支持补填、修改、作废、修改历史和 Excel 导出，截图及审核不作为填写步骤。常用选择在当前用户/项目会话中保留。
+- 统计包含按平台总量、平台/人员/图片视频类型分组；提交轮次按 submitted_time，期间曾通过任务按 approved_time 去重，与消耗记录不 join、不按平台归因；平台筛选不改变这两个任务指标，界面已注明。实际与估算分别标记；不同平台不合计。
+- 新旧代码对比备份 before-daily-records-20261111.zip；数据库备份 before-daily-records-*.dump；已有本地演示库由 42 正常升级至 43，保留原业务数据。未对正式环境或 NAS 操作，未新增演示消耗数据。
+- tests/module_shot_grid/test_daily_records.py：3 passed，含两个真实随机隔离 PostgreSQL 测试，覆盖精度/免费0、本人/他人/项目范围、伪造统计权限但无管理角色拒绝、UUID 并发重放、唯一键、乐观锁、历史、作废、整组失败回滚、日期过滤；临时库清理。导航 DAO/Service 6 passed；旧元数据测试的 35 表及“所有业务 FK 均 RESTRICT”断言已落后于评论/资产关联等扩展，补为38表并精确列举允许级联的关系后 metadata 15 passed。没有放宽业务写权限。
+- 前端每日记录组件3例通过：Element Plus Form 必填失败不请求、多平台一次保存/实际0/失败保留/UUID稳定、统计首屏读取。routeRegistry 3例通过，覆盖新白名单。组件夹具有既有重复注册及非 router-view 守卫警告，不等同真实浏览器路由验收。
+- 修改范围 ESLint、Ruff 检查通过；format 发现 schema.py 长行后已格式化。业务前端构建成功，保留既有大包警告；最后局部表单 prop 调整由组件测试验证。
+- 本机服务重启后数据库/Redis/前端代理通过，运行中 OpenAPI 有3条新增路径（4个操作），新页面 Vite 模块 HTTP200。未登录请求按现有平台协议返回HTTP200、业务code401，并未获得记录。只读验证真实角色菜单：admin有记录/统计，creator_demo仅每日记录；本月示例源版本自动返回4次提交、2个曾通过任务。现有会话需重新登录刷新权限。
+- 未运行全量E2E、人工浏览器验收、真实平台积分API或正式部署；没有读取真实平台账单，平台名称自由填写，大小写/多余空白规范化，同平台别名暂由团队约定。日期范围最多366天，明细50条一页，单次保存最多30行，导出最多10000条且逐页查询（导出期间有他人修改时不是数据库快照）。
+- 2026-11-03交接压缩包仍为当时快照，不含本次功能；下次交接须重新打包当前代码及43迁移。

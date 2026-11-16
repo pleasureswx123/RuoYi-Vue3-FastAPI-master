@@ -8,7 +8,6 @@ import pytest
 from sqlalchemy.exc import IntegrityError
 
 from module_admin.entity.vo.user_vo import CurrentUserModel, UserInfoModel
-from module_shot_grid.entity.do.task_schedule_change_do import ShotGridTaskScheduleChange
 from module_shot_grid.entity.vo.access_vo import ShotGridProjectAccessModel
 from module_shot_grid.entity.vo.task_vo import (
     ShotGridShotTaskBatchAssignModel,
@@ -159,7 +158,48 @@ def _task_row(**overrides: Any) -> dict[str, Any]:
     return row
 
 
-def test_start_schedule_contract_preserves_existing_range_and_requires_saved_schedule() -> None:
+@pytest.mark.parametrize('status', ['pending_review', 'revision', 'completed'])
+@pytest.mark.parametrize('role', ['director', 'creator', 'all_scope'])
+def test_shot_direct_feedback_requires_management_scope(status: str, role: str) -> None:
+    user = _current_user(
+        permissions=['shotgrid:note:add', 'shotgrid:version:review', 'shotgrid:version:query', 'shotgrid:task:query']
+    )
+    actions = ShotGridTaskService._allowed_actions(
+        _task_row(task_status=status), user, _access(role=role, all_scope=role == 'all_scope')
+    )
+    assert ('task.feedback' in actions) is (role != 'creator')
+
+
+@pytest.mark.parametrize(
+    'permission', ['shotgrid:note:add', 'shotgrid:version:review', 'shotgrid:version:query', 'shotgrid:task:query']
+)
+def test_shot_direct_feedback_requires_each_permission(permission: str) -> None:
+    permissions = ['shotgrid:note:add', 'shotgrid:version:review', 'shotgrid:version:query', 'shotgrid:task:query']
+    permissions.remove(permission)
+    assert 'task.feedback' not in ShotGridTaskService._allowed_actions(
+        _task_row(task_status='pending_review'), _current_user(user_id=6, permissions=permissions), _access(user_id=6)
+    )
+
+
+@pytest.mark.parametrize(
+    'overrides',
+    [
+        {'project_status': 'archived'},
+        {'project_status': 'completed'},
+        {'shot_lifecycle_status': 'archived'},
+        {'task_status': 'in_progress'},
+        {'has_uncommitted_submission': True},
+        {'task_kind': 'asset_image'},
+    ],
+)
+def test_direct_feedback_preserves_target_and_submission_boundaries(overrides: dict[str, Any]) -> None:
+    values = {'task_status': 'pending_review', **overrides}
+    assert 'task.feedback' not in ShotGridTaskService._allowed_actions(
+        _task_row(**values), _current_user(permissions=['*:*:*']), _access()
+    )
+
+
+def test_start_schedule_contract_preserves_existing_range_and_allows_unscheduled() -> None:
     now = datetime(2026, 8, 31, 10)
     existing = _task()
     existing.expected_start_time = datetime(2026, 8, 29, 9)
@@ -192,13 +232,9 @@ def test_start_schedule_contract_preserves_existing_range_and_requires_saved_sch
     assert existing_override.value.error_key == 'SG_TASK_EXPECTED_TIME_INVALID'
 
     fresh = _task()
-    with pytest.raises(ShotGridDomainException) as missing_range:
-        ShotGridTaskService._resolve_start_schedule(
-            fresh,
-            ShotGridTaskStartModel(lockVersion=INITIAL_TASK_LOCK_VERSION),
-            now,
-        )
-    assert missing_range.value.error_key == 'SG_TASK_SCHEDULE_REQUIRED'
+    assert ShotGridTaskService._resolve_start_schedule(
+        fresh, ShotGridTaskStartModel(lockVersion=INITIAL_TASK_LOCK_VERSION), now
+    ) == (None, None, False)
 
     with pytest.raises(ShotGridDomainException) as past_range:
         ShotGridTaskService._resolve_start_schedule(
@@ -210,7 +246,7 @@ def test_start_schedule_contract_preserves_existing_range_and_requires_saved_sch
             ),
             now,
         )
-    assert past_range.value.error_key == 'SG_TASK_SCHEDULE_REQUIRED'
+    assert past_range.value.error_key == 'SG_TASK_EXPECTED_TIME_INVALID'
 
 
 @pytest.mark.parametrize('start_time', ['2026-08-30T09:00:00', '2099-09-01T09:00:00'])
@@ -225,7 +261,7 @@ def test_unscheduled_start_cannot_bypass_saved_schedule_with_inline_dates(start_
             ),
             datetime(2026, 8, 31, 10),
         )
-    assert error.value.error_key == 'SG_TASK_SCHEDULE_REQUIRED'
+    assert error.value.error_key == 'SG_TASK_EXPECTED_TIME_INVALID'
 
 
 @pytest.mark.parametrize(
@@ -340,9 +376,9 @@ def test_task_detail_hides_version_add_while_uncommitted_submission_exists() -> 
 
 @pytest.mark.parametrize(
     ('task_kind', 'director_can_start', 'creator_can_start'),
-    [('shot_video', True, False), ('asset_image', True, False)],
+    [('shot_video', False, False), ('asset_image', False, False)],
 )
-def test_task_start_actions_require_manager_for_both_task_kinds(
+def test_assigned_tasks_do_not_offer_manual_start(
     task_kind: str,
     director_can_start: bool,
     creator_can_start: bool,
@@ -431,6 +467,7 @@ async def test_assign_shot_locks_project_target_task_then_member_and_audits(
     monkeypatch: pytest.MonkeyPatch,
     description: str | None,
 ) -> None:
+    monkeypatch.setattr(ShotGridTaskService, '_activate_assigned_shot', AsyncMock())
     events: list[str] = []
 
     async def lock_project(*_args: Any, **_kwargs: Any) -> None:
@@ -620,6 +657,7 @@ async def test_assign_shot_rechecks_director_after_project_lock_and_rolls_back_w
 async def test_batch_assign_shots_assigns_all_selected_shots_in_one_transaction(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(ShotGridTaskService, '_activate_assigned_shot', AsyncMock())
     first_shot_id = SHOT_ID
     second_shot_id = SHOT_ID + 1
     monkeypatch.setattr(
@@ -719,6 +757,8 @@ async def test_assign_asset_item_locks_asset_and_item_before_task(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     events: list[str] = []
+    activate = AsyncMock()
+    monkeypatch.setattr(ShotGridTaskService, '_activate_assigned_asset', activate)
 
     async def lock_project(*_args: Any, **_kwargs: Any) -> None:
         events.append('project')
@@ -965,125 +1005,34 @@ async def test_reassignment_is_blocked_after_start_or_by_uncommitted_submission(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('all_scope', [False, True])
-@pytest.mark.parametrize('existing_directory', [None, '001_S001'])
-@pytest.mark.parametrize('overlap_task_ids', [[], [999]])
-@pytest.mark.parametrize('description', [None, '', '   ', '制作内容'])
-async def test_start_shot_allows_manager_and_increments_lock_in_same_transaction(
+@pytest.mark.parametrize('directory_status', [None, 'pending', 'failed', 'succeeded'])
+async def test_assigned_shot_automatically_prepares_without_schedule(
     monkeypatch: pytest.MonkeyPatch,
-    all_scope: bool,
-    existing_directory: str | None,
-    overlap_task_ids: list[int],
-    description: str | None,
+    directory_status: str | None,
 ) -> None:
-    monkeypatch.setattr(ShotGridTaskService, '_now', staticmethod(lambda: datetime(2026, 8, 28, 10)))
-    task = _task(assignee_user_id=ASSIGNEE_USER_ID, lock_version=INITIAL_TASK_LOCK_VERSION)
-    task.expected_start_time = task.baseline_start_time = datetime(2026, 8, 29, 9)
-    task.expected_end_time = task.baseline_end_time = datetime(2026, 8, 30, 18)
-    task.due_date = date(2026, 8, 30)
-    access = _access(user_id=3, all_scope=all_scope)
-    monkeypatch.setattr(
-        'module_shot_grid.service.task_service.ShotGridTaskService._resolve_task_access',
-        AsyncMock(return_value=(PROJECT_ID, access)),
-    )
-    monkeypatch.setattr(
-        'module_shot_grid.service.task_service.ShotGridTaskService._lock_mutable_project',
-        AsyncMock(return_value=(SimpleNamespace(), SimpleNamespace(storage_status='ready'))),
-    )
-    _patch_locked_access(monkeypatch, access)
-    monkeypatch.setattr(
-        'module_shot_grid.service.task_service.ShotGridTaskService._lock_task',
-        AsyncMock(return_value=task),
-    )
+    task = _task()
     shot = SimpleNamespace(
-        shot_id=SHOT_ID,
-        shot_no=1,
-        storage_dir_name=existing_directory,
-        description=description,
-        update_by='old',
-        update_time=None,
-        lock_version=0,
-    )
-    monkeypatch.setattr(
-        'module_shot_grid.service.task_service.ShotGridTaskDao.lock_shot_target',
-        AsyncMock(
-            return_value=(
-                shot,
-                SimpleNamespace(storage_dir_name='EP001'),
-                SimpleNamespace(scene_no=1),
-            )
-        ),
+        shot_id=SHOT_ID, shot_no=1, storage_dir_name='001_0001' if directory_status else None, lock_version=0
     )
     monkeypatch.setattr(
         'module_shot_grid.service.task_service.ShotGridTaskDao.get_latest_shot_directory_operation_status',
-        AsyncMock(return_value=None),
+        AsyncMock(return_value=directory_status),
     )
-    monkeypatch.setattr(
-        'module_shot_grid.service.task_service.ShotGridTaskDao.flush',
-        AsyncMock(),
+    db = AsyncMock()
+    db.add = MagicMock()
+    await ShotGridTaskService._activate_assigned_shot(
+        db, task, shot, SimpleNamespace(storage_dir_name='EP01'), SimpleNamespace(scene_no=1), 'admin'
     )
-    monkeypatch.setattr(
-        'module_shot_grid.service.task_service.ShotGridTaskDao.get_assignable_member',
-        AsyncMock(return_value={'user_id': ASSIGNEE_USER_ID, 'producer_code': 'YJF'}),
-    )
-    monkeypatch.setattr(
-        'module_shot_grid.dao.task_schedule_dao.ShotGridTaskScheduleDao.find_overlap_task_ids',
-        AsyncMock(return_value=overlap_task_ids),
-    )
-    audit = AsyncMock()
-    monkeypatch.setattr(
-        'module_shot_grid.service.task_service.ShotGridTaskService._audit',
-        audit,
-    )
-    monkeypatch.setattr(
-        'module_shot_grid.service.task_service.ShotGridTaskService._require_task_detail',
-        AsyncMock(return_value=_task_row(task_status='preparing', lock_version=4)),
-    )
-    expected = object()
-    monkeypatch.setattr(
-        'module_shot_grid.service.task_service.ShotGridTaskService._build_detail',
-        lambda *_args: expected,
-    )
-    db = SimpleNamespace(
-        add=MagicMock(),
-        flush=AsyncMock(),
-        commit=AsyncMock(),
-        rollback=AsyncMock(),
-    )
-
-    result = await ShotGridTaskService.start_task(
-        db,
-        TASK_ID,
-        ShotGridTaskStartModel(
-            lockVersion=INITIAL_TASK_LOCK_VERSION,
-            shotLockVersion=0,
-            assetsConfirmed=True,
-            priority='urgent',
-        ),
-        _current_user(user_id=3),
-    )
-
-    assert result is expected
-    assert task.task_status == 'preparing'
-    assert task.expected_start_time == datetime(2026, 8, 29, 9)
-    assert task.expected_end_time == datetime(2026, 8, 30, 18)
-    assert task.baseline_start_time == datetime(2026, 8, 29, 9)
-    assert task.baseline_end_time == datetime(2026, 8, 30, 18)
-    assert task.due_date == date(2026, 8, 30)
-    assert task.priority == 'urgent'
-    assert shot.storage_dir_name == (existing_directory or '001_0001')
-    assert db.add.call_args.args[0].target_relative_path == f'VIDEO\\EP001\\{shot.storage_dir_name}'
-    assert task.lock_version == UPDATED_TASK_LOCK_VERSION
-    audit.assert_awaited_once()
-    assert audit.await_args.kwargs['payload']['assetsConfirmed'] is True
-    assert audit.await_args.kwargs['payload']['expectedStartTime'] == '2026-08-29T09:00:00'
-    assert audit.await_args.kwargs['payload']['expectedEndTime'] == '2026-08-30T18:00:00'
-    assert audit.await_args.kwargs['payload']['confirmationMethod'] == 'manual'
-    assert audit.await_args.kwargs['result']['operatedBy'] == access.user_id
-    assert task.assignee_user_id == ASSIGNEE_USER_ID
-    assert not any(isinstance(call.args[0], ShotGridTaskScheduleChange) for call in db.add.call_args_list)
-    db.commit.assert_awaited_once()
-    db.rollback.assert_not_awaited()
+    assert task.task_status == ('in_progress' if directory_status == 'succeeded' else 'preparing')
+    assert shot.storage_dir_name == '001_0001'
+    if directory_status is None:
+        operation = db.add.call_args.args[0]
+        assert operation.operation_status == 'pending'
+        assert operation.target_relative_path == r'VIDEO\EP01\001_0001'
+    else:
+        db.add.assert_not_called()
+    db.commit.assert_not_awaited()
+    db.flush.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -1363,6 +1312,7 @@ async def test_start_task_rejects_stale_lock_version_and_rolls_back(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     task = _task(assignee_user_id=ASSIGNEE_USER_ID, lock_version=UPDATED_TASK_LOCK_VERSION)
+    task.task_kind = 'asset_image'
     access = _access()
     monkeypatch.setattr(
         'module_shot_grid.service.task_service.ShotGridTaskService._resolve_task_access',
@@ -1682,7 +1632,7 @@ async def test_shot_start_blocks_stale_unconfirmed_and_unauthorized_requests(
         user.permissions = ['shotgrid:task:query']
     with pytest.raises(ShotGridDomainException) as exc_info:
         await ShotGridTaskService.start_task(db, TASK_ID, ShotGridTaskStartModel(**payload), user)
-    assert exc_info.value.error_key == error_key
+    assert exc_info.value.error_key == 'SG_SHOT_AUTO_START'
     assert shot.storage_dir_name is None
     audit.assert_not_awaited()
     db.commit.assert_not_awaited()
@@ -1690,35 +1640,38 @@ async def test_shot_start_blocks_stale_unconfirmed_and_unauthorized_requests(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('value', [None, '', '   '])
+@pytest.mark.parametrize('value', ['', '   '])
 @pytest.mark.parametrize('batch', [False, True])
-async def test_empty_content_can_be_assigned(
-    monkeypatch: pytest.MonkeyPatch, value: str | None, *, batch: bool
+async def test_shot_assignment_accepts_empty_content(
+    monkeypatch: pytest.MonkeyPatch, value: str, *, batch: bool
 ) -> None:
-    shot = SimpleNamespace(description=value, shot_no=1)
-    prefix = 'module_shot_grid.service.task_service.'
+    shot = SimpleNamespace(shot_id=SHOT_ID, shot_no=1, description=value, storage_dir_name=None, lock_version=0)
     monkeypatch.setattr(ShotGridTaskService, '_lock_mutable_project', AsyncMock())
-    _patch_locked_access(monkeypatch, _access(role='director'))
+    _patch_locked_access(monkeypatch, _access())
+    prefix = 'module_shot_grid.service.task_service.ShotGridTaskDao.'
     monkeypatch.setattr(
-        prefix + 'ShotGridTaskDao.lock_shot_target',
-        AsyncMock(return_value=(shot, SimpleNamespace(episode_no=1), SimpleNamespace(scene_no=1))),
+        prefix + 'lock_shot_target',
+        AsyncMock(
+            return_value=(shot, SimpleNamespace(episode_no=1, storage_dir_name='EP01'), SimpleNamespace(scene_no=1))
+        ),
     )
-    monkeypatch.setattr(prefix + 'ShotGridTaskDao.get_task_for_shot_update', AsyncMock(return_value=None))
-    assign = AsyncMock(return_value=(_task(), None))
+    monkeypatch.setattr(prefix + 'get_task_for_shot_update', AsyncMock(return_value=None))
+    monkeypatch.setattr(prefix + 'get_latest_shot_directory_operation_status', AsyncMock(return_value=None))
+    task = _task()
+    assign = AsyncMock(return_value=(task, None))
     monkeypatch.setattr(ShotGridTaskService, '_assign_task', assign)
-    monkeypatch.setattr(ShotGridTaskService, '_audit_assignment', AsyncMock())
     monkeypatch.setattr(ShotGridTaskService, '_audit', AsyncMock())
     monkeypatch.setattr(ShotGridTaskService, '_require_task_detail', AsyncMock(return_value=_task_row()))
     db = AsyncMock()
+    db.add = MagicMock()
     if batch:
-        result = await ShotGridTaskService.batch_assign_shots(
+        await ShotGridTaskService.batch_assign_shots(
             db,
             PROJECT_ID,
             ShotGridShotTaskBatchAssignModel(assigneeUserId=ASSIGNEE_USER_ID, items=[{'shotId': SHOT_ID}]),
             _current_user(),
-            _access(role='director'),
+            _access(),
         )
-        assert result.created_task_count == 1
     else:
         await ShotGridTaskService.assign_shot(
             db,
@@ -1726,19 +1679,10 @@ async def test_empty_content_can_be_assigned(
             SHOT_ID,
             ShotGridTaskAssignModel(assigneeUserId=ASSIGNEE_USER_ID),
             _current_user(),
-            _access(role='director'),
+            _access(),
         )
+    assert task.task_status == 'preparing'
     assign.assert_awaited_once()
-    assert assign.await_args.kwargs['command'].task_description == value
+    db.add.assert_called_once()
     db.commit.assert_awaited_once()
     db.rollback.assert_not_awaited()
-
-
-@pytest.mark.parametrize('description', [None, '', '   '])
-def test_empty_shot_content_allows_start_action(description: str | None) -> None:
-    row = {**_task_row(), 'shot_description': description, 'task_status': 'not_started'}
-    actions = ShotGridTaskService._allowed_actions(row, _current_user(), _access())
-    assert 'task.assign' in actions
-    assert 'task.start' in actions
-    row['shot_description'] = '补齐后的制作内容'
-    assert 'task.start' in ShotGridTaskService._allowed_actions(row, _current_user(), _access())

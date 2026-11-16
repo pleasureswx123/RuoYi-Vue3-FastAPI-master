@@ -6,7 +6,7 @@ from module_admin.entity.do.file_do import SysFileInfo  # noqa: F401
 from module_admin.entity.do.user_do import SysUser  # noqa: F401
 from module_shot_grid.schema import SHOT_GRID_TABLE_NAMES
 
-EXPECTED_TABLE_COUNT = 35
+EXPECTED_TABLE_COUNT = 39
 
 
 def _primary_key_columns(table_name: str) -> tuple[str, ...]:
@@ -30,7 +30,7 @@ def test_association_tables_use_the_frozen_composite_primary_keys() -> None:
     assert _primary_key_columns('sg_review_list_version') == ('review_list_id', 'version_id')
 
 
-def test_shot_grid_foreign_keys_preserve_domain_data_and_cascade_only_managed_role_marker() -> None:
+def test_shot_grid_foreign_keys_preserve_data_except_explicit_owned_relations() -> None:
     foreign_keys = [
         constraint
         for table_name in SHOT_GRID_TABLE_NAMES
@@ -43,7 +43,23 @@ def test_shot_grid_foreign_keys_preserve_domain_data_and_cascade_only_managed_ro
         for constraint in Base.metadata.tables['sg_managed_user_role'].constraints
         if isinstance(constraint, ForeignKeyConstraint)
     ]
-    domain_foreign_keys = [constraint for constraint in foreign_keys if constraint.table.name != 'sg_managed_user_role']
+    cascades = {
+        ('sg_managed_user_role', ('user_id', 'role_id')),
+        ('sg_asset_relation', ('asset_id', 'project_id')),
+        ('sg_asset_relation', ('related_asset_id', 'project_id')),
+        ('sg_daily_record', ('task_id', 'project_id')),
+    }
+    actual_cascades = {
+        (c.table.name, tuple(col.name for col in c.columns)) for c in foreign_keys if c.ondelete == 'CASCADE'
+    }
+    assert actual_cascades == cascades
+    daily_user = [
+        c
+        for c in foreign_keys
+        if c.table.name == 'sg_daily_record' and tuple(col.name for col in c.columns) == ('user_id',)
+    ]
+    assert len(daily_user) == 1 and daily_user[0].ondelete is None  # PostgreSQL 默认 NO ACTION 保留平台用户引用。
+    domain_foreign_keys = [c for c in foreign_keys if c.ondelete != 'CASCADE' and c not in daily_user]
 
     assert domain_foreign_keys
     assert all(constraint.ondelete == 'RESTRICT' for constraint in domain_foreign_keys)
@@ -127,10 +143,10 @@ def test_final_delivery_has_unique_version_and_fenced_execution_state() -> None:
         for constraint in delivery.constraints
         if isinstance(constraint, CheckConstraint)
     }
-    version_index = next(index for index in delivery.indexes if index.name == 'uk_sg_final_delivery_version')
+    version_index = next(index for index in delivery.indexes if index.name == 'uk_sg_final_delivery_cycle_operation')
 
     assert version_index.unique is True
-    assert [column.name for column in version_index.columns] == ['version_id']
+    assert [column.name for column in version_index.columns] == ['version_id', 'review_cycle', 'operation']
     assert "delivery_status = 'publishing'" in checks['ck_sg_final_delivery_lease']
     assert "publish_mode in ('hardlink', 'copied', 'reused')" in checks['ck_sg_final_delivery_result']
 

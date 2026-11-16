@@ -25,6 +25,7 @@ from module_shot_grid.entity.do.task_do import ShotGridTask
 from module_shot_grid.entity.do.version_do import (
     ShotGridVersion,
     ShotGridVersionCandidate,
+    ShotGridVersionFile,
     ShotGridVersionSubmission,
     ShotGridVersionSubmissionFile,
 )
@@ -89,7 +90,7 @@ async def _prepare(sessions: SessionFactory) -> None:
 
 
 async def _submit(
-    sessions: SessionFactory, *, target: int | None = None
+    sessions: SessionFactory, *, target: int | None = None, task_id: int = FIRST_TASK_ID
 ) -> tuple[Any, ShotGridVersionSubmissionCreateModel, str]:
     file_id = str(uuid4())
     async with sessions() as db:
@@ -124,7 +125,7 @@ async def _submit(
     async with sessions() as db:
         accepted = await Service.create_submission(
             db,
-            FIRST_TASK_ID,
+            task_id,
             command,
             file_id,
             _user(CREATOR_ID, ['shotgrid:version:add']),
@@ -393,3 +394,60 @@ async def test_prompt_edit_permissions_conflict_and_immutable_submission(pg_sess
 def mute_realtime_notifications(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr('module_shot_grid.service.version_submission_service.publish_version_changed', AsyncMock())
     monkeypatch.setattr('module_shot_grid.service.review_service.publish_version_changed', AsyncMock())
+
+
+async def test_two_asset_items_have_independent_named_version_folders(pg_sessions: SessionFactory) -> None:
+    await _prepare(pg_sessions)
+    async with pg_sessions() as db:
+        await db.execute(
+            update(ShotGridTask).where(ShotGridTask.task_id == FIRST_TASK_ID + 1).values(task_status='in_progress')
+        )
+        await db.commit()
+    folders = []
+    for task_id in (FIRST_TASK_ID, FIRST_TASK_ID + 1):
+        for number in (1, 2):
+            accepted, _, _ = await _submit(pg_sessions, task_id=task_id)
+            version_id, _ = await _publish(pg_sessions, accepted.submission_id)
+            async with pg_sessions() as db:
+                version = await db.get(ShotGridVersion, version_id)
+                assert version.version_no == number
+                path = await db.scalar(
+                    select(ShotGridVersionFile.nas_relative_path).where(
+                        ShotGridVersionFile.version_id == version_id, ShotGridVersionFile.file_role == 'review_media'
+                    )
+                )
+                assert path.split('\\')[-2] == f'V{number:03d}'
+                folders.append(path.rsplit('\\', 1)[0])
+    assert len(set(folders)) == 4  # noqa: PLR2004
+    assert folders[0].rsplit('\\', 1)[0] == folders[1].rsplit('\\', 1)[0]
+    assert folders[0].rsplit('\\', 1)[0] != folders[2].rsplit('\\', 1)[0]
+
+
+async def test_legacy_pending_asset_append_keeps_original_folder(pg_sessions: SessionFactory) -> None:
+    await _prepare(pg_sessions)
+    accepted, _, _ = await _submit(pg_sessions)
+    version_id, _ = await _publish(pg_sessions, accepted.submission_id)
+    async with pg_sessions() as db:
+        file = (
+            await db.scalars(
+                select(ShotGridVersionFile).where(
+                    ShotGridVersionFile.version_id == version_id, ShotGridVersionFile.file_role == 'review_media'
+                )
+            )
+        ).one()
+        context = await Dao.get_task_creation_context(db, FIRST_TASK_ID)
+        file.nas_relative_path = Service.build_target_relative_path(context, file.business_file_name, legacy=True)
+        old_parent = file.nas_relative_path.rsplit('\\', 1)[0]
+        await db.commit()
+    appended, _, _ = await _submit(pg_sessions, target=1)
+    await _publish(pg_sessions, appended.submission_id)
+    async with pg_sessions() as db:
+        paths = list(
+            await db.scalars(
+                select(ShotGridVersionFile.nas_relative_path).where(
+                    ShotGridVersionFile.version_id == version_id, ShotGridVersionFile.file_role == 'review_media'
+                )
+            )
+        )
+        assert len(paths) == 2  # noqa: PLR2004
+        assert all(path.rsplit('\\', 1)[0] == old_parent for path in paths)

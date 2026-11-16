@@ -6,7 +6,7 @@ import 'element-plus/es/components/table/style/css'
 import 'element-plus/es/components/table-column/style/css'
 import RelatedDetailDrawer from '@/components/RelatedDetailDrawer.vue'
 import { detailNavigationKey } from '@/composables/useDetailNavigation'
-import { getRecentMineVersions, getMineSubmissionProjects } from '@/api/shot-grid/reviews'
+import { getRecentMineVersions } from '@/api/shot-grid/reviews'
 import { useSessionStore } from '@/store/modules/session'
 import { formatReviewDateTime } from '@/views/review/reviewPresentation'
 import { taskVersionStatusMeta } from '@/views/task/taskPresentation'
@@ -46,7 +46,7 @@ async function loadProjects() {
   projectsLoading.value = true
   projectsError.value = false
   try {
-    const response = await getMineSubmissionProjects({ signal: request.signal })
+    const response = { data: await session.loadWorkspaceProjects({ signal: request.signal }) }
     if (!disposed && !request.signal.aborted) projectOptions.value = response.data || []
   } catch (failure) {
     if (!disposed && !request.signal.aborted && failure?.code !== 'ERR_CANCELED') projectsError.value = true
@@ -100,7 +100,7 @@ async function load() {
   loading.value = true
   error.value = false
   try {
-    const response = await getRecentMineVersions({ ...applied.value, ...page, groupByTask: true, orderByColumn: 'submittedTime', isAsc: 'descending' }, { signal: request.signal })
+    const response = await getRecentMineVersions({ ...applied.value, ...page, ...session.workbenchParams(), groupByTask: true, orderByColumn: 'submittedTime', isAsc: 'descending' }, { signal: request.signal })
     if (disposed || request.signal.aborted || current !== generation) return
     rows.value = response.rows || []
     const visibleTaskKeys = new Set(rows.value.map(row => `${row.projectId}:task:${row.taskId}`))
@@ -162,7 +162,8 @@ onBeforeUnmount(() => { disposed = true; generation += 1; filterGeneration += 1;
       <el-radio-button v-for="option in statusOptions" :key="option.value" :value="option.value">{{ option.label }}</el-radio-button>
     </el-radio-group>
     <el-form ref="form" :model="filters" :rules="rules" class="submission-filters" size="large" label-position="top" aria-label="提交记录筛选">
-      <el-form-item label="项目" prop="projectId"><el-select v-model="filters.projectId" class="sg-select" filterable clearable placeholder="全部项目" :loading="projectsLoading" :disabled="projectsError" @change="search"><el-option v-for="project in projectOptions" :key="project.projectId" :value="project.projectId" :label="`${project.projectName} · ${project.projectCode}${project.projectStatus === 'archived' ? '（已归档）' : ''}`" /></el-select></el-form-item>
+
+      <el-form-item label="当前项目"><el-tag>{{ projectOptions[0]?.projectName || "加载中" }}</el-tag></el-form-item>
       <el-form-item label="任务" prop="taskKeyword"><el-input class="sg-input" :prefix-icon="Search" v-model="filters.taskKeyword" placeholder="搜索任务名称" clearable maxlength="240" @keyup.enter="search" /></el-form-item>
 
       <el-form-item label="提交时间" prop="dates"><el-date-picker class="sg-input" v-model="filters.dates" :shortcuts="dateShortcuts" @change="search" unlink-panels format="YYYY/MM/DD" type="daterange" value-format="YYYY-MM-DD" start-placeholder="开始日期" end-placeholder="结束日期" range-separator="至" /></el-form-item>

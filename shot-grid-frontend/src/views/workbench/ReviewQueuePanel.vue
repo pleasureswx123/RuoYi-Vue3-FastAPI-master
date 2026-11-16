@@ -3,7 +3,7 @@ import { onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import RelatedDetailDrawer from '@/components/RelatedDetailDrawer.vue'
 import { ElAlert, ElButton, ElDatePicker, ElEmpty, ElForm, ElFormItem, ElInput, ElOption, ElPagination, ElRadioGroup, ElRadioButton, ElSelect, ElTable, ElTableColumn, ElTag } from 'element-plus'
 import { RefreshLeft, Refresh, Search } from '@element-plus/icons-vue'
-import { getMineReviewListPage, getMineReviewProjects, getMineReviewProducers } from '@/api/shot-grid/reviews'
+import { getMineReviewListPage, getMineReviewProducers } from '@/api/shot-grid/reviews'
 import { useSessionStore } from '@/store/modules/session'
 import { formatReviewDateTime } from '@/views/review/reviewPresentation'
 
@@ -54,7 +54,7 @@ async function load() {
   loading.value = true
   failed.value = false
   try {
-    const response = await getMineReviewListPage({ orderByColumn: 'submittedTime', isAsc: 'ascending', ...applied, ...page }, { signal: controller.signal })
+    const response = await getMineReviewListPage({ orderByColumn: 'submittedTime', isAsc: 'ascending', ...applied, ...page, ...session.productionParams() }, { signal: controller.signal })
     if (disposed || current !== generation) return
     total.value = Number(response.total || 0)
     const lastPage = Math.max(1, Math.ceil(total.value / page.pageSize))
@@ -113,7 +113,7 @@ async function loadProjects() {
   projectsLoading.value = true
   projectsError.value = false
   try {
-    const response = await getMineReviewProjects({ signal: request.signal })
+    const response = { data: await session.loadWorkspaceProjects({ signal: request.signal }) }
     if (!disposed && projectsController === request) projects.value = response.data || []
   } catch (error) {
     if (!disposed && projectsController === request && error?.code !== 'ERR_CANCELED') projectsError.value = true
@@ -129,7 +129,7 @@ async function loadProducers() {
   producersError.value = false
   producers.value = []
   try {
-    const response = await getMineReviewProducers({ projectId: filters.projectId || undefined }, { signal: request.signal })
+    const response = await getMineReviewProducers({ projectId: session.activeProjectId || undefined }, { signal: request.signal })
     if (!disposed && producersController === request) producers.value = response.data || []
   } catch (error) {
     if (!disposed && producersController === request && error?.code !== 'ERR_CANCELED') producersError.value = true
@@ -137,11 +137,7 @@ async function loadProducers() {
     if (!disposed && producersController === request) producersLoading.value = false
   }
 }
-function changeProject() {
-  filters.submittedBy = ''
-  loadProducers()
-  search()
-}
+
 function refreshAfterReview() { load(); loadProjects(); loadProducers() }
 onMounted(() => { load(); loadProjects(); loadProducers() })
 onBeforeUnmount(() => { disposed = true; generation += 1; searchGeneration += 1; controller?.abort(); projectsController?.abort(); producersController?.abort() })
@@ -156,7 +152,7 @@ onBeforeUnmount(() => { disposed = true; generation += 1; searchGeneration += 1;
     </header>
     <el-alert v-if="projectsError" title="项目选项加载失败，仍可使用其他筛选条件" type="warning" show-icon :closable="false"><el-button link type="primary" @click="loadProjects">重试项目选项</el-button></el-alert>
     <el-form ref="form" :model="filters" :rules="rules" size="default" label-position="top" class="review-filters sg-filter-bar" aria-label="待审核筛选">
-      <el-form-item class="review-field-project" label="项目" prop="projectId"><el-select v-model="filters.projectId" filterable clearable placeholder="全部项目" :loading="projectsLoading" :disabled="projectsError" @change="changeProject"><el-option v-for="project in projects" :key="project.projectId" :value="project.projectId" :label="`${project.projectName} · ${project.projectCode}`" /></el-select></el-form-item>
+      <el-form-item class="review-field-project" label="当前项目"><el-tag>{{ projects[0]?.projectName || "加载中" }}</el-tag></el-form-item>
       <el-form-item class="review-field-search" label="审核内容" prop="keyword"><el-input v-model="filters.keyword" :prefix-icon="Search" placeholder="搜索镜头号、任务或审核单" clearable @clear="search" @keydown.enter.prevent="search" /></el-form-item>
       <el-form-item class="review-field-order" label="排序" prop="orderValue"><el-select v-model="filters.orderValue" @change="search"><el-option label="镜头顺序" value="shotNo:ascending" /><el-option label="等待最久" value="submittedTime:ascending" /><el-option label="最近提交" value="submittedTime:descending" /></el-select></el-form-item>
 

@@ -257,3 +257,11 @@ export function rematchAssetRequirements(projectId) {
 export function batchForceDeleteAssets(projectId, items, reason) {
   return request({ url: projectUrl(projectId, '/assets/batch-force-delete'), method: 'post', data: { items, reason } })
 }
+
+
+export function getAssetRelations(projectId, assetId, options = {}) {
+  return request({ url: assetUrl(projectId, assetId, '/relations'), method: 'get', silentError: true, ...options })
+}
+export function updateAssetRelations(projectId, assetId, data) {
+  return request({ url: assetUrl(projectId, assetId, '/relations'), method: 'put', data, silentError: true })
+}

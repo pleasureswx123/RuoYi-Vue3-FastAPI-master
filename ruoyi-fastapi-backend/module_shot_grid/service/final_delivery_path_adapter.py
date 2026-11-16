@@ -1,7 +1,9 @@
 import asyncio
+import ctypes
 import json
 import os
 import re
+import stat
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,8 +14,10 @@ from module_shot_grid.service.version_publish_path_adapter import (
     ShotGridVersionPublishPathAdapter,
     VersionPublishPathAdapterError,
 )
+from utils.log_util import logger
 
 SOURCE_RELATIVE_PARTS = 4
+VERSIONED_SOURCE_PARTS = 6
 FINAL_RELATIVE_PARTS = 5
 
 
@@ -163,7 +167,7 @@ class ShotGridFinalDeliveryPathAdapter(ShotGridVersionPublishPathAdapter):
         manifest_parts = self._relative_parts_for_publish(context.manifest_nas_relative_path)
         generation_directory = f'T{context.task_id}-V{context.version_no:03d}-R{context.review_cycle:03d}'
         legacy = target_parts == (*source_parts[:-1], 'FINAL', context.business_file_name)
-        if context.operation == 'revoke' and len(target_parts) == FINAL_RELATIVE_PARTS + 1:
+        if context.operation == 'revoke' and len(target_parts) == len(source_parts) + 2:
             match = re.fullmatch(rf'T{context.task_id}-V{context.version_no:03d}-R([0-9]+)', target_parts[-2])
             if match and 0 < int(match.group(1)) <= context.review_cycle:
                 generation_directory = target_parts[-2]
@@ -171,10 +175,15 @@ class ShotGridFinalDeliveryPathAdapter(ShotGridVersionPublishPathAdapter):
             (*source_parts[:-1], 'FINAL') if legacy else (*source_parts[:-1], 'FINAL', generation_directory)
         )
         if (
-            len(source_parts) != SOURCE_RELATIVE_PARTS
+            len(source_parts) not in {SOURCE_RELATIVE_PARTS, VERSIONED_SOURCE_PARTS}
+            or not any(self.valid_business_path(kind, source_parts) for kind in ('shot_video', 'asset_image'))
             or source_parts[-1] != context.business_file_name
             or target_parts != (*expected_parent, context.business_file_name)
-            or manifest_parts != (*expected_parent, 'FINAL.json')
+            or manifest_parts
+            not in {
+                (*expected_parent, 'FINAL.json'),
+                (*expected_parent, f'FINAL-V{context.version_no:03d}.json'),
+            }
         ):
             raise self._invalid_path_error()
         for parts in (source_parts, target_parts, manifest_parts):
@@ -257,12 +266,14 @@ class ShotGridFinalDeliveryPathAdapter(ShotGridVersionPublishPathAdapter):
                     os.fsync(manifest.fileno())
                 cls._publish_without_overwrite(plan.manifest_temporary_path, plan.manifest_path)
                 manifest_temp_created = False
+            cls._hide_manifest(plan.manifest_path)
             return result
         except VersionPublishPathAdapterError:
             raise
         except FileExistsError:
             result = cls._verify_existing_target(plan)
             cls._verify_existing_manifest(plan, cls._manifest_bytes(plan, result))
+            cls._hide_manifest(plan.manifest_path)
             return result
         except OSError as exc:
             raise VersionPublishPathAdapterError(
@@ -281,6 +292,26 @@ class ShotGridFinalDeliveryPathAdapter(ShotGridVersionPublishPathAdapter):
                     plan.manifest_temporary_path.unlink(missing_ok=True)
                 except OSError:
                     pass
+
+    @classmethod
+    def _hide_manifest(cls, manifest_path: Path) -> None:
+        """Windows 仅隐藏交付记录，保留文件内容、原属性和校验能力。"""
+        if os.name != 'nt':
+            return
+        try:
+            cls._reject_link_or_reparse_point(manifest_path)
+            attributes = manifest_path.stat().st_file_attributes
+            if attributes & stat.FILE_ATTRIBUTE_HIDDEN:
+                return
+            kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+            set_attributes = kernel32.SetFileAttributesW
+            set_attributes.argtypes = (ctypes.c_wchar_p, ctypes.c_uint32)
+            set_attributes.restype = ctypes.c_int
+            if not set_attributes(str(manifest_path), attributes | stat.FILE_ATTRIBUTE_HIDDEN):
+                raise ctypes.WinError(ctypes.get_last_error())
+        except OSError:
+            # 展示属性失败不应把已完整发布的成果标记为交付失败。
+            logger.warning('交付记录已保存，但 Windows 隐藏属性未能设置')
 
     @classmethod
     def _validate_source(cls, plan: _FinalDeliveryPlan) -> None:

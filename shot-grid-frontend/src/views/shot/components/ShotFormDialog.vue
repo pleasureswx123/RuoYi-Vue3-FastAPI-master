@@ -1,7 +1,7 @@
 <script setup>
 import { ElMessageBox, ElTooltip } from 'element-plus'
 import { QuestionFilled } from '@element-plus/icons-vue'
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 
 import { createShot, getScenePage, updateShot } from '@/api/shot-grid/shots'
 import { secondsToDurationMs, shotErrorState } from '@/views/shot/shotPresentation'
@@ -16,7 +16,9 @@ const props = defineProps({
   episodes: { type: Array, required: true },
   initialEpisodeId: { type: [Number, String], default: '' },
   initialSceneId: { type: [Number, String], default: '' },
-  shot: { type: Object, default: null }
+  shot: { type: Object, default: null },
+  field: { type: String, default: '' },
+  embedded: { type: Boolean, default: false }
 })
 const emit = defineEmits(['close', 'saved', 'refresh'])
 const operationContext = Object.freeze({
@@ -25,6 +27,9 @@ const operationContext = Object.freeze({
   operationGeneration: Number(props.operationGeneration)
 })
 const shotFormRef = ref(null)
+const identityEditable = computed(() => !props.shot || props.shot.allowedActions?.includes('shot.editIdentity'))
+const shows = key => !props.field || props.field === key
+const fieldTitles = { shotNo: '镜头号', scene: '场次', durationSeconds: '时长', description: '制作内容', parameters: '镜头参数', dialogue: '台词 / 对白', soundEffect: '音效', colorReference: '色调参考', remark: '备注', references: '参考内容' }
 const busy = ref(false)
 const scenesLoading = ref(false)
 const scenes = ref([])
@@ -62,7 +67,7 @@ const form = reactive({
 
 // 仅比较可编辑字段，避免场次选项异步加载被误判为用户修改。
 function editSnapshot() {
-  return JSON.stringify(Object.fromEntries(Object.entries(form).filter(([key]) => !['episodeId', 'sceneId', 'shotNo'].includes(key))))
+  return JSON.stringify(form)
 }
 let savedSnapshot = editSnapshot()
 let closeConfirmationPending = false
@@ -111,7 +116,7 @@ const shotFormRules = {
   sceneId: [positiveIdRule('请选择有效场次')],
   shotNo: [{
     validator: (_rule, value, callback) => {
-      if (isEdit.value) { callback(); return }
+      if (isEdit.value && !identityEditable.value) { callback(); return }
       const shotNo = Number(value)
       if (!/^[0-9]+$/.test(String(value).trim()) || !Number.isSafeInteger(shotNo) || shotNo <= 0 || shotNo > MAX_SHOT_NO) {
         callback(new Error('镜头号须为 1 至 214748364 的整数'))
@@ -144,7 +149,7 @@ async function loadScenes(resetScene = false) {
   scenes.value = []
   if (resetScene) {
     form.sceneId = ''
-    form.shotNo = ''
+    if (!isEdit.value) form.shotNo = ''
     shotFormRef.value?.clearValidate('sceneId')
     shotFormRef.value?.clearValidate('shotNo')
   }
@@ -154,16 +159,19 @@ async function loadScenes(resetScene = false) {
   scenesController = controller
   scenesLoading.value = true
   try {
-    const sceneResponse = await getScenePage(
-      operationContext.projectId,
-      episodeId,
-      { pageNum: 1, pageSize: 100, lifecycleStatus: 'active', orderByColumn: 'sceneNo', isAsc: 'ascending' },
-      { signal: controller.signal }
-    )
-    scenes.value = Array.isArray(sceneResponse.rows) ? sceneResponse.rows : []
+    const loaded = []
+    for (let pageNum = 1; ; pageNum++) {
+      const response = await getScenePage(operationContext.projectId, episodeId,
+        { pageNum, pageSize: 100, lifecycleStatus: 'active', orderByColumn: 'sceneNo', isAsc: 'ascending' },
+        { signal: controller.signal })
+      if (controller.signal.aborted || scenesController !== controller) return
+      loaded.push(...(response.rows || []))
+      if (!response.hasNext) break
+    }
+    scenes.value = loaded
     if (form.sceneId && !scenes.value.some(scene => String(scene.sceneId) === String(form.sceneId))) {
       form.sceneId = ''
-      form.shotNo = ''
+      if (!isEdit.value) form.shotNo = ''
     }
     if (!form.sceneId && scenes.value.length === 1) form.sceneId = String(scenes.value[0].sceneId)
   } catch (error) {
@@ -189,7 +197,7 @@ function buildPayload() {
   const shotNo = Number(form.shotNo)
   if (!Number.isSafeInteger(sceneId) || sceneId <= 0) throw new Error('请选择有效场次')
   const durationMs = secondsToDurationMs(durationSeconds)
-  if (!isEdit.value && (!Number.isSafeInteger(shotNo) || shotNo <= 0 || shotNo > MAX_SHOT_NO)) throw new Error('镜头号须为 1 至 214748364 的整数')
+  if ((!isEdit.value || identityEditable.value) && (!Number.isSafeInteger(shotNo) || shotNo <= 0 || shotNo > MAX_SHOT_NO)) throw new Error('镜头号须为 1 至 214748364 的整数')
   const description = form.description.trim()
   const payload = {
     sceneId,
@@ -206,7 +214,7 @@ function buildPayload() {
     remark: optionalText(form.remark),
     assetIds: isEdit.value ? (props.shot.assets || []).map(asset => asset.assetId) : []
   }
-  if (!isEdit.value) payload.shotNo = shotNo
+  if (!isEdit.value || identityEditable.value) payload.shotNo = shotNo
   if (isEdit.value) payload.lockVersion = props.shot.lockVersion
   return payload
 }
@@ -244,7 +252,10 @@ function closeDialog() {
 }
 
 watch(() => form.episodeId, () => loadScenes(true))
-onMounted(() => loadScenes(false))
+onMounted(() => {
+  if (!props.field || props.field === 'scene') loadScenes(false)
+  if (props.embedded) nextTick(() => shotFormRef.value?.$el.querySelector('input, textarea')?.focus())
+})
 onBeforeUnmount(() => {
   scenesController?.abort()
 })
@@ -252,33 +263,34 @@ onBeforeUnmount(() => {
 
 <template>
   <component
-    :is="isEdit ? ProjectDrawer : ProjectModal"
+    :is="embedded ? 'div' : isEdit ? ProjectDrawer : ProjectModal"
     :title="isEdit ? `编辑 ${[shot.episodeCode, shot.sceneCode, shot.shotCode].filter(Boolean).join(' / ')}` : '新建镜头'"
-    :description="isEdit ? '镜头号保持不变，可补充制作信息；制作人调整请使用“改派制作人”。' : '手动填写镜头号，允许跳号，同一场次不能重复；创建后可继续补充制作信息。'"
+    :description="isEdit ? '点击字段修改；目录已冻结的镜头不能改号或换场次。' : '手动填写镜头号，允许跳号，同一场次不能重复；创建后可继续补充制作信息。'"
     :busy="busy"
     v-bind="isEdit ? { closeGuard: confirmDiscardChanges } : {}"
     wide
     @close="closeDialog"
   >
-    <el-form ref="shotFormRef" :model="form" :rules="shotFormRules" class="shot-form" size="default" label-position="top" aria-label="镜头信息表单">
-      <el-card shadow="never" class="shot-form__section">
-        <template #header><div class="shot-form__section-heading"><strong>基本信息</strong><span>{{ isEdit ? '所属集、场次与镜头号不可修改' : '确定镜头归属与编号' }}</span></div></template>
+    <strong v-if="embedded" class="shot-form__inline-title">编辑{{ fieldTitles[field] }}</strong>
+    <el-form ref="shotFormRef" :class="{ 'shot-form--inline': embedded }" :model="form" :rules="shotFormRules" class="shot-form" size="default" label-position="top" aria-label="镜头信息表单">
+      <el-card v-if="!field || ['shotNo', 'scene', 'durationSeconds'].includes(field)" shadow="never" class="shot-form__section">
+        <template #header><div class="shot-form__section-heading"><strong>基本信息</strong><span>{{ identityEditable ? '确定镜头归属与编号' : '已有制作目录，编号和场次已冻结' }}</span></div></template>
       <div class="shot-form__grid shot-form__grid--identity">
-        <el-form-item label="所属集" prop="episodeId" required><el-select v-model="form.episodeId" class="sg-select" placeholder="请选择集" :disabled="isEdit || busy"><el-option label="请选择集" value="" /><el-option v-for="episode in episodes" :key="episode.episodeId" :label="`${episode.episodeCode} ${episode.episodeName || ''}`" :value="String(episode.episodeId)" /></el-select></el-form-item>
-        <el-form-item label="所属场次" prop="sceneId" required><el-select v-model="form.sceneId" class="sg-select" :placeholder="scenesLoading ? '正在加载…' : '请选择场次'" :disabled="isEdit || scenesLoading || busy" @change="changeScene"><el-option :label="scenesLoading ? '正在加载…' : '请选择场次'" value="" /><el-option v-for="scene in scenes" :key="scene.sceneId" :label="`${scene.sceneCode} ${scene.sceneName || ''}`" :value="String(scene.sceneId)" /></el-select></el-form-item>
-        <el-form-item label="镜头号" prop="shotNo" required>
+        <el-form-item v-if="shows('scene')" label="所属集" prop="episodeId" required><el-select v-model="form.episodeId" class="sg-select" placeholder="请选择集" :disabled="!identityEditable || busy"><el-option label="请选择集" value="" /><el-option v-for="episode in episodes" :key="episode.episodeId" :label="`${episode.episodeCode} ${episode.episodeName || ''}`" :value="String(episode.episodeId)" /></el-select></el-form-item>
+        <el-form-item v-if="shows('scene')" label="所属场次" prop="sceneId" required><el-select v-model="form.sceneId" class="sg-select" :placeholder="scenesLoading ? '正在加载…' : '请选择场次'" :disabled="!identityEditable || scenesLoading || busy" @change="changeScene"><el-option :label="scenesLoading ? '正在加载…' : '请选择场次'" value="" /><el-option v-for="scene in scenes" :key="scene.sceneId" :label="`${scene.sceneCode} ${scene.sceneName || ''}`" :value="String(scene.sceneId)" /></el-select></el-form-item>
+        <el-form-item v-if="shows('shotNo') || field === 'scene'" label="镜头号" prop="shotNo" required>
           <template #label>
             <span class="shot-form__label-help">镜头号<el-tooltip v-if="!isEdit" placement="top" :show-after="200" content="镜头号可跳号，无需从 0001 开始，同场次不可重复；显示时自动补齐至少四位，创建不会改变其他镜头编号。"><el-icon tabindex="0" aria-label="镜头号填写说明" class="shot-form__help-icon"><QuestionFilled /></el-icon></el-tooltip></span>
           </template>
-          <el-input v-model="form.shotNo" inputmode="numeric" maxlength="9" placeholder="例如：0010、0030" :disabled="isEdit || !form.sceneId || busy" @keyup.enter="submit" /></el-form-item>
-        <el-form-item label="时长（秒）" prop="durationSeconds"><el-input-number v-model="form.durationSeconds" :min="0" :step="0.001" :precision="3" controls-position="right" :disabled="busy" /></el-form-item>
+          <el-input v-model="form.shotNo" inputmode="numeric" maxlength="9" placeholder="例如：0010、0030" :disabled="!identityEditable || !form.sceneId || busy" @keyup.enter="submit" /></el-form-item>
+        <el-form-item v-if="shows('durationSeconds')" label="时长（秒）" prop="durationSeconds"><el-input-number v-model="form.durationSeconds" :min="0" :step="0.001" :precision="3" controls-position="right" :disabled="busy" /></el-form-item>
       </div>
       </el-card>
-      <el-card shadow="never" class="shot-form__section shot-form__section--content">
-        <template #header><div class="shot-form__section-heading"><strong>制作内容</strong><span>制作内容可选，不影响分配制作人、排期和确认开工</span></div></template>
+      <el-card v-if="shows('description')" shadow="never" class="shot-form__section shot-form__section--content">
+        <template #header><div class="shot-form__section-heading"><strong>制作内容</strong><span>选填，可在制作过程中补充</span></div></template>
       <el-form-item class="shot-form__full" label="制作内容描述" prop="description"><el-input v-model="form.description" type="textarea" :autosize="{ minRows: 4, maxRows: 8 }" placeholder="描述画面主体、动作与场景，让制作人明确本镜头要完成什么" :disabled="busy" /></el-form-item>
       </el-card>
-      <el-card shadow="never" class="shot-form__section">
+      <el-card v-if="shows('parameters')" shadow="never" class="shot-form__section">
         <template #header><div class="shot-form__section-heading"><strong>镜头参数</strong><span>选填，补充画面与拍摄要求</span></div></template>
       <div class="shot-form__grid shot-form__grid--parameters">
         <el-form-item label="景别" prop="shotSize"><el-input v-model="form.shotSize" maxlength="500" placeholder="如：近景" :disabled="busy" /></el-form-item>
@@ -288,33 +300,40 @@ onBeforeUnmount(() => {
 
       </div>
       </el-card>
-      <el-card shadow="never" class="shot-form__section">
+      <el-card v-if="!field || ['dialogue', 'soundEffect', 'colorReference', 'remark'].includes(field)" shadow="never" class="shot-form__section">
         <template #header><div class="shot-form__section-heading"><strong>补充说明</strong><span>选填，提供声音、色调及其他要求</span></div></template>
       <div class="shot-form__grid shot-form__grid--text">
-        <el-form-item label="台词 / 对白" prop="dialogue"><el-input v-model="form.dialogue" type="textarea" :rows="3" :disabled="busy" /></el-form-item>
-        <el-form-item label="音效" prop="soundEffect"><el-input v-model="form.soundEffect" type="textarea" :rows="3" :disabled="busy" /></el-form-item>
-        <el-form-item label="色调参考" prop="colorReference"><el-input v-model="form.colorReference" type="textarea" :rows="3" :disabled="busy" /></el-form-item>
-        <el-form-item label="备注" prop="remark"><el-input v-model="form.remark" type="textarea" :rows="3" maxlength="2000" show-word-limit :disabled="busy" /></el-form-item>
+        <el-form-item v-if="shows('dialogue')" label="台词 / 对白" prop="dialogue"><el-input v-model="form.dialogue" type="textarea" :rows="3" :disabled="busy" /></el-form-item>
+        <el-form-item v-if="shows('soundEffect')" label="音效" prop="soundEffect"><el-input v-model="form.soundEffect" type="textarea" :rows="3" :disabled="busy" /></el-form-item>
+        <el-form-item v-if="shows('colorReference')" label="色调参考" prop="colorReference"><el-input v-model="form.colorReference" type="textarea" :rows="3" :disabled="busy" /></el-form-item>
+        <el-form-item v-if="shows('remark')" label="备注" prop="remark"><el-input v-model="form.remark" type="textarea" :rows="3" maxlength="2000" show-word-limit :disabled="busy" /></el-form-item>
       </div>
       </el-card>
-      <el-card shadow="never" class="shot-form__section">
+      <el-card v-if="shows('references')" shadow="never" class="shot-form__section">
         <template #header><div class="shot-form__section-heading"><strong>参考内容</strong><span>选填，供制作人查阅</span></div></template>
         <div class="shot-form__references">
           <el-form-item label="参考说明" prop="referenceDescription"><el-input v-model="form.referenceDescription" type="textarea" :rows="4" maxlength="10000" show-word-limit placeholder="填写画面风格、参考链接或素材使用说明" :disabled="busy" /></el-form-item>
           <el-form-item label="参考附件" prop="referenceFileIds"><ReviewReferenceInput :files="referenceAttachments" :disabled="busy" @add="addReferenceFile" @remove="removeReferenceFile" /></el-form-item>
         </div>
       </el-card>
-      <p v-if="isEdit && shot.assets?.length" class="shot-form__hint">当前 {{ shot.assets.length }} 项关联资产将保持不变；如需调整，请前往资产管理。</p>
+      <p v-if="isEdit && !embedded && shot.assets?.length" class="shot-form__hint">当前 {{ shot.assets.length }} 项关联资产将保持不变；如需调整，请前往资产管理。</p>
       <el-alert v-if="validationMessage || requestError" class="shot-form__alert" :type="requestError ? 'error' : 'warning'" :closable="false" show-icon :title="requestError?.title || '请检查表单'"><div class="form-alert-content"><p>{{ requestError?.message || validationMessage }}</p><el-button v-if="requestError?.status === 409" link type="primary" @click="emit('refresh')">刷新镜头后重试</el-button></div></el-alert>
-      <footer v-if="!isEdit"><el-button :disabled="busy" @click="requestClose">取消</el-button><el-button type="primary" :loading="busy" :disabled="!canSubmit" @click="submit">{{ isEdit ? '保存修改' : '创建镜头' }}</el-button></footer>
+      <footer v-if="!isEdit || embedded"><el-button :disabled="busy" @click="requestClose">取消</el-button><el-button type="primary" :loading="busy" :disabled="!canSubmit" @click="submit">{{ isEdit ? '保存修改' : '创建镜头' }}</el-button></footer>
     </el-form>
-    <template v-if="isEdit" #footer>
+    <template v-if="isEdit && !embedded" #footer>
       <footer><el-button :disabled="busy" @click="requestClose">取消</el-button><el-button type="primary" :loading="busy" :disabled="!canSubmit" @click="submit">保存修改</el-button></footer>
     </template>
   </component>
 </template>
 
 <style scoped>
+.shot-form__inline-title { display: block; margin-bottom: 12px; color: var(--sg-text); }
+.shot-form--inline { max-height: 65vh; overflow: auto; }
+.shot-form--inline .shot-form__grid { grid-template-columns: 1fr; gap: 12px; }
+.shot-form--inline :deep(.el-card__header) { display: none; }
+.shot-form--inline .shot-form__section { border: 0; }
+.shot-form--inline :deep(.el-card__body) { padding: 0; }
+
 .shot-form__references{display:grid;gap:16px}
 .shot-form__section { --el-card-padding: 16px; border-color: var(--sg-border); border-radius: 10px; }
 .shot-form__section :deep(.el-card__header) { padding: 12px 16px; background: var(--sg-surface-soft); }

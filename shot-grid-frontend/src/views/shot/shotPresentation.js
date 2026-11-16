@@ -2,13 +2,13 @@ import { taskStage } from '@/views/task/taskStage'
 const STATUS_META = {
   pending_info: { label: '待完善', tone: 'info' },
   unassigned: { label: '待分配', tone: 'warning' },
-  pending_schedule: { label: '待排期', tone: 'warning' },
-  not_started: { label: '待开工', tone: 'muted' },
+  pending_schedule: { label: '历史任务待恢复', tone: 'warning' },
+  not_started: { label: '历史任务待恢复', tone: 'muted' },
   preparing: { label: '目录准备中', tone: 'info' },
   in_progress: { label: '制作中', tone: 'primary' },
   reviewing: { label: '待审核', tone: 'purple' },
-  revision: { label: '待修改', tone: 'danger' },
-  completed: { label: '已完成', tone: 'success' }
+  revision: { label: '反馈', tone: 'danger' },
+  completed: { label: '通过', tone: 'success' }
 }
 
 const DIRECTORY_META = {

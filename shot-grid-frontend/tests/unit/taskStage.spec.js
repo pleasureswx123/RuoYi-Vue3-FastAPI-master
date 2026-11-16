@@ -9,25 +9,29 @@ describe('待排期与待开工统一派生阶段', () => {
   it.each([{}, { expectedStartTime: dates.expectedStartTime }, { expectedEndTime: dates.expectedEndTime }])('任一时间缺失均待排期，且不改写原任务', range => {
     const task = { taskStatus: 'not_started', ...range }
     expect(taskStage(task)).toBe('pending_schedule')
-    expect(taskStatusMeta(task).label).toBe('待排期')
-    expect(shotStatusMeta({ status: 'not_started', task }).label).toBe('待排期')
+    expect(taskStatusMeta(task).label).toBe('历史任务待恢复')
+    expect(shotStatusMeta({ status: 'not_started', task }).label).toBe('历史任务待恢复')
     expect(task.taskStatus).toBe('not_started')
   })
   it('完整排期显示待开工，覆盖镜头、任务和甘特数据', () => {
     expect(taskStage({ taskStatus: 'not_started', ...dates })).toBe('not_started')
-    expect(shotStatusMeta({ status: 'not_started', task: dates }).label).toBe('待开工')
+    expect(shotStatusMeta({ status: 'not_started', task: dates }).label).toBe('历史任务待恢复')
     expect(taskStage({ taskStatus: 'not_started', start: dates.expectedStartTime, end: dates.expectedEndTime })).toBe('not_started')
     expect(taskStage({ taskStatus: 'in_progress' })).toBe('in_progress')
     expect(taskStage({ status: 'unassigned' })).toBe('unassigned')
+  })
+  it('镜头未排期不会派生待排期门禁', () => {
+    expect(taskStage({ taskKind: 'shot_video', taskStatus: 'in_progress' })).toBe('in_progress')
+    expect(taskStage({ taskKind: 'shot_video', taskStatus: 'not_started' })).toBe('not_started')
   })
   it('制作履历阶段条及当前待办跟随排期变化', () => {
     const lane = { currentStage: 'assigned', task: { taskStatus: 'not_started' } }
     expect(productionHistoryStage(lane)).toBe('pending_schedule')
     expect(currentProductionHandoff(lane).stage).toBe('待排期')
-    expect(productionHistoryActiveStep(productionHistoryStage(lane))).toBe(2)
+    expect(productionHistoryActiveStep(productionHistoryStage(lane))).toBe(3)
     Object.assign(lane.task, dates)
     expect(productionHistoryStage(lane)).toBe('not_started')
     expect(currentProductionHandoff(lane).stage).toBe('待开工')
-    expect(productionHistoryActiveStep(productionHistoryStage(lane))).toBe(3)
+    expect(productionHistoryActiveStep(productionHistoryStage(lane))).toBe(4)
   })
 })

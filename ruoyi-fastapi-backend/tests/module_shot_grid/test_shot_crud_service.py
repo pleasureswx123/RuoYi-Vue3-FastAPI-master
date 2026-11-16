@@ -1170,8 +1170,8 @@ async def test_shot_list_exposes_task_identity_and_manager_start_action(monkeypa
     assert item.task_id == row['task_id']
     assert item.task_lock_version == row['task_lock_version']
     assert item.lock_version == 1
-    assert 'task.start' in item.allowed_actions
-    assert 'task.start' in ShotGridShotCrudService._build_detail(row, [], None, user, _access()).allowed_actions
+    assert 'task.start' not in item.allowed_actions
+    assert 'task.start' not in ShotGridShotCrudService._build_detail(row, [], None, user, _access()).allowed_actions
 
     creator_access = _access()
     creator_access.project_role = 'creator'
@@ -1229,15 +1229,13 @@ async def test_create_rejects_duplicate_number_before_writing(monkeypatch: pytes
 
 @pytest.mark.parametrize('field', ['description'])
 @pytest.mark.parametrize('value', [None, '', '   '])
-def test_empty_content_allows_assignment_and_start(field: str, value: str | None) -> None:
+def test_empty_content_allows_assignment_without_manual_start(field: str, value: str | None) -> None:
     row = {**_shot_projection_row(), 'task_status': 'not_started', field: value}
     user = _current_user()
     user.permissions.append('shotgrid:task:assign')
-    user.permissions.append('shotgrid:task:start')
     assert 'task.assign' in ShotGridShotCrudService._allowed_actions(row, user, _access())
-    assert 'task.start' in ShotGridShotCrudService._allowed_actions(row, user, _access())
     row[field] = '已填写'
-    assert 'task.start' in ShotGridShotCrudService._allowed_actions(row, user, _access())
+    assert 'task.start' not in ShotGridShotCrudService._allowed_actions(row, user, _access())
     assert 'task.assign' in ShotGridShotCrudService._allowed_actions(row, user, _access())
 
 
@@ -1314,3 +1312,104 @@ async def test_append_entry_uses_separate_version_projection(
     detail = ShotGridShotCrudService._build_detail(row, [], projection, _current_user(), _access())
     assert ('task.appendIssue' in page.rows[0].allowed_actions) is (not uncommitted)
     assert ('task.appendIssue' in detail.allowed_actions) is (not uncommitted)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('change', ['number', 'scene', 'both'])
+async def test_edit_unfrozen_identity_keeps_task_and_audits_before_after(
+    monkeypatch: pytest.MonkeyPatch, change: str
+) -> None:
+    shot = SimpleNamespace(
+        shot_id=SHOT_ID,
+        scene_id=20,
+        episode_id=10,
+        shot_no=1,
+        storage_dir_name=None,
+        lifecycle_status='active',
+        lock_version=4,
+        sort_order=10,
+    )
+    scene_id = 30 if change in {'scene', 'both'} else 20
+    number = 12 if change in {'number', 'both'} else 1
+    scene = SimpleNamespace(scene_id=scene_id)
+    episode = SimpleNamespace(episode_id=11 if scene_id == TARGET_SCENE_ID else 10)
+    monkeypatch.setattr(ShotGridShotCrudService, '_lock_writable_project', AsyncMock())
+    monkeypatch.setattr(
+        ShotGridShotCrudDao, 'get_task_for_update', AsyncMock(return_value=SimpleNamespace(task_status='not_started'))
+    )
+    monkeypatch.setattr(ShotGridShotCrudDao, 'get_shot_for_update', AsyncMock(return_value=shot))
+    monkeypatch.setattr(ShotGridShotCrudService, '_require_scene', AsyncMock(return_value=(scene, episode)))
+    monkeypatch.setattr(
+        ShotGridShotCrudDao, 'get_shot_detail', AsyncMock(return_value={'directory_operation_status': None})
+    )
+    monkeypatch.setattr(ShotGridShotCrudDao, 'list_scene_renumber_blockers', AsyncMock(return_value=[]))
+    monkeypatch.setattr(ShotGridShotCrudDao, 'shot_no_exists', AsyncMock(return_value=False))
+    monkeypatch.setattr(ShotGridShotCrudService, '_require_assets', AsyncMock())
+    write = AsyncMock(return_value=5)
+    monkeypatch.setattr(ShotGridShotCrudDao, 'update_shot', write)
+    monkeypatch.setattr(ShotGridShotCrudDao, 'sync_shot_assets', AsyncMock())
+    audit = AsyncMock()
+    monkeypatch.setattr(ShotGridShotCrudService, '_audit', audit)
+    monkeypatch.setattr(ShotGridShotCrudService, '_freeze_detail', AsyncMock(return_value='saved'))
+    db = AsyncMock()
+    result = await ShotGridShotCrudService.update_shot(
+        db,
+        PROJECT_ID,
+        SHOT_ID,
+        ShotGridShotUpdateModel(sceneId=scene_id, shotNo=number, lockVersion=4, description='制作要求', assetIds=[9]),
+        _current_user(),
+        _access(),
+    )
+    assert result == 'saved'
+    values = write.call_args.kwargs['values']
+    assert (values['scene_id'], values['episode_id'], values['shot_no'], values['sort_order']) == (
+        scene_id,
+        episode.episode_id,
+        number,
+        number * 10,
+    )
+    assert values['storage_dir_name'] is None
+    assert audit.call_args.kwargs['payload']['identityBefore'] == {'sceneId': 20, 'episodeId': 10, 'shotNo': 1}
+    db.commit.assert_awaited_once()
+    db.rollback.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('failure', ['directory', 'operation', 'version', 'submission', 'duplicate'])
+async def test_edit_identity_rejects_frozen_or_conflicting_targets(
+    monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    shot = SimpleNamespace(shot_id=SHOT_ID, storage_dir_name='001_0001' if failure == 'directory' else None)
+    monkeypatch.setattr(
+        ShotGridShotCrudDao,
+        'get_shot_detail',
+        AsyncMock(return_value={'directory_operation_status': 'failed' if failure == 'operation' else None}),
+    )
+    blockers = (
+        [
+            {
+                'shot_id': SHOT_ID,
+                'has_started_task': False,
+                'has_version': failure == 'version',
+                'has_file': failure == 'submission',
+            }
+        ]
+        if failure in {'version', 'submission'}
+        else []
+    )
+    monkeypatch.setattr(ShotGridShotCrudDao, 'list_scene_renumber_blockers', AsyncMock(return_value=blockers))
+    monkeypatch.setattr(ShotGridShotCrudDao, 'shot_no_exists', AsyncMock(return_value=failure == 'duplicate'))
+    with pytest.raises(ShotGridDomainException) as caught:
+        await ShotGridShotCrudService._validate_identity_change(AsyncMock(), PROJECT_ID, shot, 30, 12)
+    assert caught.value.http_status == CONFLICT_STATUS
+
+
+def test_identity_edit_action_requires_unfrozen_directory_and_director() -> None:
+    row = _shot_projection_row(operation_status=None)
+    row.update(storage_dir_name=None, task_status=None, task_id=None, latest_version_id=None)
+    assert 'shot.editIdentity' in ShotGridShotCrudService._allowed_actions(row, _current_user(), _access())
+    row['directory_operation_status'] = 'failed'
+    assert 'shot.editIdentity' not in ShotGridShotCrudService._allowed_actions(row, _current_user(), _access())
+    row['directory_operation_status'] = None
+    access = ShotGridProjectAccessModel(projectId=PROJECT_ID, userId=1, projectRole='creator')
+    assert 'shot.editIdentity' not in ShotGridShotCrudService._allowed_actions(row, _current_user(), access)

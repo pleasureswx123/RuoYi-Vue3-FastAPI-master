@@ -21,6 +21,8 @@ describe('镜头展示规则', () => {
 
   it('集中映射任务聚合状态和时长', () => {
     expect(shotStatusMeta('reviewing')).toMatchObject({ label: '待审核', tone: 'purple' })
+    expect(shotStatusMeta('revision').label).toBe('反馈')
+    expect(shotStatusMeta('completed').label).toBe('通过')
     expect(shotStatusMeta('unassigned')).toMatchObject({ label: '待分配', tone: 'warning' })
     expect(shotStatusMeta('in_progress')).toMatchObject({ label: '制作中', tone: 'primary' })
     expect(shotStatusTagClass('in_progress')).toBe('shot-status-tag--in_progress')

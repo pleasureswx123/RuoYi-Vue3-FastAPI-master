@@ -24,6 +24,7 @@ from module_shot_grid.entity.do.project_do import (
     ShotGridShot,
 )
 from module_shot_grid.entity.do.review_do import (
+    ShotGridIssueComment,
     ShotGridIssueVerification,
     ShotGridNote,
     ShotGridReviewAction,
@@ -301,6 +302,7 @@ class ShotGridProjectPurgeDao:
         review_list_ids = select(ShotGridReviewList.review_list_id).where(ShotGridReviewList.project_id == project_id)
         for model in (
             ShotGridReviewIssueDraft,
+            ShotGridIssueComment,
             ShotGridIssueVerification,
             ShotGridVersionIssueResponse,
             ShotGridReviewAction,

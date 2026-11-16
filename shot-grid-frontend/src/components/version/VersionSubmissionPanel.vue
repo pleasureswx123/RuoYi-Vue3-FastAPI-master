@@ -31,6 +31,7 @@ const MAX_CONSECUTIVE_POLL_ERRORS = 3
 const MAX_POLL_BACKOFF_MS = 30_000
 
 const props = defineProps({
+  simple: { type: Boolean, default: false },
   taskId: { type: Number, required: true },
   taskKind: { type: String, required: true },
   taskStatus: { type: String, required: true },
@@ -80,9 +81,11 @@ let idempotency = createIdempotencyState(`version-${props.taskId}`)
 
 const acceptedExtensions = computed(() => props.taskKind === 'asset_image' ? ['jpg', 'png'] : ['mp4', 'mov'])
 const acceptAttribute = computed(() => acceptedExtensions.value.map(item => `.${item}`).join(','))
-const isAppendSubmission = computed(() => props.taskStatus === 'pending_review')
+const isAppendSubmission = computed(() => props.taskStatus === 'pending_review' && props.taskKind !== 'shot_video')
+const isContinuousSubmission = computed(() => props.taskStatus === 'pending_review' && !isAppendSubmission.value)
+const requiresIssueResponses = computed(() => props.taskStatus === 'revision' || (isContinuousSubmission.value && props.openIssues.length > 0))
 const isRevisionSubmission = computed(() => props.taskStatus === 'revision' || Number(props.versionCount) > 0)
-const nextVersionNumber = computed(() => `V${String(Math.max(1, Number(props.versionCount || 0) + 1)).padStart(3, '0')}`)
+const nextVersionNumber = computed(() => `V${String(Math.max(1, Number(props.latestVersionNo || props.versionCount || 0) + 1)).padStart(3, '0')}`)
 const submissionCopy = computed(() => isAppendSubmission.value
   ? {
       eyebrow: 'ADD CANDIDATES',
@@ -93,6 +96,14 @@ const submissionCopy = computed(() => isAppendSubmission.value
       footerHint: '追加文件发布完成后，审核人可继续提交审核结论。',
       submitLabel: '追加候选并送审',
       retryLabel: '重试追加候选'
+    }
+  : isContinuousSubmission.value
+  ? {
+      eyebrow: 'NEXT VERSION', title: '继续提交新版本',
+      description: `无需等待审核，提交后生成下一版（预计 ${nextVersionNumber.value}，以服务端编号为准）。历史版本保留，新版继续待审核。`,
+      uploadPrompt: '选择新版本成果', changelogLabel: '本次提交说明',
+      footerHint: '新版本发布成功后进入待审核，上一版文件和审核记录保留。',
+      submitLabel: '提交新版本', retryLabel: '重试提交新版本'
     }
   : isRevisionSubmission.value
   ? {
@@ -121,6 +132,7 @@ const canSubmit = computed(() => (
   props.hasAddPermission
 ))
 const changelogPlaceholder = computed(() => {
+  if (isContinuousSubmission.value) return '说明新版本的调整内容，或需要审核人关注的位置。'
   if (isAppendSubmission.value) return '说明本次补充的内容，以及需要审核人关注的候选文件。'
   const description = String(props.productionDescription || '').trim()
   if (Number(props.versionCount) === 0 && description) {
@@ -131,7 +143,7 @@ const changelogPlaceholder = computed(() => {
     ? '概括本轮针对审核意见完成的修改，以及仍需审核人关注的内容。'
     : '说明首版实际完成情况和需要审核人关注的内容。'
 })
-const issueResponses = computed(() => props.taskStatus === 'revision'
+const issueResponses = computed(() => requiresIssueResponses.value
   ? props.openIssues.map(issue => ({
       issueId: Number(issue.issueId),
       responseText: issueHandlingStates.value[issue.issueId] === 'unhandled'
@@ -503,7 +515,7 @@ function validateSelectedCandidates(_rule, candidates, callback) {
 
 function validateChangelog(_rule, value, callback) {
   const normalized = String(value || '').trim()
-  if (!normalized) return callback(new Error('请填写本轮修改说明'))
+  if (!normalized) return callback(props.simple ? undefined : new Error('请填写本轮修改说明'))
   if (normalized.length > 5000) return callback(new Error('本轮修改说明不能超过 5000 个字符'))
   if (Array.from(normalized).some(character => character !== ' ' && /[\p{C}\p{Z}]/u.test(character))) {
     return callback(new Error('修改说明不能换行或包含不可见字符'))
@@ -560,7 +572,9 @@ async function submitVersion() {
   } finally {
     formValidating.value = false
   }
-  const normalizedChangelog = changelog.value.trim()
+  const normalizedChangelog = changelog.value.trim() || (props.simple
+    ? isAppendSubmission.value ? '追加成果' : isContinuousSubmission.value ? '提交新版本' : isRevisionSubmission.value ? '提交修改成果' : '提交成果'
+    : '')
 
   const generation = contextGeneration
   const targetTaskId = Number(props.taskId)
@@ -757,13 +771,19 @@ onBeforeUnmount(() => {
   abortRequests()
   releaseCandidatePreviews()
 })
+// 嵌入镜头成果抽屉时，复用同一上传流程并保护尚未提交的草稿。
+defineExpose({
+  isBusy,
+  hasUnsavedChanges: computed(() => !submission.value && Boolean(selectedCandidates.value.length || changelog.value.trim() || Object.keys(uploadResults.value).length ||
+    Object.values(issueHandlingStates.value).some(value => value !== 'handled') || Object.values(issueUnhandledReasons.value).some(value => String(value).trim())))
+})
 </script>
 
 <template>
   <el-card class="version-submission-panel" shadow="never">
     <div class="panel-heading">
       <div>
-        <p class="sg-eyebrow">{{ submissionCopy.eyebrow }}</p>
+        <p v-if="!simple" class="sg-eyebrow">{{ submissionCopy.eyebrow }}</p>
         <h3>{{ submissionCopy.title }}</h3>
         <p>{{ submissionCopy.description }}</p>
       </div>
@@ -850,7 +870,7 @@ onBeforeUnmount(() => {
         </div>
       </el-form-item>
 
-      <ElCollapse v-if="taskStatus === 'revision'" v-model="expandedIssueResponses" class="issue-response-panel">
+      <ElCollapse v-if="requiresIssueResponses" v-model="expandedIssueResponses" class="issue-response-panel">
         <ElCollapseItem name="issues">
           <template #title>
             <span class="issue-response-summary">修改情况 · {{ openIssues.length }} 条意见</span>
@@ -903,8 +923,8 @@ onBeforeUnmount(() => {
         </ElCollapseItem>
       </ElCollapse>
 
-      <el-form-item class="field-label changelog-field" :label="submissionCopy.changelogLabel" prop="changelog">
-        <el-input v-model="changelog" type="textarea" maxlength="5000" :rows="4" show-word-limit :disabled="composerLocked || !canSubmit" :placeholder="changelogPlaceholder" />
+      <el-form-item class="field-label changelog-field" :label="simple ? '提交说明（选填）' : submissionCopy.changelogLabel" prop="changelog">
+        <el-input v-model="changelog" type="textarea" maxlength="5000" :rows="simple ? 2 : 4" show-word-limit :disabled="composerLocked || !canSubmit" :placeholder="simple ? '补充需要关注的内容；留空将记录为提交成果。请用一行填写。' : changelogPlaceholder" />
       </el-form-item>
 
       <el-progress v-if="phase === 'uploading'" class="upload-progress" :percentage="uploadProgress" :stroke-width="8" :status="uploadProgress >= 100 ? 'success' : undefined" aria-label="版本文件上传进度" />

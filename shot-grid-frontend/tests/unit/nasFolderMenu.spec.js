@@ -11,7 +11,6 @@ function render(canQuery = true) {
     ElPopover: { props: ['visible'], template: '<div v-if="visible"><slot /></div>' },
     ElDialog: { props: ['modelValue'], template: '<section v-if="modelValue"><slot /><slot name="footer" /></section>' },
     ElButton: { template: '<button><slot /></button>' }, ElAlert: { props: ['title'], template: '<p>{{ title }}</p>' },
-    ElForm: { template: '<div><slot /></div>' }, ElFormItem: { template: '<div><slot /></div>' },
     ElSelect: { template: '<div><slot /></div>' }, ElOption: true, ElInput: true, ElLink: true
   } } })
 }

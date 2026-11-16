@@ -28,9 +28,11 @@ class ShotGridTargetPurgePathAdapter(ShotGridProjectPurgePathAdapter):
         try:
             for path in context.nas_manifest:
                 normalized = normalize_target_path(path)
-                if len(normalized.split('/')) != TARGET_PATH_DEPTH:
+                if len(normalized.split('/')) != (
+                    TARGET_PATH_DEPTH + 1 if normalized.startswith('shot/') else TARGET_PATH_DEPTH
+                ):
                     raise ValueError('清理目标必须为三级业务目录')
-                kind = 'shot' if normalized.startswith('video/') else 'asset'
+                kind = 'shot' if normalized.startswith(('video/', 'shot/')) else 'asset'
                 plans.append(
                     self.storage_adapter._build_plan(
                         StorageOperationPathContext(

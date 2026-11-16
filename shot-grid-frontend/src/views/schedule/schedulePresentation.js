@@ -13,7 +13,7 @@ const SCHEDULE_STATUS_COLORS = {
 
 export const scheduleStatusOptions = Object.keys(SCHEDULE_STATUS_COLORS).filter(value => value !== 'preparing').map(value => ({
   value,
-  label: taskStatusMeta(value).label
+  label: ({ revision: '反馈', completed: '通过' })[value] || taskStatusMeta(value).label
 }))
 
 export function scheduleStatusStyle(status) {

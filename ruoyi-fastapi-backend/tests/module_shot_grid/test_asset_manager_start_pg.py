@@ -21,7 +21,7 @@ from alembic.operations import Operations
 from dotenv import dotenv_values
 from openpyxl import Workbook
 from psycopg2 import sql
-from sqlalchemy import URL, select, text, update
+from sqlalchemy import URL, delete, select, text, update
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -32,7 +32,7 @@ from module_shot_grid.dao.search_dao import ShotGridSearchDao
 from module_shot_grid.dao.shot_crud_dao import ShotGridShotCrudDao
 from module_shot_grid.dao.storage_operation_dao import ShotGridStorageOperationDao
 from module_shot_grid.dao.task_dao import ShotGridTaskDao
-from module_shot_grid.entity.do.asset_do import ShotGridAsset, ShotGridAssetItem
+from module_shot_grid.entity.do.asset_do import ShotGridAsset, ShotGridAssetItem, ShotGridAssetRelation
 from module_shot_grid.entity.do.import_do import ShotGridImportBatch
 from module_shot_grid.entity.do.project_do import (
     ShotGridEpisode,
@@ -41,13 +41,15 @@ from module_shot_grid.entity.do.project_do import (
     ShotGridScene,
     ShotGridShot,
 )
-from module_shot_grid.entity.do.storage_do import ShotGridProjectStorage, ShotGridStorageRoot
+from module_shot_grid.entity.do.storage_do import ShotGridProjectStorage, ShotGridStorageOperation, ShotGridStorageRoot
 from module_shot_grid.entity.do.task_do import ShotGridTask
 from module_shot_grid.entity.do.task_schedule_change_do import ShotGridTaskScheduleChange
 from module_shot_grid.entity.vo.asset_crud_vo import (
     ShotGridAssetArchiveModel,
+    ShotGridAssetCreateModel,
     ShotGridAssetItemDeleteModel,
     ShotGridAssetListQueryModel,
+    ShotGridAssetRelationsUpdateModel,
     ShotGridAssetUpdateModel,
 )
 from module_shot_grid.entity.vo.shot_crud_vo import ShotGridShotListQueryModel
@@ -88,10 +90,101 @@ IMPORTED_ITEM_COUNT = 2
 ARCHIVED_ITEM_INDEX = 4
 DELETED_ITEM_INDEX = 5
 SessionFactory = async_sessionmaker[AsyncSession]
+
+
+async def test_auto_asset_assignment_reuses_directory_without_schedule(pg_sessions: SessionFactory) -> None:
+    ready_directory_index = 2
+
+    class NoNetworkAdapter:
+        async def ensure_directories(self, context: StorageOperationPathContext) -> None:
+            assert context.operation_type == 'ensure_asset_directory'
+            assert context.aggregate_id == ASSET_ID
+
+    user = _user(permissions=['shotgrid:task:assign', 'shotgrid:task:query', 'shotgrid:asset:query'])
+    for index in range(3):
+        async with pg_sessions() as db:
+            access = await ShotGridProjectAccessService.resolve_access(db, user, PROJECT_ID)
+            result = await ShotGridTaskService.assign_asset_item(
+                db,
+                PROJECT_ID,
+                FIRST_ITEM_ID + index,
+                ShotGridTaskAssignModel(assigneeUserId=CREATOR_ID, taskLockVersion=0),
+                user,
+                access,
+            )
+            assert result.task_status == ('in_progress' if index == ready_directory_index else 'preparing')
+            assert result.expected_start_time is None
+            assert result.expected_end_time is None
+            assert 'task.start' not in result.allowed_actions
+        async with pg_sessions() as db:
+            operations = (await db.scalars(select(ShotGridStorageOperation))).all()
+            assert len(operations) == 1
+            assert operations[0].aggregate_id == ASSET_ID
+            assert operations[0].operation_type == 'ensure_asset_directory'
+            assert (await db.get(ShotGridAsset, ASSET_ID)).lock_version == 0
+            assert (await db.get(ShotGridAssetItem, FIRST_ITEM_ID + index)).lock_version == 0
+            if index == 0:
+                assert (await db.get(ShotGridTask, FIRST_TASK_ID + 1)).task_status == 'not_started'
+        if index == 1:
+            # 仅替换 NAS I/O，真实验证 Worker 的领取、fencing 和任务回写。
+            async with pg_sessions() as db:
+                completed = await ShotGridStorageWorkerService.run_once(
+                    db, worker_id='pg-auto-asset', adapter=NoNetworkAdapter()
+                )
+                assert completed.outcome == 'succeeded'
+            state = await _snapshot(pg_sessions)
+            assert [row['task_status'] for row in state['tasks']] == ['in_progress', 'in_progress', 'not_started']
+
+
+async def test_auto_asset_batch_assignment_starts_only_selected_items(pg_sessions: SessionFactory) -> None:
+    user = _user(permissions=['shotgrid:task:assign'])
+    async with pg_sessions() as db:
+        access = await ShotGridProjectAccessService.resolve_access(db, user, PROJECT_ID)
+        await ShotGridTaskService.batch_assign_asset_items(
+            db,
+            PROJECT_ID,
+            ShotGridAssetItemTaskBatchAssignModel(
+                assigneeUserId=CREATOR_ID,
+                items=[{'assetItemId': FIRST_ITEM_ID + index, 'taskLockVersion': 0} for index in range(2)],
+            ),
+            user,
+            access,
+        )
+    async with pg_sessions() as db:
+        tasks = (await db.scalars(select(ShotGridTask).order_by(ShotGridTask.task_id))).all()
+        assert [task.task_status for task in tasks] == ['preparing', 'preparing', 'not_started']
+        assert all(task.expected_start_time is None and task.expected_end_time is None for task in tasks)
+        assert len((await db.scalars(select(ShotGridStorageOperation))).all()) == 1
+
+
+async def test_auto_asset_new_task_and_invalid_creator_are_transactional(pg_sessions: SessionFactory) -> None:
+    user = _user(permissions=['shotgrid:task:assign'])
+    item_id = FIRST_ITEM_ID + 3  # 唯一活动且尚未创建任务的分项。
+    before = await _snapshot(pg_sessions)
+    async with pg_sessions() as db:
+        access = await ShotGridProjectAccessService.resolve_access(db, user, PROJECT_ID)
+        with pytest.raises(ShotGridDomainException):
+            await ShotGridTaskService.assign_asset_item(
+                db, PROJECT_ID, item_id, ShotGridTaskAssignModel(assigneeUserId=OUTSIDER_ID), user, access
+            )
+    assert await _snapshot(pg_sessions) == before
+    async with pg_sessions() as db:
+        access = await ShotGridProjectAccessService.resolve_access(db, user, PROJECT_ID)
+        result = await ShotGridTaskService.assign_asset_item(
+            db, PROJECT_ID, item_id, ShotGridTaskAssignModel(assigneeUserId=CREATOR_ID), user, access
+        )
+        assert result.task_status == 'preparing'
+        assert result.expected_start_time is None
+    async with pg_sessions() as db:
+        assert (await db.get(ShotGridTask, FIRST_TASK_ID)).task_status == 'not_started'
+        assert len((await db.scalars(select(ShotGridStorageOperation))).all()) == 1
+
+
 EXPECTED_COUNTS = {
     'pending_info': 0,
     'unassigned': 1,
-    'not_started': 2,
+    'not_started': 0,
+    'pending_schedule': 2,
     'preparing': 1,
     'in_progress': 0,
     'reviewing': 0,
@@ -210,7 +303,7 @@ async def test_task_schedule_migration_rejects_incompatible_existing_history_tab
 @pytest.fixture
 def isolated_pg_url() -> Iterator[URL]:
     """仅连接回环 PG 管理库，创建随机数据库；加载基线前再次核对物理目标。"""
-    config = dotenv_values(BACKEND / '.env.dev')
+    config = dotenv_values(os.getenv('SHOT_GRID_TEST_ENV_FILE', str(BACKEND / '.env.dev')))
     assert config.get('DB_TYPE') == 'postgresql'
     host = config.get('DB_HOST', '127.0.0.1')
     assert host in {'127.0.0.1', 'localhost', '::1'}, 'PG 门禁只允许使用回环开发实例'
@@ -378,15 +471,12 @@ def _user(user_id: int = DIRECTOR_ID, permissions: list[str] | None = None) -> C
 
 
 def _command(*, task_id: int = FIRST_TASK_ID, **overrides: object) -> ShotGridTaskStartModel:
-    start = datetime.now().replace(microsecond=0) + timedelta(days=1 + task_id - FIRST_TASK_ID)
     return ShotGridTaskStartModel.model_validate(
         {
             'lockVersion': 0,
             'assetLockVersion': 0,
             'assetItemLockVersion': 0,
             'startConfirmed': True,
-            'expectedStartTime': start,
-            'expectedEndTime': start + timedelta(days=1),
             **overrides,
         }
     )
@@ -407,35 +497,19 @@ async def _start(
         )
 
 
-async def test_expected_times_save_with_start_and_are_visible_to_creator(pg_sessions: SessionFactory) -> None:
-    start = datetime.now().replace(microsecond=0) + timedelta(days=1)
-    end = start + timedelta(days=2)
-    result = await _start(
-        pg_sessions, command=_command(priority='urgent', expectedStartTime=start, expectedEndTime=end)
-    )
+async def test_unscheduled_start_preserves_empty_schedule_for_creator(pg_sessions: SessionFactory) -> None:
+    result = await _start(pg_sessions, command=_command(priority='urgent'))
     assert result.task_status == 'preparing'
     async with pg_sessions() as db:
         task = await db.get(ShotGridTask, FIRST_TASK_ID)
-        assert (task.expected_start_time, task.expected_end_time, task.priority, task.due_date) == (
-            start,
-            end,
-            'urgent',
-            end.date(),
-        )
-        assert (task.baseline_start_time, task.baseline_end_time) == (start, end)
-        history = (
-            await db.execute(
-                select(ShotGridTaskScheduleChange).where(ShotGridTaskScheduleChange.task_id == FIRST_TASK_ID)
-            )
-        ).scalar_one()
-        assert (history.change_type, history.operation_source) == ('initial', 'start')
-        assert (history.task_lock_version_before, history.task_lock_version_after) == (0, 1)
-        assert history.overlap_task_ids == []
+        assert task.expected_start_time is None and task.expected_end_time is None
+        assert task.baseline_start_time is None and task.baseline_end_time is None
+        assert task.priority == 'urgent'
+        assert not list(await db.scalars(select(ShotGridTaskScheduleChange)))
         detail = await ShotGridTaskService.get_task_detail(
             db, FIRST_TASK_ID, _user(CREATOR_ID, ['shotgrid:task:query'])
         )
-        assert (detail.expected_start_time, detail.expected_end_time) == (start, end)
-        assert (detail.baseline_start_time, detail.baseline_end_time) == (start, end)
+        assert detail.expected_start_time is None and detail.expected_end_time is None
 
 
 async def test_imported_asset_description_persists_on_parent_and_reaches_creator(pg_sessions: SessionFactory) -> None:
@@ -1032,6 +1106,13 @@ async def test_invalid_context_leaves_no_side_effects(pg_sessions: SessionFactor
             .values(lifecycle_status='archived'),
         }
         await db.execute(statements[invalid_state])
+        if invalid_state == 'creator_role_changed':
+            await db.execute(
+                text(
+                    "UPDATE sg_project_member_role SET project_role='director' WHERE project_id=:project_id AND user_id=:user_id"
+                ),
+                {'project_id': PROJECT_ID, 'user_id': CREATOR_ID},
+            )
         await db.commit()
     before = await _snapshot(pg_sessions)
     with pytest.raises(ShotGridDomainException):
@@ -1071,11 +1152,7 @@ async def test_audit_database_failure_rolls_back_start_and_outbox(pg_sessions: S
         await db.commit()
     before = await _snapshot(pg_sessions)
     with pytest.raises(DBAPIError, match='PG_GATE_AUDIT_REJECTED'):
-        start = datetime.now().replace(microsecond=0) + timedelta(days=1)
-        await _start(
-            pg_sessions,
-            command=_command(priority='urgent', expectedStartTime=start, expectedEndTime=start + timedelta(days=1)),
-        )
+        await _start(pg_sessions, command=_command(priority='urgent'))
     assert await _snapshot(pg_sessions) == before
 
 
@@ -1326,12 +1403,12 @@ async def test_list_and_detail_execute_preparing_counts_projection(pg_sessions: 
     assert page.rows[0].model_dump(by_alias=True)['itemStatusCounts'] == EXPECTED_COUNTS
     assert detail.model_dump(by_alias=True)['itemStatusCounts'] == EXPECTED_COUNTS
     assert actual_states[FIRST_TASK_ID + 1] == 'not_started'
-    assert 'task.start' in page.rows[0].allowed_actions
-    assert 'task.start' in detail.allowed_actions
+    assert 'task.start' not in page.rows[0].allowed_actions
+    assert 'task.start' not in detail.allowed_actions
     actions = {item.asset_item_id: item.allowed_actions for item in detail.items}
     assert 'task.start' not in actions[FIRST_ITEM_ID]
-    assert 'task.start' in actions[FIRST_ITEM_ID + 1]
-    assert 'task.start' in actions[FIRST_ITEM_ID + 2]
+    assert 'task.start' not in actions[FIRST_ITEM_ID + 1]
+    assert 'task.start' not in actions[FIRST_ITEM_ID + 2]
     assert 'task.start' not in actions[FIRST_ITEM_ID + 3]
 
 
@@ -1481,10 +1558,10 @@ async def test_pending_info_filter_counts_and_detail_agree_in_postgresql(
 
 
 @pytest.mark.parametrize(('has_start', 'has_end'), [(False, False), (True, True)])
-async def test_asset_start_actions_require_complete_schedule(
+async def test_asset_manual_start_actions_are_absent_regardless_of_schedule(
     pg_sessions: SessionFactory, *, has_start: bool, has_end: bool
 ) -> None:
-    """父级 SQL 与详情动作一致：未排期不可开工，已排期才可开工。"""
+    """父级与详情不再暴露手动开工；历史状态投影保持兼容。"""
     async with pg_sessions() as db:
         await db.execute(
             update(ShotGridTask)
@@ -1502,9 +1579,9 @@ async def test_asset_start_actions_require_complete_schedule(
         detail = await ShotGridAssetCrudService.get_asset_detail(db, PROJECT_ID, ASSET_ID, _user(), access)
         item = next(item for item in detail.items if item.asset_item_id == FIRST_ITEM_ID)
         can_start = has_start and has_end
-        assert ('task.start' in item.allowed_actions) is can_start
-        assert ('task.start' in detail.allowed_actions) is can_start
-        assert ('task.start' in page.rows[0].allowed_actions) is can_start
+        assert 'task.start' not in item.allowed_actions
+        assert 'task.start' not in detail.allowed_actions
+        assert 'task.start' not in page.rows[0].allowed_actions
         assert item.asset_status == ('not_started' if can_start else 'pending_schedule')
         assert (
             'task.start'
@@ -1535,3 +1612,159 @@ async def test_mixed_asset_is_found_by_each_item_status(pg_sessions: SessionFact
             db, PROJECT_ID, ShotGridAssetListQueryModel(assetStatus='completed'), _user(), access
         )
         assert page.total == 0
+
+
+async def _relation_asset(db: AsyncSession, asset_id: int, *, archived: bool = False) -> ShotGridAsset:
+    asset = ShotGridAsset(
+        asset_id=asset_id,
+        project_id=PROJECT_ID,
+        asset_name=f'关联测试{asset_id}',
+        asset_name_key=f'relation{asset_id}',
+        asset_type='Character',
+        storage_dir_name=f'relation{asset_id}',
+        storage_path_key=f'relation{asset_id}',
+        lifecycle_status='archived' if archived else 'active',
+    )
+    db.add(asset)
+    await db.flush()
+    return asset
+
+
+async def test_asset_relations_create_read_replace_and_cascade(pg_sessions: SessionFactory) -> None:
+    user = _user(permissions=['shotgrid:asset:add', 'shotgrid:asset:query', 'shotgrid:asset:edit'])
+    async with pg_sessions() as db:
+        access = await ShotGridProjectAccessService.resolve_access(db, user, PROJECT_ID)
+        # 关联校验失败时，新资产与新分项必须同事务回滚，不能留下半成品。
+        with pytest.raises(ShotGridDomainException):
+            await ShotGridAssetCrudService.create_asset(
+                db,
+                PROJECT_ID,
+                ShotGridAssetCreateModel(
+                    assetType='Environment',
+                    assetName='关联失败回滚',
+                    items=[{'productionItem': '全景'}],
+                    relatedAssetIds=[999999],
+                ),
+                user,
+                access,
+            )
+        assert await db.scalar(select(ShotGridAsset.asset_id).where(ShotGridAsset.asset_name == '关联失败回滚')) is None
+        source = await ShotGridAssetCrudService.create_asset(
+            db,
+            PROJECT_ID,
+            ShotGridAssetCreateModel(
+                assetType='Environment',
+                assetName='关联场景',
+                items=[{'productionItem': '全景'}],
+                relatedAssetIds=[ASSET_ID],
+            ),
+            user,
+            access,
+        )
+        source_id = source.asset_id
+        result = await ShotGridAssetCrudService.get_relations(db, PROJECT_ID, source_id, user, access)
+        assert result.related_assets[0].asset_id == ASSET_ID
+        assert result.related_assets[0].items[0].task.assignee_user_id == CREATOR_ID
+        assert result.related_assets[0].items[0].version is None
+        assert result.can_edit
+        removed = await ShotGridAssetCrudService.update_relations(
+            db,
+            PROJECT_ID,
+            source_id,
+            ShotGridAssetRelationsUpdateModel(relatedAssetIds=[], lockVersion=0),
+            user,
+            access,
+        )
+        assert removed.related_assets == []
+        assert (await db.get(ShotGridAsset, ASSET_ID)).del_flag == '0'
+        await ShotGridAssetCrudService.update_relations(
+            db,
+            PROJECT_ID,
+            source_id,
+            ShotGridAssetRelationsUpdateModel(relatedAssetIds=[ASSET_ID], lockVersion=removed.lock_version),
+            user,
+            access,
+        )
+        assert (await db.get(ShotGridTask, FIRST_TASK_ID)).task_status == 'not_started'
+        # 无分项的独立来源仅用于证明数据库级双向删除约束，不调用业务永久删除。
+        temporary_id = 1100
+        await _relation_asset(db, temporary_id)
+        db.add(ShotGridAssetRelation(project_id=PROJECT_ID, asset_id=temporary_id, related_asset_id=ASSET_ID))
+        db.add(ShotGridAssetRelation(project_id=PROJECT_ID, asset_id=ASSET_ID, related_asset_id=temporary_id))
+        await db.flush()
+        await db.execute(delete(ShotGridAsset).where(ShotGridAsset.asset_id == temporary_id))
+        await db.commit()
+        assert (
+            await db.scalars(
+                select(ShotGridAssetRelation).where(
+                    (ShotGridAssetRelation.asset_id == temporary_id)
+                    | (ShotGridAssetRelation.related_asset_id == temporary_id)
+                )
+            )
+        ).all() == []
+        assert len((await db.scalars(select(ShotGridAssetRelation))).all()) == 1
+
+
+@pytest.mark.parametrize('kind', ['self', 'missing', 'archived', 'stale', 'creator', 'permission', 'context'])
+async def test_asset_relations_reject_invalid_writes_without_partial_changes(
+    pg_sessions: SessionFactory, kind: str
+) -> None:
+    target_id = 1101
+    async with pg_sessions() as db:
+        await _relation_asset(db, target_id, archived=kind == 'archived')
+        await db.commit()
+    user = _user(
+        CREATOR_ID if kind == 'creator' else DIRECTOR_ID,
+        permissions=['shotgrid:asset:query']
+        if kind == 'permission'
+        else ['shotgrid:asset:edit', 'shotgrid:asset:query'],
+    )
+    async with pg_sessions() as db:
+        access = await ShotGridProjectAccessService.resolve_access(db, user, PROJECT_ID)
+        if kind == 'context':
+            access = access.model_copy(update={'project_id': PROJECT_ID + 1})
+        ids = [ASSET_ID if kind == 'self' else 999999 if kind == 'missing' else target_id]
+        with pytest.raises(ShotGridDomainException):
+            await ShotGridAssetCrudService.update_relations(
+                db,
+                PROJECT_ID,
+                ASSET_ID,
+                ShotGridAssetRelationsUpdateModel(relatedAssetIds=ids, lockVersion=99 if kind == 'stale' else 0),
+                user,
+                access,
+            )
+    async with pg_sessions() as db:
+        assert (await db.get(ShotGridAsset, ASSET_ID)).lock_version == 0
+        assert (await db.scalars(select(ShotGridAssetRelation))).all() == []
+        assert (await db.get(ShotGridTask, FIRST_TASK_ID)).task_status == 'not_started'
+
+
+async def test_asset_relations_pg_migration_and_cross_project_fk(pg_sessions: SessionFactory) -> None:
+    async with pg_sessions() as db:
+        await db.execute(text('DROP TABLE sg_asset_relation'))
+        connection = await db.connection()
+        migration = runpy.run_path(str(BACKEND / 'alembic/versions/2026_11_02_1200-20261102_42_asset_relations.py'))
+        await connection.run_sync(lambda conn: _run_relation_migration(conn, migration['upgrade']))
+        await _relation_asset(db, 1102)
+        db.add(ShotGridAssetRelation(project_id=PROJECT_ID, asset_id=ASSET_ID, related_asset_id=1102))
+        await db.commit()
+        connection = await db.connection()
+        with pytest.raises(RuntimeError, match='拒绝降级'):
+            await connection.run_sync(lambda conn: _run_relation_migration(conn, migration['downgrade']))
+        await db.rollback()
+        # 服务端项目校验之外，复合外键也拒绝伪造项目归属。
+        with pytest.raises(DBAPIError):
+            await db.execute(
+                text('INSERT INTO sg_asset_relation(project_id,asset_id,related_asset_id) VALUES (:p,1102,:a)'),
+                {'p': PROJECT_ID + 1, 'a': ASSET_ID},
+            )
+        await db.rollback()
+        user = _user(permissions=['shotgrid:asset:query'])
+        access = await ShotGridProjectAccessService.resolve_access(db, user, PROJECT_ID)
+        with pytest.raises(ShotGridDomainException):
+            await ShotGridAssetCrudService.get_relations(db, PROJECT_ID + 1, ASSET_ID, user, access)
+
+
+def _run_relation_migration(connection: Any, action: Any) -> None:
+    with Operations.context(MigrationContext.configure(connection)):
+        action()

@@ -58,8 +58,8 @@ export function scheduleWindowForScale(scale = 'day', anchor = new Date()) {
   let end
 
   if (effectiveScale === 'day') {
-    start = addDays(anchorDay, -7)
-    end = addDays(anchorDay, 24)
+    start = addDays(anchorDay, -((anchorDay.getDay() + 6) % 7))
+    end = addDays(start, 7)
   } else if (effectiveScale === 'week') {
     const mondayOffset = (anchorDay.getDay() + 6) % 7
     const currentMonday = addDays(anchorDay, -mondayOffset)

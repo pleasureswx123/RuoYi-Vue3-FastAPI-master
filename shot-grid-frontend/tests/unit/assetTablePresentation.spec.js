@@ -51,3 +51,27 @@ it('自动模式随容器宽度调整列，手动模式保持不变，恢复自�
     expect(settings.visibleColumns.value).toHaveLength(5)
   } finally { scope.stop(); localStorage.clear() }
 })
+
+it('列顺序按账号记忆，隐藏列恢复位置，非法顺序不破坏布局', async () => {
+  localStorage.clear()
+  const scope = effectScope()
+  const user = ref(201)
+  const settings = scope.run(() => useAssetTablePresentation(user))
+  try {
+    settings.setOrder(['status', 'thumbnail', 'description', 'plan', 'assignee'])
+    expect(settings.visibleColumns.value[0]).toBe('status')
+    settings.setColumns(['status', 'assignee'])
+    settings.setOrder(['assignee', 'status'])
+    expect(settings.visibleColumns.value).toEqual(['assignee', 'status'])
+    settings.setOrder(['unknown'])
+    expect(settings.visibleColumns.value).toEqual(['assignee', 'status'])
+    settings.mode.value = 'full'
+    expect(settings.visibleColumns.value).toEqual(['assignee', 'thumbnail', 'description', 'plan', 'status'])
+    user.value = 202; await nextTick()
+    expect(settings.visibleColumns.value[0]).toBe('thumbnail')
+    user.value = 201; await nextTick()
+    expect(settings.visibleColumns.value[0]).toBe('assignee')
+    settings.resetPresentation()
+    expect(settings.visibleColumns.value[0]).toBe('thumbnail')
+  } finally { scope.stop(); localStorage.clear() }
+})

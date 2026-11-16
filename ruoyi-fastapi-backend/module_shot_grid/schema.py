@@ -31,12 +31,25 @@ SHOT_GRID_MULTIPLE_ROLES_SCHEMA_REVISION = '20261012_37'
 SHOT_GRID_PROJECT_CREATOR_SCHEMA_REVISION = '20261012_38'
 SHOT_GRID_FORCE_DELETE_SCHEMA_REVISION = '20261013_39'
 SHOT_GRID_TARGET_PURGE_SCHEMA_REVISION = '20261013_40'
-SHOT_GRID_SCHEMA_REVISION = SHOT_GRID_TARGET_PURGE_SCHEMA_REVISION
+SHOT_GRID_ISSUE_COMMENT_SCHEMA_REVISION = '20261030_41'
+SHOT_GRID_SCHEMA_REVISION = '20261116_44'
 
-SHOT_GRID_NAVIGATION_ROUTE_KEYS = ('workbench', 'projects', 'shots', 'assets', 'reviews', 'files')
+SHOT_GRID_NAVIGATION_ROUTE_KEYS = (
+    'workbench',
+    'projects',
+    'shots',
+    'assets',
+    'reviews',
+    'files',
+    'daily-records',
+    'production-statistics',
+)
 
 SHOT_GRID_TABLE_NAMES = frozenset(
     {
+        'sg_review_cycle',
+        'sg_daily_record',
+        'sg_asset_relation',
         'sg_project',
         'sg_project_purge',
         'sg_target_purge',
@@ -59,6 +72,7 @@ SHOT_GRID_TABLE_NAMES = frozenset(
         'sg_version_file',
         'sg_media_derivation',
         'sg_note',
+        'sg_issue_comment',
         'sg_review_issue_draft',
         'sg_version_issue_response',
         'sg_issue_verification',
@@ -77,6 +91,9 @@ SHOT_GRID_TABLE_NAMES = frozenset(
 
 SHOT_GRID_PERMISSION_CODES = frozenset(
     {
+        'shotgrid:version:reopen',
+        'shotgrid:daily:write',
+        'shotgrid:daily:stats',
         'shotgrid:storageRoot:list',
         'shotgrid:storageRoot:query',
         'shotgrid:storageRoot:add',
@@ -140,6 +157,7 @@ SHOT_GRID_PERMISSION_CODES = frozenset(
         'shotgrid:version:retry',
         'shotgrid:version:review',
         'shotgrid:note:list',
+        'shotgrid:note:comment',
         'shotgrid:note:add',
         'shotgrid:reviewList:list',
         'shotgrid:reviewList:query',

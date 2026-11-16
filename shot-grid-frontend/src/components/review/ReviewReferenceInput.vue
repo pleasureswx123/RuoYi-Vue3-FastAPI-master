@@ -4,7 +4,7 @@ import { Delete, Document, UploadFilled } from '@element-plus/icons-vue'
 import ReviewReferenceFiles from './ReviewReferenceFiles.vue'
 import { MAX_REFERENCE_FILES, REFERENCE_ACCEPT } from '@/composables/useReviewReferenceAttachments'
 
-const props = defineProps({ files: { type: Array, default: () => [] }, disabled: Boolean, readonly: Boolean, purpose: { type: String, default: '反馈' } })
+const props = defineProps({ files: { type: Array, default: () => [] }, disabled: Boolean, readonly: Boolean, dropPaste: Boolean, purpose: { type: String, default: '反馈' } })
 const emit = defineEmits(['add', 'remove'])
 const uploadRef = ref(null)
 const savedFiles = computed(() => props.files.filter(file => file.downloadUrl))
@@ -13,6 +13,13 @@ function selectFile(file) {
   uploadRef.value?.clearFiles()
   if (!props.disabled && !props.readonly) emit('add', file)
 }
+function pasteImages(event) {
+  if (!props.dropPaste || props.disabled || props.readonly) return
+  const images = Array.from(event.clipboardData?.files || []).filter(file => file.type.startsWith('image/'))
+  if (!images.length) return
+  event.preventDefault()
+  images.forEach(raw => emit('add', { raw }))
+}
 function formatSize(bytes) {
   const size = Number(bytes || 0)
   return size < 1024 * 1024 ? `${(size / 1024).toFixed(1)} KiB` : `${(size / 1024 / 1024).toFixed(1)} MiB`
@@ -20,14 +27,15 @@ function formatSize(bytes) {
 </script>
 
 <template>
-  <div class="issue-reference-compose">
+  <div class="issue-reference-compose" :tabindex="dropPaste && !readonly ? 0 : undefined" :aria-label="dropPaste ? '制作参考，可粘贴图片' : undefined" @paste="pasteImages">
     <div v-if="!readonly" class="issue-reference-compose__heading">
-      <el-upload ref="uploadRef" :auto-upload="false" :show-file-list="false" multiple :accept="REFERENCE_ACCEPT" :disabled="disabled || files.length >= MAX_REFERENCE_FILES" :on-change="selectFile">
-        <el-button :icon="UploadFilled" :disabled="disabled || files.length >= MAX_REFERENCE_FILES">添加图片或参考资料</el-button>
+      <el-upload ref="uploadRef" :drag="dropPaste" :auto-upload="false" :show-file-list="false" multiple :accept="REFERENCE_ACCEPT" :disabled="disabled || files.length >= MAX_REFERENCE_FILES" :on-change="selectFile">
+        <span v-if="dropPaste">点击添加或拖入参考资料，也可在此粘贴图片</span>
+        <el-button v-else :icon="UploadFilled" :disabled="disabled || files.length >= MAX_REFERENCE_FILES">添加图片或参考资料</el-button>
       </el-upload>
       <span>最多 5 个，每个不超过 20 MiB</span>
     </div>
-    <p v-if="!readonly" class="issue-reference-compose__hint">支持图片、文档或短视频参考。</p>
+    <p v-if="!readonly && !dropPaste" class="issue-reference-compose__hint">支持图片、文档或短视频参考。</p>
     <ReviewReferenceFiles v-if="savedFiles.length" :files="savedFiles" compact :removable="!readonly && !disabled" @remove="emit('remove', $event)" />
     <div v-if="localFiles.length" class="issue-reference-pending-list">
       <article v-for="file in localFiles" :key="file.clientKey" class="issue-reference-pending">
@@ -42,6 +50,8 @@ function formatSize(bytes) {
 
 <style scoped>
 .issue-reference-compose{display:grid;width:100%;gap:8px}
+.issue-reference-compose :deep(.el-upload-dragger){padding:14px 12px;font-size:12px}
+.issue-reference-compose:focus-visible{outline:2px solid var(--sg-accent);outline-offset:3px}
 .issue-reference-compose__heading{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between}
 .issue-reference-compose__heading>span,.issue-reference-compose__hint{margin:0;color:var(--sg-text-muted);font-size:12px;line-height:1.5}
 .issue-reference-pending-list{display:grid;gap:7px}

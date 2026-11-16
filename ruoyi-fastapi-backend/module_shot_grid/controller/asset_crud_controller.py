@@ -25,6 +25,8 @@ from module_shot_grid.entity.vo.asset_crud_vo import (
     ShotGridAssetItemUpdateModel,
     ShotGridAssetListItemModel,
     ShotGridAssetListQueryModel,
+    ShotGridAssetRelationsModel,
+    ShotGridAssetRelationsUpdateModel,
     ShotGridAssetUpdateModel,
 )
 from module_shot_grid.service.asset_crud_service import ShotGridAssetCrudService
@@ -327,3 +329,42 @@ async def batch_force_delete_assets(
         access,
     )
     return ResponseUtil.success(data=result)
+
+
+@asset_crud_controller.get(
+    '/{projectId}/assets/{assetId}/relations',
+    summary='查看资产关联资料',
+    response_model=DataResponseModel[ShotGridAssetRelationsModel],
+    dependencies=[UserInterfaceAuthDependency('shotgrid:asset:query')],
+)
+async def get_asset_relations(
+    project_id: Annotated[int, Path(alias='projectId', gt=0, le=SQL_BIGINT_MAX)],
+    asset_id: Annotated[int, Path(alias='assetId', gt=0, le=SQL_BIGINT_MAX)],
+    query_db: Annotated[AsyncSession, DBSessionDependency()],
+    current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
+    access: Annotated[ShotGridProjectAccessModel, ProjectAccessDependency()],
+) -> Response:
+    return ResponseUtil.success(
+        data=await ShotGridAssetCrudService.get_relations(query_db, project_id, asset_id, current_user, access)
+    )
+
+
+@asset_crud_controller.put(
+    '/{projectId}/assets/{assetId}/relations',
+    summary='调整资产关联资料',
+    response_model=DataResponseModel[ShotGridAssetRelationsModel],
+    dependencies=[UserInterfaceAuthDependency(['shotgrid:asset:edit', 'shotgrid:asset:query'])],
+)
+async def update_asset_relations(
+    project_id: Annotated[int, Path(alias='projectId', gt=0, le=SQL_BIGINT_MAX)],
+    asset_id: Annotated[int, Path(alias='assetId', gt=0, le=SQL_BIGINT_MAX)],
+    command: ShotGridAssetRelationsUpdateModel,
+    query_db: Annotated[AsyncSession, DBSessionDependency()],
+    current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
+    access: Annotated[ShotGridProjectAccessModel, ProjectRoleDependency('director')],
+) -> Response:
+    return ResponseUtil.success(
+        data=await ShotGridAssetCrudService.update_relations(
+            query_db, project_id, asset_id, command, current_user, access
+        )
+    )

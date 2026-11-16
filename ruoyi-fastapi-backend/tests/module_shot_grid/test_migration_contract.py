@@ -1,6 +1,7 @@
 import runpy
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 from sqlalchemy import DateTime, create_engine, text
@@ -69,6 +70,17 @@ def _migration_namespace(revision: str) -> dict[str, object]:
     revision_files = list((BACKEND_ROOT / 'alembic' / 'versions').glob(f'*-{revision}_*.py'))
     assert len(revision_files) == 1
     return runpy.run_path(str(revision_files[0]))
+
+
+def test_issue_comments_downgrade_preserves_existing_discussion() -> None:
+    migration = _migration_namespace('20261030_41')
+    operation = MagicMock()
+    operation.get_context.return_value.dialect.name = 'postgresql'
+    operation.get_bind.return_value.execute.return_value.scalar.return_value = True
+    migration['downgrade'].__globals__['op'] = operation
+    with pytest.raises(RuntimeError, match='已有反馈评论'):
+        migration['downgrade']()
+    operation.execute.assert_not_called()
 
 
 def test_migration_covers_the_exact_frozen_table_set() -> None:
@@ -525,6 +537,13 @@ def test_initial_migration_seeds_frozen_and_legacy_permissions_without_duplicate
     for permission in ('shotgrid:shot:forceDelete', 'shotgrid:asset:forceDelete'):
         assert permission in force_source
         permission_sequence.append(permission)
+    assert 'shotgrid:note:comment' in _migration_namespace('20261030_41')['MENU_SQL']
+    permission_sequence.append('shotgrid:note:comment')
+    for permission in ('shotgrid:daily:write', 'shotgrid:daily:stats'):
+        assert permission in Path(_migration_namespace('20261111_43')['__file__']).read_text(encoding='utf-8')
+        permission_sequence.append(permission)
+    assert 'shotgrid:version:reopen' in _migration_namespace('20261026_41')['UPGRADE_SQL']
+    permission_sequence.append('shotgrid:version:reopen')
     legacy_permissions = {'shotgrid:note:reply', 'shotgrid:note:resolve'}
 
     assert len(permission_sequence) == len(SHOT_GRID_PERMISSION_CODES | legacy_permissions)

@@ -47,3 +47,18 @@ async def test_version_files_query_joins_own_project_storage() -> None:
     assert 'sg_project_storage.project_id = sg_version.project_id' in sql
     assert 'sg_version_file.version_id = 17' in sql
     assert 'sg_project_storage.project_path_snapshot' in sql
+
+
+@pytest.mark.parametrize(
+    'relative,expected',
+    [
+        (r'SHOT\EP001\001\0001\V002\clip_V002_01.mp4', r'演示项目\SHOT\EP001\001\0001\V002'),
+        (r'ASSET\Prop\剑\正面__7\V001\demo_V001_01.png', r'演示项目\ASSET\Prop\剑\正面__7\V001'),
+        (r'VIDEO\EP001\001_0001\legacy.mp4', r'演示项目\VIDEO\EP001\001_0001'),
+        (r'..\secret\file.mp4', None),
+    ],
+)
+def test_local_folder_projection_never_exposes_disk_root(relative: str, expected: str | None) -> None:
+    file = {'project_path_snapshot': r'D:\private\演示项目', 'nas_relative_path': relative, 'role': 'review_media'}
+    assert ShotGridReviewService._version_folder_relative_path(file) == expected
+    assert ShotGridReviewService._version_folder_relative_path({**file, 'role': 'thumbnail'}) is None

@@ -7,7 +7,6 @@ import 'element-plus/es/components/table/style/css'
 import 'element-plus/es/components/table-column/style/css'
 import { Refresh, Search } from '@element-plus/icons-vue'
 
-import { getProjectPage } from '@/api/shot-grid/projects'
 import { getReviewListPage } from '@/api/shot-grid/reviews'
 import { useSessionStore } from '@/store/modules/session'
 import { tagTypeFromTone } from '@/utils/tag'
@@ -57,7 +56,6 @@ const query = reactive({ reviewStatus: ['draft', 'active', 'completed', 'archive
 let projectsController = null
 let reviewsController = null
 
-const canViewAll = computed(() => sessionStore.permissions.includes('*:*:*') || sessionStore.permissions.includes('shotgrid:project:all'))
 const canListReviews = computed(() => sessionStore.permissions.includes('*:*:*') || sessionStore.permissions.includes('shotgrid:reviewList:list'))
 const reviewFilterModel = computed(() => ({ projectId: selectedProjectId.value, reviewStatus: query.reviewStatus }))
 
@@ -81,7 +79,7 @@ async function loadProjects() {
   projectsLoading.value = true
   projectsError.value = null
   try {
-    const response = await getProjectPage({ pageNum: 1, pageSize: 100, scope: canViewAll.value ? 'all' : undefined }, { signal: controller.signal })
+    const response = { rows: await sessionStore.loadWorkspaceProjects({ signal: controller.signal }) }
     if (projectsController !== controller) return
     projects.value = response.rows || []
     if (!projects.value.some(item => String(item.projectId) === selectedProjectId.value)) {
@@ -166,7 +164,7 @@ onBeforeUnmount(() => {
     <ProjectStatePanel v-if="projectsError" :title="projectsError.title" :message="projectsError.message" :retryable="projectsError.retryable" @retry="loadProjects" />
     <template v-else>
       <el-form ref="reviewFilterFormRef" :model="reviewFilterModel" class="review-toolbar sg-filter-bar" size="default" label-position="top" aria-label="审核单筛选">
-        <el-form-item label="当前项目" prop="projectId"><el-select v-model="selectedProjectId" :placeholder="projectsLoading ? '正在加载项目…' : '请选择项目'" :loading="projectsLoading" :disabled="projectsLoading"><el-option v-for="project in projects" :key="project.projectId" :label="`${project.projectCode} · ${project.projectName}`" :value="String(project.projectId)" /></el-select></el-form-item>
+        <el-form-item label="当前项目"><el-tag>{{ projects[0]?.projectName || "加载中" }}</el-tag></el-form-item>
         <el-form-item label="审核单状态" prop="reviewStatus"><el-select v-model="query.reviewStatus" placeholder="全部状态"><el-option label="全部状态" value="" /><el-option label="草稿" value="draft" /><el-option label="待审核" value="active" /><el-option label="已结束" value="completed" /><el-option label="已归档" value="archived" /></el-select></el-form-item>
         <div class="review-toolbar__summary"><el-icon><Search /></el-icon><span>当前筛选 {{ total }} 个任务 / 批量单</span></div>
       </el-form>

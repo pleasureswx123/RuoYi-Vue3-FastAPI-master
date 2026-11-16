@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import ntpath
 import os
+import re
 import stat
 import unicodedata
 import uuid
@@ -398,7 +399,13 @@ class ShotGridStoragePathAdapter:
         if effective_operation_type == 'ensure_episode_directory':
             valid = len(target_parts) == self.EPISODE_TARGET_PARTS and folded_target[0] == 'video'
         elif effective_operation_type == 'ensure_shot_directory':
-            valid = len(target_parts) == self.SHOT_TARGET_PARTS and folded_target[0] == 'video'
+            valid = (len(target_parts) == self.SHOT_TARGET_PARTS and folded_target[0] == 'video') or (
+                len(target_parts) == self.SHOT_TARGET_PARTS + 1
+                and folded_target[0] == 'shot'
+                and re.fullmatch(r'ep[0-9]{2,}', folded_target[1]) is not None
+                and re.fullmatch(r'[0-9]{3,}', folded_target[2]) is not None
+                and re.fullmatch(r'[0-9]{4,}', folded_target[3]) is not None
+            )
         elif effective_operation_type == 'ensure_asset_directory':
             valid = (
                 len(target_parts) == self.ASSET_TARGET_PARTS

@@ -3,9 +3,11 @@ import ReopenReviewButton from '@/components/review/ReopenReviewButton.vue'
 import RelatedDetailDrawer from '@/components/RelatedDetailDrawer.vue'
 import { detailNavigationKey } from '@/composables/useDetailNavigation'
 import RevisionTransferDialog from '@/components/version/RevisionTransferDialog.vue'
-import { inject, computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import ShotTaskFeedbackDialog from '@/components/version/ShotTaskFeedbackDialog.vue'
+import { inject, defineAsyncComponent, computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { useLeaveProtection } from '@/composables/useLeaveProtection'
+import { ElCollapse, ElCollapseItem, ElMessage, ElRadioGroup, ElRadioButton } from 'element-plus'
 import { ArrowLeft, Edit, Refresh } from '@element-plus/icons-vue'
 
 import { assertPositiveId } from '@/api/shot-grid/projects'
@@ -46,12 +48,37 @@ const STATUS_POLL_MAX_FAILURES = 3
 const PREPARATION_POLL_INTERVAL_MS = 1500
 const PREPARATION_POLL_MAX_ATTEMPTS = 80
 
-const props = defineProps({ targetTaskId: { type: [Number, String], default: null }, embedded: { type: Boolean, default: false } })
+const AssetRelationsPanel = defineAsyncComponent(() => import('@/views/asset/components/AssetRelationsPanel.vue'))
+const props = defineProps({ targetTaskId: { type: [Number, String], default: null }, embedded: { type: Boolean, default: false }, initialSection: { type: String, default: 'brief' } })
 const emit = defineEmits(['completed'])
 const route = useRoute()
 const router = useRouter()
 const sessionStore = useSessionStore()
 const task = ref(null)
+const versionWorkspace = ref(null)
+const relations = ref(null)
+const creatorSection = ref('brief')
+async function canLeave() {
+  return (await relations.value?.canLeave?.()) !== false && (await versionWorkspace.value?.canLeave?.()) !== false
+}
+async function refreshDetail() { if (await canLeave()) await loadDetail() }
+async function submitResults() {
+  creatorSection.value = 'results'
+  await nextTick()
+  await versionWorkspace.value?.focusSubmission?.()
+}
+useLeaveProtection(canLeave, () => Boolean(relations.value?.dirty || versionWorkspace.value?.dirty))
+defineExpose({ canLeave })
+const directFeedback = ref(null)
+function addShotFeedback() {
+  if (!task.value?.allowedActions?.includes('task.feedback') || !task.value?.latestVersion?.versionId) return
+  const snapshot = task.value
+  directFeedback.value?.open(snapshot.project.projectId, [{
+    taskId: snapshot.taskId, shotId: snapshot.target.shotId ?? snapshot.target.targetId,
+    versionId: snapshot.latestVersion.versionId, label: `${snapshot.taskName} · ${snapshot.latestVersion.versionNumber}`
+  }], () => !disposed && taskId.value === snapshot.taskId && task.value?.project?.projectId === snapshot.project.projectId)
+}
+function shotFeedbackClosed(result) { if (result.changed || result.uncertain) loadDetail() }
 const currentTime = useCurrentTime()
 const openIssues = ref([])
 const loading = ref(false)
@@ -343,7 +370,7 @@ async function handleVersionCommitted(_status, operationContext) {
     return
   }
   const submittedTaskId = taskId.value
-  showWorkflowSuccess(task.value?.taskStatus === 'pending_review' ? 'appended' : 'submitted').then(confirmed => {
+  showWorkflowSuccess(task.value?.taskStatus === 'pending_review' && !isShotTask.value ? 'appended' : 'submitted').then(confirmed => {
     if (confirmed && !disposed && props.embedded && taskId.value === submittedTaskId) emit('completed')
   })
   await loadDetail()
@@ -351,6 +378,17 @@ async function handleVersionCommitted(_status, operationContext) {
 
 onMounted(loadDetail)
 watch(taskId, loadDetail)
+watch(() => props.initialSection, section => { if (['brief', 'reference'].includes(section)) creatorSection.value = section }, { immediate: true })
+watch(() => [task.value?.taskId, props.initialSection, routeContext.value?.operationGeneration, loading.value], async () => {
+  const snapshot = task.value
+  if (loading.value || !snapshot || Number(snapshot.taskId) !== Number(taskId.value) || !['submit', 'feedback'].includes(props.initialSection)) return
+  const section = props.initialSection
+  creatorSection.value = 'results'
+  await nextTick()
+  if (disposed || task.value !== snapshot || section !== props.initialSection) return
+  if (section === 'submit') await versionWorkspace.value?.focusSubmission?.()
+  else versionWorkspace.value?.focusFeedback?.()
+}, { flush: 'post' })
 onBeforeUnmount(() => {
   disposed = true
   loadGeneration += 1
@@ -363,6 +401,8 @@ onBeforeUnmount(() => {
 
 <template>
   <RelatedDetailDrawer ref="reopenedReview" @closed="loadDetail" />
+
+  <ShotTaskFeedbackDialog ref="directFeedback" @closed="shotFeedbackClosed" />
   <section class="sg-page task-detail-page" :class="{ 'task-detail-page--embedded': embedded }">
     <RevisionTransferDialog ref="transferDialog" @saved="loadDetail" />
     <el-button v-if="!embedded" class="back-link" link :icon="ArrowLeft" @click="router.push('/workbench')">返回任务工作台</el-button>
@@ -380,20 +420,24 @@ onBeforeUnmount(() => {
     </el-card>
 
     <template v-else-if="task">
-      <header class="task-hero">
+      <header class="task-hero" :class="{ 'task-hero--creator': sessionStore.isCreatorWorkspace }">
         <div class="task-hero__main">
           <p class="sg-eyebrow">{{ task.project.projectCode }} · {{ taskKindMeta(task.taskKind).label }}</p>
           <div class="task-hero__title">
             <h2>{{ task.taskName }}</h2>
+            <el-button v-if="hasPermission('shotgrid:daily:write') && Number(task.assignee?.userId) === Number(sessionStore.user?.userId)" size="small" @click="router.push({ path: '/daily-records', query: { projectId: task.project.projectId, taskId: task.taskId } })">记录今日产出</el-button>
             <el-tag :type="tagTypeFromTone(taskStatusMeta(task).tone)" size="small" effect="light" round>{{ taskStatusMeta(task).label }}</el-tag>
           </div>
           <p>{{ task.target.targetName }} · {{ task.project.projectName }}</p>
-          <small>更新于 {{ formatTaskDateTime(task.updateTime) }}</small>
+          <small v-if="!sessionStore.isCreatorWorkspace">更新于 {{ formatTaskDateTime(task.updateTime) }}</small>
         </div>
         <div class="task-hero__actions">
           <ReopenReviewButton v-if="task.latestVersion" :version="task.latestVersion" @reopened="handleReopened" />
+
+          <el-button v-if="sessionStore.isCreatorWorkspace && allowedActions.has('version.add') && hasPermission('shotgrid:version:add') && (['in_progress', 'revision'].includes(task.taskStatus) || (isShotTask && task.taskStatus === 'pending_review')) && !task.hasUncommittedSubmission" type="primary" :disabled="loading" @click="submitResults">{{ task.taskStatus === 'pending_review' ? '继续提交新版本' : '提交成果' }}</el-button>
+          <el-button v-if="allowedActions.has('task.feedback')" type="primary" :disabled="loading" @click="addShotFeedback">添加反馈</el-button>
           <el-button v-if="allowedActions.has('task.transfer')" type="primary" :disabled="loading" @click="transferDialog.open(task.latestVersion.versionId)">转交修改</el-button>
-          <el-button :icon="Refresh" :loading="loading" @click="loadDetail">刷新</el-button>
+          <el-button :icon="Refresh" :loading="loading" @click="refreshDetail">刷新</el-button>
           <el-button v-if="canEdit" :icon="Edit" :disabled="loading" @click="openEditDialog">编辑任务</el-button>
         </div>
       </header>
@@ -415,10 +459,8 @@ onBeforeUnmount(() => {
 
       <el-alert
         v-if="isWaitingForStart"
-        :title="task.expectedStartTime && task.expectedEndTime ? '等待管理人员确认开工' : '待排期：等待管理人员设置计划起止时间'"
-        :description="isShotTask
-          ? '任务已分配。管理人员确认所需资产齐备并开始任务后，制作目录就绪即可提交版本。'
-          : '任务已分配。管理人员确认该制作分项的开工条件齐备并开始任务后，制作目录就绪即可提交版本；同一资产的其他分项独立确认。'"
+        title="历史任务等待恢复"
+        description="分配制作人后自动进入制作。此历史任务尚未转换，请管理人员核对制作人和存储后重新分配。计划时间选填。"
         type="info"
         :closable="false"
         show-icon
@@ -431,8 +473,27 @@ onBeforeUnmount(() => {
         message="该任务尚未填写制作分项，因此不能开始或提交版本。请联系项目管理人进入资产详情补齐制作分项；无需重新创建任务。"
       />
 
-      <section class="task-detail-grid">
-        <el-card v-if="task.projectReferenceDescription?.trim() || task.projectReferenceFiles?.length" class="task-card task-card--wide asset-information-card" shadow="never" data-testid="project-references">
+      <el-radio-group v-if="sessionStore.isCreatorWorkspace" v-model="creatorSection" class="creator-sections" aria-label="任务内容">
+        <el-radio-button value="brief">制作要求</el-radio-button>
+        <el-radio-button value="reference">参考与关联</el-radio-button>
+        <el-radio-button value="results">成果与反馈</el-radio-button>
+      </el-radio-group>
+      <section class="task-detail-grid" :class="{ 'task-detail-grid--creator': sessionStore.isCreatorWorkspace }">
+        <el-card v-if="sessionStore.isCreatorWorkspace" v-show="creatorSection === 'brief'" class="task-card task-card--wide" shadow="never">
+          <header><h3>制作内容</h3><el-tag v-if="['urgent', 'high'].includes(task.priority)" type="warning">{{ taskPriorityMeta(task.priority).label }}</el-tag></header>
+          <p class="task-requirements">{{ versionProductionDescription || '暂无额外制作要求' }}</p>
+          <p v-if="hasAdditionalShotRequirements" class="task-requirements">{{ task.requirements }}</p>
+          <p v-if="shotProduction?.durationMs" class="task-requirements">时长：{{ shotProduction.durationMs / 1000 }} 秒</p>
+          <TaskTimeReminder :task="task" :now="currentTime" compact />
+          <el-collapse v-if="shotProduction || task.remark" class="creator-more-info">
+            <el-collapse-item title="更多制作信息" name="details">
+              <ShotProductionInfo v-if="shotProduction" :shot="shotProduction" layout="dialog" :reference-files="task.referenceFiles" :reference-description="task.referenceDescription" />
+              <p v-if="task.remark" class="task-requirements">{{ task.remark }}</p>
+            </el-collapse-item>
+          </el-collapse>
+        </el-card>
+        <el-card v-show="!sessionStore.isCreatorWorkspace || creatorSection === 'reference'" v-if="task.target" class="task-card--wide" shadow="never"><AssetRelationsPanel ref="relations" :key="`${task.project.projectId}:${task.taskId}`" :project-id="Number(task.project.projectId)" :asset-id="Number(task.target.assetId || 0)" :shot-id="isShotTask ? Number(task.target.shotId || task.target.targetId) : 0" /></el-card>
+        <el-card v-show="!sessionStore.isCreatorWorkspace || creatorSection === 'reference'" v-if="task.projectReferenceDescription?.trim() || task.projectReferenceFiles?.length" class="task-card task-card--wide asset-information-card" shadow="never" data-testid="project-references">
           <header><h3>项目资料</h3></header>
           <el-descriptions class="asset-information-table" :column="1" label-width="96px" size="small" border>
             <el-descriptions-item label="资料说明"><div class="asset-information-description">{{ task.projectReferenceDescription || '暂无资料说明。' }}</div></el-descriptions-item>
@@ -443,7 +504,7 @@ onBeforeUnmount(() => {
           </el-descriptions>
         </el-card>
 
-        <el-card v-if="task.taskKind === 'asset_image'" class="task-card task-card--wide asset-information-card" shadow="never" data-testid="asset-information">
+        <el-card v-if="!sessionStore.isCreatorWorkspace && task.taskKind === 'asset_image'" class="task-card task-card--wide asset-information-card" shadow="never" data-testid="asset-information">
           <header><h3>资产信息</h3></header>
           <el-descriptions class="asset-information-table" :column="3" label-width="96px" size="small" border>
             <el-descriptions-item label="资产名称">{{ task.target.assetName || '—' }}</el-descriptions-item>
@@ -453,7 +514,7 @@ onBeforeUnmount(() => {
           </el-descriptions>
         </el-card>
 
-        <el-card class="task-card task-card--wide" :class="{ 'asset-information-card': !isShotTask }" shadow="never" data-testid="task-requirements">
+        <el-card v-if="!sessionStore.isCreatorWorkspace" class="task-card task-card--wide" :class="{ 'asset-information-card': !isShotTask }" shadow="never" data-testid="task-requirements">
           <header><div><p v-if="isShotTask" class="sg-eyebrow">BRIEF</p><h3>制作要求</h3></div><div class="brief-actions"><el-button v-if="targetRoute && !embedded" link type="primary" @click="router.push(targetRoute)">查看{{ taskKindMeta(task.taskKind).shortLabel }}详情</el-button><el-tag :type="tagTypeFromTone(taskPriorityMeta(task.priority).tone)" size="small" effect="plain" round>{{ taskPriorityMeta(task.priority).label }}优先级</el-tag></div></header>
           <template v-if="isShotTask">
             <ShotProductionInfo v-if="shotProduction" :shot="shotProduction" :reference-files="task.referenceFiles" :reference-description="task.referenceDescription" />
@@ -481,8 +542,16 @@ onBeforeUnmount(() => {
           </el-descriptions>
         </el-card>
 
-        <el-card id="version-workspace" class="task-card task-card--wide version-workspace-anchor" shadow="never" data-testid="version-workspace-anchor">
+        <el-card v-if="sessionStore.isCreatorWorkspace" v-show="creatorSection === 'reference'" class="task-card task-card--wide" shadow="never">
+          <header><h3>制作参考</h3></header>
+          <p class="task-requirements">{{ task.referenceDescription || '暂无额外参考说明' }}</p>
+          <ReviewReferenceFiles v-if="task.referenceFiles?.length" :files="task.referenceFiles" />
+          <el-empty v-else :image-size="48" description="暂无参考附件" />
+        </el-card>
+        <el-card v-show="!sessionStore.isCreatorWorkspace || creatorSection === 'results'" id="version-workspace" class="task-card task-card--wide version-workspace-anchor" shadow="never" data-testid="version-workspace-anchor">
           <VersionWorkspace
+            ref="versionWorkspace"
+            :compact="sessionStore.isCreatorWorkspace"
             :task-id="task.taskId"
             :task-kind="task.taskKind"
             :task-status="task.taskStatus"
@@ -497,7 +566,7 @@ onBeforeUnmount(() => {
           />
         </el-card>
 
-        <el-card class="task-card task-card--wide asset-information-card" shadow="never">
+        <el-card v-if="!sessionStore.isCreatorWorkspace" class="task-card task-card--wide asset-information-card" shadow="never">
           <header><h3>审计与备注</h3></header>
           <el-descriptions class="asset-information-table" :column="4" label-width="96px" size="small" border>
             <el-descriptions-item label="创建人">{{ task.createBy }}</el-descriptions-item>
@@ -522,6 +591,13 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.task-hero--creator { padding: 16px; gap: 14px; flex-wrap: wrap; }
+.task-hero--creator h2 { font-size: 20px; }
+.creator-sections { display: flex; flex-wrap: wrap; gap: 4px; }
+.task-detail-grid--creator { grid-template-columns: minmax(0, 1fr); }
+.task-detail-grid--creator .task-card :deep(.el-card__body) { padding: 12px; }
+.task-detail-grid--creator :deep(.asset-information-table .el-descriptions__table) { min-width: 0; }
+
 .brief-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
 .asset-information-card header h3 { margin-bottom: 10px; font-size: 14px; }
 .asset-information-table { overflow-x: auto; }

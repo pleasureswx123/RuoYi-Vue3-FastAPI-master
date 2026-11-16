@@ -93,7 +93,7 @@ async function save(command) {
     await updateTaskSchedule(snapshot.taskId, { ...command, lockVersion: snapshot.lockVersion }, key)
     if (disposed || current !== generation) return
     visible.value = false
-    ElMessage.success(snapshot.taskStatus === 'not_started' ? '排期已保存；任务仍需管理人员确认开工。' : '排期已更新，制作状态不变。')
+    ElMessage.success('计划时间已更新，制作状态不变。')
     emit('changed', { projectId: snapshot.projectId, assetId: snapshot.assetId, assetItemId: snapshot.assetItemId })
   } catch (failure) {
     if (disposed || current !== generation) return

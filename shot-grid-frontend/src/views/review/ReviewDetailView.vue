@@ -129,6 +129,7 @@ const canListVersions = computed(() => hasPermission('shotgrid:version:list'))
 const candidates = computed(() => reviewContext.value?.candidates || version.value?.candidates || [])
 const selectedCandidateId = computed(() => reviewContext.value?.currentVersion?.selectedCandidateId ?? version.value?.selectedCandidateId ?? null)
 const finalDelivery = computed(() => reviewContext.value?.currentVersion?.finalDelivery || version.value?.finalDelivery || null)
+const canRetryDeliveryState = computed(() => finalDelivery.value?.operation === 'revoke' || finalDelivery.value?.revocationStatus === 'failed' || (reviewContext.value?.currentVersion?.versionStatus || version.value?.versionStatus) === 'final')
 const finalDeliveryAlert = computed(() => {
   const delivery = finalDelivery.value
   if (!delivery) return null
@@ -138,12 +139,15 @@ const finalDeliveryAlert = computed(() => {
       ? 'NAS 当前有效清单已同步撤销；历史文件仅供追溯。' : delivery.deliveryStatus === 'failed'
         ? 'NAS 撤销清单同步失败，请重试；不要使用旧终稿。' : 'NAS 撤销清单同步中，历史文件保留。' }
   }
+  if ((reviewContext.value?.currentVersion?.versionStatus || version.value?.versionStatus) !== 'final') {
+    return { type: 'info', title: '此版本已收到后续反馈', description: '原通过记录和已交付文件保留为历史资料，请以最新版本的审核结果为准。' }
+  }
   if (delivery.deliveryStatus === 'published') {
     return {
       type: 'success',
       title: '最终版本已发布到 NAS',
       path: delivery.finalNasRelativePath,
-      description: '同目录 FINAL.json 记录最终候选和文件摘要。'
+      description: '同目录交付清单记录本版最终候选和文件摘要。'
     }
   }
   if (delivery.deliveryStatus === 'failed') {
@@ -156,7 +160,7 @@ const finalDeliveryAlert = computed(() => {
   return {
     type: 'warning',
     title: delivery.deliveryStatus === 'publishing' ? '正在发布最终版本到 NAS' : '最终版本已进入 NAS 发布队列',
-    description: '候选原文件保持不变；发布完成后会在同一任务目录生成 FINAL 文件夹和 FINAL.json。'
+    description: '候选原文件保持不变；发布完成后会生成本版最终文件与交付清单，保留历史交付。'
   }
 })
 const activeCandidate = computed(() => candidates.value.find(item => Number(item.candidateId) === Number(previewCandidateId.value)) || candidates.value[0] || null)
@@ -822,7 +826,7 @@ async function submitDecision(actionType, revisionTransfer = null, confirmed = f
 }
 
 async function retryFailedFinalDelivery() {
-  if (finalDeliveryRetryBusy.value || !canRetryFinalDelivery.value ||
+  if (finalDeliveryRetryBusy.value || !canRetryDeliveryState.value || !canRetryFinalDelivery.value ||
     (finalDelivery.value?.deliveryStatus !== 'failed' && finalDelivery.value?.revocationStatus !== 'failed')) return
   finalDeliveryRetryBusy.value = true
   try {
@@ -1088,7 +1092,7 @@ onBeforeUnmount(() => {
                 <code v-if="finalDeliveryAlert.path" class="final-delivery-path" aria-label="NAS 发布路径">{{ finalDeliveryAlert.path }}</code>
                 <span class="final-delivery-note">{{ finalDeliveryAlert.description }}</span>
               </el-alert>
-              <el-button v-if="(finalDelivery?.deliveryStatus === 'failed' || finalDelivery?.revocationStatus === 'failed') && canRetryFinalDelivery" type="warning" plain :loading="finalDeliveryRetryBusy" @click="retryFailedFinalDelivery">{{ finalDelivery?.operation === 'revoke' || finalDelivery?.revocationStatus === 'failed' ? '重试同步撤销清单' : '重新发布最终版本' }}</el-button>
+              <el-button v-if="(finalDelivery?.deliveryStatus === 'failed' || finalDelivery?.revocationStatus === 'failed') && canRetryFinalDelivery && canRetryDeliveryState" type="warning" plain :loading="finalDeliveryRetryBusy" @click="retryFailedFinalDelivery">{{ finalDelivery?.operation === 'revoke' || finalDelivery?.revocationStatus === 'failed' ? '重试同步撤销清单' : '重新发布最终版本' }}</el-button>
               <div class="decision-summary">
                 <template v-if="isReviewDecisionOpen">
                   <span v-if="carriedIssues.length">上轮已确认 {{ completedVerificationCount }}/{{ carriedIssues.length }} 条</span>

@@ -90,7 +90,7 @@ function cancel() {
     @closed="formRef?.resetFields()"
   >
     <el-form ref="formRef" :model="form" :rules="rules" label-position="top" class="schedule-edit-form">
-      <el-alert type="info" :closable="false" show-icon :title="isInitialSchedule ? '先设置计划开始与结束时间。保存排期不会自动开工，待开工任务仍需管理人员确认开工。' : '调整的是计划时间，不会修改实际开工、提交或审核记录，也不会覆盖最初排期。'" />
+      <el-alert type="info" :closable="false" show-icon :title="isInitialSchedule ? '制作周期为选填，不影响制作和提交；保存后任务状态保持不变。' : '调整的是计划时间，不会修改实际开工、提交或审核记录，也不会覆盖最初排期。'" />
       <el-card v-if="task" shadow="never" class="schedule-edit-form__panel">
         <template #header><h4>排期对照</h4></template>
       <el-descriptions :column="1" border size="small">

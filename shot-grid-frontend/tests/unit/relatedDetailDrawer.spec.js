@@ -7,23 +7,64 @@ import { useSessionStore } from '@/store/modules/session'
 
 vi.mock('@/views/version/VersionDetailView.vue', () => ({ default: { props: { targetVersionId: Number, embedded: Boolean }, template: '<p>版本 {{ targetVersionId }} {{ embedded }}</p>' } }))
 vi.mock('@/views/review/ReviewDetailView.vue', () => ({ default: { props: { targetReviewListId: Number, embedded: Boolean }, emits: ['completed'], template: '<p>审核 {{ targetReviewListId }} {{ embedded }}<button class="acknowledge" @click="$emit(\'completed\')">知道了</button></p>' } }))
+const leaveTask = vi.hoisted(() => vi.fn().mockResolvedValue(true))
 vi.mock('@/views/task/TaskDetailView.vue', async () => {
   const { inject } = await import('vue')
   const { detailNavigationKey } = await import('@/composables/useDetailNavigation')
-  return { default: { props: { targetTaskId: Number, embedded: Boolean }, setup() { return { navigate: inject(detailNavigationKey) } }, template: '<p>任务 {{ targetTaskId }} {{ embedded }}<button class="reopened" @click="navigate(\'/reviews/87\')">重审后继续审核</button></p>' } }
+  return { default: { props: { targetTaskId: Number, embedded: Boolean, initialSection: String }, methods: { canLeave: leaveTask }, setup() { return { navigate: inject(detailNavigationKey) } }, template: '<p :data-section="initialSection">任务 {{ targetTaskId }} {{ embedded }}<button class="reopened" @click="navigate(\'/reviews/87\')">重审后继续审核</button></p>' } }
 })
 function render() {
   return mount(RelatedDetailDrawer, { global: { stubs: {
-    ElDrawer: { name: 'ElDrawer', props: ['modelValue'], emits: ['update:modelValue', 'closed'], template: '<section v-if="modelValue"><slot name="header" /><slot /><button class="close" @click="$emit(\'update:modelValue\', false); $emit(\'closed\')">关闭</button></section>' },
+    ElDrawer: { name: 'ElDrawer', props: ['modelValue', 'beforeClose', 'size'], emits: ['update:modelValue', 'closed'], template: '<section v-if="modelValue"><slot name="header" /><slot /><button class="close" @click="$emit(\'update:modelValue\', false); $emit(\'closed\')">关闭</button></section>' },
     ElButton: { template: '<button><slot /></button>' },
     ElAlert: { props: ['title'], template: '<p>{{ title }}</p>' }
   } } })
 }
 beforeEach(() => {
+  leaveTask.mockReset().mockResolvedValue(true)
   setActivePinia(createPinia())
   useSessionStore().permissions = ['*:*:*']
 })
 describe('镜头关联详情抽屉', () => {
+  it('快捷面板选项传到任务，同任务切换保留实例并过滤非法选项', async () => {
+    const wrapper = render()
+    wrapper.vm.open('/tasks/15', { section: 'submit' })
+    await flushPromises()
+    expect(wrapper.get('[data-section]').attributes('data-section')).toBe('submit')
+    wrapper.vm.open('/tasks/15', { section: 'feedback' })
+    await flushPromises()
+    expect(wrapper.get('[data-section]').attributes('data-section')).toBe('feedback')
+    expect(leaveTask).not.toHaveBeenCalled()
+    wrapper.vm.open('/tasks/15', { section: 'reference' })
+    await flushPromises()
+    expect(wrapper.get('[data-section]').attributes('data-section')).toBe('reference')
+    wrapper.vm.open('/tasks/15', { section: 'invalid' })
+    await flushPromises()
+    expect(wrapper.get('[data-section]').attributes('data-section')).toBe('brief')
+    wrapper.unmount()
+  })
+  it('制作任务使用紧凑抽屉，取消草稿离开时阻止关闭和切换详情', async () => {
+    useSessionStore().roles = ['shotgrid_creator']
+    useSessionStore().permissions = ['shotgrid:task:query', 'shotgrid:version:query']
+    const wrapper = render()
+    wrapper.vm.open('/tasks/15')
+    await flushPromises()
+    const drawer = wrapper.findComponent({ name: 'ElDrawer' })
+    expect(drawer.props('size')).toBe('min(760px, 94vw)')
+    leaveTask.mockResolvedValue(false)
+    const close = vi.fn()
+    drawer.props('beforeClose')(close)
+    await flushPromises()
+    expect(close).not.toHaveBeenCalled()
+    wrapper.vm.open('/versions/2')
+    await flushPromises()
+    expect(wrapper.text()).toContain('任务 15')
+    leaveTask.mockResolvedValue(true)
+    wrapper.vm.open('/versions/2')
+    await flushPromises()
+    expect(wrapper.text()).toContain('版本 2')
+    wrapper.unmount()
+  })
   it('审核完成确认后关闭抽屉，并在关闭完成时通知外层刷新', async () => {
     const wrapper = render()
     wrapper.vm.open('/reviews/87')

@@ -1,5 +1,7 @@
 import hashlib
 import json
+import os
+import stat
 from dataclasses import replace
 from pathlib import Path
 
@@ -10,6 +12,28 @@ from module_shot_grid.service.final_delivery_path_adapter import (
     ShotGridFinalDeliveryPathAdapter,
 )
 from module_shot_grid.service.version_publish_path_adapter import VersionPublishPathAdapterError
+
+
+@pytest.mark.asyncio
+async def test_versioned_manifest_preserves_previous_final_manifest(tmp_path: Path) -> None:
+    context, project_path, _ = _prepare_context(tmp_path)
+    adapter = ShotGridFinalDeliveryPathAdapter(allow_local_root=True)
+    await adapter.publish(context)
+    old_path = project_path / Path(context.manifest_nas_relative_path.replace('\\', '/'))
+    old_content = old_path.read_bytes()
+    later = replace(
+        context,
+        version_no=2,
+        version_id=15,
+        final_delivery_id=20,
+        manifest_nas_relative_path=context.manifest_nas_relative_path.replace('FINAL.json', 'FINAL-V002.json'),
+    )
+    await adapter.publish(later)
+    assert old_path.read_bytes() == old_content
+    assert (old_path.parent / 'FINAL-V002.json').exists()
+    invalid = replace(later, manifest_nas_relative_path=later.manifest_nas_relative_path.replace('V002', 'V003'))
+    with pytest.raises(VersionPublishPathAdapterError):
+        await adapter.publish(invalid)
 
 
 def _prepare_context(
@@ -151,3 +175,31 @@ async def test_shared_asset_directory_has_independent_task_manifests(tmp_path: P
     directory = project / Path(context.final_nas_relative_path.replace('\\', '/')).parent
     assert json.loads((directory / 'CURRENT-10.json').read_text(encoding='utf-8'))['valid'] is True
     assert json.loads((directory / 'CURRENT-11.json').read_text(encoding='utf-8'))['valid'] is False
+
+
+@pytest.mark.asyncio
+async def test_final_delivery_stays_inside_its_version_directory(tmp_path: Path) -> None:
+    context, project, content = _prepare_context(tmp_path)
+    name = 'demo_V002_01.mp4'
+    relative = r'SHOT\EP001\001\0001\V002'
+    folder = project.joinpath(*relative.split('\\'))
+    folder.mkdir(parents=True)
+    (folder / name).write_bytes(content)
+    context = replace(
+        context,
+        version_no=2,
+        business_file_name=name,
+        source_nas_relative_path=relative + '\\' + name,
+        final_nas_relative_path=relative + '\\FINAL\\' + name,
+        manifest_nas_relative_path=relative + r'\FINAL\FINAL-V002.json',
+    )
+    await ShotGridFinalDeliveryPathAdapter(allow_local_root=True).publish(context)
+    assert (folder / name).read_bytes() == (folder / 'FINAL' / name).read_bytes() == content
+    manifest = folder / 'FINAL' / 'FINAL-V002.json'
+    assert manifest.is_file()
+    before = manifest.read_bytes()
+    await ShotGridFinalDeliveryPathAdapter(allow_local_root=True).publish(context)
+    assert manifest.read_bytes() == before
+    if os.name == 'nt':
+        assert manifest.stat().st_file_attributes & stat.FILE_ATTRIBUTE_HIDDEN
+        assert not (folder / 'FINAL' / name).stat().st_file_attributes & stat.FILE_ATTRIBUTE_HIDDEN

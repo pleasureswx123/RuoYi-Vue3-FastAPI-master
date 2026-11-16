@@ -1,9 +1,12 @@
 <script setup>
 import NasFolderMenu from '@/components/NasFolderMenu.vue'
+
+import { assetFinalSummary } from '@/components/version/finalPresentation'
 import ForceDeleteAction from '@/components/ForceDeleteAction.vue'
 import TargetPurgeStatus from '@/components/TargetPurgeStatus.vue'
 import { myProjectRoles, memberRoles } from '@/views/project/projectPresentation'
 import { assetOptionalColumns, useAssetTablePresentation } from './useAssetTablePresentation'
+import AssetCardItems from './components/AssetCardItems.vue'
 import AssetReviewEntry from './components/AssetReviewEntry.vue'
 import ProductionHistoryPanel from '@/components/production-history/ProductionHistoryPanel.vue'
 import ProjectDrawer from '@/views/project/components/ProjectDrawer.vue'
@@ -12,13 +15,14 @@ import AssetProductionAdjustmentDialog from './components/AssetProductionAdjustm
 import AssetItemScheduleDialog from '@/views/asset/components/AssetItemScheduleDialog.vue'
 import AssetItemBatchWorkspace from '@/views/asset/components/AssetItemBatchWorkspace.vue'
 import RelatedDetailDrawer from '@/components/RelatedDetailDrawer.vue'
-import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useLeaveProtection } from '@/composables/useLeaveProtection'
 import { ElCheckboxGroup, ElPopover, ElMessage, ElMessageBox } from 'element-plus'
 import { Box, Calendar, Clock, Collection, Delete, Edit, Grid, List, Plus, Refresh, RefreshLeft, Search, Switch, Upload, User, VideoPlay, View } from '@element-plus/icons-vue'
 
 import { archiveAsset, batchAssignAssetItemTasks, batchDeleteAssets, getAssetDetail, getAssetPage, listAssetAssignees } from '@/api/shot-grid/assets'
-import { assertPositiveId, getProjectDetail, getProjectPage } from '@/api/shot-grid/projects'
+import { assertPositiveId, getProjectDetail } from '@/api/shot-grid/projects'
 import { useTaskStatePolling } from '@/composables/useTaskStatePolling'
 import { useSessionStore } from '@/store/modules/session'
 import { tagTypeFromTone } from '@/utils/tag'
@@ -32,12 +36,13 @@ import AssetImportDialog from '@/views/asset/components/AssetImportDialog.vue'
 import AssetRequirementDialog from '@/views/asset/components/AssetRequirementDialog.vue'
 import AssetDetailView from '@/views/asset/AssetDetailView.vue'
 import ProtectedAssetThumbnail from '@/views/asset/components/ProtectedAssetThumbnail.vue'
-import { assetCompletionSummary, assetErrorState, assetItemStatusEntries, assetStatusMeta, assetStatusTagClass, assetTypeMeta, memberLabel, memberUserName, resolveAssetThumbnail } from '@/views/asset/assetPresentation'
+import { assetErrorState, assetItemStatusEntries, assetStatusMeta, assetStatusTagClass, assetTypeMeta, memberLabel, memberUserName, resolveAssetThumbnail } from '@/views/asset/assetPresentation'
 import { projectRoleMeta, storageMeta } from '@/views/project/projectPresentation'
 
 const purgeRefresh = ref(0)
 
 const ScheduleBoard = defineAsyncComponent(() => import('@/views/schedule/ScheduleBoard.vue'))
+const AssetResultsPanel = defineAsyncComponent(() => import('@/views/shot/components/ShotResultsPanel.vue'))
 
 const nasFolderMenu = ref(null)
 const route = useRoute()
@@ -45,7 +50,7 @@ const router = useRouter()
 const sessionStore = useSessionStore()
 const tableAvailableWidth = ref(0)
 const tablePresentationForm = ref(null)
-const { mode: tableMode, visibleColumns, widths: columnWidths, setColumns, saveWidth, resetPresentation } = useAssetTablePresentation(computed(() => sessionStore.user?.userId), tableAvailableWidth)
+const { mode: tableMode, visibleColumns, widths: columnWidths, setColumns, setOrder, saveWidth, resetPresentation } = useAssetTablePresentation(computed(() => sessionStore.user?.userId), tableAvailableWidth)
 const projects = ref([])
 const project = ref(null)
 const members = ref([])
@@ -72,6 +77,7 @@ const assetsError = ref(null)
 const projectContextForm = ref(null)
 const projectContext = reactive({ selectedProjectId: '', scope: '' })
 const viewMode = ref('table')
+const scheduleBrowseState = ref(null)
 const showCreate = ref(false)
 const showImport = ref(false)
 const showRequirements = ref(false)
@@ -85,17 +91,46 @@ const showBatchAssign = ref(false)
 const batchAssignFormRef = ref(null)
 const batchAssignForm = reactive({ assigneeUserId: '' })
 const showDetail = ref(false)
+const assetDetailPanel = ref(null)
+async function beforeCloseDetail(done) { if ((await assetDetailPanel.value?.canLeave?.()) !== false) done() }
 const detailAssetId = ref(null)
 const detailAssetItemId = ref(null)
 const historyTarget = ref(null)
+const resultsTarget = ref(null)
+const resultsPanel = ref(null)
+useLeaveProtection(() => resultsPanel.value?.canLeave?.() ?? true, () => Boolean(resultsPanel.value?.dirty))
+let resultsNavigation = 0
+async function openAssetEntry(row) {
+  if (!row.assetItemId) { openAsset(row); return }
+  if (row.previewFinal && resultsTarget.value?.assetItemId === Number(row.assetItemId)) { await resultsPanel.value?.previewApproved(); return }
+  const navigation = ++resultsNavigation
+  const projectId = currentProjectId.value
+  const operation = operationGeneration
+  if (resultsPanel.value && !await resultsPanel.value.canLeave()) return
+  if (disposed || navigation !== resultsNavigation || operation !== operationGeneration || currentProjectId.value !== projectId) return
+  resultsTarget.value = { assetId: Number(row.assetId), assetItemId: Number(row.assetItemId), previewFinal: Boolean(row.previewFinal) }
+}
+async function beforeCloseResults(done) {
+  const navigation = ++resultsNavigation
+  if (resultsPanel.value && !await resultsPanel.value.canLeave()) return
+  if (disposed || navigation !== resultsNavigation) return
+  resultsTarget.value = null
+  done()
+}
+function feedbackFromResults({ asset, item, action }) {
+  if (Number(asset?.projectId) !== currentProjectId.value || Number(item?.assetItemId) !== resultsTarget.value?.assetItemId) return
+  batchWorkspace.value?.open([asset], [item.assetItemId], action)
+}
 const createContext = ref(null)
 const importContext = ref(null)
 const assetFilterForm = ref(null)
 const appliedAssetQuery = ref('')
+const appliedItemFilters = computed(() => JSON.parse(appliedAssetQuery.value || '{}'))
 const appliedItemStatus = computed(() => JSON.parse(appliedAssetQuery.value || '{}').assetStatus || '')
 const query = reactive({
   keyword: '',
   assetType: '',
+  hasFinal: '',
   assetStatus: '',
   assigneeUserId: '',
   pageNum: 1,
@@ -156,6 +191,8 @@ const currentProjectId = computed(() => {
   }
 })
 const scheduleInitialFilters = computed(() => ({
+  productionFrom: sessionStore.workspaceFilters.productionFrom || undefined,
+  productionTo: sessionStore.workspaceFilters.productionTo || undefined,
   keyword: query.keyword.trim(),
   assigneeUserIds: query.assigneeUserId ? [Number(query.assigneeUserId)] : [],
   assetTypes: query.assetType ? [query.assetType] : [],
@@ -239,8 +276,33 @@ function openSelectedItems(action = '') {
   const rows = selectedItems.value
   const parents = assets.value.filter(asset => rows.some(row => Number(row.assetId) === Number(asset.assetId)))
   if (!rows.length || rows.length > 100 || rows.some(row => !parents.some(asset => Number(asset.assetId) === Number(row.assetId) && canSelectItem(asset, row)))) return
+  if (action && batchActionHint(action)) return
   batchWorkspace.value.open(parents, rows.map(row => row.assetItemId), action)
 }
+const batchFeedbackAction = computed(() => selectedItems.value.length && selectedItems.value.every(row => {
+  const asset = assets.value.find(parent => Number(parent.assetId) === Number(row.assetId))
+  return canItemWorkspace(asset, row, 'appendIssue')
+}) ? 'append' : 'review')
+const batchShortcuts = computed(() => [
+  { action: 'assign', label: '批量分配制作人' },
+  { action: 'schedule', label: '批量修改周期' },
+  { action: batchFeedbackAction.value, label: '批量添加反馈' },
+  { action: 'adjust', label: '批量编辑制作要求' }
+])
+function batchActionHint(action) {
+  if (batchWorkspaceOpen.value || assetsLoading.value || assigning.value || deleting.value || itemActionBusy.value || scheduleBusy.value) return '正在处理，请稍候'
+  if (!selectedItems.value.length) return '请展开资产并勾选需要操作的制作分项'
+  if (selectedItems.value.length > 100) return '单次最多操作 100 个制作分项'
+  const allowed = selectedItems.value.every(row => {
+    const asset = assets.value.find(parent => Number(parent.assetId) === Number(row.assetId))
+    if (!canSelectItem(asset, row)) return false
+    if (action === 'assign') return itemCan(asset, row, 'task.assign')
+    if (action === 'schedule') return canScheduleAssetItem(asset, row, canSchedule.value)
+    return canItemWorkspace(asset, row, action === 'append' ? 'appendIssue' : action)
+  })
+  return allowed ? '' : ['review', 'append'].includes(action) ? '请分别选择可审核或可追加反馈的分项；未提交成果的分项不能打反馈' : '所选分项中有状态或权限不适用的项目，请分别操作'
+}
+function clearItemSelection() { selectedItems.value = [] }
 watch(viewMode, () => { selectedItems.value = [] })
 
 function canItemWorkspace(asset, row, action) {
@@ -251,6 +313,12 @@ function canItemWorkspace(asset, row, action) {
 async function refreshWorkspace() {
   await loadAssets()
   await scheduleBoard.value?.refresh?.()
+  if (resultsPanel.value && await resultsPanel.value.canLeave()) await resultsPanel.value.reload()
+}
+async function openAssetScheduleResults(task) {
+  if (Number(task.projectId) !== currentProjectId.value || task.target?.targetKind !== 'asset_item' || !hasPermission('shotgrid:asset:query')) return false
+  await openAssetEntry({ assetId: Number(task.target.parentId), assetItemId: Number(task.target.targetId) })
+  return resultsTarget.value?.assetItemId === Number(task.target.targetId)
 }
 async function loadAssetScheduleTarget(task, options) {
   const id = currentProjectId.value
@@ -281,7 +349,7 @@ function assetTableActions(row) {
   add('delete', canDeleteAsset(row), { label: '删除资产', type: 'danger', icon: Delete, disabled }, () => handleAssetCommand('delete', row))
   return actions
 }
-watch(currentProjectId, () => { historyTarget.value = null })
+watch(currentProjectId, () => { historyTarget.value = null; resultsTarget.value = null; operationGeneration++ }, { flush: 'sync' })
 function openItemAdjustment(asset, row) {
   if (!canItemWorkspace(asset, row, 'adjust')) return
   const projectId = currentProjectId.value
@@ -311,13 +379,23 @@ function assetItemTableActions(asset, row) {
   add('delete', itemCan(asset, row, 'assetItem.delete'), { label: '删除分项', type: 'danger', icon: Delete }, () => itemOperations.value.run('assetItem.delete', asset, row))
   return prioritizeAssetItemActions(actions, row)
 }
+function assetFieldAction(row, field) {
+  const asset = assets.value.find(parent => Number(parent.assetId) === Number(row.assetId))
+  if (!asset) return null
+  const actions = assetItemTableActions(asset, row)
+  const keys = { assignee: ['assign'], plan: ['schedule'], description: ['adjust', 'edit'] }[field] || []
+  return keys.map(key => actions.find(action => action.key === key)).find(Boolean) || null
+}
 
 function assetQueryParams() {
   return {
     keyword: query.keyword.trim() || undefined,
     assetType: query.assetType || undefined,
+    hasFinal: query.hasFinal === '' ? undefined : query.hasFinal === 'yes',
     assetStatus: query.assetStatus || undefined,
     assigneeUserId: query.assigneeUserId || undefined,
+      productionFrom: sessionStore.workspaceFilters.productionFrom || undefined,
+      productionTo: sessionStore.workspaceFilters.productionTo || undefined,
     pageNum: query.pageNum,
     pageSize: query.pageSize,
     orderByColumn: query.orderByColumn,
@@ -349,11 +427,7 @@ async function loadProjects(preferredId = null) {
   projectsLoading.value = true
   projectsError.value = null
   try {
-    const rows = await fetchAllPages(
-      (params, options) => getProjectPage(params, options),
-      { scope: projectContext.scope || undefined, orderByColumn: 'projectName', isAsc: 'ascending' },
-      controller.signal
-    )
+    const rows = await sessionStore.loadWorkspaceProjects({ signal: controller.signal })
     if (projectController !== controller || controller.signal.aborted) return
     projects.value = rows
     const routeId = preferredId || route.query.projectId
@@ -462,15 +536,81 @@ async function submitFilters() {
   const isValid = await assetFilterForm.value?.validate().catch(() => false)
   if (!isValid) return
   query.pageNum = 1
-  loadAssets()
+  syncAssetWorkspaceFilters()
+  await loadAssets()
 }
 
 async function resetFilters() {
   assetFilterForm.value?.resetFields()
   assetFilterForm.value?.clearValidate()
   query.pageNum = 1
+  Object.assign(query, { hasFinal: '', keyword: '', assetType: '', assetStatus: '', assigneeUserId: '' })
+  syncAssetWorkspaceFilters({ productionFrom: '', productionTo: '' })
   await loadAssets()
 }
+
+const assetStatusOptions = ['pending_info', 'unassigned', 'preparing', 'in_progress', 'reviewing', 'revision', 'completed']
+const headerFilterKind = ref('')
+const headerFilterAnchor = shallowRef(null)
+const headerFilterForm = ref(null)
+const headerFilterBusy = ref(false)
+const headerFilterDraft = reactive({ keyword: '', assetType: '', assigneeUserId: '', assetStatus: '', dates: [] })
+const headerFilterRules = {
+  keyword: [{ max: 200, message: '搜索关键字不能超过 200 个字符', trigger: 'blur' }],
+  assetType: [{ validator: (_rule, value, done) => done(!value || ['Character', 'Environment', 'Prop'].includes(value) ? undefined : new Error('请选择有效分类')), trigger: 'change' }],
+  assetStatus: [{ validator: (_rule, value, done) => done(!value || assetStatusOptions.includes(value) ? undefined : new Error('请选择有效状态')), trigger: 'change' }],
+  assigneeUserId: [{ validator: (_rule, value, done) => done(!value || Number.isSafeInteger(Number(value)) && Number(value) > 0 ? undefined : new Error('请选择有效制作人')), trigger: 'change' }],
+  dates: [{ validator: (_rule, value, done) => done(!value?.length || value.length === 2 && value.every(date => /^\d{4}-\d{2}-\d{2}$/.test(date)) && value[0] <= value[1] ? undefined : new Error('请选择有效的起止日期')), trigger: 'change' }]
+}
+const activeHeaderFilters = computed(() => ({ identity: Boolean(query.keyword || query.assetType), assignee: Boolean(query.assigneeUserId), status: Boolean(query.assetStatus), plan: Boolean(sessionStore.workspaceFilters.productionFrom || sessionStore.workspaceFilters.productionTo) }))
+let publishedAssetFilters = ''
+function syncAssetWorkspaceFilters(extra = {}) {
+  Object.assign(sessionStore.workspaceFilters, { assetType: query.assetType, assigneeUserId: query.assigneeUserId, ...extra })
+  publishedAssetFilters = JSON.stringify(sessionStore.workspaceFilters)
+}
+function openHeaderFilter(kind, event) {
+  if (assetsLoading.value || headerFilterBusy.value) return
+  Object.assign(headerFilterDraft, { keyword: query.keyword, assetType: query.assetType, assigneeUserId: query.assigneeUserId, assetStatus: query.assetStatus,
+    dates: sessionStore.workspaceFilters.productionFrom && sessionStore.workspaceFilters.productionTo ? [sessionStore.workspaceFilters.productionFrom, sessionStore.workspaceFilters.productionTo] : [] })
+  headerFilterAnchor.value = event.currentTarget
+  headerFilterKind.value = kind
+  nextTick(() => headerFilterForm.value?.clearValidate())
+}
+async function applyHeaderFilter() {
+  if (headerFilterBusy.value || assetsLoading.value) return
+  headerFilterBusy.value = true
+  const generation = operationGeneration
+  const kind = headerFilterKind.value
+  try {
+    if (!await headerFilterForm.value?.validate().catch(() => false)) return
+    if (disposed || generation !== operationGeneration || kind !== headerFilterKind.value) return
+    if (kind === 'identity') Object.assign(query, { keyword: headerFilterDraft.keyword, assetType: headerFilterDraft.assetType || '' })
+    if (kind === 'assignee') query.assigneeUserId = headerFilterDraft.assigneeUserId || ''
+    if (kind === 'status') query.assetStatus = headerFilterDraft.assetStatus || ''
+    syncAssetWorkspaceFilters(kind === 'plan' ? { productionFrom: headerFilterDraft.dates?.[0] || '', productionTo: headerFilterDraft.dates?.[1] || '' } : {})
+    headerFilterKind.value = ''
+    query.pageNum = 1
+    await loadAssets()
+  } finally { headerFilterBusy.value = false }
+}
+function clearHeaderFilter() {
+  if (headerFilterBusy.value || assetsLoading.value) return
+  headerFilterForm.value?.resetFields()
+  if (headerFilterKind.value === 'identity') { headerFilterDraft.keyword = ''; headerFilterDraft.assetType = '' }
+  if (headerFilterKind.value === 'assignee') headerFilterDraft.assigneeUserId = ''
+  if (headerFilterKind.value === 'status') headerFilterDraft.assetStatus = ''
+  if (headerFilterKind.value === 'plan') headerFilterDraft.dates = []
+  headerFilterForm.value?.clearValidate()
+  return applyHeaderFilter()
+}
+watch(currentProjectId, () => { headerFilterKind.value = '' }, { flush: 'sync' })
+watch(viewMode, () => { headerFilterKind.value = '' })
+watch(() => sessionStore.workspaceFilters, async value => {
+  if (JSON.stringify(value) === publishedAssetFilters) return
+  headerFilterKind.value = ''
+  Object.assign(query, { assetType: value.assetType, assigneeUserId: value.assigneeUserId, pageNum: 1 })
+  if (project.value && Number(project.value.projectId) === currentProjectId.value) await loadAssets()
+}, { deep: true })
 
 function changePageSize(size) {
   if (size === query.pageSize) return
@@ -485,7 +625,10 @@ function changePage(page) {
   loadAssets()
 }
 
-function openAsset(asset) {
+async function openAsset(asset) {
+  const projectId = currentProjectId.value
+  if (showDetail.value && (await assetDetailPanel.value?.canLeave?.()) === false) return
+  if (disposed || projectId !== currentProjectId.value) return
   const targetAssetId = Number(asset?.assetId)
   if (!currentProjectId.value || !Number.isSafeInteger(targetAssetId) || targetAssetId <= 0) return
   detailAssetId.value = targetAssetId
@@ -760,7 +903,7 @@ function notifyDetachedOperation() {
   ElMessage.success('操作已完成；请切回对应项目查看最新结果。')
 }
 
-async function handleSaved(_result, operationContext) {
+async function handleSaved(result, operationContext, nextAction = '') {
   if (disposed) return
   const targetProjectId = Number(operationContext?.projectId)
   if (!contextMatches(createContext.value, operationContext)) {
@@ -773,7 +916,20 @@ async function handleSaved(_result, operationContext) {
     return
   }
   ElMessage.success('资产已创建')
+  const generation = operationGeneration
   await loadAssets()
+  if (nextAction !== 'assign' || disposed || currentProjectId.value !== targetProjectId || generation !== operationGeneration || !canAssign.value || !hasPermission('shotgrid:asset:query')) return
+  try {
+    const { data: asset } = await getAssetDetail(targetProjectId, assertPositiveId(result?.assetId, '资产'))
+    if (disposed || currentProjectId.value !== targetProjectId || generation !== operationGeneration) return
+    if (Number(asset.projectId) !== targetProjectId || Number(asset.assetId) !== Number(result.assetId)) throw new Error('资产范围已变化')
+    const ids = (asset.items || []).map(item => item.assetItemId)
+    if (!ids.length) throw new Error('尚无可分配的制作分项')
+    if (ids.length === 1) await itemOperations.value?.run('task.assign', asset, asset.items[0])
+    else await batchWorkspace.value?.open([asset], ids, 'assign')
+  } catch {
+    if (!disposed && currentProjectId.value === targetProjectId && generation === operationGeneration) ElMessage.warning('资产已创建，但分配入口加载失败。请从列表重新分配，无需重复创建。')
+  }
 }
 
 async function handleEdited(_result, operationContext) {
@@ -825,7 +981,8 @@ watch(() => projectContext.selectedProjectId, (next, previous) => {
   batchAssignForm.assigneeUserId = ''
   selectedAssetIds.value = new Set()
   query.pageNum = 1
-  query.assigneeUserId = ''
+  query.assigneeUserId = sessionStore.workspaceFilters.assigneeUserId
+  query.assetType = sessionStore.workspaceFilters.assetType
   loadProjectContext()
 })
 watch(() => projectContext.scope, () => loadProjects())
@@ -857,8 +1014,7 @@ onBeforeUnmount(() => {
     <ProjectStatePanel v-if="projectsError" :title="projectsError.title" :message="projectsError.message" :retryable="projectsError.retryable" @retry="loadProjects" />
     <template v-else>
       <el-form ref="projectContextForm" :model="projectContext" :rules="projectContextRules" class="project-context sg-filter-bar sg-context-bar" size="default" inline label-position="left" aria-label="当前项目筛选">
-        <el-form-item label="当前项目" prop="selectedProjectId"><el-select v-model="projectContext.selectedProjectId" :placeholder="projectsLoading ? '正在加载项目…' : '请选择项目'" :disabled="projectsLoading"><el-option :label="projectsLoading ? '正在加载项目…' : '请选择项目'" value="" /><el-option v-for="item in projects" :key="item.projectId" :label="`${item.projectCode} · ${item.projectName}`" :value="String(item.projectId)" /></el-select></el-form-item>
-        <el-form-item v-if="canViewAll" label="项目范围" prop="scope"><el-select v-model="projectContext.scope" placeholder="我的项目"><el-option label="我的项目" value="" /><el-option label="全部项目" value="all" /></el-select></el-form-item>
+        <el-form-item label="当前项目"><el-tag>{{ project ? `${project.projectCode} · ${project.projectName}` : projects[0]?.projectName || "加载中" }}</el-tag></el-form-item>
         <div v-if="project" class="project-context__meta"><el-tag size="small" effect="plain" round type="primary">{{ project.projectTypeName }}</el-tag><el-tag size="small" effect="plain" round type="info">{{ project.aspectRatio }}</el-tag><el-tag size="small" effect="plain" round :type="projectRoleMeta(myProjectRoles(project)).type">我的角色：{{ projectRoleMeta(myProjectRoles(project)).label }}</el-tag><el-tag size="small" effect="plain" round :type="tagTypeFromTone(storageMeta(project.storageStatus).tone)">存储：{{ storageMeta(project.storageStatus).label }}</el-tag></div>
       </el-form>
 
@@ -875,11 +1031,12 @@ onBeforeUnmount(() => {
             <el-select v-model="query.assetType" placeholder="全部类型" aria-label="按资产类型筛选" @change="submitFilters"><el-option label="全部类型" value="" /><el-option label="角色" value="Character" /><el-option label="场景" value="Environment" /><el-option label="道具" value="Prop" /></el-select>
           </el-form-item>
           <el-form-item class="asset-filter-item" label="分项状态" prop="assetStatus">
-            <el-select popper-class="sg-production-status-options" v-model="query.assetStatus" placeholder="全部状态" aria-label="按资产分项状态筛选" @change="submitFilters"><el-option label="全部状态" value="" /><el-option v-for="status in ['pending_info','unassigned','pending_schedule','not_started','in_progress','reviewing','revision','completed']" :key="status" :label="assetStatusMeta(status).label" :value="status" /></el-select>
+            <el-select v-model="query.assetStatus" placeholder="全部状态" aria-label="按资产分项状态筛选" @change="submitFilters"><el-option label="全部状态" value="" /><el-option v-for="status in assetStatusOptions" :key="status" :label="assetStatusMeta(status).label" :value="status" /></el-select>
           </el-form-item>
           <el-form-item class="asset-filter-item" label="制作人" prop="assigneeUserId">
             <el-select v-model="query.assigneeUserId" placeholder="全部制作人" aria-label="按制作人筛选" @change="submitFilters"><el-option label="全部制作人" value="" /><el-option v-for="member in members" :key="member.userId" :label="memberLabel(member)" :value="String(member.userId)" /></el-select>
           </el-form-item>
+          <el-form-item v-if="!['swimlane', 'gantt'].includes(viewMode)" label="定稿" prop="hasFinal"><el-select v-model="query.hasFinal" aria-label="定稿筛选" @change="submitFilters"><el-option label="全部" value="" /><el-option label="有定稿（含历史）" value="yes" /><el-option label="无定稿" value="no" /></el-select></el-form-item>
           <el-form-item class="asset-filter-actions">
             <el-button type="primary" :icon="Search" :loading="assetsLoading" @click="submitFilters">查询</el-button>
             <el-button :icon="RefreshLeft" :disabled="assetsLoading" @click="resetFilters">重置</el-button>
@@ -892,26 +1049,30 @@ onBeforeUnmount(() => {
           <el-form ref="tablePresentationForm" :model="{ mode: tableMode, columns: visibleColumns }" label-position="top">
             <el-form-item label="显示方式" prop="mode"><el-select v-model="tableMode" aria-label="资产表格显示方式"><el-option label="自动适应" value="auto" /><el-option label="完整列" value="full" /><el-option label="精简列" value="compact" /><el-option label="自定义列" value="custom" /></el-select></el-form-item>
             <el-form-item label="信息列" prop="columns"><el-checkbox-group :model-value="visibleColumns" @update:model-value="setColumns"><el-checkbox v-for="column in assetOptionalColumns" :key="column.key" :value="column.key">{{ column.label }}</el-checkbox></el-checkbox-group></el-form-item>
-            <p>名称与操作列始终保留。隐藏信息可在详情中查看，拖动表头边界可调整列宽。</p>
+            <p>名称与操作列固定两侧；拖动信息列表头可移动列，拖动边界可调整列宽。漏斗按钮用于筛选，Alt + 左右方向键也可移动列。</p>
             <el-button text type="primary" @click="resetPresentation">恢复自动布局</el-button>
           </el-form>
-        </el-popover><el-radio-group v-model="viewMode" class="view-switch" size="small" aria-label="资产视图"><el-radio-button value="table"><el-icon><List /></el-icon>表格</el-radio-button><el-radio-button value="card"><el-icon><Grid /></el-icon>卡片</el-radio-button><el-radio-button value="type"><el-icon><Box /></el-icon>类型看板</el-radio-button><el-radio-button value="swimlane"><el-icon><Clock /></el-icon>人员泳道</el-radio-button><el-radio-button value="gantt"><el-icon><Calendar /></el-icon>任务甘特</el-radio-button></el-radio-group></section>
+        </el-popover><el-radio-group v-model="viewMode" class="view-switch" size="small" aria-label="资产视图"><el-radio-button value="table"><el-icon><List /></el-icon>表格</el-radio-button><el-radio-button value="card"><el-icon><Grid /></el-icon>卡片</el-radio-button><el-radio-button value="type"><el-icon><Box /></el-icon>类型看板</el-radio-button><el-radio-button value="swimlane"><el-icon><Clock /></el-icon>人员任务</el-radio-button><el-radio-button value="gantt"><el-icon><Calendar /></el-icon>制作排期</el-radio-button></el-radio-group></section>
 
         <div v-if="selectedAssets.length && selectedAssets.every(canManageItemWorkspace)" class="asset-toolbar__summary"><el-button type="primary" plain :disabled="batchWorkspaceOpen || assigning || deleting || assetsLoading" @click="batchWorkspace.open(selectedAssets)">选择分项批量操作（{{ selectedAssets.length }} 个资产）</el-button><el-text size="small" type="info">展开并明确勾选制作分项，再分配、排期或反馈。</el-text></div>
-        <div v-if="selectedItems.length" class="asset-toolbar__summary" aria-label="已选制作分项操作"><el-text>已选 {{ selectedItems.length }} 个制作分项</el-text><el-button type="primary" :disabled="batchWorkspaceOpen || assigning || deleting || assetsLoading || itemActionBusy || scheduleBusy || selectedItems.length > 100" @click="openSelectedItems()">操作所选分项（{{ selectedItems.length }}）</el-button><el-text size="small" type="info">仅操作勾选分项，不包含其他分项或整资产删除。</el-text></div>
+        <section v-if="viewMode === 'table'" class="asset-batch-toolbar" aria-label="制作分项批量操作栏">
+          <el-text>已选 {{ selectedItems.length }} 个制作分项</el-text>
+          <el-tooltip v-for="shortcut in batchShortcuts" :key="shortcut.action" :content="batchActionHint(shortcut.action)" :disabled="!batchActionHint(shortcut.action)"><span><el-button :disabled="Boolean(batchActionHint(shortcut.action))" @click="openSelectedItems(shortcut.action)">{{ shortcut.label }}</el-button></span></el-tooltip>
+          <el-button text :disabled="!selectedItems.length || batchWorkspaceOpen || assigning || deleting || itemActionBusy || scheduleBusy" @click="clearItemSelection">清空分项选择</el-button>
+        </section>
         <el-text v-if="viewMode === 'table'" size="small" type="info">全选范围：当前页可操作资产及已加载的可操作分项；未展开资产的分项请先展开再选择。</el-text>
         <Suspense v-if="['swimlane', 'gantt'].includes(viewMode) && currentProjectId">
-          <ScheduleBoard ref="scheduleBoard" :project-id="currentProjectId" target-kind="asset_item" :initial-mode="viewMode" :initial-filters="scheduleInitialFilters" :editable-allowed="canSchedule" :action-loader="loadAssetScheduleTarget" :action-factory="assetScheduleActions" @query-change="handleScheduleQueryChange" />
+          <ScheduleBoard ref="scheduleBoard" :project-id="currentProjectId" target-kind="asset_item" :initial-mode="viewMode" :initial-window-start="sessionStore.workspaceFilters.productionFrom ? `${sessionStore.workspaceFilters.productionFrom}T00:00:00` : ''" :initial-window-end="sessionStore.workspaceFilters.productionTo ? `${sessionStore.workspaceFilters.productionTo}T23:59:59` : ''" :initial-filters="scheduleInitialFilters" :assignee-options="creatorMembers" :editable-allowed="canSchedule" :browse-state="scheduleBrowseState" @remember="scheduleBrowseState = $event" :task-opener="openAssetScheduleResults" :action-loader="loadAssetScheduleTarget" :action-factory="assetScheduleActions" @query-change="handleScheduleQueryChange" />
           <template #fallback><el-card class="asset-context-loading" shadow="never"><el-skeleton :rows="8" animated /></el-card></template>
         </Suspense>
         <ProjectStatePanel v-else-if="assetsError" :title="assetsError.title" :message="assetsError.message" :retryable="assetsError.retryable" @retry="loadProjectContext" />
         <el-empty v-else-if="!assetsLoading && !assets.length" class="asset-empty" description="当前筛选没有资产"><template #image><el-icon><Box /></el-icon></template><p>调整筛选条件，或在存储就绪的活动项目中新建/导入资产。</p></el-empty>
 
-        <AssetTreeTable @row-contextmenu="(...args) => nasFolderMenu?.open(...args)" v-else-if="viewMode === 'table'" ref="assetTable" :assets="assets" :item-status="appliedItemStatus" :visible-columns="visibleColumns" :column-widths="columnWidths" @header-dragend="saveWidth" @available-width="tableAvailableWidth = $event" :project-id="currentProjectId"
+        <AssetTreeTable @row-contextmenu="(...args) => nasFolderMenu?.open(...args)" v-else-if="viewMode === 'table'" ref="assetTable" :assets="assets" :item-status="appliedItemStatus" :item-filters="appliedItemFilters" :visible-columns="visibleColumns" :column-widths="columnWidths" :active-filters="activeHeaderFilters" @header-filter="openHeaderFilter" @column-order="setOrder" @header-dragend="saveWidth" @available-width="tableAvailableWidth = $event" :project-id="currentProjectId"
                         :context-key="`${currentProjectId}:${appliedAssetQuery}`" :members="members"
-                        :selected-asset-ids="selectedAssetIds" :selectable="canSelectAsset" :selected-item-ids="selectedItemIds" :item-selectable="canSelectItem"
+                        :selected-asset-ids="selectedAssetIds" :selectable="canSelectAsset" :selected-item-ids="selectedItemIds" :item-selectable="canSelectItem" :field-action="assetFieldAction"
                         :can-query="hasPermission('shotgrid:asset:query')" :loading="assetsLoading" :background-refresh="backgroundAssetRefresh" :selection-disabled="assigning || deleting || itemActionBusy"
-                        @selection-change="updateAssetSelection" @item-selection-change="selectedItems = $event" @open-item="openAsset">
+                        @selection-change="updateAssetSelection" @item-selection-change="selectedItems = $event" @open-item="openAssetEntry">
           <template #asset-actions="{ row }">
             <AssetActionButtons :actions="assetTableActions(row)">
               <ForceDeleteAction :project-id="currentProjectId" entity-type="asset" :items="[row]" compact @deleted="purgeRefresh++; loadAssets()" />
@@ -922,7 +1083,7 @@ onBeforeUnmount(() => {
           </template>
         </AssetTreeTable>
 
-        <div v-else-if="viewMode === 'card'" class="asset-grid" v-loading="assetsLoading"><el-card v-for="asset in assets" :key="asset.assetId" class="asset-card" shadow="hover" tabindex="0" @click="openAsset(asset)" @keydown.enter="openAsset(asset)"><ProtectedAssetThumbnail class="asset-thumb" :thumbnail="resolveAssetThumbnail(asset)" :alt="`${asset.assetName} 缩略图`" /><header><el-tag size="small" effect="plain" round :type="tagTypeFromTone(assetTypeMeta(asset.assetType).tone)">{{ assetTypeMeta(asset.assetType).label }}</el-tag></header><h3>{{ asset.assetName }}</h3><p>{{ asset.description || '暂无资产描述' }}</p><div v-if="itemStatusEntries(asset).length" class="asset-item-status-counts asset-item-status-counts--card"><el-tag v-for="entry in itemStatusEntries(asset)" :key="entry.status" size="small" effect="plain" round :type="tagTypeFromTone(assetStatusMeta(entry.status).tone)">{{ entry.label }} {{ entry.count }}</el-tag></div><footer><span>{{ assetCompletionSummary(asset) }} · {{ asset.itemCount }} 个制作分项</span><el-button v-if="canOpenAssetReview(asset)" size="small" type="primary" @click.stop="reviewEntry.open(asset)">审核任务</el-button><el-button v-if="canOpenItemStart(asset)" size="small" type="primary" :icon="VideoPlay" @click.stop="openAssetItemStart(asset)">{{ assetStartLabel(asset) }}</el-button></footer></el-card></div>
+        <div v-else-if="viewMode === 'card'" class="asset-grid" v-loading="assetsLoading"><el-card v-for="asset in assets" :key="asset.assetId" class="asset-card" shadow="hover" tabindex="0" @click="openAsset(asset)" @keydown.enter="openAsset(asset)"><ProtectedAssetThumbnail class="asset-thumb" :thumbnail="resolveAssetThumbnail(asset)" :alt="`${asset.assetName} 缩略图`" /><header><el-tag size="small" effect="plain" round :type="tagTypeFromTone(assetTypeMeta(asset.assetType).tone)">{{ assetTypeMeta(asset.assetType).label }}</el-tag></header><h3>{{ asset.assetName }}</h3><p>{{ asset.description || '暂无资产描述' }}</p><div v-if="itemStatusEntries(asset).length" class="asset-item-status-counts asset-item-status-counts--card"><el-tag v-for="entry in itemStatusEntries(asset)" :key="entry.status" size="small" effect="plain" round :type="tagTypeFromTone(assetStatusMeta(entry.status).tone)">{{ entry.label }} {{ entry.count }}</el-tag></div><footer><span>{{ assetFinalSummary(asset) }}</span><el-button v-if="canOpenAssetReview(asset)" size="small" type="primary" @click.stop="reviewEntry.open(asset)">审核任务</el-button><el-button v-if="canOpenItemStart(asset)" size="small" type="primary" :icon="VideoPlay" @click.stop="openAssetItemStart(asset)">{{ assetStartLabel(asset) }}</el-button></footer><AssetCardItems v-if="hasPermission('shotgrid:asset:query')" :key="`${currentProjectId}:${asset.assetId}:${asset.lockVersion}:${asset.itemCount}:${asset.assetStatus}`" :project-id="currentProjectId" :asset="asset" :filters="appliedItemFilters" @open-item="openAssetEntry" /></el-card></div>
 
         <div v-else class="type-board" v-loading="assetsLoading">
           <el-card v-for="group in groupedAssets" :key="group.type" class="type-board__column" shadow="never">
@@ -963,7 +1124,7 @@ onBeforeUnmount(() => {
       </template>
     </template>
 
-    <AssetFormDialog v-if="showCreate && createContext" :project-id="createContext.projectId" :operation-generation="createContext.operationGeneration" @close="closeCreateDialog" @saved="handleSaved" @refresh="loadProjectContext" />
+    <AssetFormDialog :can-link="hasPermission('shotgrid:asset:list')" v-if="showCreate && createContext" :project-id="createContext.projectId" :operation-generation="createContext.operationGeneration" :can-assign="canAssign && hasPermission('shotgrid:asset:query')" :initial-type="query.assetType || 'Character'" @close="closeCreateDialog" @saved="handleSaved" @refresh="loadProjectContext" />
     <AssetFormDialog v-if="showEdit && editContext && editingAsset" :project-id="editContext.projectId" :operation-generation="editContext.operationGeneration" :asset="editingAsset" @close="closeEditDialog" @saved="handleEdited" @refresh="loadProjectContext" />
     <AssetImportDialog v-if="showImport && importContext" :project-id="importContext.projectId" :operation-generation="importContext.operationGeneration" :project-name="project?.projectName" @close="closeImportDialog" @imported="handleImported" />
     <AssetRequirementDialog v-if="showRequirements && currentProjectId" :project-id="currentProjectId" :can-resolve="canResolveRequirements" :can-ignore="canIgnoreRequirements" :can-rematch="canRematchRequirements" @close="closeRequirementDialog" @updated="loadProjectContext" />
@@ -980,15 +1141,33 @@ onBeforeUnmount(() => {
     <AssetProductionAdjustmentDialog v-if="adjustmentContext" :context="adjustmentContext" @close="closeItemAdjustment" />
     <AssetItemBatchWorkspace ref="batchWorkspace" :item-status="appliedItemStatus" :project-id="currentProjectId || 0" :context-key="`${currentProjectId}:${appliedItemStatus}`" @changed="refreshWorkspace" @active-change="batchWorkspaceOpen = $event" />
     <AssetItemScheduleDialog ref="scheduleDialog" :project-id="currentProjectId || 0" :context-key="`${currentProjectId}:${appliedItemStatus}`" :members="members" @changed="refreshWorkspace" @busy-change="scheduleBusy = $event" />
-    <RelatedDetailDrawer ref="taskDrawer" @closed="loadAssets" />
-    <el-drawer v-model="showDetail" class="sg-detail-drawer asset-detail-drawer" modal-class="sg-detail-drawer-mask" header-class="sg-detail-drawer__header" body-class="sg-detail-drawer__body" :title="detailDrawerTitle" direction="rtl" size="72%" resizable append-to-body destroy-on-close @closed="clearDetailDrawer">
-      <AssetDetailView v-if="detailAssetId && currentProjectId" embedded :target-project-id="currentProjectId" :target-asset-id="detailAssetId" :target-asset-item-id="detailAssetItemId" @changed="handleDetailChanged" @deleted="handleDetailDeleted" />
+    <RelatedDetailDrawer ref="taskDrawer" @closed="refreshWorkspace" />
+    <el-drawer v-model="showDetail" class="sg-detail-drawer asset-detail-drawer" modal-class="sg-detail-drawer-mask" header-class="sg-detail-drawer__header" body-class="sg-detail-drawer__body" :title="detailDrawerTitle" direction="rtl" size="72%" resizable append-to-body destroy-on-close :before-close="beforeCloseDetail" @closed="clearDetailDrawer">
+      <AssetDetailView ref="assetDetailPanel" v-if="detailAssetId && currentProjectId" embedded :target-project-id="currentProjectId" :target-asset-id="detailAssetId" :target-asset-item-id="detailAssetItemId" @changed="handleDetailChanged" @deleted="handleDetailDeleted" />
     </el-drawer>
   </section>
   <NasFolderMenu ref="nasFolderMenu" :project-id="Number(currentProjectId) || 0" :can-query="hasPermission('shotgrid:version:query')" />
+
+  <el-popover :visible="Boolean(headerFilterKind)" :virtual-ref="headerFilterAnchor" virtual-triggering placement="bottom-end" :width="360" :persistent="false">
+    <el-form v-if="headerFilterKind" ref="headerFilterForm" :model="headerFilterDraft" :rules="headerFilterRules" :disabled="headerFilterBusy" label-position="top" aria-label="资产表头筛选表单">
+      <template v-if="headerFilterKind === 'identity'">
+        <el-form-item label="资产搜索" prop="keyword"><el-input v-model="headerFilterDraft.keyword" clearable placeholder="资产名称或制作分项" @keyup.enter="applyHeaderFilter" /></el-form-item>
+        <el-form-item label="资产分类" prop="assetType"><el-select v-model="headerFilterDraft.assetType" clearable placeholder="全部分类"><el-option label="角色" value="Character" /><el-option label="场景" value="Environment" /><el-option label="道具" value="Prop" /></el-select></el-form-item>
+      </template>
+      <el-form-item v-if="headerFilterKind === 'assignee'" label="制作人" prop="assigneeUserId"><el-select v-model="headerFilterDraft.assigneeUserId" filterable clearable placeholder="全部制作人"><el-option v-for="member in members" :key="member.userId" :label="memberLabel(member)" :value="String(member.userId)" /></el-select></el-form-item>
+      <el-form-item v-if="headerFilterKind === 'status'" label="制作状态" prop="assetStatus"><el-select v-model="headerFilterDraft.assetStatus" clearable placeholder="全部状态"><el-option v-for="status in assetStatusOptions" :key="status" :label="assetStatusMeta(status).label" :value="status" /></el-select></el-form-item>
+      <el-form-item v-if="headerFilterKind === 'plan'" label="预期制作时间（范围有交集）" prop="dates"><el-date-picker v-model="headerFilterDraft.dates" type="daterange" value-format="YYYY-MM-DD" start-placeholder="开始日期" end-placeholder="结束日期" unlink-panels /></el-form-item>
+      <el-form-item><el-button type="primary" :loading="headerFilterBusy" :disabled="assetsLoading" @click="applyHeaderFilter">应用</el-button><el-button :disabled="assetsLoading || headerFilterBusy" @click="clearHeaderFilter">清除</el-button><el-button :disabled="headerFilterBusy" @click="headerFilterKind = ''">取消</el-button></el-form-item>
+    </el-form>
+  </el-popover>
+  <el-drawer :model-value="Boolean(resultsTarget)" title="资产制作分项" size="min(440px, 92vw)" :modal="false" modal-penetrable :lock-scroll="false" :close-on-click-modal="false" aria-modal="false" append-to-body destroy-on-close :before-close="beforeCloseResults">
+    <AssetResultsPanel v-if="resultsTarget && currentProjectId" ref="resultsPanel" :key="`${currentProjectId}:${resultsTarget.assetId}:${resultsTarget.assetItemId}`" :project-id="currentProjectId" :asset-id="resultsTarget.assetId" :asset-item-id="resultsTarget.assetItemId" :preview-on-load="resultsTarget.previewFinal" @updated="refreshWorkspace" @feedback="feedbackFromResults" @work="taskDrawer.open(`/tasks/${$event}`)" />
+  </el-drawer>
 </template>
 
 <style scoped>
+.asset-batch-toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:10px 12px;background:var(--sg-surface);border:1px solid var(--sg-border);border-radius:8px}
+.asset-batch-toolbar .el-button{margin:0}
 .asset-page { display: grid; gap: 18px; }
 .asset-heading { display: flex; gap: 20px; align-items: flex-start; justify-content: space-between; }
 .asset-heading__actions { display: flex; gap: 9px; flex-wrap: wrap; }
@@ -1048,7 +1227,7 @@ onBeforeUnmount(() => {
 @media (max-width: 700px) { .asset-heading { flex-direction: column; } .asset-filters { grid-template-columns: 1fr; } .project-context__meta { justify-content: flex-start; } .asset-grid { grid-template-columns: 1fr; } }
 .asset-toolbar{gap:12px}.asset-toolbar__summary{display:flex!important;gap:8px!important;align-items:center!important;flex-wrap:wrap}.asset-batch-assign-dialog{display:grid;gap:16px}.asset-batch-assign-dialog p{margin:0;color:var(--sg-text-secondary);font-size:12px;line-height:1.65}.asset-batch-assign-dialog:deep(.el-form-item){margin-bottom:0}.asset-batch-assign-dialog:deep(.el-form-item__label){color:var(--sg-text-muted);font-size:11px}.asset-batch-assign-dialog:deep(.el-select){width:100%}
 .project-context:deep(.el-form-item){min-width:240px;margin:0}.project-context:deep(.el-form-item__label){height:auto;padding-bottom:6px;color:var(--sg-text-muted);font-size:10px;line-height:1}.asset-filters .asset-search{padding:0;background:transparent;border:0}.view-switch{padding:0;background:transparent}.view-switch:deep(.el-radio-button__inner){display:flex;gap:6px;align-items:center;color:var(--sg-text-muted);background:var(--sg-surface);border-color:var(--sg-border);box-shadow:none}.view-switch:deep(.el-radio-button__original-radio:checked+.el-radio-button__inner){color:var(--sg-accent);background:var(--sg-accent-soft);border-color:rgba(255,182,87,.32);box-shadow:-1px 0 0 0 rgba(255,182,87,.32)}.asset-card:deep(.el-card__body){padding:0}.asset-card>.asset-thumb,.asset-card:deep(.el-card__body>.asset-thumb){height:150px}.asset-pagination{margin-top:2px}.asset-pagination:deep(.el-pager li),.asset-pagination:deep(button){background:var(--sg-surface)!important}.asset-pagination:deep(.is-active){color:#17130d!important;background:var(--sg-accent)!important}
-.asset-filters{grid-template-columns:minmax(220px,1fr) repeat(3,minmax(130px,180px)) auto}
+.asset-filters{grid-template-columns:minmax(200px,1fr) repeat(4,minmax(110px,160px)) auto}
 .asset-filters:deep(.el-form-item){min-width:0;margin-bottom:0}
 .asset-filter-item:deep(.el-form-item__content),.asset-filter-item:deep(.el-select),.asset-filter-item:deep(.el-input){width:100%;min-width:0}
 .asset-filter-actions:deep(.el-form-item__content){flex-wrap:nowrap;justify-content:flex-end}

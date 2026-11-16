@@ -28,6 +28,7 @@ from module_shot_grid.dao.review_dao import ShotGridReviewDao
 from module_shot_grid.dao.version_submission_dao import ShotGridVersionSubmissionDao
 from module_shot_grid.entity.do.final_delivery_do import ShotGridFinalDelivery
 from module_shot_grid.entity.do.review_do import (
+    ShotGridIssueComment,
     ShotGridIssueVerification,
     ShotGridNote,
     ShotGridReviewAction,
@@ -47,6 +48,9 @@ from module_shot_grid.entity.vo.review_vo import (
     ShotGridCarriedIssueModel,
     ShotGridFinalDeliveryModel,
     ShotGridIssueAppendModel,
+    ShotGridIssueCommentCreateModel,
+    ShotGridIssueCommentModel,
+    ShotGridIssueCommentPageModel,
     ShotGridIssueDetailModel,
     ShotGridIssueDraftModel,
     ShotGridIssueDraftUpdateModel,
@@ -85,10 +89,10 @@ from module_shot_grid.entity.vo.task_vo import ShotGridTaskShotProductionModel
 from module_shot_grid.exceptions import ShotGridDomainException, shot_grid_error
 from module_shot_grid.service.project_access_service import ShotGridProjectAccessService
 from module_shot_grid.service.project_service import ShotGridProjectService
+from module_shot_grid.service.version_publish_path_adapter import ShotGridVersionPublishPathAdapter
 from utils.file_util import FileDownloadResult
 
 MAX_IDEMPOTENCY_KEY_LENGTH = 100
-FINAL_DELIVERY_SOURCE_PATH_PARTS = 4
 REVIEW_ISSUE_DRAFT_REFERENCE_TYPE = 'shot_grid_review_issue_draft'
 REVIEW_ISSUE_REFERENCE_TYPE = 'shot_grid_review_issue'
 MAX_REVIEW_ISSUE_REFERENCE_FILES = 5
@@ -237,6 +241,7 @@ class ShotGridReviewService:
                     **file,
                     'is_primary': file['is_primary'] == '1',
                     'nas_path': cls._version_file_nas_path(file),
+                    'folder_relative_path': cls._version_folder_relative_path(file),
                     'url': f'/shot-grid/versions/{version_id}/files/{file["file_id"]}/download',
                 }
             )
@@ -258,6 +263,25 @@ class ShotGridReviewService:
             for item in await ShotGridFinalDeliveryDao.get_history(db, version_id)
         ]
         return ShotGridVersionDetailModel.model_validate(values)
+
+    @staticmethod
+    def _version_folder_relative_path(file: dict) -> str | None:
+        """仅公开冻结的项目名称和业务相对目录，供本机演示映射。"""
+        project, path = file.get('project_path_snapshot'), file.get('nas_relative_path')
+        if not project or not path or file.get('role') != 'review_media':
+            return None
+        try:
+            parts = ShotGridVersionPublishPathAdapter._relative_parts_for_publish(path)
+            if not any(
+                ShotGridVersionPublishPathAdapter.valid_business_path(kind, parts)
+                for kind in ('shot_video', 'asset_image')
+            ):
+                return None
+            result = str(PureWindowsPath(PureWindowsPath(project).name, *parts[:-1]))
+            ShotGridVersionPublishPathAdapter._relative_parts_for_publish(result)
+            return result
+        except Exception:
+            return None
 
     @staticmethod
     def _version_file_nas_path(file: dict) -> str | None:
@@ -740,6 +764,94 @@ class ShotGridReviewService:
             await db.rollback()
             raise
 
+    @staticmethod
+    def _require_comment_permission(current_user: CurrentUserModel, *, write: bool = False) -> None:
+        permissions = set(current_user.permissions or [])
+        required = {'shotgrid:note:list'} | ({'shotgrid:note:comment'} if write else set())
+        if '*:*:*' not in permissions and not required <= permissions:
+            raise shot_grid_error(403, 'SG_COMMENT_PERMISSION_DENIED', '没有反馈评论权限')
+
+    @classmethod
+    async def get_issue_comments(
+        cls,
+        db: AsyncSession,
+        version_id: int,
+        issue_id: int,
+        before_id: int | None,
+        page_size: int,
+        current_user: CurrentUserModel,
+    ) -> ShotGridIssueCommentPageModel:
+        cls._require_comment_permission(current_user)
+        context, _ = await cls._resolve_note_access(db, issue_id, current_user)
+        if int(context['version_id']) != version_id:
+            raise shot_grid_error(404, 'SG_NOTE_NOT_FOUND', '反馈不属于当前版本')
+        rows = await ShotGridReviewDao.get_issue_comments(
+            db, int(context['project_id']), issue_id, before_id, page_size + 1
+        )
+        has_next = len(rows) > page_size
+        items = [ShotGridIssueCommentModel.model_validate(row) for row in rows[:page_size]]
+        return ShotGridIssueCommentPageModel(
+            rows=items, hasNext=has_next, nextCursor=items[-1].comment_id if has_next else None
+        )
+
+    @classmethod
+    async def add_issue_comment(
+        cls,
+        db: AsyncSession,
+        version_id: int,
+        issue_id: int,
+        command: ShotGridIssueCommentCreateModel,
+        current_user: CurrentUserModel,
+    ) -> ShotGridIssueCommentModel:
+        cls._require_comment_permission(current_user, write=True)
+        try:
+            context, access = await cls._resolve_note_access(db, issue_id, current_user)
+            if int(context['version_id']) != version_id:
+                raise shot_grid_error(404, 'SG_NOTE_NOT_FOUND', '反馈不属于当前版本')
+            project_id, _task, _version, access = await cls._lock_version_graph(db, context, current_user, access)
+            if not (access.has_all_scope or access.has_role('director') or access.has_role('creator')):
+                raise shot_grid_error(403, 'SG_PROJECT_ACCESS_DENIED', '当前成员无权评论')
+            note = await ShotGridReviewDao.get_note_for_update(db, project_id, version_id, issue_id)
+            if note is None:
+                raise shot_grid_error(404, 'SG_NOTE_NOT_FOUND', '反馈不存在或不可见')
+            user_id, _, actor_name, dept_name = cls._actor(current_user)
+            existing = await ShotGridReviewDao.get_issue_comment_request(db, issue_id, user_id, command.request_id)
+            if existing is not None:
+                if existing.content != command.content:
+                    raise shot_grid_error(409, 'SG_COMMENT_REQUEST_CONFLICT', '同一次评论请求不能改变内容')
+                result = ShotGridIssueCommentModel.model_validate(existing)
+                await db.commit()
+                return result
+            row = await ShotGridReviewDao.add_issue_comment(
+                db,
+                ShotGridIssueComment(
+                    project_id=project_id,
+                    note_id=issue_id,
+                    author_id=user_id,
+                    author_name=actor_name,
+                    content=command.content,
+                    request_id=command.request_id,
+                    create_time=datetime.now(),
+                ),
+            )
+            result = ShotGridIssueCommentModel.model_validate(row)
+            await cls._audit(
+                db,
+                actor_name=actor_name,
+                dept_name=dept_name,
+                business_type=BusinessType.INSERT.value,
+                method='add_issue_comment',
+                oper_url=f'/shot-grid/versions/{version_id}/issues/{issue_id}/comments',
+                payload={'versionId': version_id, 'issueId': issue_id},
+                result={'commentId': row.comment_id},
+            )
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            raise
+        await publish_version_changed(version_id, 'issue.comment.added')
+        return result
+
     @classmethod
     async def get_task_issues(
         cls,
@@ -781,6 +893,7 @@ class ShotGridReviewService:
                     **file,
                     'is_primary': file['is_primary'] == '1',
                     'nas_path': cls._version_file_nas_path(file),
+                    'folder_relative_path': cls._version_folder_relative_path(file),
                     'url': f'/shot-grid/versions/{version_id}/files/{file["file_id"]}/download',
                 }
             )
@@ -1264,7 +1377,7 @@ class ShotGridReviewService:
             raise
 
     @classmethod
-    async def append_rejected_issue(
+    async def append_rejected_issue(  # noqa: PLR0915 - 正式反馈、返修状态和交付 fencing 必须在同一事务完成
         cls,
         db: AsyncSession,
         version_id: int,
@@ -1273,13 +1386,14 @@ class ShotGridReviewService:
         *,
         issue_id: int | None = None,
     ) -> ShotGridIssueDetailModel:
-        """在下一版提交受理前，为最新退回版本追加或修改本人正式问题。"""
+        """追加正式反馈；最新已通过镜头与反馈同事务进入返修。"""
         user_id, actor_name, _, dept_name = cls._actor(current_user)
         context, access = await cls._resolve_version_access(db, version_id, current_user)
         try:
-            project_id, _task, version, access = await cls._lock_rejected_issue_window(
-                db, context, current_user, access, command.lock_version
+            project_id, task, version, access = await cls._lock_rejected_issue_window(
+                db, context, current_user, access, command.lock_version, allow_reopen=issue_id is None
             )
+            reopening = version.version_status == 'final'
             candidate_id = (
                 None if command.issue_scope == 'version' else command.candidate_id or version.selected_candidate_id
             )
@@ -1354,6 +1468,13 @@ class ShotGridReviewService:
             )
             version.lock_version += 1
             version.update_time = now
+            if reopening:
+                await cls._revoke_feedback_delivery(db, version, user_id, now)
+                version.version_status = 'rejected'
+                task.task_status = 'revision'
+                task.lock_version += 1
+                task.update_by = actor_name
+                task.update_time = now
             result = ShotGridIssueDetailModel(
                 reviewCycle=int(note.review_cycle or 1),
                 issueId=note.note_id,
@@ -1378,11 +1499,18 @@ class ShotGridReviewService:
                 actor_name=actor_name,
                 dept_name=dept_name,
                 business_type=BusinessType.UPDATE.value if issue_id is not None else BusinessType.INSERT.value,
-                method='update_rejected_issue' if issue_id is not None else 'append_rejected_issue',
+                method='reopen_completed_shot'
+                if reopening
+                else 'update_rejected_issue'
+                if issue_id is not None
+                else 'append_rejected_issue',
                 oper_url=f'/shot-grid/versions/{version_id}/additional-issues',
                 payload={'versionId': version_id, 'lockVersion': command.lock_version},
                 result={
                     'issueId': note.note_id,
+                    'reopenedCompletedShot': reopening,
+                    'fromVersionStatus': 'final' if reopening else 'rejected',
+                    'toVersionStatus': version.version_status,
                     'lockVersion': version.lock_version,
                     'before': before,
                     'after': {
@@ -1402,6 +1530,44 @@ class ShotGridReviewService:
         return result
 
     @classmethod
+    async def _revoke_feedback_delivery(cls, db: AsyncSession, version: Any, user_id: int, now: datetime) -> None:
+        """正式反馈沿用不可抢占的交付撤销机制，与反馈共用事务。"""
+        # 沿用主线撤销 Outbox，不能在 NAS I/O 进行中抢占或仅修改数据库状态。
+        delivery = await ShotGridFinalDeliveryDao.get_for_update(db, version.version_id)
+        if delivery is not None:
+            if delivery.delivery_status == 'publishing':
+                raise cls._invalid_transition('最终交付正在执行，请等待完成后再添加反馈')
+            delivery.validity_status = 'revoked'
+            if delivery.delivery_status == 'pending':
+                delivery.delivery_status = 'cancelled'
+            delivery.update_time = now
+            fields = (
+                'project_id',
+                'task_id',
+                'version_id',
+                'candidate_id',
+                'source_file_id',
+                'business_file_name',
+                'source_nas_relative_path',
+                'final_nas_relative_path',
+                'manifest_nas_relative_path',
+                'source_sha256',
+                'source_file_size',
+            )
+            await ShotGridFinalDeliveryDao.add(
+                db,
+                ShotGridFinalDelivery(
+                    **{field: getattr(delivery, field) for field in fields},
+                    review_cycle=int(getattr(version, 'review_cycle', 1) or 1),
+                    operation='revoke',
+                    validity_status='revoked',
+                    approved_by=user_id,
+                    approved_time=now,
+                    delivery_status='pending',
+                ),
+            )
+
+    @classmethod
     async def _lock_rejected_issue_window(
         cls,
         db: AsyncSession,
@@ -1409,10 +1575,31 @@ class ShotGridReviewService:
         current_user: CurrentUserModel,
         access: ShotGridProjectAccessModel,
         lock_version: int,
+        *,
+        allow_reopen: bool = False,
     ) -> tuple[int, Any, Any, ShotGridProjectAccessModel]:
         project_id, task, version, access = await cls._lock_version_graph(db, context, current_user, access)
         cls._require_director(access)
-        if version.version_status != 'rejected' or task.task_status != 'revision':
+        reopening = allow_reopen and version.version_status == 'final' and task.task_status == 'completed'
+        if reopening:
+            permissions = set(current_user.permissions)
+            if task.task_kind != 'shot_video' or not (
+                (current_user.user and current_user.user.admin)
+                or '*:*:*' in permissions
+                or 'shotgrid:version:review' in permissions
+            ):
+                raise shot_grid_error(403, 'SG_PROJECT_ACCESS_DENIED', '只有具备审核权限的管理人可以给已通过镜头反馈')
+            target = await ShotGridVersionSubmissionDao.get_task_creation_context(db, task.task_id)
+            if (
+                target is None
+                or target['project_status'] in {'completed', 'archived'}
+                or any(
+                    target.get(key) != 'active'
+                    for key in ('episode_lifecycle_status', 'scene_lifecycle_status', 'shot_lifecycle_status')
+                )
+            ):
+                raise cls._invalid_transition('已关闭项目或归档镜头不能重新进入制作')
+        elif version.version_status != 'rejected' or task.task_status != 'revision':
             raise cls._invalid_transition('只有待修改任务的退回版本可以追加问题')
         cls._ensure_lock_version(version.lock_version, lock_version)
         if await ShotGridReviewDao.get_latest_version_no(db, task.task_id) != version.version_no:
@@ -1713,7 +1900,10 @@ class ShotGridReviewService:
         source = PureWindowsPath(delivery.source_nas_relative_path)
         legacy = source.parent / 'FINAL'
         if (
-            len(source.parts) != FINAL_DELIVERY_SOURCE_PATH_PARTS
+            not any(
+                ShotGridVersionPublishPathAdapter.valid_business_path(kind, source.parts)
+                for kind in ('shot_video', 'asset_image')
+            )
             or source.name != delivery.business_file_name
             or PureWindowsPath(delivery.final_nas_relative_path) != legacy / source.name
             or PureWindowsPath(delivery.manifest_nas_relative_path) != legacy / 'FINAL.json'
@@ -1725,7 +1915,9 @@ class ShotGridReviewService:
         }
         directory = legacy / f'T{delivery.task_id}-V{version.version_no:03d}-R{delivery.review_cycle:03d}'
         delivery.final_nas_relative_path = str(directory / source.name)
-        delivery.manifest_nas_relative_path = str(directory / 'FINAL.json')
+        delivery.manifest_nas_relative_path = str(
+            directory / (f'FINAL-V{version.version_no:03d}.json' if version.version_no > 1 else 'FINAL.json')
+        )
         return previous
 
     @classmethod
@@ -2150,7 +2342,10 @@ class ShotGridReviewService:
                 business_file_name=str(source['business_file_name']),
                 source_nas_relative_path=str(source_path),
                 final_nas_relative_path=str(final_directory / source_path.name),
-                manifest_nas_relative_path=str(final_directory / 'FINAL.json'),
+                manifest_nas_relative_path=str(
+                    final_directory
+                    / (f'FINAL-V{version.version_no:03d}.json' if version.version_no > 1 else 'FINAL.json')
+                ),
                 source_sha256=str(source['nas_sha256']).casefold(),
                 source_file_size=int(source['nas_file_size']),
                 review_cycle=cycle,

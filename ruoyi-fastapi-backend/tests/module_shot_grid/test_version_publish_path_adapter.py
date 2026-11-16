@@ -282,3 +282,59 @@ def test_intermediate_reparse_point_is_rejected_without_relying_on_endpoint_flag
         ShotGridVersionPublishPathAdapter._reject_reparse_chain(root, target)
 
     assert exc_info.value.error_key == 'SG_STORAGE_PATH_INVALID'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    'kind,base',
+    [
+        ('shot_video', r'SHOT\EP01\001\0001'),
+        ('asset_image', r'ASSET\Character\主角A\正面形象__7'),
+    ],
+)
+async def test_version_folders_are_created_and_rounds_never_mix(tmp_path: Path, kind: str, base: str) -> None:
+    content = _iso_bmff(b'isom')
+    source, nas, key = _prepare_roots(tmp_path, content, 'mp4')
+    adapter = ShotGridVersionPublishPathAdapter(source_root=source, allow_local_root=True)
+    original = _context(nas, key, content)
+    for number in (1, 2):
+        for candidate in (1, 2):
+            name = f'example_V{number:03d}_{candidate:02d}.mp4'
+            folder = base + f'\\V{number:03d}'
+            context = replace(
+                original,
+                task_kind=kind,
+                business_file_name=name,
+                target_relative_path=folder + '\\' + name,
+                temporary_relative_path=folder + r'\.sgtmp-7-a1-test.part',
+            )
+            assert not (await adapter.publish(context)).reused_target
+            assert (await adapter.publish(context)).reused_target
+            assert nas.joinpath('AI影视短片', '罗刹夫人', *folder.split('\\'), name).read_bytes() == content
+    for number in (1, 2):
+        folder = nas.joinpath('AI影视短片', '罗刹夫人', *base.split('\\'), f'V{number:03d}')
+        assert sorted(p.name for p in folder.iterdir()) == [
+            f'example_V{number:03d}_01.mp4',
+            f'example_V{number:03d}_02.mp4',
+        ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    'folder', [r'SHOT\EP01\001\0001\V002', r'SHOT\EP01\001\..\V001', r'ASSET\Character\主角A\无身份分项\V001']
+)
+async def test_bad_version_hierarchy_creates_no_directory(tmp_path: Path, folder: str) -> None:
+    content = _iso_bmff(b'isom')
+    source, nas, key = _prepare_roots(tmp_path, content, 'mp4')
+    original = _context(nas, key, content)
+    context = replace(
+        original,
+        business_file_name='example_V001_01.mp4',
+        task_kind='asset_image' if folder.startswith('ASSET') else 'shot_video',
+        target_relative_path=folder + r'\example_V001_01.mp4',
+        temporary_relative_path=folder + r'\.sgtmp-7-a1-test.part',
+    )
+    before = set(nas.rglob('*'))
+    with pytest.raises(VersionPublishPathAdapterError):
+        await ShotGridVersionPublishPathAdapter(source_root=source, allow_local_root=True).publish(context)
+    assert set(nas.rglob('*')) == before

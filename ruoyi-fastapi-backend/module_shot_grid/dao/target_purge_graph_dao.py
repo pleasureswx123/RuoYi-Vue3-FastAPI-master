@@ -157,6 +157,7 @@ class ShotGridTargetPurgeGraphDao:
                 ),
             ),
             (models.ShotGridReviewAction, models.ShotGridReviewAction.version_id.in_(versions)),
+            (models.ShotGridIssueComment, models.ShotGridIssueComment.note_id.in_(note_ids)),
             (models.ShotGridNote, models.ShotGridNote.note_id.in_(note_ids)),
             (
                 models.ShotGridVersionCandidateSelection,

@@ -9,6 +9,7 @@ from module_shot_grid.entity.do.asset_do import (
     ShotGridShotAsset,
     ShotGridShotAssetRequirement,
 )
+from module_shot_grid.entity.do.daily_record_do import ShotGridDailyRecord
 from module_shot_grid.entity.do.final_delivery_do import ShotGridFinalDelivery
 from module_shot_grid.entity.do.import_do import ShotGridImportBatch
 from module_shot_grid.entity.do.project_do import (
@@ -21,6 +22,7 @@ from module_shot_grid.entity.do.project_do import (
     ShotGridShot,
 )
 from module_shot_grid.entity.do.review_do import (
+    ShotGridIssueComment,
     ShotGridIssueVerification,
     ShotGridNote,
     ShotGridReviewAction,
@@ -36,6 +38,7 @@ from module_shot_grid.entity.do.storage_do import (
     ShotGridStorageOperation,
     ShotGridStorageRoot,
 )
+from module_shot_grid.entity.do.target_purge_do import ShotGridTargetPurge, ShotGridTargetPurgePath
 from module_shot_grid.entity.do.task_do import ShotGridTask
 from module_shot_grid.entity.do.task_schedule_change_do import ShotGridTaskScheduleChange
 from module_shot_grid.entity.do.version_do import (
@@ -50,9 +53,11 @@ from module_shot_grid.entity.do.version_do import (
 __all__ = [
     'ShotGridAsset',
     'ShotGridAssetItem',
+    'ShotGridDailyRecord',
     'ShotGridEpisode',
     'ShotGridFinalDelivery',
     'ShotGridImportBatch',
+    'ShotGridIssueComment',
     'ShotGridIssueVerification',
     'ShotGridManagedUserRole',
     'ShotGridMediaDerivation',
@@ -72,6 +77,8 @@ __all__ = [
     'ShotGridShotAssetRequirement',
     'ShotGridStorageOperation',
     'ShotGridStorageRoot',
+    'ShotGridTargetPurge',
+    'ShotGridTargetPurgePath',
     'ShotGridTask',
     'ShotGridTaskScheduleChange',
     'ShotGridVersion',

@@ -104,32 +104,71 @@ async function clickSubmissionButton(wrapper) {
 }
 
 describe('版本上传与发布面板', () => {
-  it('待审核时经表单校验向实际最新轮次追加，不能根据版本数量猜测轮次', async () => {
+  it('简洁制作表单允许留空说明，预检和创建使用相同默认说明且失败保留文件', async () => {
+    createVersionSubmission.mockRejectedValueOnce({ httpStatus: 503, message: '发布暂不可用' })
+    const wrapper = mount(VersionSubmissionPanel, { ...mountOptions, props: {
+      taskId: 31, taskKind: 'shot_video', taskStatus: 'in_progress', simple: true,
+      allowedActions: ['version.add'], hasAddPermission: true, canQuery: true
+    } })
+    await flushPromises()
+    await clickSubmissionButton(wrapper)
+    await flushPromises()
+    expect(preflightVersionSubmission).not.toHaveBeenCalled()
+    const input = wrapper.get('input[type="file"]')
+    Object.defineProperty(input.element, 'files', { configurable: true, value: [new File(['demo'], '镜头.mov', { type: 'video/quicktime' })] })
+    await input.trigger('change')
+    await clickSubmissionButton(wrapper)
+    await flushPromises()
+    expect(preflightVersionSubmission.mock.calls[0][1].changelog).toBe('提交成果')
+    expect(createVersionSubmission.mock.calls[0][1].changelog).toBe('提交成果')
+    expect(wrapper.vm.$.exposed.hasUnsavedChanges.value).toBe(true)
+    expect(wrapper.text()).toContain('镜头.mov')
+    expect(wrapper.emitted('committed')).toBeUndefined()
+    wrapper.unmount()
+  })
+  it('向嵌入抽屉暴露草稿与忙碌状态，关闭门禁不改变提交流程', async () => {
+    const wrapper = mount(VersionSubmissionPanel, { ...mountOptions, props: {
+      taskId: 31, taskKind: 'shot_video', taskStatus: 'in_progress', allowedActions: ['version.add'], hasAddPermission: true, canQuery: true
+    } })
+    await flushPromises()
+    const panel = wrapper.vm.$.exposed
+    expect(panel.isBusy.value).toBe(false)
+    expect(panel.hasUnsavedChanges.value).toBe(false)
+    const form = wrapper.find('.submission-form').findComponent(ElForm)
+    const input = form.findAllComponents(ElFormItem).find(item => item.props('prop') === 'changelog').findComponent(ElInput)
+    input.vm.$emit('update:modelValue', '这一版调整了镜头运动')
+    await flushPromises()
+    expect(panel.hasUnsavedChanges.value).toBe(true)
+    expect(createVersionSubmission).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+  it('待审核镜头经表单校验提交新版本，不携带追加轮次并保留重复提交保护', async () => {
     const wrapper = mount(VersionSubmissionPanel, {
       ...mountOptions,
       props: { taskId: 31, taskKind: 'shot_video', taskStatus: 'pending_review', versionCount: 1,
         latestVersionNo: 3, allowedActions: ['version.add'], hasAddPermission: true, canQuery: true }
     })
     await flushPromises()
-    expect(wrapper.text()).toContain('继续向 V003 追加')
-    expect(wrapper.text()).toContain('追加候选并送审')
+    expect(wrapper.text()).toContain('预计 V004')
+    expect(wrapper.text()).toContain('继续提交新版本')
     await clickSubmissionButton(wrapper)
     await flushPromises()
     expect(preflightVersionSubmission).not.toHaveBeenCalled()
     await chooseValidFileAndSubmit(wrapper)
-    expect(preflightVersionSubmission.mock.calls[0][1].targetVersionNo).toBe(3)
-    expect(createVersionSubmission.mock.calls[0][1]).toMatchObject({ targetVersionNo: 3, issueResponses: [] })
+    expect(preflightVersionSubmission.mock.calls[0][1].targetVersionNo).toBeUndefined()
+    expect(createVersionSubmission.mock.calls[0][1].targetVersionNo).toBeUndefined()
+    expect(createVersionSubmission.mock.calls[0][1].issueResponses).toEqual([])
     getVersionSubmissionStatus.mockResolvedValueOnce(status('committed', { reservedVersionNumber: 'V003' }))
     await vi.advanceTimersByTimeAsync(2000)
     await flushPromises()
     expect(wrapper.emitted('committed')).toHaveLength(1)
-    expect(wrapper.text()).toContain('候选已追加')
+    expect(wrapper.text()).not.toContain('候选已追加')
     await wrapper.setProps({ operationGeneration: 1 })
     await flushPromises()
     expect(wrapper.find('.submission-form').exists()).toBe(true)
     await chooseValidFileAndSubmit(wrapper)
     expect(createVersionSubmission).toHaveBeenCalledTimes(2)
-    expect(createVersionSubmission.mock.calls[1][1].targetVersionNo).toBe(3)
+    expect(createVersionSubmission.mock.calls[1][1].targetVersionNo).toBeUndefined()
     wrapper.unmount()
   })
 

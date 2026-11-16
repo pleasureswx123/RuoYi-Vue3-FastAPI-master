@@ -5,13 +5,13 @@ import { useShotTablePresentation } from '@/views/shot/useShotTablePresentation'
 describe('镜头表格展示偏好', () => {
   beforeEach(() => localStorage.clear())
 
-  it('自动布局跟随容器宽度，自定义选择不被窗口变化覆盖，重置恢复自动', async () => {
+  it('默认八列不随容器增加附加列，自定义选择保留，重置恢复默认', async () => {
     const scope = effectScope()
     const width = ref(1200)
     const settings = scope.run(() => useShotTablePresentation(ref(1), width))
     expect(settings.visibleColumns.value).toEqual([])
     width.value = 1900
-    expect(settings.visibleColumns.value).toEqual(['parameters'])
+    expect(settings.visibleColumns.value).toEqual([])
     settings.setColumns(['dialogue', 'assets'])
     width.value = 1000
     expect(settings.visibleColumns.value).toEqual(['dialogue'])
@@ -47,6 +47,28 @@ describe('镜头表格展示偏好', () => {
     const scope = effectScope()
     const settings = scope.run(() => useShotTablePresentation(ref(1), ref(1200)))
     expect(settings.mode.value).toBe('auto')
+    scope.stop()
+  })
+
+  it('行高按账号保存，旧偏好和非法行高回退紧凑默认值', async () => {
+    localStorage.setItem('shot-grid:shot-table:v1:2', JSON.stringify({ rowHeight: 9999 }))
+    const scope = effectScope()
+    const user = ref(1)
+    const settings = scope.run(() => useShotTablePresentation(user, ref(1600)))
+    expect(settings.rowHeight.value).toBe(88)
+    settings.rowHeight.value = 144
+    settings.saveWidth(NaN, 300, { columnKey: 'description' })
+    await nextTick()
+    expect(settings.widths.value).toEqual({})
+    expect(JSON.parse(localStorage.getItem('shot-grid:shot-table:v1:1')).rowHeight).toBe(144)
+    user.value = 2
+    await nextTick()
+    expect(settings.rowHeight.value).toBe(88)
+    user.value = 1
+    await nextTick()
+    expect(settings.rowHeight.value).toBe(144)
+    settings.resetPresentation()
+    expect(settings.rowHeight.value).toBe(88)
     scope.stop()
   })
 

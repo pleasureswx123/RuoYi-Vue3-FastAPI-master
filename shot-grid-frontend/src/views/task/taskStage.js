@@ -5,5 +5,5 @@ export function taskStage(value) {
   const status = value.taskStatus || value.status || value.assetStatus || task.taskStatus
   const start = value.expectedStartTime || task.expectedStartTime || value.currentStart || value.start
   const end = value.expectedEndTime || task.expectedEndTime || value.currentEnd || value.end
-  return status === 'not_started' && (!start || !end) ? 'pending_schedule' : status
+  return (value.taskKind || task.taskKind) !== 'shot_video' && status === 'not_started' && (!start || !end) ? 'pending_schedule' : status
 }

@@ -7,7 +7,7 @@ from sqlalchemy.orm import aliased
 from sqlalchemy.sql import Select
 
 from module_admin.entity.do.user_do import SysUser
-from module_shot_grid.dao.schedule_phase import task_phase_expression
+from module_shot_grid.dao.schedule_phase import production_period_conditions, task_phase_expression
 from module_shot_grid.entity.do.asset_do import ShotGridAsset, ShotGridAssetItem
 from module_shot_grid.entity.do.project_do import (
     ShotGridEpisode,
@@ -268,9 +268,12 @@ class ShotGridTaskDao:
         scope = getattr(query, 'scope', 'project')
         if mine_user_id is None and scope == 'mine':
             raise ValueError('scope=mine 必须由服务端提供当前用户范围')
-        if mine_user_id is None and assignee_user_id is not None:
+        if assignee_user_id is not None:
             statement = statement.where(ShotGridTask.assignee_user_id == assignee_user_id)
 
+        statement = statement.where(*production_period_conditions(ShotGridTask, query))
+        if getattr(query, 'project_id', None) is not None:
+            statement = statement.where(ShotGridTask.project_id == query.project_id)
         return cls._order_task_statement(statement, query)
 
     @staticmethod

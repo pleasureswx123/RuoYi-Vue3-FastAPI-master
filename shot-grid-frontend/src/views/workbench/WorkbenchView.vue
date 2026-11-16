@@ -1,6 +1,10 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ElTable, ElTableColumn, ElTabs, ElTabPane, ElRadioGroup, ElRadioButton } from 'element-plus'
+import { useRoute, useRouter } from 'vue-router'
+import TaskPreviewThumbnail from '@/views/task/components/TaskPreviewThumbnail.vue'
+import TaskFeedbackShortcut from '@/views/task/components/TaskFeedbackShortcut.vue'
+import TaskRelationsShortcut from '@/views/task/components/TaskRelationsShortcut.vue'
 import RelatedDetailDrawer from '@/components/RelatedDetailDrawer.vue'
 import { RefreshLeft, Refresh, Search } from '@element-plus/icons-vue'
 
@@ -8,6 +12,7 @@ import { getMineTaskPage } from '@/api/shot-grid/tasks'
 import ReviewQueuePanel from './ReviewQueuePanel.vue'
 import MySubmissionsPanel from './MySubmissionsPanel.vue'
 import { useTaskStatePolling } from '@/composables/useTaskStatePolling'
+import { useVersionCollectionRealtime } from '@/composables/useVersionCollectionRealtime'
 import { useCurrentTime } from '@/composables/useCurrentTime'
 import TaskTimeReminder from '@/views/task/components/TaskTimeReminder.vue'
 import { useSessionStore } from '@/store/modules/session'
@@ -22,18 +27,25 @@ import {
 } from '@/views/task/taskPresentation'
 
 const sessionStore = useSessionStore()
+const route = useRoute()
+const router = useRouter()
+const advancedFilters = ref(false)
 const tasks = ref([])
+const feedbackRefreshKey = ref(0)
 const taskDetailDrawer = ref(null)
 const statusOptions = [
   { value: 'unfinished', label: '未完成' },
   { value: 'revision', label: '待修改' },
   { value: 'in_progress', label: '制作中' },
   { value: 'pending_review', label: '待审核' },
-  { value: 'pending_schedule', label: '待排期' },
-  { value: 'not_started', label: '待开工' },
+  { value: 'preparing', label: '目录准备中' },
+  { value: 'not_started', label: '历史任务待恢复' },
   { value: 'completed', label: '已完成' },
   { value: '', label: '全部' }
 ]
+const visibleStatuses = computed(() => sessionStore.isCreatorWorkspace
+  ? [{ value: 'unfinished', label: '未完成' }, { value: 'in_progress', label: '制作中' }, { value: 'revision', label: '反馈待改' }, { value: 'pending_review', label: '待审核' }, { value: 'completed', label: '通过' }]
+  : statusOptions)
 const currentTime = useCurrentTime()
 const total = ref(0)
 const loading = ref(false)
@@ -80,10 +92,26 @@ const hasProductionRole = computed(() => !canReviewQueue.value || sessionStore.r
 const canViewTasks = computed(() => hasProductionRole.value && hasPermission('shotgrid:task:list'))
 const canViewRecentSubmissions = computed(() => hasProductionRole.value && hasPermission('shotgrid:version:list'))
 const activeTab = ref(canReviewQueue.value ? 'reviews' : canViewTasks.value ? 'tasks' : 'submissions')
+watch(() => route.query.tab, tab => {
+  if (sessionStore.isCreatorWorkspace) activeTab.value = tab === 'submissions' && canViewRecentSubmissions.value ? 'submissions' : canViewTasks.value ? 'tasks' : 'submissions'
+}, { immediate: true })
+watch(activeTab, tab => {
+  if (sessionStore.isCreatorWorkspace) router.replace({ query: { ...route.query, tab: tab === 'submissions' ? 'submissions' : undefined } })
+})
 const welcomeDescription = computed(() => canReviewQueue.value
   ? '在“待审核”中查看管理范围内的审核内容，跟进审核进度。'
   : '在“我的任务”中跟进制作进度，在“提交记录”中查看历史版本与审核反馈。')
 const pageCount = computed(() => Math.max(1, Math.ceil(total.value / query.pageSize)))
+const realtimeError = ref('')
+useVersionCollectionRealtime(computed(() => activeTab.value === 'tasks' && hasPermission('shotgrid:version:query')
+  ? tasks.value.map(task => task.latestVersion?.versionId).filter(Boolean) : []), async () => {
+  if (loading.value || errorState.value || appliedQuery.value !== JSON.stringify(query)) return
+  // 目录准备/历史任务已有更高频轮询，避免两个刷新器互相取消请求。
+  if (tasks.value.some(task => ['preparing', 'not_started'].includes(task.taskStatus) &&
+    !['completed', 'archived'].includes(task.project?.projectStatus) && task.target?.lifecycleStatus !== 'archived')) return
+  try { await loadTasks(new AbortController()); realtimeError.value = '' }
+  catch { realtimeError.value = '反馈自动更新暂时失败，当前显示上次结果，请刷新重试。' }
+})
 const { pollingError } = useTaskStatePolling({
   getDelay: () => {
     if (activeTab.value !== 'tasks' || loading.value || errorState.value || appliedQuery.value !== JSON.stringify(query)) return null
@@ -147,10 +175,12 @@ async function loadTasks(backgroundController = null) {
     !requestController.signal.aborted
   )
   try {
-    const response = await getMineTaskPage(buildParams(), { signal: requestController.signal })
+    const response = await getMineTaskPage({ ...buildParams(), ...sessionStore.workbenchParams() }, { signal: requestController.signal })
     if (!isCurrent()) return
     tasks.value = Array.isArray(response.rows) ? response.rows : []
     total.value = Number(response.total || 0)
+    feedbackRefreshKey.value += 1
+    realtimeError.value = ''
   } catch (error) {
     if (error?.code !== 'ERR_CANCELED' && isCurrent()) {
       if (background) throw error
@@ -201,8 +231,16 @@ function changePageSize(size) {
   loadTasks()
 }
 
-function openTask(task) {
-  taskDetailDrawer.value?.open(`/tasks/${task.taskId}`)
+function openTask(task, section) {
+  taskDetailDrawer.value?.open(`/tasks/${task.taskId}`, { section })
+}
+function canQuickSubmit(task) {
+  return hasPermission('shotgrid:version:add') && (['in_progress', 'revision'].includes(task.taskStatus) || (task.taskKind === 'shot_video' && task.taskStatus === 'pending_review')) &&
+    !['completed', 'archived'].includes(task.project?.projectStatus) && task.target?.lifecycleStatus !== 'archived'
+}
+
+function openTaskRow(task, _column, event) {
+  if (sessionStore.isCreatorWorkspace && hasPermission('shotgrid:task:query') && !event?.target?.closest('button, a, input, .el-select')) openTask(task)
 }
 
 function taskActionLabel(task) {
@@ -216,6 +254,11 @@ function taskActionType(task) {
 }
 
 onMounted(() => { if (canViewTasks.value) loadTasks() })
+watch(() => JSON.stringify(sessionStore.workbenchParams()), () => {
+  query.pageNum = 1
+  tasks.value = []; total.value = 0
+  if (canViewTasks.value) loadTasks()
+})
 onBeforeUnmount(() => {
   disposed = true
   loadGeneration += 1
@@ -224,8 +267,9 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <section class="sg-page workbench-page">
-    <div class="workbench-hero">
+  <section class="sg-page workbench-page" :class="{ 'creator-workbench': sessionStore.isCreatorWorkspace }">
+    <el-button v-if="hasPermission('shotgrid:daily:write')" type="primary" plain style="margin-bottom:12px" @click="router.push({ path: '/daily-records', query: { projectId: sessionStore.activeProjectId || undefined } })">记录今日产出</el-button>
+    <div v-if="!sessionStore.isCreatorWorkspace" class="workbench-hero">
       <div class="workbench-hero__content">
 
         <h2>你好，{{ displayName }}</h2>
@@ -242,13 +286,13 @@ onBeforeUnmount(() => {
     <section class="task-workbench" aria-label="我的任务">
       <header class="workbench-section-heading">
         <div>
-          <p>查看分配给我的制作任务，跟进制作进度与审核反馈。</p>
+          <p>{{ sessionStore.isCreatorWorkspace ? '镜头和资产制作任务都在这里。点开查看要求与反馈，完成后提交成果。' : '查看分配给我的制作任务，跟进制作进度与审核反馈。' }}</p>
         </div>
         <el-button :icon="Refresh" :loading="loading" @click="loadTasks()">刷新</el-button>
       </header>
 
       <el-radio-group v-model="query.taskStatus" class="task-status-shortcuts" aria-label="按任务状态筛选" @change="submitFilters">
-        <el-radio-button v-for="option in statusOptions" :key="option.value" :value="option.value">{{ option.label }}</el-radio-button>
+        <el-radio-button v-for="option in visibleStatuses" :key="option.value" :value="option.value">{{ option.label }}</el-radio-button>
       </el-radio-group>
 
       <el-form ref="taskFilterForm" :model="query" :rules="taskFilterRules" class="task-filters" size="large" label-position="top" aria-label="我的任务筛选">
@@ -256,12 +300,17 @@ onBeforeUnmount(() => {
           <el-input v-model="query.keyword" class="sg-input" :prefix-icon="Search" maxlength="200" clearable placeholder="任务、项目、镜头或资产" aria-label="搜索任务" @keyup.enter="submitFilters" />
         </el-form-item>
         <el-form-item class="task-filter-item" label="任务类型" prop="taskKind">
-          <el-select v-model="query.taskKind" class="sg-select" placeholder="全部类型" aria-label="按任务类型筛选" @change="submitFilters"><el-option label="全部类型" value="" /><el-option label="镜头视频" value="shot_video" /><el-option label="资产图片" value="asset_image" /></el-select>
+          <el-radio-group v-if="sessionStore.isCreatorWorkspace" v-model="query.taskKind" class="creator-task-kinds" aria-label="按制作类型筛选" @change="submitFilters">
+            <el-radio-button value="">全部任务</el-radio-button>
+            <el-radio-button value="shot_video">镜头制作</el-radio-button>
+            <el-radio-button value="asset_image">资产制作</el-radio-button>
+          </el-radio-group>
+          <el-select v-else v-model="query.taskKind" class="sg-select" placeholder="全部类型" aria-label="按任务类型筛选" @change="submitFilters"><el-option label="全部类型" value="" /><el-option label="镜头视频" value="shot_video" /><el-option label="资产图片" value="asset_image" /></el-select>
         </el-form-item>
-        <el-form-item class="task-filter-item" label="优先级" prop="priority">
+        <el-form-item class="task-filter-item" label="优先级" prop="priority" v-show="!sessionStore.isCreatorWorkspace || advancedFilters">
           <el-select v-model="query.priority" class="sg-select" placeholder="全部优先级" aria-label="按优先级筛选" @change="submitFilters"><el-option label="全部优先级" value="" /><el-option label="紧急" value="urgent" /><el-option label="高" value="high" /><el-option label="普通" value="normal" /><el-option label="低" value="low" /></el-select>
         </el-form-item>
-        <el-form-item class="task-filter-item task-filter-item--date-range" label="截止日期" prop="dueDateRange">
+        <el-form-item class="task-filter-item task-filter-item--date-range" label="截止日期" prop="dueDateRange" v-show="!sessionStore.isCreatorWorkspace || advancedFilters">
           <el-date-picker
             v-model="query.dueDateRange"
             class="sg-input"
@@ -276,12 +325,13 @@ onBeforeUnmount(() => {
             @change="submitFilters"
           />
         </el-form-item>
-        <el-form-item class="task-filter-item" label="排序" prop="orderValue">
+        <el-form-item class="task-filter-item" label="排序" prop="orderValue" v-show="!sessionStore.isCreatorWorkspace || advancedFilters">
           <el-select v-model="query.orderValue" class="sg-select" aria-label="任务排序" @change="applyOrder"><el-option label="优先处理" value="workbench:ascending" /><el-option label="镜头号由小到大" value="shotNo:ascending" /><el-option label="最近更新" value="updateTime:descending" /><el-option label="截止日期由近到远" value="dueDate:ascending" /><el-option label="优先级由高到低" value="priority:ascending" /><el-option label="最近创建" value="createTime:descending" /></el-select>
         </el-form-item>
-        <el-form-item class="task-filter-actions"><el-button type="primary" :loading="loading" @click="submitFilters">查询</el-button><el-button :icon="RefreshLeft" :disabled="loading" @click="resetFilters">重置</el-button></el-form-item>
+        <el-form-item class="task-filter-actions"><el-button type="primary" :loading="loading" @click="submitFilters">查询</el-button><el-button :icon="RefreshLeft" :disabled="loading" @click="resetFilters">重置</el-button><el-button v-if="sessionStore.isCreatorWorkspace" link type="primary" :aria-expanded="advancedFilters" @click="advancedFilters = !advancedFilters">{{ advancedFilters ? '收起筛选' : '更多筛选' }}</el-button></el-form-item>
       </el-form>
 
+      <el-alert v-if="realtimeError" :title="realtimeError" type="warning" show-icon :closable="false"><el-button text @click="loadTasks()">刷新</el-button></el-alert>
       <el-alert v-if="pollingError" :title="pollingError" type="warning" show-icon :closable="false" />
       <ProjectStatePanel
         v-if="errorState"
@@ -293,33 +343,45 @@ onBeforeUnmount(() => {
       />
       <el-card v-else-if="loading && !tasks.length" class="task-loading" shadow="never" aria-busy="true"><el-skeleton animated :rows="5" /></el-card>
       <el-empty v-else-if="!tasks.length" class="task-empty" :description="total ? '当前页没有任务' : '当前筛选暂无任务'"><p>任务由项目管理人在镜头或资产制作分项中分配。</p></el-empty>
-      <el-table v-else v-loading="loading" :data="tasks" row-key="taskId" class="task-list" aria-label="我的制作任务">
+      <el-table v-else v-loading="loading" :data="tasks" row-key="taskId" class="task-list" aria-label="我的制作任务" @row-click="openTaskRow">
+        <el-table-column v-if="sessionStore.isCreatorWorkspace" label="画面" width="112"><template #default="{ row }"><TaskPreviewThumbnail :version-id="row.latestVersion?.versionId" :task-id="row.taskId" :can-preview="hasPermission('shotgrid:version:query') && hasPermission('shotgrid:file:download')" /></template></el-table-column>
         <el-table-column label="制作任务" min-width="300">
           <template #default="{ row }">
+            <el-tag v-if="sessionStore.isCreatorWorkspace" class="creator-task-kind" :type="row.taskKind === 'shot_video' ? 'primary' : 'success'" size="small" effect="plain">{{ row.taskKind === 'shot_video' ? '镜头制作' : '资产制作' }}</el-tag>
             <el-button v-if="hasPermission('shotgrid:task:query')" link type="primary" class="task-title" @click="openTask(row)">{{ row.taskName }}</el-button>
             <strong v-else>{{ row.taskName }}</strong>
             <div class="task-context">{{ row.project.projectCode }} · {{ row.project.projectName }} / {{ taskKindMeta(row.taskKind).label }}</div>
-            <div class="task-requirements">{{ row.requirements || row.target.targetDescription || '暂无额外制作要求' }}</div>
+            <div v-if="!sessionStore.isCreatorWorkspace" class="task-requirements">{{ row.requirements || row.target.targetDescription || '暂无额外制作要求' }}</div>
+            <TaskFeedbackShortcut v-if="sessionStore.isCreatorWorkspace" :task-id="row.taskId" :enabled="Boolean(row.latestVersion) && hasPermission('shotgrid:note:list') && hasPermission('shotgrid:task:query')" :refresh-key="feedbackRefreshKey" @open="openTask(row, 'feedback')" />
+            <TaskRelationsShortcut v-if="sessionStore.isCreatorWorkspace" :task="row" :refresh-key="feedbackRefreshKey" @open="openTask(row, 'reference')" />
           </template>
         </el-table-column>
+        <el-table-column v-if="sessionStore.isCreatorWorkspace" label="制作内容" min-width="240" show-overflow-tooltip><template #default="{ row }">{{ row.requirements || row.target.targetDescription || '暂无额外制作要求' }}</template></el-table-column>
         <el-table-column label="当前状态" width="140">
           <template #default="{ row }">
             <el-tag :type="tagTypeFromTone(taskStatusMeta(row).tone)" size="small" effect="dark" round>{{ taskStatusMeta(row).label }}</el-tag>
-            <small v-if="row.taskStatus === 'not_started'" class="task-context">{{ row.expectedStartTime && row.expectedEndTime ? '等待管理人员确认开工' : '等待管理人员设置排期' }}</small>
+            <small v-if="row.taskStatus === 'not_started'" class="task-context">历史任务，请管理人员核对分配</small>
             <small v-else-if="row.taskStatus === 'preparing'" class="task-context">目录就绪后可制作</small>
             <small v-if="row.project.projectStatus === 'archived' || row.target.lifecycleStatus === 'archived'" class="task-context">已归档 · 只读</small>
           </template>
         </el-table-column>
         <el-table-column label="制作时间" min-width="200"><template #default="{ row }"><TaskTimeReminder :task="row" :now="currentTime" compact /></template></el-table-column>
-        <el-table-column label="最新提交" min-width="135">
+        <el-table-column v-if="sessionStore.isCreatorWorkspace && hasPermission('shotgrid:task:query')" label="快捷操作" width="150" fixed="right">
+          <template #default="{ row }">
+            <el-button v-if="canQuickSubmit(row)" size="small" type="primary" @click.stop="openTask(row, 'submit')">{{ row.taskStatus === 'pending_review' ? '继续提交新版本' : row.taskStatus === 'revision' ? '提交修改成果' : '提交成果' }}</el-button>
+            <el-button v-else-if="row.latestVersion && hasPermission('shotgrid:version:query')" size="small" :type="row.taskStatus === 'pending_review' ? 'warning' : 'default'" @click.stop="openTask(row, 'feedback')">{{ row.taskStatus === 'pending_review' ? '查看审核进度' : '查看成果与反馈' }}</el-button>
+            <el-button v-else size="small" @click.stop="openTask(row)">查看要求</el-button>
+          </template>
+        </el-table-column>
+        <el-table-column v-if="!sessionStore.isCreatorWorkspace" label="最新提交" min-width="135">
           <template #default="{ row }">
             <el-button v-if="row.latestVersion && hasPermission('shotgrid:version:query')" link type="primary" @click="taskDetailDrawer?.open(`/versions/${row.latestVersion.versionId}`)">{{ row.latestVersion.versionNumber }}</el-button>
             <span v-else>{{ row.latestVersion?.versionNumber || '尚未提交' }}</span>
             <small class="task-context">{{ row.latestVersion ? taskVersionStatusMeta(row.latestVersion.versionStatus).label : '等待首次提交' }} · {{ row.versionCount }} 个版本</small>
           </template>
         </el-table-column>
-        <el-table-column label="优先级" width="90"><template #default="{ row }"><el-tag v-if="['urgent', 'high'].includes(row.priority)" :type="tagTypeFromTone(taskPriorityMeta(row.priority).tone)" size="small">{{ taskPriorityMeta(row.priority).label }}</el-tag><span v-else class="task-context">{{ taskPriorityMeta(row.priority).label }}</span></template></el-table-column>
-        <el-table-column label="下一步" width="150" fixed="right"><template #default="{ row }"><el-button v-if="hasPermission('shotgrid:task:query')" :type="taskActionType(row)" size="small" @click="openTask(row)">{{ taskActionLabel(row) }}</el-button><span v-else class="task-context">无详情查看权限</span></template></el-table-column>
+        <el-table-column v-if="!sessionStore.isCreatorWorkspace" label="优先级" width="90"><template #default="{ row }"><el-tag v-if="['urgent', 'high'].includes(row.priority)" :type="tagTypeFromTone(taskPriorityMeta(row.priority).tone)" size="small">{{ taskPriorityMeta(row.priority).label }}</el-tag><span v-else class="task-context">{{ taskPriorityMeta(row.priority).label }}</span></template></el-table-column>
+        <el-table-column v-if="!sessionStore.isCreatorWorkspace" label="下一步" width="150" fixed="right"><template #default="{ row }"><el-button v-if="hasPermission('shotgrid:task:query')" :type="taskActionType(row)" size="small" @click="openTask(row)">{{ taskActionLabel(row) }}</el-button><span v-else class="task-context">无详情查看权限</span></template></el-table-column>
       </el-table>
 
       <el-pagination v-if="total" class="task-pagination" background layout="total, sizes, prev, pager, next" :current-page="query.pageNum" :page-size="query.pageSize" :page-sizes="[10, 20, 50]" :total="total" :disabled="loading" aria-label="任务分页" @current-change="changePage" @update:page-size="changePageSize" />
@@ -576,4 +638,12 @@ onBeforeUnmount(() => {
 
 
 }
+.creator-workbench { gap: 12px; }
+.creator-workbench .task-filters { grid-template-columns: minmax(220px, 2fr) minmax(300px, 1fr) auto; padding: 12px; }
+.creator-task-kind { display: flex; width: max-content; margin-bottom: 6px; }
+.creator-task-kinds { flex-wrap: wrap; }
+.creator-workbench .task-filter-item--search { grid-column: auto; }
+.creator-workbench :deep(.workbench-tabs > .el-tabs__header) { display: none; }
+.creator-workbench :deep(.task-list .el-table__row) { cursor: pointer; }
+@media (max-width: 1100px) { .creator-workbench .task-filters { grid-template-columns: minmax(0, 1fr); } }
 </style>

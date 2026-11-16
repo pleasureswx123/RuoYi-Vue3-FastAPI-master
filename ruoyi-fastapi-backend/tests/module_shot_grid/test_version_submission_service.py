@@ -100,10 +100,11 @@ async def test_append_continues_candidate_numbers_and_enforces_round_limit(monke
 
 
 @pytest.mark.asyncio
-async def test_pending_review_cannot_implicitly_create_new_round() -> None:
-    with pytest.raises(ShotGridDomainException) as error:
-        await ShotGridVersionSubmissionService._submission_target(AsyncMock(), TASK_ID, 'pending_review', None, 1)
-    assert error.value.error_key == 'SG_VERSION_APPEND_TARGET_REQUIRED'
+async def test_pending_review_can_create_next_round(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(ShotGridVersionSubmissionDao, 'next_reserved_version_no', AsyncMock(return_value=4))
+    assert await ShotGridVersionSubmissionService._submission_target(
+        AsyncMock(), TASK_ID, 'pending_review', None, 1
+    ) == (None, 4, 1)
 
 
 def test_single_candidate_is_initialized_as_system_selected_without_reviewer_audit() -> None:
@@ -264,6 +265,7 @@ def _asset_context(*, production_item: str | None = '动力舱恐怖气氛主视
         'producer_code': 'YJF',
         'asset_type': 'Environment',
         'asset_name': '动力舱室内',
+        'asset_item_id': 77,
         'production_item': production_item,
         'asset_storage_dir_name': '动力舱室内',
     }
@@ -1235,7 +1237,9 @@ async def test_formal_commit_creates_all_candidates_and_commits_whole_review_cha
     monkeypatch.setattr(
         ShotGridVersionSubmissionDao,
         'get_latest_version',
-        AsyncMock(return_value=SimpleNamespace(version_id=VERSION_ID - 1) if has_previous else None),
+        AsyncMock(
+            return_value=SimpleNamespace(version_id=VERSION_ID - 1, version_status='rejected') if has_previous else None
+        ),
     )
     task = SimpleNamespace(
         task_id=TASK_ID,
@@ -1490,3 +1494,21 @@ async def test_formal_commit_creates_all_candidates_and_commits_whole_review_cha
 def mute_realtime_notifications(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr('module_shot_grid.service.version_submission_service.publish_version_changed', AsyncMock())
     monkeypatch.setattr('module_shot_grid.service.review_service.publish_version_changed', AsyncMock())
+
+
+def test_named_version_layout_keeps_asset_items_and_rounds_separate() -> None:
+    service = ShotGridVersionSubmissionService
+    assert (
+        service.build_target_relative_path(_shot_context(), 'demo_V001_01.mp4')
+        == r'SHOT\EP01\001\0001\V001\demo_V001_01.mp4'
+    )
+    first = service.build_target_relative_path(_asset_context(production_item='正面形象'), 'demo_V001_01.png')
+    second = service.build_target_relative_path(
+        {**_asset_context(production_item='正面形象'), 'asset_item_id': 78}, 'demo_V001_01.png'
+    )
+    assert first == r'ASSET\Environment\动力舱室内\正面形象__77\V001\demo_V001_01.png'
+    assert first != second
+    assert service._matches_target_snapshot(_shot_context(), 'old.mp4', r'VIDEO\EP01\001_0001\old.mp4')
+    assert not service._matches_target_snapshot(
+        _shot_context(), 'demo_V001_01.mp4', r'SHOT\EP01\001\0002\V001\demo_V001_01.mp4'
+    )

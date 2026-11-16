@@ -1,0 +1,96 @@
+Shot Grid 开发交接说明
+交接日期：2026年11月16日
+
+一、先读结论
+本包是当前工作区源码快照，包含本次镜头、资产、制作工作台及每日多平台记录优化。不是免配置安装包，不是与同事仓库的精确补丁，也不是正式上线验收结论。
+同事应在自己的仓库建立交接分支，解压到独立位置比对合并，禁止直接覆盖现有生产代码、环境文件或数据库。
+最新版产品依据是包内 output/ShotGrid需求梳理与新旧流程对照-图文交接版-管理员与制作人员补充-20261112.docx（25页）。本说明负责源码接入和验收交接；图文文档负责产品需求与界面。
+当前交接工作区没有 .git，不能提供可靠的原始提交基线、提交历史或完整新旧代码差异。包内提供逐文件 SHA-256 清单用于核对传输完整性。
+
+二、包内内容与明确排除项
+保留原业务目录：shot-grid-frontend（本次主要业务前端）、ruoyi-fastapi-backend（共用后端）、ruoyi-fastapi-frontend（平台管理端）、ruoyi-fastapi-test（独立E2E）、deploy、docs、image-interface，以及根目录构建与部署配置。
+包含源代码、单元/集成测试、依赖声明、业务前端锁文件、PostgreSQL初始化SQL、Alembic迁移、接口契约、协作规则及图文需求文档。
+新增说明和配置模板均位于既有目录；未新增业务目录。源码原件没有为打包而改写。
+排除真实 .env、私钥、令牌文件、数据库与Redis数据、备份、用户上传媒体、日志、缓存、node_modules、虚拟环境、编译产物和历史源码包。默认测试值/公开样例可能仍存在于测试代码、SQL和开发Compose中，不可作为生产凭据。
+不包含 admin 或 creator_demo 的登录会话、密码与演示数据库。截图中本地演示项目及其数据不会随源码自动出现。请在隔离测试环境通过平台功能建立角色、项目和示例任务。
+不携带 output/local-runtime 的本机数据库启动器和修改演示库脚本：它们依赖原电脑路径和二进制，不能视为可移植初始化工具。
+文件夹打开器源码保留在 shot-grid-frontend/public/shot-grid-folder-opener.ps1；原电脑已注册的协议、模拟成果目录不包含在包内。
+
+三、最终产品规则与历史文档冲突处理
+1. 进入工具先选项目，镜头、资产及工作台保持当前项目范围；制作人员可浏览项目全貌，不能因此修改或代交他人任务。
+2. 镜头和资产制作分项分配有效制作人后自动准备目录，不需要额外确认开工、强制排期或完善所有信息。目录准备成功、本人提交和权限校验仍必须保留。
+3. 镜头待审核时允许继续提交新轮次；完成后可正式打反馈重新进入修改。普通评论不改变任务状态。资产同轮追加与镜头新轮策略尚有差异，不能未经核对宣称完全统一。
+4. 镜头紧凑可编辑表格、列宽/行高、筛选与批量反馈/周期/分配；成果、版本反馈和制作参考集中右侧，不恢复大面积底部预览。
+5. 资产保持大项/制作分项、独立负责人和版本；关联资产用于制作参考，不能变成强制开工审批。
+6. 制作人“我的任务”同时列出镜头和资产；提交、参考、反馈和每日记录就近可达。
+7. 版本目录按镜头或资产分项隔离，FINAL位于通过版本目录内；历史成果保留。当前文件夹演示采用本地模拟，正式NAS另行接入验收。
+8. 每日记录与成果提交独立；同任务可多平台一次保存。积分按平台分开，实际0有效；无实际值才估算。不要增加日报审核或强制截图。
+9. 本周/上周/本月/上月及自定义范围汇总；生成量、提交轮次、期间曾通过任务分别计算，不能因多平台记录重复计数。
+根AGENTS、早期README和旧契约可能仍有“管理人确认开工”“排期重叠二次确认”等旧描述。最新产品决定见图文文档，实施记录见 shot-grid-frontend/AGENTS.md 与 ruoyi-fastapi-backend/AGENTS.md 末尾10月至11月追加内容。合并时核对实际源码并统一旧文档，不要恢复用户已取消的步骤。权限、事务、文件安全、目录发布和迁移约束继续有效。
+
+四、代码定位
+业务前端：shot-grid-frontend/src/views/shot、asset、workbench、task、schedule；共用组件、状态及API仍沿用当前工程。
+每日记录入口：shot-grid-frontend/src/views/workbench/DailyRecordsView.vue；统计入口路由 /production-statistics；记录路由 /daily-records。
+后端业务：ruoyi-fastapi-backend/module_shot_grid；遵循 Controller → Service → DAO → DO/VO。
+正式业务契约：shot-grid-frontend/docs/领域模型与API契约.md；前后端AGENTS.md记录各轮改动与定向验证。
+文件管理：ruoyi-fastapi-backend/docs/file_management_usage_guide.md。
+迁移：ruoyi-fastapi-backend/alembic/versions；初始化SQL：ruoyi-fastapi-backend/sql/ruoyi-fastapi-pg.sql。
+文件夹入口：shot-grid-frontend/src/utils/folderOpener.js 与 public/shot-grid-folder-opener.ps1。
+
+五、数据库接入与迁移
+主数据库为PostgreSQL。当前源码迁移链最后版本为20261111_43（每日记录），前置20261102_42（资产关联）、20261030_41（反馈评论）。本包不导出或改动任何数据库。
+已有同事数据库：先备份并恢复到隔离克隆库；安装依赖、配置克隆库连接后执行 python -m alembic current 与 python -m alembic heads，比对迁移历史和实际表结构，再执行 python -m alembic upgrade head。完成验证后才评审正式升级。
+没有版本标记的历史库：不能直接stamp head，也不能不检查就执行增量迁移。
+真正空库：平台尚无完整Alembic空库baseline，需先用已同步的PostgreSQL初始化SQL建平台表，并核对平台/Shot Grid结构与head完全一致，再记录对应版本。不可把导入最新SQL和重跑全部历史DDL叠加。具体初始化与stamp流程必须先在空测试库验证。
+开发Compose的postgres仅在新数据卷首次创建时执行初始化SQL；已有卷不会自动补结构。禁止为升级而删除旧卷。
+新增每日记录权限：shotgrid:daily:write 与 shotgrid:daily:stats。升级后重新登录刷新菜单与权限；统计还需项目管理范围，不能只放开前端菜单。
+
+六、同事本地启动顺序
+环境：Node >=22.13.0、npm、Python建议3.11、PostgreSQL、Redis。媒体派生启用时还需FFmpeg。
+先查看本机是否已占用5174、9099、15432、16379；不要停止其他项目服务。
+1）在解压根目录：docker compose -f docker-compose.dev.yml up -d postgres redis
+   仅启动依赖；不要同时启动Compose后端和宿主机后端。若使用自己的数据库/Redis，跳过此步，填写实际连接。
+2）后端目录创建虚拟环境并安装：
+   python -m venv .venv
+   .\.venv\Scripts\Activate.ps1
+   python -m pip install -r requirements-pg.txt
+   python -m pip install -e .
+3）复制包内后端 .env.dev.handoff.example 为 .env.dev，填写本地数据库、Redis、JWT及加密配置。模板只有占位值，不能直接启动。生成传输密钥可先运行 ruoyi crypto keygen --help，再按本机CLI输出配置密钥；私钥不要发到聊天、提交仓库或写进交接报告。
+   不要通过关闭验证码、移除Redis或降低加密模式掩盖启动问题。公司固定内网HTTP例外不能扩展到其他部署。
+4）按第五节核对/升级数据库。执行 ruoyi app doctor --env=dev，排除数据库、Redis和加密配置问题，再执行 ruoyi app run --env=dev。也可按现有README使用uvicorn运行工厂，端口9099。
+5）另开终端进入 shot-grid-frontend：复制 .env.development.handoff.example 为 .env.development，执行 npm.cmd ci，再 npm.cmd run dev。
+   访问 http://127.0.0.1:5174；/dev-api代理到9099。确保 /captchaImage 返回图片，登录后 /getInfo、导航和项目列表可用。
+6）平台用户、固定角色包、项目成员及存储根通过现有平台功能配置。平台管理前端属于 ruoyi-fastapi-frontend；其依赖安装与启动按本目录package.json执行，不要误把管理端当成本次优化业务端。
+本机历史验证码故障来自PostgreSQL未启动导致接口超时；排查顺序为DB、Redis、后端接口、前端代理，再看页面。
+模板默认不启用真实存储/版本/媒体Worker，防止未经配置执行NAS I/O。完成真实上传必须另外配置存储适配与对应Worker；仅启动页面不能证明提交流程完成。
+
+七、本地模拟文件夹与正式NAS
+本地打开器是用户级Windows协议工具，安装会注册HKCU协议，并在LOCALAPPDATA生成程序。先读脚本，使用 -Mode Test 进行自检；安装和卸载按脚本头部说明。测试同事需单独配置自己的模拟根目录。
+本地打开器演示与后端真实版本发布是不同环节，不要把“模拟文件夹能打开”报告为NAS交付成功。
+镜头：项目名/SHOT/集/场次/镜头号/V001/成果文件。
+资产：项目名/ASSET/类型/资产名/制作分项名称及稳定ID/V001/成果文件。
+通过：对应V001或V002目录内的FINAL保存选定成果；JSON清单可隐藏但不能删除校验和审计资料。
+正式NAS需另行收集共享路径、客户端访问情况和服务账号权限，凭据通过安全渠道交接，不写入本包。延续现有路径白名单、鉴权、文件引用、SHA-256与Worker租约/fencing约束。
+
+八、测试与验收
+本次只整理交接材料和核验包完整性，没有重新运行全量业务测试、完整E2E、生产构建或真实NAS验收。历史定向结果见前后端AGENTS.md，不能视为同事环境已通过。
+接收合并后最低应执行：
+业务前端 npm.cmd run lint、npm.cmd run test、npm.cmd run build:prod。
+后端先执行与改动直接相关的 module_shot_grid 测试及Ruff，再在阶段验收运行完整后端测试。
+部署前按项目AGENTS.md恢复发布级检查及真实PostgreSQL/Redis完整业务E2E；测试中的真实数据库用例应仅连接隔离测试环境。
+人工验收清单：
+[ ] 管理员与制作人登录、项目切换不混数据、制作人不可代交或改派他人。
+[ ] 新建镜头/资产分项直接分配，未排期仍可在目录就绪后提交。
+[ ] 镜头V001待审核继续V002；通过后打正式反馈并再提交；普通评论不改状态。
+[ ] 跨场次批量反馈、改周期、分配；部分失败显示真实结果，不声称整批原子成功。
+[ ] 资产分项及关联素材区分未提交、未通过、已定稿；文件版本不混放。
+[ ] FINAL归档状态、失败重试和历史版本正确；打开的是当前任务的准确目录。
+[ ] 两个平台每日记录实际0、估算、修改、作废、周月统计和Excel导出；不重复统计任务产出。
+[ ] 故事板、人员任务、制作排期筛选/多选与主列表权限一致。
+图文仍可补充：提交表单细节、多平台每日记录填写图、非空统计和导出结果、实际版本/FINAL文件夹截图。这些主要规则已有文字说明，不影响开始开发；提交表单字段建议开发时补充确认。
+已知边界：统计日期最大366天、单次记录最多30行、导出最多10000条且非数据库快照；平台别名由团队统一。当前业务前端有锁文件，平台管理端依赖锁定风险按实际文件核对；大包告警仍需后续治理。
+
+九、推荐交接步骤
+同事先读本说明和25页图文文档 → 独立解压与SHA-256校验 → 与其仓库比对 → 隔离数据库核验迁移 → 建立管理员/制作人演示数据 → 跑通上述清单 → 分模块合并 → 另行评审正式部署。
+优先完善提交/反馈/定稿、每日记录/统计的真实闭环，再处理性能和视觉细节。生产部署沿用deploy/deploy.sh及独立生产Compose的备份、迁移和健康门禁；不要直接把开发Compose上线。
+本交接没有推送远程、修改生产环境或变动既有业务数据。

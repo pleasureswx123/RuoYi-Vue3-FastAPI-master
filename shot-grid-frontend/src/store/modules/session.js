@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 
 import { getCaptcha, getCurrentUser, login, logout } from '@/api/platform/auth'
 import { getShotGridNavigation } from '@/api/shot-grid/navigation'
+import { getProjectDetail } from '@/api/shot-grid/projects'
 import { getToken, removeToken, setToken } from '@/utils/auth'
 import { ApiError } from '@/utils/apiError'
 import { normalizeNavigation } from '@/router/routeRegistry'
@@ -37,6 +38,10 @@ function projectSafeError(error) {
 
 export const useSessionStore = defineStore('session', {
   state: () => ({
+    activeProjectId: '',
+    // 仅保留当前会话的列表位置和查询，不缓存镜头内容或批量选择。
+    shotBrowseState: null,
+    workspaceFilters: { episodeId: '', sceneId: '', assetType: '', assigneeUserId: '', productionFrom: '', productionTo: '' },
     token: getToken() || '',
     user: null,
     roles: [],
@@ -50,11 +55,41 @@ export const useSessionStore = defineStore('session', {
     captcha: { enabled: true, image: '', uuid: '', loading: false }
   }),
   getters: {
+    // 只精简纯制作账号的展示，不改变后端导航或授权范围。
+    isCreatorWorkspace: state => state.roles.includes('shotgrid_creator') &&
+      !state.roles.some(role => role !== 'shotgrid_creator' && (role === 'admin' || role.startsWith('shotgrid_'))) &&
+      !state.permissions.some(permission => ['*:*:*', 'shotgrid:project:all', 'shotgrid:version:review', 'shotgrid:task:assign', 'shotgrid:project:add'].includes(permission)),
     displayName: state => state.user?.userName || state.user?.nickName || '当前用户',
     allowedRouteKeys: state => new Set(state.navigation.map(item => item.routeKey))
   },
   actions: {
+    selectProject(projectId) {
+      const id = Number(projectId)
+      const next = Number.isSafeInteger(id) && id > 0 ? String(id) : ''
+      if (next !== this.activeProjectId) {
+        this.shotBrowseState = null
+        this.activeProjectId = next
+        this.workspaceFilters = { episodeId: '', sceneId: '', assetType: '', assigneeUserId: '', productionFrom: '', productionTo: '' }
+      }
+    },
+    async loadWorkspaceProjects(options = {}) {
+      if (!this.activeProjectId) return []
+      const id = this.activeProjectId
+      const response = await getProjectDetail(id, options)
+      return id === this.activeProjectId ? [response.data] : []
+    },
+    productionParams() {
+      const { assigneeUserId, productionFrom, productionTo } = this.workspaceFilters
+      return { projectId: this.activeProjectId || undefined, assigneeUserId: assigneeUserId || undefined,
+        productionFrom: productionFrom || undefined, productionTo: productionTo || undefined }
+    },
+    workbenchParams() {
+      // 制作人工作台仅继承项目，不带入资产页对其他制作人或周期的筛选。
+      return this.isCreatorWorkspace ? { projectId: this.activeProjectId || undefined } : this.productionParams()
+    },
     clearLocalSession() {
+      this.shotBrowseState = null
+      this.selectProject('')
       removeToken()
       this.token = ''
       this.user = null

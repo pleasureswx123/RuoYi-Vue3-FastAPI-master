@@ -24,6 +24,8 @@ const routes = [
     name: 'root',
     component: () => import('@/layout/AppLayout.vue'),
     children: [
+      { path: 'daily-records', name: 'daily-records', component: () => import('@/views/workbench/DailyRecordsView.vue'), meta: { title: '每日记录', routeKey: 'daily-records' } },
+      { path: 'production-statistics', name: 'production-statistics', component: () => import('@/views/workbench/DailyRecordsView.vue'), meta: { title: '产出统计', routeKey: 'production-statistics' } },
       {
         path: 'workbench',
         name: 'workbench',

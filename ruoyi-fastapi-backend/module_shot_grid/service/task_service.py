@@ -217,6 +217,7 @@ class ShotGridTaskService:
                 asset_item_id=None,
                 actor_name=actor_name,
             )
+            await cls._activate_assigned_shot(db, task, shot, episode, scene, actor_name)
             await cls._audit_assignment(
                 db,
                 project_id=project_id,
@@ -291,6 +292,7 @@ class ShotGridTaskService:
                     asset_item_id=None,
                     actor_name=actor_name,
                 )
+                await cls._activate_assigned_shot(db, _task, shot, episode, scene, actor_name)
                 created_task_count += int(old_assignee is None)
                 reassigned_task_count += int(old_assignee is not None)
                 assigned_shot_ids.append(item.shot_id)
@@ -373,6 +375,7 @@ class ShotGridTaskService:
                 asset_item_id=asset_item_id,
                 actor_name=actor_name,
             )
+            await cls._activate_assigned_asset(db, task, asset, actor_name)
             await cls._audit_assignment(
                 db,
                 project_id=project_id,
@@ -454,6 +457,7 @@ class ShotGridTaskService:
                     asset_item_id=target.asset_item_id,
                     actor_name=actor_name,
                 )
+                await cls._activate_assigned_asset(db, _task, asset, actor_name)
                 created_task_count += int(old_assignee is None)
                 reassigned_task_count += int(old_assignee is not None)
                 assigned_item_ids.append(target.asset_item_id)
@@ -515,6 +519,8 @@ class ShotGridTaskService:
             cls._require_matching_access(access, project_id, actor_user_id)
             task = await cls._lock_task(db, project_id, task_id)
             is_shot = task.task_kind == 'shot_video'
+            if is_shot:
+                raise shot_grid_error(409, 'SG_SHOT_AUTO_START', '镜头分配制作人后自动进入制作，无需确认开工')
             can_start = access.has_all_scope or access.has_role('director')
             if not can_start or not cls._has_permission(current_user, 'shotgrid:task:start'):
                 raise shot_grid_error(
@@ -568,84 +574,32 @@ class ShotGridTaskService:
             directory_operation_id: int | None = None
             if storage is None or storage.storage_status != 'ready':
                 raise shot_grid_error(409, 'SG_PROJECT_NOT_READY', '项目 NAS 存储尚未就绪，不能开始制作')
-            if task.task_kind == 'shot_video':
-                target = await ShotGridTaskDao.lock_shot_target(db, project_id, task.shot_id)
-                if target is None:
-                    raise shot_grid_error(404, 'SG_SHOT_NOT_FOUND', '镜头不存在或不可见')
-                shot, episode, scene = target
-                if not command.assets_confirmed or command.shot_lock_version is None:
-                    raise shot_grid_error(
-                        422,
-                        'SG_SHOT_START_CONFIRMATION_REQUIRED',
-                        '请确认已在线下核对资产齐备，并提交当前镜头版本',
-                    )
-                cls._require_lock_version(shot.lock_version, command.shot_lock_version)
-                member = await ShotGridTaskDao.get_assignable_member(db, project_id, task.assignee_user_id)
-                if member is None:
-                    raise shot_grid_error(
-                        409,
-                        'SG_TASK_ASSIGNEE_INVALID',
-                        '当前负责人已不是有效制作人员，请重新分配任务',
-                    )
-                latest_directory_status = await ShotGridTaskDao.get_latest_shot_directory_operation_status(
-                    db,
-                    project_id,
-                    shot.shot_id,
-                )
-                if shot.storage_dir_name is None:
-                    shot.storage_dir_name = f'{scene.scene_no:03d}_{format_shot_code(shot.shot_no)}'
-                    latest_directory_status = None
-                if latest_directory_status == 'succeeded':
-                    task.task_status = 'in_progress'
-                else:
-                    task.task_status = 'preparing'
-                    if latest_directory_status is None:
-                        operation = ShotGridStorageOperation(
-                            project_id=project_id,
-                            operation_type='ensure_shot_directory',
-                            aggregate_type='shot',
-                            aggregate_id=shot.shot_id,
-                            target_relative_path=(f'VIDEO\\{episode.storage_dir_name}\\{shot.storage_dir_name}'),
-                            operation_status='pending',
-                            idempotency_key=f'shotgrid:dir:shot-start:{project_id}:{shot.shot_id}',
-                            attempt_count=0,
-                            create_by=actor_name,
-                            create_time=now,
-                            update_time=now,
-                        )
-                        db.add(operation)
-                        await db.flush()
-                        directory_operation_id = operation.operation_id
-                shot.update_by = actor_name
-                shot.update_time = now
-                shot.lock_version += 1
+            latest_directory_status = await ShotGridTaskDao.get_latest_asset_directory_operation_status(
+                db,
+                project_id,
+                asset.asset_id,
+            )
+            if latest_directory_status == 'succeeded':
+                task.task_status = 'in_progress'
             else:
-                latest_directory_status = await ShotGridTaskDao.get_latest_asset_directory_operation_status(
-                    db,
-                    project_id,
-                    asset.asset_id,
-                )
-                if latest_directory_status == 'succeeded':
-                    task.task_status = 'in_progress'
-                else:
-                    task.task_status = 'preparing'
-                    if latest_directory_status is None:
-                        operation = ShotGridStorageOperation(
-                            project_id=project_id,
-                            operation_type='ensure_asset_directory',
-                            aggregate_type='asset',
-                            aggregate_id=asset.asset_id,
-                            target_relative_path=f'ASSET\\{asset.asset_type}\\{asset.storage_dir_name}',
-                            operation_status='pending',
-                            idempotency_key=f'asset-directory:{project_id}:{asset.asset_id}',
-                            attempt_count=0,
-                            create_by=actor_name,
-                            create_time=now,
-                            update_time=now,
-                        )
-                        db.add(operation)
-                        await db.flush()
-                        directory_operation_id = operation.operation_id
+                task.task_status = 'preparing'
+                if latest_directory_status is None:
+                    operation = ShotGridStorageOperation(
+                        project_id=project_id,
+                        operation_type='ensure_asset_directory',
+                        aggregate_type='asset',
+                        aggregate_id=asset.asset_id,
+                        target_relative_path=f'ASSET\\{asset.asset_type}\\{asset.storage_dir_name}',
+                        operation_status='pending',
+                        idempotency_key=f'asset-directory:{project_id}:{asset.asset_id}',
+                        attempt_count=0,
+                        create_by=actor_name,
+                        create_time=now,
+                        update_time=now,
+                    )
+                    db.add(operation)
+                    await db.flush()
+                    directory_operation_id = operation.operation_id
             if command.priority is not None:
                 task.priority = command.priority
             task.update_by = actor_name
@@ -664,27 +618,15 @@ class ShotGridTaskService:
                     'taskId': task_id,
                     'lockVersion': command.lock_version,
                     'priority': task.priority,
-                    'expectedStartTime': schedule_start.isoformat(),
-                    'expectedEndTime': schedule_end.isoformat(),
-                    **(
-                        {
-                            'projectId': project_id,
-                            'shotId': task.shot_id,
-                            'shotLockVersion': command.shot_lock_version,
-                            'assetsConfirmed': True,
-                            'confirmationMethod': 'manual',
-                        }
-                        if is_shot
-                        else {
-                            'projectId': project_id,
-                            'assetId': asset.asset_id,
-                            'assetItemId': task.asset_item_id,
-                            'assetLockVersion': command.asset_lock_version,
-                            'assetItemLockVersion': command.asset_item_lock_version,
-                            'startConfirmed': True,
-                            'confirmationMethod': 'manual',
-                        }
-                    ),
+                    'expectedStartTime': schedule_start.isoformat() if schedule_start else None,
+                    'expectedEndTime': schedule_end.isoformat() if schedule_end else None,
+                    'projectId': project_id,
+                    'assetId': asset.asset_id,
+                    'assetItemId': task.asset_item_id,
+                    'assetLockVersion': command.asset_lock_version,
+                    'assetItemLockVersion': command.asset_item_lock_version,
+                    'startConfirmed': True,
+                    'confirmationMethod': 'manual',
                 },
                 result={
                     'taskId': task_id,
@@ -710,6 +652,78 @@ class ShotGridTaskService:
         except Exception:
             await db.rollback()
             raise
+
+    @classmethod
+    async def _activate_assigned_asset(cls, db: AsyncSession, task: ShotGridTask, asset: Any, actor_name: str) -> None:
+        """在已持有项目协调锁的分配事务内准备目录，仅启动当前受派分项。"""
+        if task.task_status != 'not_started':
+            return
+        now = cls._now()
+        latest = await ShotGridTaskDao.get_latest_asset_directory_operation_status(db, task.project_id, asset.asset_id)
+        task.task_status = 'in_progress' if latest == 'succeeded' else 'preparing'
+        if latest is None:
+            db.add(
+                ShotGridStorageOperation(
+                    project_id=task.project_id,
+                    operation_type='ensure_asset_directory',
+                    aggregate_type='asset',
+                    aggregate_id=asset.asset_id,
+                    target_relative_path=f'ASSET\\{asset.asset_type}\\{asset.storage_dir_name}',
+                    operation_status='pending',
+                    idempotency_key=f'asset-directory:{task.project_id}:{asset.asset_id}',
+                    attempt_count=0,
+                    create_by=actor_name,
+                    create_time=now,
+                    update_time=now,
+                )
+            )
+        task.update_by = actor_name
+        task.update_time = now
+        task.lock_version += 1
+        await db.flush()
+
+    @classmethod
+    async def _activate_assigned_shot(
+        cls,
+        db: AsyncSession,
+        task: ShotGridTask,
+        shot: Any,
+        episode: Any,
+        scene: Any,
+        actor_name: str,
+    ) -> None:
+        """分配事务内自动准备镜头目录，不要求排期、内容或开工确认。"""
+        if task.task_status != 'not_started':
+            return
+        now = cls._now()
+        latest = await ShotGridTaskDao.get_latest_shot_directory_operation_status(db, task.project_id, shot.shot_id)
+        if shot.storage_dir_name is None:
+            shot.storage_dir_name = f'{scene.scene_no:03d}_{format_shot_code(shot.shot_no)}'
+            latest = None
+        task.task_status = 'in_progress' if latest == 'succeeded' else 'preparing'
+        if latest is None:
+            db.add(
+                ShotGridStorageOperation(
+                    project_id=task.project_id,
+                    operation_type='ensure_shot_directory',
+                    aggregate_type='shot',
+                    aggregate_id=shot.shot_id,
+                    target_relative_path=f'VIDEO\\{episode.storage_dir_name}\\{shot.storage_dir_name}',
+                    operation_status='pending',
+                    idempotency_key=f'shotgrid:dir:shot-start:{task.project_id}:{shot.shot_id}',
+                    attempt_count=0,
+                    create_by=actor_name,
+                    create_time=now,
+                    update_time=now,
+                )
+            )
+        task.update_by = actor_name
+        task.update_time = now
+        task.lock_version += 1
+        shot.update_by = actor_name
+        shot.update_time = now
+        shot.lock_version += 1
+        await db.flush()
 
     @classmethod
     async def _assign_task(
@@ -857,8 +871,8 @@ class ShotGridTaskService:
         task: ShotGridTask,
         command: ShotGridTaskStartModel,
         now: datetime,
-    ) -> tuple[datetime, datetime, bool]:
-        """只读沿用已保存排期，开工不能兼作首次排期。"""
+    ) -> tuple[datetime | None, datetime | None, bool]:
+        """只读沿用已保存排期；无排期也可开工，排期仍由独立入口维护。"""
 
         current_start = getattr(task, 'expected_start_time', None)
         current_end = getattr(task, 'expected_end_time', None)
@@ -878,7 +892,9 @@ class ShotGridTaskService:
             return current_start, current_end, False
         if baseline_start is not None or baseline_end is not None:
             raise shot_grid_error(409, 'SG_TASK_SCHEDULE_READ_ONLY', '任务当前排期缺失，请先修复后再开工')
-        raise shot_grid_error(422, 'SG_TASK_SCHEDULE_REQUIRED', '请先设置并保存计划起止时间，再确认开工')
+        if command.expected_start_time is not None or command.expected_end_time is not None:
+            raise shot_grid_error(422, 'SG_TASK_EXPECTED_TIME_INVALID', '请通过排期功能保存时间，开工请求不接受排期')
+        return None, None, False
 
     @staticmethod
     def _require_lock_version(actual: int, expected: int) -> None:
@@ -1081,7 +1097,7 @@ class ShotGridTaskService:
         current_user: CurrentUserModel,
         access: ShotGridProjectAccessModel,
     ) -> list[str]:
-        if row['project_status'] in {'completed', 'archived'} or row['task_status'] == 'completed':
+        if row['project_status'] in {'completed', 'archived'}:
             return []
         target_active = (
             row['shot_lifecycle_status'] == 'active'
@@ -1095,6 +1111,22 @@ class ShotGridTaskService:
         owner_creator = access.has_role('creator') and owner
         target_ready = row['task_kind'] != 'asset_image' or is_asset_production_item_ready(row.get('production_item'))
         actions: list[str] = []
+        if (
+            row['task_kind'] == 'shot_video'
+            and director
+            and row['task_status'] in {'pending_review', 'revision', 'completed'}
+            and not row['has_uncommitted_submission']
+            and all(
+                cls._has_permission(current_user, permission)
+                for permission in (
+                    'shotgrid:note:add',
+                    'shotgrid:version:review',
+                    'shotgrid:version:query',
+                    'shotgrid:task:query',
+                )
+            )
+        ):
+            actions.append('task.feedback')
         if (
             director
             and row['task_status'] == 'revision'
@@ -1112,14 +1144,7 @@ class ShotGridTaskService:
             and cls._has_permission(current_user, 'shotgrid:task:assign')
         ):
             actions.append('task.assign')
-        if (
-            row['task_status'] == 'not_started'
-            and target_ready
-            and director
-            and row.get('assignee_valid')
-            and cls._has_permission(current_user, 'shotgrid:task:start')
-        ):
-            actions.append('task.start')
+        # 镜头和资产均由分配事务自动准备目录，不再展示人工开工动作。
         if (
             row['task_status'] in {'in_progress', 'revision', 'pending_review'}
             and not (row['task_status'] == 'pending_review' and int(row.get('latest_review_cycle') or 1) > 1)

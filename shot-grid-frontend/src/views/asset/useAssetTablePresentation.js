@@ -17,6 +17,8 @@ export function useAssetTablePresentation(userId, availableWidth = ref(0)) {
   const columns = ref([])
   const widths = ref({})
   const keys = assetOptionalColumns.map(column => column.key)
+  const order = ref([...keys])
+  const normalizeOrder = value => [...new Set([...(Array.isArray(value) ? value.filter(key => keys.includes(key)) : []), ...keys])]
   const widthKeys = [...keys, 'identity', 'actions']
   const storageKey = computed(() => `shot-grid:asset-table:v1:${userId.value ?? 'guest'}`)
   watch(storageKey, key => {
@@ -25,11 +27,12 @@ export function useAssetTablePresentation(userId, availableWidth = ref(0)) {
     mode.value = ['auto', 'full', 'compact', 'custom'].includes(saved.mode) ? saved.mode : 'auto'
     columns.value = Array.isArray(saved.columns) ? saved.columns.filter(key => keys.includes(key)) : []
     widths.value = Object.fromEntries(Object.entries(saved.widths || {}).filter(([key, value]) => widthKeys.includes(key) && Number.isFinite(value) && value >= 80 && value <= 800))
+    order.value = normalizeOrder(saved.order)
   }, { immediate: true })
-  watch([mode, columns, widths], () => {
-    try { localStorage.setItem(storageKey.value, JSON.stringify({ mode: mode.value, columns: columns.value, widths: widths.value })) } catch { /* 不阻断列表使用。 */ }
+  watch([mode, columns, widths, order], () => {
+    try { localStorage.setItem(storageKey.value, JSON.stringify({ mode: mode.value, columns: columns.value, widths: widths.value, order: order.value })) } catch { /* 不阻断列表使用。 */ }
   }, { deep: true, flush: 'sync' })
-  const visibleColumns = computed(() => {
+  const visibleKeys = computed(() => {
     if (mode.value === 'full') return keys
     if (mode.value === 'custom') return columns.value
     if (mode.value === 'compact') return ['assignee', 'status']
@@ -46,6 +49,15 @@ export function useAssetTablePresentation(userId, availableWidth = ref(0)) {
     }
     return keys.filter(key => visible.has(key))
   })
+  const visibleColumns = computed(() => order.value.filter(key => visibleKeys.value.includes(key)))
+  function setOrder(value) {
+    // 仅重排当前可见列，隐藏列保留原位，重新显示时仍有稳定位置。
+    const visible = visibleColumns.value
+    const next = [...new Set(value.filter(key => visible.includes(key)))]
+    if (next.length !== visible.length) return
+    let index = 0
+    order.value = order.value.map(key => visible.includes(key) ? next[index++] : key)
+  }
   function setColumns(value) {
     columns.value = value.filter(key => keys.includes(key))
     mode.value = 'custom'
@@ -57,6 +69,7 @@ export function useAssetTablePresentation(userId, availableWidth = ref(0)) {
     mode.value = 'auto'
     columns.value = []
     widths.value = {}
+    order.value = [...keys]
   }
-  return { mode, visibleColumns, widths, setColumns, saveWidth, resetPresentation }
+  return { mode, visibleColumns, widths, setColumns, setOrder, saveWidth, resetPresentation }
 }

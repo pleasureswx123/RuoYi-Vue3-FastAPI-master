@@ -50,7 +50,7 @@ describe('版本展示契约', () => {
       taskStatus: 'in_progress',
       replayed: true
     })).toMatchObject({ submissionId: 9, reservedVersionNumber: 'V003', replayed: true })
-    expect(versionStatusMeta('final').label).toBe('最终版本')
+    expect(versionStatusMeta('final').label).toBe('定稿')
     expect(formatFileSize(5 * 1024 * 1024)).toBe('5.0 MiB')
   })
 })

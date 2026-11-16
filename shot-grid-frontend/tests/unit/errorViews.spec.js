@@ -12,6 +12,9 @@ import { getShotGridNavigation } from '@/api/shot-grid/navigation'
 import { installRouterGuard } from '@/router/guard'
 import { setToken } from '@/utils/auth'
 
+// 路由用例不验证进度动画，隔离其延迟计时器，避免环境销毁后访问 document。
+vi.mock('nprogress', () => ({ default: { configure: vi.fn(), start: vi.fn(), done: vi.fn() } }))
+
 vi.mock('@/api/platform/auth', () => ({
   getCaptcha: vi.fn(), getCurrentUser: vi.fn(), login: vi.fn(), logout: vi.fn()
 }))

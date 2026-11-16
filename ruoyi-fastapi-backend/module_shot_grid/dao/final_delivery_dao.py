@@ -16,6 +16,33 @@ class ShotGridFinalDeliveryDao:
     """最终交付 Outbox 的短事务数据访问。"""
 
     @staticmethod
+    def approved_statement(task_id: Any, project_id: Any) -> Any:
+        """只读定稿投影，同时保留重新反馈前的通过记录。"""
+        return (
+            select(
+                ShotGridVersion.version_id,
+                ShotGridVersion.version_no,
+                ShotGridVersion.version_status,
+                ShotGridFinalDelivery.delivery_status,
+                ShotGridFinalDelivery.approved_time,
+            )
+            .outerjoin(
+                ShotGridFinalDelivery,
+                and_(
+                    ShotGridFinalDelivery.version_id == ShotGridVersion.version_id,
+                    ShotGridFinalDelivery.project_id == ShotGridVersion.project_id,
+                    ShotGridFinalDelivery.task_id == ShotGridVersion.task_id,
+                    ShotGridFinalDelivery.operation == 'publish',
+                ),
+            )
+            .where(
+                ShotGridVersion.task_id == task_id,
+                ShotGridVersion.project_id == project_id,
+                or_(ShotGridVersion.version_status == 'final', ShotGridFinalDelivery.approved_time.is_not(None)),
+            )
+        )
+
+    @staticmethod
     async def add(db: AsyncSession, delivery: ShotGridFinalDelivery) -> ShotGridFinalDelivery:
         db.add(delivery)
         await db.flush()

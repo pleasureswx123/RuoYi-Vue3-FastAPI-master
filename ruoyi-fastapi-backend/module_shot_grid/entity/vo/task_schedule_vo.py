@@ -12,7 +12,7 @@ from pydantic import (
     model_validator,
 )
 
-from module_shot_grid.entity.vo.common_vo import ShotGridApiModel
+from module_shot_grid.entity.vo.common_vo import ShotGridApiModel, ShotGridProductionPeriodModel
 from module_shot_grid.entity.vo.task_vo import TaskKind, TaskPriority, TaskStatus
 
 ScheduleTargetKind = Literal['all', 'shot', 'asset_item']
@@ -51,7 +51,7 @@ BusinessDateTime = Annotated[
 ]
 
 
-class ShotGridScheduleQueryModel(ShotGridApiModel):
+class ShotGridScheduleQueryModel(ShotGridProductionPeriodModel):
     """项目排期窗口查询；日、周、月只改变客户端窗口和刻度。"""
 
     model_config = ConfigDict(extra='forbid')

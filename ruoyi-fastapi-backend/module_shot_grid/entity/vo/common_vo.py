@@ -1,6 +1,7 @@
+from datetime import date, datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic.alias_generators import to_camel
 
 
@@ -8,6 +9,16 @@ class ShotGridApiModel(BaseModel):
     """Shot Grid camelCase API 模型基类。"""
 
     model_config = ConfigDict(alias_generator=to_camel, from_attributes=True, populate_by_name=True)
+
+
+class ShotGridApprovedVersionModel(ShotGridApiModel):
+    """最近一次审核通过记录；重新反馈后仍保留，不代表当前任务已完成。"""
+
+    version_id: int
+    version_no: int
+    version_status: Literal['pending_review', 'rejected', 'final']
+    delivery_status: Literal['pending', 'publishing', 'published', 'failed'] | None = None
+    approved_time: datetime | None = None
 
 
 class ShotGridPageQueryModel(ShotGridApiModel):
@@ -24,3 +35,22 @@ class ShotGridLockVersionModel(ShotGridApiModel):
     """需要乐观锁保护的更新请求基类。"""
 
     lock_version: int = Field(ge=0, description='期望乐观锁版本')
+
+
+class ShotGridProductionPeriodModel(ShotGridApiModel):
+    """按预期制作时间交集筛选；不改变原有权限范围。"""
+
+    production_from: date | None = None
+    production_to: date | None = None
+
+    @model_validator(mode='after')
+    def validate_production_period(self) -> 'ShotGridProductionPeriodModel':
+        if self.production_from and self.production_to and self.production_from > self.production_to:
+            raise ValueError('制作周期开始日期不能晚于结束日期')
+        return self
+
+
+class ShotGridProductionQueryModel(ShotGridPageQueryModel, ShotGridProductionPeriodModel):
+    """可选制作人与制作周期，始终与原数据范围取交集。"""
+
+    assignee_user_id: int | None = Field(default=None, gt=0, le=9_223_372_036_854_775_807)

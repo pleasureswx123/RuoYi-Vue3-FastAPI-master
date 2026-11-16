@@ -1,4 +1,6 @@
 const ROUTE_REGISTRY = Object.freeze({
+  'daily-records': Object.freeze({ routeKey: 'daily-records', path: '/daily-records', routeName: 'daily-records', title: '每日记录', icon: 'edit' }),
+  'production-statistics': Object.freeze({ routeKey: 'production-statistics', path: '/production-statistics', routeName: 'production-statistics', title: '产出统计', icon: 'chart' }),
   workbench: Object.freeze({ routeKey: 'workbench', path: '/workbench', routeName: 'workbench', title: '工作台', icon: 'dashboard' }),
   projects: Object.freeze({ routeKey: 'projects', path: '/projects', routeName: 'projects', title: '项目', icon: 'project' }),
   shots: Object.freeze({ routeKey: 'shots', path: '/shots', routeName: 'shots', title: '镜头管理', icon: 'video-camera' }),
@@ -61,6 +63,7 @@ export function getRouteKeyByPath(path) {
 }
 
 export function getFirstAuthorizedPath(navigation) {
+  if (navigation?.some(item => item.routeKey === 'projects')) return '/projects'
   return Array.isArray(navigation) && navigation.length > 0 ? navigation[0].path : '/forbidden'
 }
 

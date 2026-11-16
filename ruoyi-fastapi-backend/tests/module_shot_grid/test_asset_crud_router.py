@@ -9,7 +9,7 @@ from common.aspect.interface_auth import CheckUserInterfaceAuth
 from common.router import auto_register_controller_files
 from module_shot_grid.controller.asset_crud_controller import asset_crud_controller
 
-ASSET_ROUTE_COUNT = 12
+ASSET_ROUTE_COUNT = 14
 CRUD_ROUTER_ORDER = 45
 IMPORT_ROUTER_ORDER = 43
 
@@ -26,6 +26,13 @@ def _route(method: str, path: str) -> APIRoute:
     ('method', 'path', 'permission', 'write_route'),
     [
         ('GET', '/shot-grid/projects/{projectId}/assets', 'shotgrid:asset:list', False),
+        ('GET', '/shot-grid/projects/{projectId}/assets/{assetId}/relations', 'shotgrid:asset:query', False),
+        (
+            'PUT',
+            '/shot-grid/projects/{projectId}/assets/{assetId}/relations',
+            ['shotgrid:asset:edit', 'shotgrid:asset:query'],
+            True,
+        ),
         ('POST', '/shot-grid/projects/{projectId}/assets', 'shotgrid:asset:add', True),
         ('POST', '/shot-grid/projects/{projectId}/assets/batch-force-delete', 'shotgrid:asset:forceDelete', True),
         ('POST', '/shot-grid/projects/{projectId}/assets/batch-delete', 'shotgrid:asset:archive', True),
@@ -47,7 +54,7 @@ def _route(method: str, path: str) -> APIRoute:
 def test_asset_routes_freeze_permission_and_project_scope(
     method: str,
     path: str,
-    permission: str,
+    permission: str | list[str],
     write_route: bool,
 ) -> None:
     route = _route(method, path)

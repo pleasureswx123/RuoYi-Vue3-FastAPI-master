@@ -6,7 +6,7 @@ from pydantic import ConfigDict, Field, StrictBool, field_validator, model_valid
 from module_shot_grid.entity.vo.common_vo import (
     ShotGridApiModel,
     ShotGridLockVersionModel,
-    ShotGridPageQueryModel,
+    ShotGridProductionQueryModel,
 )
 from module_shot_grid.entity.vo.project_reference_vo import ShotGridProjectReferenceFileModel
 
@@ -25,7 +25,7 @@ def _normalize_optional_text(value: object) -> str | None:
     return normalized or None
 
 
-class ShotGridTaskFilterModel(ShotGridPageQueryModel):
+class ShotGridTaskFilterModel(ShotGridProductionQueryModel):
     """任务列表共用筛选条件。"""
 
     task_kind: TaskKind | None = Field(default=None, description='任务类型')
@@ -66,6 +66,8 @@ class ShotGridTaskListQueryModel(ShotGridTaskFilterModel):
 
 
 class ShotGridMineTaskListQueryModel(ShotGridTaskFilterModel):
+    project_id: int | None = Field(default=None, gt=0, le=SQL_BIGINT_MAX)
+
     """工作台跨项目“我的任务”查询；负责人范围由服务端强制。"""
 
 

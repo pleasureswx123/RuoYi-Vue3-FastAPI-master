@@ -40,7 +40,7 @@ const SUBMISSION_STATUS = Object.freeze({
 const VERSION_STATUS = Object.freeze({
   pending_review: { label: '待审核', tone: 'warning' },
   rejected: { label: '已退回', tone: 'danger' },
-  final: { label: '最终版本', tone: 'success' }
+  final: { label: '定稿', tone: 'success' }
 })
 
 const STATUS_HTTP_COPY = Object.freeze({

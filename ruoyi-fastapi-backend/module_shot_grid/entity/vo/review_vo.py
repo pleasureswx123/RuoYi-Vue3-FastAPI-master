@@ -1,5 +1,6 @@
 import json
 import re
+import unicodedata
 import uuid
 from datetime import date, datetime
 from typing import Any, Literal
@@ -10,6 +11,7 @@ from module_shot_grid.entity.vo.common_vo import (
     ShotGridApiModel,
     ShotGridLockVersionModel,
     ShotGridPageQueryModel,
+    ShotGridProductionQueryModel,
 )
 from module_shot_grid.entity.vo.task_vo import ShotGridTaskShotProductionModel
 from module_shot_grid.entity.vo.version_submission_vo import _normalize_generation_prompt
@@ -127,7 +129,7 @@ class ShotGridVersionListQueryModel(ShotGridPageQueryModel):
     order_by_column: Literal['versionNo', 'submittedTime'] = Field(default='versionNo')
 
 
-class ShotGridMineVersionQueryModel(ShotGridVersionListQueryModel):
+class ShotGridMineVersionQueryModel(ShotGridVersionListQueryModel, ShotGridProductionQueryModel):
     """本人提交记录筛选，日期范围包含首尾两天。"""
 
     project_id: int | None = Field(default=None, gt=0, le=SQL_BIGINT_MAX)
@@ -168,6 +170,7 @@ class ShotGridVersionFileModel(ShotGridApiModel):
     file_size: int
     url: str
     nas_path: str | None = None
+    folder_relative_path: str | None = None
 
 
 class ShotGridVersionCandidateModel(ShotGridApiModel):
@@ -323,7 +326,7 @@ class ShotGridReviewListQueryModel(ShotGridPageQueryModel):
     order_by_column: Literal['createTime', 'reviewDate', 'shotNo'] = Field(default='createTime')
 
 
-class ShotGridMineReviewQueryModel(ShotGridReviewListQueryModel):
+class ShotGridMineReviewQueryModel(ShotGridReviewListQueryModel, ShotGridProductionQueryModel):
     """工作台审核队列筛选，不改变项目审核列表的查询契约。"""
 
     task_kind: Literal['shot_video', 'asset_image'] | None = None
@@ -580,6 +583,36 @@ class ShotGridNoteModel(ShotGridApiModel):
     resolved_in_version_number: str | None = None
     create_time: datetime
     update_time: datetime
+
+
+class ShotGridIssueCommentCreateModel(ShotGridApiModel):
+    content: str = Field(min_length=1, max_length=2000)
+    request_id: str = Field(min_length=1, max_length=100, pattern=r'^[A-Za-z0-9_.:-]+$')
+
+    @field_validator('content', mode='before')
+    @classmethod
+    def normalize_content(cls, value: object) -> object:
+        if not isinstance(value, str):
+            return value
+        if any(unicodedata.category(char) == 'Cc' and char not in '\n\r\t' for char in value):
+            raise ValueError('评论不能包含控制字符')
+        return value.strip()
+
+
+class ShotGridIssueCommentModel(ShotGridApiModel):
+    comment_id: int
+    project_id: int
+    note_id: int
+    author_id: int
+    author_name: str
+    content: str
+    create_time: datetime
+
+
+class ShotGridIssueCommentPageModel(ShotGridApiModel):
+    rows: list[ShotGridIssueCommentModel]
+    has_next: bool
+    next_cursor: int | None = None
 
 
 class ShotGridIssueResponseModel(ShotGridApiModel):

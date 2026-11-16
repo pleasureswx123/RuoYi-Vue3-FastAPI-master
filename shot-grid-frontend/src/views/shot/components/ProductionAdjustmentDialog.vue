@@ -8,6 +8,7 @@ import { getShotDetail } from '@/api/shot-grid/shots'
 import { adjustShotProduction } from '@/api/shot-grid/tasks'
 import { getTaskDetail } from '@/api/shot-grid/tasks'
 import ReviewReferenceInput from '@/components/review/ReviewReferenceInput.vue'
+import ReviewReferenceFiles from '@/components/review/ReviewReferenceFiles.vue'
 import { useReviewReferenceAttachments } from '@/composables/useReviewReferenceAttachments'
 import ProjectDrawer from '@/views/project/components/ProjectDrawer.vue'
 import ProductionAdjustmentField from './ProductionAdjustmentField.vue'
@@ -17,6 +18,8 @@ import { adjustmentFields, adjustmentPatch, adjustmentValues } from './productio
 const props = defineProps({ context: { type: Object, required: true } })
 const emit = defineEmits(['close'])
 const context = props.context
+const single = context.shots.length === 1
+const moreSettings = ref([])
 const copyValues = value => JSON.parse(JSON.stringify(value))
 const loading = ref(true)
 const saving = ref(false)
@@ -27,7 +30,18 @@ const formRef = ref(null)
 const rows = ref([])
 const form = reactive({ keys: [], mode: 'common', common: {}, individual: {}, reason: '', referenceDescription: '', referenceFileIds: [] })
 const editableFields = adjustmentFields.filter(field => context.permissions.includes('*:*:*') || context.permissions.includes(field.permission))
+const initialFields = (context.initialFields || []).filter(key => editableFields.some(field => field.key === key))
 const { referenceAttachments, addReferenceFile, removeReferenceFile, resetReferenceAttachments, uploadPendingReferenceFiles } = useReviewReferenceAttachments({ canEdit: () => !disabled.value, isCurrent: () => current() })
+const commonKeys = ['description', 'assigneeUserId', 'durationMs', 'expectedRange']
+const commonFields = commonKeys.map(key => editableFields.find(field => field.key === key)).filter(Boolean)
+const moreFields = editableFields.filter(field => !commonKeys.includes(field.key) && field.type !== 'references')
+const canEditReferences = editableFields.some(field => field.type === 'references')
+const comparable = value => JSON.stringify(typeof value === 'string' ? value.trim() : value)
+const activeKeys = computed(() => single ? editableFields.filter(field => {
+  if (!rows.value.length) return false
+  if (field.type === 'references') return referenceAttachments.value.length || form.referenceDescription.trim()
+  return comparable(form.common[field.key]) !== comparable(rows.value[0].before[field.key])
+}).map(field => field.key) : form.keys)
 const fieldSections = computed(() => [
   { title: '任务安排', layout: 'schedule', keys: ['expectedRange', 'assigneeUserId', 'priority'] },
   { title: '制作内容', layout: 'content', keys: ['description', 'durationMs'] },
@@ -37,19 +51,20 @@ const fieldSections = computed(() => [
 ].map(section => ({ ...section, fields: section.keys.map(key => editableFields.find(field => field.key === key)).filter(Boolean) })).filter(section => section.fields.length))
 async function confirmClose() {
   if (saving.value) return false
-  if (!form.keys.length && !form.reason && !referenceAttachments.value.length) return true
+  if (!activeKeys.value.length && !form.reason && !referenceAttachments.value.length) return true
   try {
     await ElMessageBox.confirm('本次修改尚未保存，关闭后将丢失。', '放弃未保存的修改？', { confirmButtonText: '放弃修改', cancelButtonText: '继续编辑', type: 'warning' })
     return !saving.value
   } catch { return false }
 }
-async function requestClose() { if (await confirmClose()) emit('close') }
-const selectedFields = computed(() => editableFields.filter(field => form.keys.includes(field.key)))
+async function requestClose() { if (await confirmClose()) emit('close', { attempted }) }
+const selectedFields = computed(() => editableFields.filter(field => activeKeys.value.includes(field.key)))
 const disabled = computed(() => loading.value || saving.value || navigating.value || Boolean(error.value))
 const groups = computed(() => form.mode === 'common' ? [{ key: 'common', label: '统一设置（应用于全部所选镜头）', values: form.common, path: ['common'] }]
   : rows.value.map(row => ({ key: row.shotId, label: row.label, values: form.individual[row.shotId], path: ['individual', String(row.shotId)] })))
 const rules = {
   referenceFileIds: [{ validator: (_rule, _value, done) => {
+    if (single && !activeKeys.value.includes('referenceFileIds')) return done()
     if (!referenceAttachments.value.length && !form.referenceDescription.trim()) return done(new Error('请填写参考说明或添加参考资料，或返回取消勾选参考内容'))
     if (rows.value.some(row => [row.before.referenceDescription, form.referenceDescription.trim()].filter(Boolean).join('\n\n').length > 10000)) return done(new Error('追加后有任务的参考说明超过 10000 字，请缩短说明'))
     if (rows.value.some(row => row.before.referenceFileIds.length + referenceAttachments.value.length > 5)) return done(new Error('追加后有任务超过 5 个参考文件，请减少上传数量'))
@@ -60,17 +75,19 @@ const rules = {
 }
 const controller = new AbortController()
 let disposed = false
+let attempted = false
 onBeforeUnmount(() => { disposed = true; controller.abort() })
 const current = () => !disposed && context.validateContext()
 const fieldRuleCache = new Map()
 function fieldRules(field) {
   if (fieldRuleCache.has(field.key)) return fieldRuleCache.get(field.key)
   const rules = [{ validator: (_rule, value, done) => {
+    if (single && !activeKeys.value.includes(field.key)) return done()
     let message = ''
     if (field.type === 'range' && (!Array.isArray(value) || value.length !== 2 || value.some(item => !item || !Number.isFinite(new Date(item).getTime())) || new Date(value[1]) <= new Date(value[0]))) message = '请选择完整且结束晚于开始的计划时间'
     if (field.type === 'member' && !context.members.some(member => member.userId === value)) message = '请选择有效制作人'
     if (field.type === 'priority' && !['low', 'normal', 'high', 'urgent'].includes(value)) message = '请选择优先级'
-    if (field.type === 'number' && (!Number.isSafeInteger(value) || value < 0)) message = '时长必须为非负整数毫秒'
+    if (field.type === 'number' && (!Number.isSafeInteger(value) || value < 0)) message = '请填写有效时长，最多保留三位小数（秒）'
     if (field.max && String(value || '').length > field.max) message = `最多 ${field.max} 字`
     done(message ? new Error(message) : undefined)
   }, trigger: 'change' }]
@@ -94,6 +111,8 @@ onMounted(async () => {
       form.individual[shot.shotId] = copyValues(values)
     }
     if (rows.value.length) form.common = copyValues(rows.value[0].before)
+    form.keys = [...initialFields]
+    if (single && initialFields.some(key => moreFields.some(field => field.key === key))) moreSettings.value = ['more']
   } catch (failure) { if (!disposed) error.value = failure?.message || '加载失败，请重新打开' }
   finally { if (!disposed) loading.value = false }
 })
@@ -101,7 +120,7 @@ function reset() {
   if (disabled.value) return
   formRef.value?.resetFields()
   resetReferenceAttachments()
-  form.keys = []; form.reason = ''; form.referenceDescription = ''; form.mode = 'common'
+  form.keys = [...initialFields]; form.reason = ''; form.referenceDescription = ''; form.mode = 'common'
   form.common = copyValues({ ...rows.value[0].before, expectedRange: [...rows.value[0].before.expectedRange] })
   for (const row of rows.value) form.individual[row.shotId] = { ...row.before, expectedRange: [...row.before.expectedRange] }
   formRef.value?.clearValidate()
@@ -139,20 +158,24 @@ const preview = computed(() => rows.value.map(row => ({
   }))
 })))
 async function submit() {
-  if (disabled.value || step.value !== 2) return
+  if (disabled.value || (!single && step.value !== 2)) return
   if (!current()) { error.value = '项目或任务已变化，请关闭并刷新'; return }
   saving.value = true
   let requestSent = false
   try {
-    const referenceIds = form.keys.includes('referenceFileIds') ? await uploadPendingReferenceFiles() : null
+    if (single && !await formRef.value?.validate().catch(() => false)) return
+    if (!activeKeys.value.length) { ElMessage.info('尚未修改内容'); return }
+    const keys = [...activeKeys.value]
+    const referenceIds = keys.includes('referenceFileIds') ? await uploadPendingReferenceFiles() : null
     if (!current()) return
     requestSent = true
+    attempted = true
     await adjustShotProduction(context.projectId, {
       reason: form.reason.trim(),
-      items: rows.value.map(row => ({ shotId: row.shotId, taskId: row.taskId, lockVersion: row.taskLockVersion, shotLockVersion: row.lockVersion, changes: { ...adjustmentPatch(form.keys.filter(key => key !== 'referenceFileIds'), valuesFor(row)), ...(referenceIds?.length ? { referenceFileIds: referenceIds } : {}), ...(form.keys.includes('referenceFileIds') && form.referenceDescription.trim() ? { referenceDescription: form.referenceDescription.trim() } : {}) } }))
+      items: rows.value.map(row => ({ shotId: row.shotId, taskId: row.taskId, lockVersion: row.taskLockVersion, shotLockVersion: row.lockVersion, changes: { ...adjustmentPatch(keys.filter(key => key !== 'referenceFileIds'), valuesFor(row)), ...(referenceIds?.length ? { referenceFileIds: referenceIds } : {}), ...(keys.includes('referenceFileIds') && form.referenceDescription.trim() ? { referenceDescription: form.referenceDescription.trim() } : {}) } }))
     })
     if (!current()) return
-    ElMessage.success(`已调整 ${rows.value.length} 个制作任务`)
+    ElMessage.success(single ? '修改已保存' : `已调整 ${rows.value.length} 个制作任务`)
     emit('close', { saved: true })
   } catch (failure) {
     if (!current()) return
@@ -164,11 +187,38 @@ async function submit() {
 }
 </script>
 <template>
-  <ProjectDrawer :title="context.shots.length > 1 ? '批量编辑制作任务' : `编辑制作任务 · ${[context.shots[0]?.episodeCode, context.shots[0]?.sceneCode, context.shots[0]?.shotCode].filter(Boolean).join(' / ')}`" :description="`已选 ${context.shots.length} 个制作中镜头 · 保存后仍保持制作中`" wide :busy="saving" :close-guard="confirmClose" @close="emit('close')">
-    <el-steps :active="step === 2 ? 1 : 0" finish-status="success" simple><el-step title="选择并编辑" /><el-step title="核对保存" /></el-steps>
+  <ProjectDrawer :title="context.shots.length > 1 ? '批量编辑制作任务' : `编辑制作任务 · ${[context.shots[0]?.episodeCode, context.shots[0]?.sceneCode, context.shots[0]?.shotCode].filter(Boolean).join(' / ')}`" :description="single ? '' : `已选 ${context.shots.length} 个制作中镜头 · 保存后仍保持制作中`" :wide="!single" :busy="saving" :close-guard="confirmClose" @close="emit('close', { attempted })">
+    <el-steps v-if="!single" :active="step === 2 ? 1 : 0" finish-status="success" simple><el-step title="选择并编辑" /><el-step title="核对保存" /></el-steps>
     <el-alert v-if="error" :title="error" type="error" :closable="false" class="adjust-gap" />
     <el-form v-if="!loading && !error" ref="formRef" :model="form" :rules="rules" :disabled="disabled" label-position="top" class="adjust-form" size="default">
-      <template v-if="step === 0">
+      <template v-if="single">
+        <div class="adjust-simple-grid">
+          <el-form-item v-for="field in commonFields" :key="field.key" :label="field.key === 'durationMs' ? '时长（秒）' : field.label" :prop="`common.${field.key}`" :rules="fieldRules(field)" :class="{ 'is-wide': ['description', 'expectedRange'].includes(field.key) }">
+            <ProductionAdjustmentField v-model="form.common[field.key]" :field="field" :members="context.members" seconds />
+          </el-form-item>
+        </div>
+        <el-form-item v-if="canEditReferences" label="制作参考" prop="referenceFileIds">
+          <div class="adjust-simple-references">
+            <div v-if="rows[0].before.referenceDescription || rows[0].before.referenceFileIds.length" class="adjust-existing-reference">
+              <p v-if="rows[0].before.referenceDescription">{{ rows[0].before.referenceDescription }}</p>
+              <ReviewReferenceFiles :files="rows[0].before.referenceFileIds" compact />
+            </div>
+            <el-input v-model="form.referenceDescription" type="textarea" :rows="2" maxlength="10000" show-word-limit aria-label="参考说明" placeholder="补充制作参考，已有资料会保留" />
+            <ReviewReferenceInput :files="referenceAttachments" :disabled="disabled" purpose="保存" drop-paste @add="addReferenceFile" @remove="removeReferenceFile" />
+          </div>
+        </el-form-item>
+        <el-collapse v-model="moreSettings" class="adjust-more">
+          <el-collapse-item title="更多信息" name="more">
+            <div class="adjust-simple-grid">
+              <el-form-item v-for="field in moreFields" :key="field.key" :label="field.label" :prop="`common.${field.key}`" :rules="fieldRules(field)">
+                <ProductionAdjustmentField v-model="form.common[field.key]" :field="field" :members="context.members" />
+              </el-form-item>
+            </div>
+            <el-form-item label="调整原因（选填）" prop="reason"><el-input v-model="form.reason" maxlength="500" placeholder="需要记录时填写" /></el-form-item>
+          </el-collapse-item>
+        </el-collapse>
+      </template>
+      <template v-else-if="step === 0">
         <el-alert title="勾选要修改的内容，即可在下方编辑；未勾选的内容保持原值。" type="info" :closable="false" />
         <el-form-item v-if="rows.length > 1" label="填写方式" prop="mode" class="adjust-gap"><el-radio-group v-model="form.mode"><el-radio value="common">统一填写</el-radio><el-radio value="individual">逐镜头填写</el-radio></el-radio-group></el-form-item>
         <p v-if="rows.length > 1 && form.mode === 'common'" class="adjust-references__hint">统一填写以第一个镜头为初始值，勾选字段的新值会应用于全部所选镜头。</p>
@@ -218,10 +268,18 @@ async function submit() {
       </template>
     </el-form>
     <p v-if="loading">正在核对制作任务…</p>
-    <template #footer><footer class="adjust-actions"><el-button :disabled="saving" @click="requestClose">关闭</el-button><template v-if="!loading && !error"><el-button :icon="RefreshLeft" :disabled="disabled" @click="reset">重置</el-button><el-button v-if="step > 0" :disabled="disabled" @click="previous">返回编辑</el-button><el-button v-if="step < 2" type="primary" :disabled="disabled" @click="advance">下一步：核对修改</el-button><el-button v-else type="primary" :disabled="disabled" :loading="saving" @click="submit">确认保存（{{ rows.length }}）</el-button></template></footer></template>
+    <template #footer><footer class="adjust-actions"><el-button :disabled="saving" @click="requestClose">{{ single ? '取消' : '关闭' }}</el-button><template v-if="!loading && !error"><el-button v-if="single" type="primary" :disabled="disabled || !activeKeys.length" :loading="saving" @click="submit">保存修改</el-button><template v-else><el-button :icon="RefreshLeft" :disabled="disabled" @click="reset">重置</el-button><el-button v-if="step > 0" :disabled="disabled" @click="previous">返回编辑</el-button><el-button v-if="step < 2" type="primary" :disabled="disabled" @click="advance">下一步：核对修改</el-button><el-button v-else type="primary" :disabled="disabled" :loading="saving" @click="submit">应用到 {{ rows.length }} 个镜头</el-button></template></template></footer></template>
   </ProjectDrawer>
 </template>
 <style scoped>
+.adjust-simple-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 16px}
+.adjust-simple-grid>.is-wide{grid-column:1/-1}
+.adjust-simple-grid :deep(.el-input-number){width:100%}
+.adjust-simple-references{display:grid;gap:10px;width:100%;min-width:0}
+.adjust-existing-reference{max-height:160px;overflow:auto;padding:10px;background:var(--sg-surface-soft);border-radius:6px}
+.adjust-existing-reference p{margin:0 0 8px;white-space:pre-wrap;overflow-wrap:anywhere}
+.adjust-more :deep(.el-collapse-item__content){padding-top:12px;padding-bottom:0}
+@media(max-width:540px){.adjust-simple-grid{grid-template-columns:minmax(0,1fr)}}
 .adjust-preview-description{margin:0 0 8px;white-space:pre-wrap;overflow-wrap:anywhere}
 .adjust-sections{display:grid;gap:16px}
 .adjust-section{--el-card-padding:16px;border-radius:10px;border-color:var(--sg-border)}

@@ -157,6 +157,7 @@ async function open(assets, ids = [], action = '') {
       }
     }
     loading.value = false
+    if (ids.length && action && rows.value.some(row => !eligible(row, action))) throw new Error('部分所选分项的状态或权限已变化，请返回列表重新选择；本次未执行任何修改')
     // 从分项行打开时只预选该分项，父资产批量入口要求用户明确勾选。
     await nextTick()
     if (ids.length && rows.value.length !== new Set(ids).size) throw new Error('部分所选分项已不可见，请关闭后刷新列表')
@@ -233,7 +234,7 @@ async function submit() {
         row.result = '已保存'
       }
     }
-    if (current(token)) ElMessage.success('所选分项已保存，任务不会自动开工')
+    if (current(token)) ElMessage.success(mode.value === 'assign' ? '制作人已分配，目录就绪后即可提交成果' : '计划时间已保存，制作状态不变')
   } catch (failure) {
     if (current(token)) {
       const status = Number(failure?.httpStatus || failure?.status)
@@ -287,14 +288,14 @@ defineExpose({ open })
       <el-alert title="可统一填写后应用，也可逐项调整；确认保存后生效。" type="info" :closable="false" />
       <div class="batch-actions">
         <el-form-item v-if="mode === 'assign'" class="batch-actions__assignee" label="统一制作人（选填）" prop="commonAssignee">
-          <el-select v-model="form.commonAssignee" placeholder="选择制作人"><el-option v-for="member in members" :key="member.userId" :value="String(member.userId)" :label="memberLabel(member)" /></el-select>
+          <el-select filterable v-model="form.commonAssignee" placeholder="选择制作人"><el-option v-for="member in members" :key="member.userId" :value="String(member.userId)" :label="memberLabel(member)" /></el-select>
         </el-form-item>
         <el-form-item v-else class="batch-actions__schedule" label="统一计划时间（选填）" prop="commonRange">
           <ScheduleDateRangePicker v-model="form.commonRange" type="datetimerange" value-format="YYYY-MM-DDTHH:mm:ss" />
         </el-form-item>
         <el-button class="batch-actions__apply" type="primary" plain :disabled="blocked" @click="applyCommon">应用到所选分项</el-button>
       </div>
-      <el-table class="batch-table" :key="mode" :data="form.rows" row-key="assetItemId" max-height="500"><el-table-column prop="displayLabel" label="资产 / 制作分项" min-width="200" /><el-table-column :label="mode === 'assign' ? '制作人' : '计划起止时间'" min-width="380"><template #default="{ row, $index }"><el-form-item v-if="mode === 'assign'" :prop="`rows.${$index}.assigneeUserId`" :rules="memberRules" ><el-select v-model="row.assigneeUserId" style="width: 100%"><el-option v-for="member in members" :key="member.userId" :value="String(member.userId)" :label="memberLabel(member)" /></el-select></el-form-item><el-form-item v-else :prop="`rows.${$index}.range`" :rules="rangeRules"><ScheduleDateRangePicker v-model="row.range" type="datetimerange" value-format="YYYY-MM-DDTHH:mm:ss" /></el-form-item></template></el-table-column><el-table-column prop="result" label="保存结果" min-width="200" /></el-table>
+      <el-table class="batch-table" :key="mode" :data="form.rows" row-key="assetItemId" max-height="500"><el-table-column prop="displayLabel" label="资产 / 制作分项" min-width="200" /><el-table-column :label="mode === 'assign' ? '制作人' : '计划起止时间'" min-width="380"><template #default="{ row, $index }"><el-form-item v-if="mode === 'assign'" :prop="`rows.${$index}.assigneeUserId`" :rules="memberRules" ><el-select filterable v-model="row.assigneeUserId" style="width: 100%"><el-option v-for="member in members" :key="member.userId" :value="String(member.userId)" :label="memberLabel(member)" /></el-select></el-form-item><el-form-item v-else :prop="`rows.${$index}.range`" :rules="rangeRules"><ScheduleDateRangePicker v-model="row.range" type="datetimerange" value-format="YYYY-MM-DDTHH:mm:ss" /></el-form-item></template></el-table-column><el-table-column prop="result" label="保存结果" min-width="200" /></el-table>
       <el-form-item v-if="mode === 'schedule'" label="排期原因（选填）" prop="reason" :rules="[{ max: 500, message: '最多 500 字' }]"><el-input v-model="form.reason" maxlength="500" /></el-form-item>
     </el-form>
     <template #footer><div class="workspace-footer"><div><el-text>已选 {{ mode ? form.rows.length : selected.length }} 个分项</el-text><el-text v-if="selected.length > 100" type="danger" size="small">每次最多操作 100 个分项</el-text><el-text v-else type="info" size="small">{{ attempted ? '请核对逐项保存结果' : '仅处理所选分项' }}</el-text></div><div class="workspace-footer__buttons"><el-button :disabled="busy || childOpen" @click="close">{{ attempted ? '完成' : '取消' }}</el-button><el-button v-if="mode && !attempted" :disabled="busy" @click="backToSelection">返回选择</el-button><el-button v-if="!mode" type="primary" :disabled="!entryAction || !available(entryAction)" @click="begin(entryAction)">{{ activeAction ? `下一步：${activeAction.next}` : '请选择操作' }}</el-button><el-button v-else-if="!attempted" type="primary" :disabled="blocked || !form.rows.length" :loading="busy" @click="submit">确认保存 {{ form.rows.length }} 个分项</el-button></div></div></template>

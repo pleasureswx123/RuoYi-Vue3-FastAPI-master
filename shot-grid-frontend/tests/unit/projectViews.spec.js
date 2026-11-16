@@ -212,7 +212,7 @@ describe('项目管理页面', () => {
     expect(filterForm.props('model')).toMatchObject({
       keyword: '',
       projectStatus: '',
-      scope: '',
+      scope: 'all',
       orderByColumn: 'createTime',
       isAsc: 'descending',
       pageNum: 1,

@@ -13,6 +13,7 @@ from utils.upload_util import FilePathUtil
 
 HASH_CHUNK_SIZE = 1024 * 1024
 TARGET_RELATIVE_PARTS = 4
+VERSIONED_RELATIVE_PARTS = 6
 ISO_BMFF_TYPE_OFFSET = 4
 ISO_BMFF_HEADER_END = 64
 ISO_BMFF_BRAND_SIZE = 4
@@ -86,6 +87,7 @@ class _VersionPublishPlan:
     expected_file_size: int
     mapped_mount_root: Path | None
     mount_resolver: ShotGridNasMountResolver
+    directory_root: Path | None = None
 
 
 class VersionPublishPathAdapterError(Exception):
@@ -235,6 +237,7 @@ class ShotGridVersionPublishPathAdapter(ShotGridStoragePathAdapter):
             expected_file_size=context.source_file_size,
             mapped_mount_root=mapped_mount_root,
             mount_resolver=self.nas_mount_resolver,
+            directory_root=recomposed_project if len(target_parts) == VERSIONED_RELATIVE_PARTS else None,
         )
 
     @classmethod
@@ -244,7 +247,9 @@ class ShotGridVersionPublishPathAdapter(ShotGridStoragePathAdapter):
         target_parts: tuple[str, ...],
         temporary_parts: tuple[str, ...],
     ) -> None:
-        if len(target_parts) != TARGET_RELATIVE_PARTS or len(temporary_parts) != TARGET_RELATIVE_PARTS:
+        if len(target_parts) not in {TARGET_RELATIVE_PARTS, VERSIONED_RELATIVE_PARTS} or len(temporary_parts) != len(
+            target_parts
+        ):
             raise cls._invalid_path_error()
         if target_parts[-1] != context.business_file_name or target_parts[:-1] != temporary_parts[:-1]:
             raise cls._invalid_path_error()
@@ -255,20 +260,43 @@ class ShotGridVersionPublishPathAdapter(ShotGridStoragePathAdapter):
         )
         if not temporary_parts[-1].startswith(temp_prefix) or not temporary_parts[-1].endswith('.part'):
             raise cls._invalid_path_error()
-        folded = tuple(part.casefold() for part in target_parts)
-        if context.task_kind == 'shot_video':
-            valid = (
-                folded[0] == 'video'
-                and re.fullmatch(r'ep\d{2,}', folded[1]) is not None
-                # 新目录使用四位数字镜头号；已有 S 前缀的冻结快照仍可读取和重试。
-                and re.fullmatch(r'[0-9]{3,}_(?:[0-9]{4,}|s[0-9]{3,})', folded[2]) is not None
-            )
-        elif context.task_kind == 'asset_image':
-            valid = folded[0] == 'asset' and folded[1] in {'character', 'environment', 'prop'}
-        else:
-            valid = False
-        if not valid:
+        if not cls.valid_business_path(context.task_kind, target_parts):
             raise cls._invalid_path_error()
+
+    @staticmethod
+    def valid_business_path(task_kind: str, parts: tuple[str, ...]) -> bool:
+        folded = tuple(part.casefold() for part in parts)
+        if len(parts) == TARGET_RELATIVE_PARTS:
+            if task_kind == 'shot_video':
+                return bool(
+                    folded[0] == 'video'
+                    and re.fullmatch(r'ep\d{2,}', folded[1])
+                    and re.fullmatch(r'[0-9]{3,}_(?:[0-9]{4,}|s[0-9]{3,})', folded[2])
+                )
+            return (
+                task_kind == 'asset_image'
+                and folded[0] == 'asset'
+                and folded[1] in {'character', 'environment', 'prop'}
+            )
+        if len(parts) != VERSIONED_RELATIVE_PARTS or not re.fullmatch(r'V[0-9]{3,}', parts[-2]):
+            return False
+        # 版本文件夹必须与不可变业务文件名的版本一致。
+        match = re.search(r'_(V[0-9]{3,})_[0-9]+\.[a-z0-9]+$', parts[-1])
+        if not match or match.group(1) != parts[-2]:
+            return False
+        if task_kind == 'shot_video':
+            return bool(
+                folded[0] == 'shot'
+                and re.fullmatch(r'ep\d{2,}', folded[1])
+                and re.fullmatch(r'[0-9]{3,}', parts[2])
+                and re.fullmatch(r'[0-9]{4,}', parts[3])
+            )
+        return bool(
+            task_kind == 'asset_image'
+            and folded[0] == 'asset'
+            and folded[1] in {'character', 'environment', 'prop'}
+            and re.fullmatch(r'.+__[1-9][0-9]*', parts[3])
+        )
 
     @classmethod
     def _publish_sync(cls, plan: _VersionPublishPlan) -> VersionPublishResult:
@@ -321,6 +349,16 @@ class ShotGridVersionPublishPathAdapter(ShotGridStoragePathAdapter):
 
     @classmethod
     def _validate_filesystem_plan(cls, plan: _VersionPublishPlan) -> None:
+        if plan.directory_root is not None:
+            # 只允许新布局在已存在的项目根内逐层准备目录；每层前后拒绝链接和越界。
+            cls._reject_reparse_chain(plan.containment_root, plan.directory_root)
+            current = plan.directory_root
+            for part in plan.target_path.parent.relative_to(current).parts:
+                cls._reject_reparse_chain(plan.containment_root, current)
+                current = current / part
+                current.mkdir(exist_ok=True)
+                cls._reject_reparse_chain(plan.containment_root, current)
+                cls._assert_resolved_containment(plan.containment_root, current)
         if not plan.containment_root.is_dir() or not plan.target_path.parent.is_dir():
             raise VersionPublishPathAdapterError(
                 error_key='SG_STORAGE_ROOT_UNAVAILABLE',

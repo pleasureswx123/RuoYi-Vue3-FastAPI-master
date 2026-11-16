@@ -3,6 +3,7 @@ import { mount } from '@vue/test-utils'
 import { describe, expect, it, vi } from 'vitest'
 
 import VersionWorkspace from '@/components/version/VersionWorkspace.vue'
+import { ElMessageBox } from 'element-plus'
 import { useSessionStore } from '@/store/modules/session'
 
 const historyStub = {
@@ -13,6 +14,7 @@ const historyStub = {
 
 const submissionStub = {
   name: 'VersionSubmissionPanel',
+  data: () => ({ hasUnsavedChanges: false, isBusy: false }),
   template: '<div data-testid="version-submission" />'
 }
 
@@ -47,6 +49,39 @@ function mountWorkspace({
 }
 
 describe('版本工作区提交入口', () => {
+  it('反馈快捷定位等待版本加载完成，使用对应问题且只消费一次', async () => {
+    const wrapper = mountWorkspace({ taskStatus: 'revision', permissions: ['shotgrid:version:query', 'shotgrid:version:list'] })
+    const issue = { issueId: 7, originVersionId: 2 }
+    await wrapper.setProps({ openIssues: [issue], compact: true })
+    const history = wrapper.findComponent(historyStub)
+    const focus = vi.spyOn(history.vm, 'focusIssue')
+    wrapper.vm.focusFeedback()
+    expect(focus).not.toHaveBeenCalled()
+    history.vm.$emit('version-selected', { versionId: 2 }, { taskId: 31, operationGeneration: 0 })
+    await wrapper.vm.$nextTick()
+    expect(focus).toHaveBeenCalledWith(issue)
+    history.vm.$emit('version-selected', { versionId: 3 }, { taskId: 31, operationGeneration: 0 })
+    expect(focus).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
+  })
+  it('制作端点击提交切换面板且保留草稿实例，离开可取消，忙碌时禁止关闭', async () => {
+    const wrapper = mountWorkspace({ taskStatus: 'in_progress', allowedActions: ['version.add'], permissions: ['shotgrid:version:add'] })
+    await wrapper.setProps({ compact: true })
+    const form = wrapper.findComponent(submissionStub)
+    expect(form.isVisible()).toBe(false)
+    await wrapper.vm.focusSubmission()
+    expect(form.element.style.display).not.toBe('none')
+    form.vm.hasUnsavedChanges = true
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockRejectedValueOnce('cancel')
+    expect(await wrapper.vm.canLeave()).toBe(false)
+    expect(wrapper.findComponent(submissionStub).vm).toBe(form.vm)
+    confirm.mockResolvedValueOnce('confirm')
+    expect(await wrapper.vm.canLeave()).toBe(true)
+    form.vm.isBusy = true
+    expect(await wrapper.vm.canLeave()).toBe(false)
+    expect(confirm).toHaveBeenCalledTimes(2)
+    wrapper.unmount()
+  })
   it.each([
     ['shot_video', 'not_started'],
     ['shot_video', 'preparing'],
@@ -78,8 +113,16 @@ describe('版本工作区提交入口', () => {
     wrapper.unmount()
   })
 
-  it('追加表单仅在最新待审核版本显示，切换历史时隐藏且保留实例', async () => {
+  it('镜头待审核无需选择历史版本即可继续提交', async () => {
     const wrapper = mountWorkspace({ taskStatus: 'pending_review', allowedActions: ['version.add'], permissions: ['shotgrid:version:add'] })
+    await wrapper.vm.$nextTick()
+    expect(wrapper.findComponent(submissionStub).isVisible()).toBe(true)
+    expect(wrapper.text()).toContain('继续提交新版本')
+    await wrapper.vm.focusSubmission()
+    wrapper.unmount()
+  })
+  it('资产追加表单仅在最新待审核版本显示，切换历史时隐藏且保留实例', async () => {
+    const wrapper = mountWorkspace({ taskKind: 'asset_image', taskStatus: 'pending_review', allowedActions: ['version.add'], permissions: ['shotgrid:version:add'] })
     await wrapper.setProps({ latestVersionNo: 2 })
     const history = wrapper.findComponent(historyStub)
     const submission = wrapper.findComponent(submissionStub)

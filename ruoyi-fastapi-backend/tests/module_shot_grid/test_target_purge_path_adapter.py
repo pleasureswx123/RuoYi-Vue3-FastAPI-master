@@ -37,7 +37,9 @@ async def test_target_purge_then_same_path_and_filename_recreated(tmp_path: Path
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('unsafe', ['ASSET/Prop', 'ASSET/Prop/../keep', 'VIDEO', '/ASSET/Prop/fixture'])
+@pytest.mark.parametrize(
+    'unsafe', ['ASSET/Prop', 'ASSET/Prop/../keep', 'VIDEO', 'SHOT/EP001/001', '/ASSET/Prop/fixture']
+)
 async def test_unsafe_manifest_never_deletes_neighbor(tmp_path: Path, unsafe: str) -> None:
 
     project = tmp_path / 'AI影视短片' / '测试项目'
@@ -57,3 +59,24 @@ async def test_unsafe_manifest_never_deletes_neighbor(tmp_path: Path, unsafe: st
     with pytest.raises(ProjectPurgePathAdapterError):
         await ShotGridTargetPurgePathAdapter(allow_local_root=True).purge(context)
     assert marker.read_bytes() == b'keep'
+
+
+@pytest.mark.asyncio
+async def test_new_shot_cleanup_keeps_other_shots_and_scenes(tmp_path: Path) -> None:
+    project = tmp_path / '项目'
+    for target in ('0001', '0002'):
+        folder = project / 'SHOT' / 'EP001' / '001' / target / 'V001'
+        folder.mkdir(parents=True)
+        (folder / 'file.mp4').write_bytes(b'keep')
+    context = TargetPurgePathContext(
+        purge_id=1,
+        project_id=1,
+        root_path_snapshot=str(tmp_path),
+        project_relative_path='项目',
+        project_path_snapshot=str(project),
+        file_manifest=[],
+        nas_manifest=['SHOT/EP001/001/0001'],
+    )
+    await ShotGridTargetPurgePathAdapter(allow_local_root=True).purge(context)
+    assert not (project / 'SHOT' / 'EP001' / '001' / '0001').exists()
+    assert (project / 'SHOT' / 'EP001' / '001' / '0002' / 'V001' / 'file.mp4').read_bytes() == b'keep'

@@ -1,3 +1,5 @@
+import { getProjectDetail } from '@/api/shot-grid/projects'
+vi.mock('@/api/shot-grid/projects', () => ({ getProjectDetail: vi.fn().mockResolvedValue({ data: { projectId: 8, projectName: '罗刹夫人', projectCode: 'LCFR' } }), assertPositiveId: value => Number(value) }))
 import {
   ElAlert,
   ElButton,
@@ -26,7 +28,7 @@ import { createMemoryHistory, createRouter } from 'vue-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { getMineTaskPage, getTaskDetail, startTask, updateTask } from '@/api/shot-grid/tasks'
-import { getMineReviewListPage, getMineReviewProjects, getMineReviewProducers, getRecentMineVersions } from '@/api/shot-grid/reviews'
+import { getMineReviewListPage, getMineReviewProducers, getRecentMineVersions, getVersionReviewContext } from '@/api/shot-grid/reviews'
 import { createApiError } from '@/utils/apiError'
 import { useSessionStore } from '@/store/modules/session'
 import { buttonLabel, expectedTaskTimes, setElSelectValue } from '../helpers/elementPlus'
@@ -36,6 +38,10 @@ import ScheduleEditDialog from '@/views/schedule/components/ScheduleEditDialog.v
 import { updateTaskSchedule } from '@/api/shot-grid/schedules'
 import TaskStartDialog from '@/views/task/components/TaskStartDialog.vue'
 import WorkbenchView from '@/views/workbench/WorkbenchView.vue'
+vi.mock('@/views/task/components/TaskRelationsShortcut.vue', () => ({ default: { props: ['task'], emits: ['open'], template: '<button @click.stop="$emit(\'open\')">关联资产 3 项</button>' } }))
+vi.mock('@/views/asset/components/AssetRelationsPanel.vue', () => ({ __esModule: true, default: { name: 'AssetRelationsPanel', props: ['projectId', 'shotId', 'assetId'], template: '<div data-testid="task-relations" />' } }))
+const collection = vi.hoisted(() => ({ ids: null, refresh: null }))
+vi.mock('@/composables/useVersionCollectionRealtime', () => ({ useVersionCollectionRealtime: (ids, refresh) => { collection.ids = ids; collection.refresh = refresh } }))
 
 vi.mock('@/api/shot-grid/schedules', () => ({ updateTaskSchedule: vi.fn() }))
 vi.mock('@/api/shot-grid/productionHistory', () => ({ getProductionHistory: vi.fn().mockResolvedValue({ data: { lanes: [], events: [] } }) }))
@@ -47,6 +53,7 @@ vi.mock('@/api/shot-grid/tasks', () => ({
   updateTask: vi.fn()
 }))
 vi.mock('@/api/shot-grid/reviews', () => ({
+  getVersionReviewContext: vi.fn(),
   getMineReviewListPage: vi.fn(),
   getMineReviewProducers: vi.fn(),
   getMineReviewProjects: vi.fn().mockResolvedValue({ data: [{ projectId: 8, projectName: '罗刹夫人', projectCode: 'LCFR' }] }),
@@ -136,6 +143,7 @@ function installSession(permissions = []) {
   const session = useSessionStore()
   session.user = { userId: 7, userName: 'producer', nickName: '杨景锋' }
   session.permissions = permissions
+  session.selectProject(8)
   session.navigation = [
     { routeKey: 'projects', path: '/projects', orderNum: 2 },
     { routeKey: 'shots', path: '/shots', orderNum: 3 }
@@ -160,7 +168,7 @@ async function mountWorkbench(permissions = ['shotgrid:task:list', 'shotgrid:tas
   await router.isReady()
   const wrapper = mount(WorkbenchView, {
     global: { plugins: [pinia, router], components: pageComponents,
-      stubs: { RelatedDetailDrawer: { name: 'RelatedDetailDrawer', data: () => ({ target: '' }), methods: { open(target) { this.target = target } }, template: '<div data-testid="detail-drawer">{{ target }}</div>' } }
+      stubs: { RelatedDetailDrawer: { name: 'RelatedDetailDrawer', data: () => ({ target: '', section: '' }), methods: { open(target, options = {}) { this.target = target; this.section = options.section } }, template: '<div data-testid="detail-drawer" :data-section="section">{{ target }}</div>' } }
     }
   })
   await flushPromises()
@@ -197,6 +205,7 @@ async function mountDetail(path = '/tasks/31', permissions = ['shotgrid:task:que
       components: pageComponents,
       stubs: {
         VersionWorkspace: {
+          name: 'VersionWorkspace',
           props: ['taskId', 'taskKind', 'taskStatus', 'versionCount', 'productionDescription', 'allowedActions', 'hasUncommittedSubmission', 'operationGeneration'],
           template: '<div data-testid="version-workspace" :data-task-status="taskStatus" :data-allowed-actions="allowedActions.join(\',\')" :data-version-count="versionCount" :data-production-description="productionDescription" />'
         }
@@ -208,10 +217,106 @@ async function mountDetail(path = '/tasks/31', permissions = ['shotgrid:task:que
 }
 
 describe('真实任务工作台', () => {
+  it('工作台实时反馈更新保留列表、失败提示，切项目隔离旧任务', async () => {
+    getMineTaskPage.mockResolvedValue({ rows: [taskFixture(31, { taskStatus: 'pending_review', latestVersion: { versionId: 81 } })], total: 1 })
+    const { wrapper } = await mountWorkbench(['shotgrid:task:list', 'shotgrid:version:query'], ['shotgrid_creator'])
+    try {
+      expect(collection.ids.value).toEqual([81])
+      getMineTaskPage.mockRejectedValueOnce(new Error('网络异常'))
+      await collection.refresh(); await flushPromises()
+      expect(wrapper.text()).toContain('反馈自动更新暂时失败')
+      expect(wrapper.text()).toContain('EP001-001-S031')
+      getMineTaskPage.mockResolvedValueOnce({ rows: [taskFixture(31, { taskStatus: 'revision', latestVersion: { versionId: 81 } })], total: 1 })
+      await collection.refresh(); await flushPromises()
+      expect(wrapper.text()).not.toContain('反馈自动更新暂时失败')
+      expect(wrapper.text()).toContain('待修改')
+      getMineTaskPage.mockResolvedValueOnce({ rows: [], total: 0 })
+      useSessionStore().selectProject(9); await flushPromises()
+      expect(getMineTaskPage.mock.lastCall[0].projectId).toBe('9')
+      expect(wrapper.text()).not.toContain('EP001-001-S031')
+    } finally { wrapper.unmount() }
+  })
+  it('制作快捷操作按状态进入上传或审核，缺少上传权限时不提供提交', async () => {
+    getMineTaskPage.mockResolvedValue({ rows: [taskFixture(15, { taskStatus: 'in_progress' }), assetTaskFixture(16, { taskStatus: 'pending_review', latestVersion: { versionId: 2, versionNumber: 'V001' } })], total: 2 })
+    const { wrapper } = await mountWorkbench(['shotgrid:task:list', 'shotgrid:task:query', 'shotgrid:version:add', 'shotgrid:version:query'], ['shotgrid_creator'])
+    await wrapper.findAll('button').find(item => item.text() === '提交成果').trigger('click')
+    expect(wrapper.get('[data-testid="detail-drawer"]').attributes('data-section')).toBe('submit')
+    expect(wrapper.get('[data-testid="detail-drawer"]').text()).toBe('/tasks/15')
+    await wrapper.findAll('button').find(item => item.text() === '关联资产 3 项').trigger('click')
+    expect(wrapper.get('[data-testid="detail-drawer"]').attributes('data-section')).toBe('reference')
+    expect(wrapper.get('[data-testid="detail-drawer"]').text()).toBe('/tasks/15')
+    await wrapper.findAll('button').find(item => item.text() === '查看审核进度').trigger('click')
+    expect(wrapper.get('[data-testid="detail-drawer"]').attributes('data-section')).toBe('feedback')
+    expect(wrapper.get('[data-testid="detail-drawer"]').text()).toBe('/tasks/16')
+    useSessionStore().permissions = ['shotgrid:task:list', 'shotgrid:task:query']
+    await flushPromises()
+    expect(wrapper.findAll('button').some(item => item.text() === '提交成果')).toBe(false)
+    wrapper.unmount()
+  })
+  it('待审核镜头提供继续提交新版本的快捷入口', async () => {
+    getMineTaskPage.mockResolvedValue({ rows: [taskFixture(15, { taskStatus: 'pending_review' })], total: 1 })
+    const { wrapper } = await mountWorkbench(['shotgrid:task:list', 'shotgrid:task:query', 'shotgrid:version:add'], ['shotgrid_creator'])
+    await wrapper.findAll('button').find(item => item.text() === '继续提交新版本').trigger('click')
+    expect(wrapper.get('[data-testid="detail-drawer"]').attributes('data-section')).toBe('submit')
+    expect(wrapper.get('[data-testid="detail-drawer"]').text()).toBe('/tasks/15')
+    wrapper.unmount()
+  })
+  it('同一制作人默认同时看到镜头和资产，可快捷切换并打开各自任务', async () => {
+    const demoTasks = [
+      taskFixture(15, { taskName: 'EP001-001-0003 镜头视频制作', taskStatus: 'in_progress' }),
+      assetTaskFixture(16, { taskName: '演示场景 - 制作流程体验', taskStatus: 'in_progress' })
+    ]
+    getMineTaskPage.mockImplementation(params => {
+      const rows = demoTasks.filter(task => !params.taskKind || task.taskKind === params.taskKind)
+      return Promise.resolve({ rows, total: rows.length })
+    })
+    const { wrapper } = await mountWorkbench(undefined, ['shotgrid_creator'])
+    const labels = () => wrapper.findAll('.creator-task-kind').map(item => item.text())
+    const switchKind = async label => {
+      await wrapper.findAll('.creator-task-kinds .el-radio-button').find(item => item.text() === label).get('input').setValue(true)
+      await flushPromises()
+    }
+    expect(labels()).toEqual(['镜头制作', '资产制作'])
+    expect(getMineTaskPage).toHaveBeenLastCalledWith(expect.objectContaining({ taskKind: undefined, projectId: '8' }), expect.anything())
+    await wrapper.findAll('.task-title').find(item => item.text().includes('镜头视频')).trigger('click')
+    expect(wrapper.get('[data-testid="detail-drawer"]').text()).toBe('/tasks/15')
+    await switchKind('资产制作')
+    expect(labels()).toEqual(['资产制作'])
+    expect(getMineTaskPage).toHaveBeenLastCalledWith(expect.objectContaining({ taskKind: 'asset_image', pageNum: 1 }), expect.anything())
+    await wrapper.get('.task-title').trigger('click')
+    expect(wrapper.get('[data-testid="detail-drawer"]').text()).toBe('/tasks/16')
+    await switchKind('镜头制作')
+    expect(labels()).toEqual(['镜头制作'])
+    expect(getMineTaskPage).toHaveBeenLastCalledWith(expect.objectContaining({ taskKind: 'shot_video', pageNum: 1 }), expect.anything())
+    await switchKind('全部任务')
+    expect(labels()).toEqual(['镜头制作', '资产制作'])
+    await switchKind('资产制作')
+    await wrapper.findAll('button').find(item => item.text() === '重置').trigger('click')
+    await flushPromises()
+    expect(labels()).toEqual(['镜头制作', '资产制作'])
+    wrapper.unmount()
+  })
+  it('简洁制作工作台折叠高级筛选，点击行打开任务，提交记录与导航查询同步', async () => {
+    getMineTaskPage.mockResolvedValue({ rows: [taskFixture(31, { taskStatus: 'in_progress', allowedActions: ['version.add'] })], total: 1 })
+    const { wrapper, router } = await mountWorkbench(undefined, ['shotgrid_creator'])
+    expect(wrapper.find('.creator-workbench').exists()).toBe(true)
+    expect(wrapper.findAll('thead th').map(item => item.text())).toEqual(['画面', '制作任务', '制作内容', '当前状态', '制作时间', '快捷操作'])
+    const priority = wrapper.findAllComponents(ElFormItem).find(item => item.props('prop') === 'priority')
+    expect(priority.isVisible()).toBe(false)
+    await wrapper.findAll('button').find(item => item.text() === '更多筛选').trigger('click')
+    expect(priority.element.style.display).not.toBe('none')
+    await wrapper.get('.el-table__row td').trigger('click')
+    expect(wrapper.get('[data-testid="detail-drawer"]').text()).toBe('/tasks/31')
+    await router.push('/workbench?tab=submissions')
+    await flushPromises()
+    expect(wrapper.find('[aria-label="我的任务"]').isVisible()).toBe(false)
+    expect(getRecentMineVersions).toHaveBeenCalled()
+    wrapper.unmount()
+  })
   beforeEach(() => {
     getMineTaskPage.mockResolvedValue({ rows: [taskFixture()], total: 1, hasNext: false })
     getMineReviewProducers.mockResolvedValue({ data: [{ userId: 7, userName: '制作人甲', nickName: '甲' }] })
-    getMineReviewProjects.mockResolvedValue({ data: [{ projectId: 8, projectName: '罗刹夫人', projectCode: 'LCFR' }] })
+    getProjectDetail.mockResolvedValue({ data: { projectId: 8, projectName: '罗刹夫人', projectCode: 'LCFR' } })
     getMineReviewListPage.mockResolvedValue({ rows: [], total: 0 })
     getRecentMineVersions.mockResolvedValue({ rows: [], total: 0 })
   })
@@ -243,7 +348,7 @@ describe('真实任务工作台', () => {
       .mockResolvedValue({ rows: [taskFixture(31, { taskStatus: 'in_progress' })], total: 1 })
     const { wrapper } = await mountWorkbench()
     try {
-      expect(wrapper.find('.el-table__row').text()).toContain('待排期')
+      expect(wrapper.find('.el-table__row').text()).toContain('历史任务待恢复')
       const calls = getMineTaskPage.mock.calls.length
       await vi.advanceTimersByTimeAsync(5000)
       await flushPromises()
@@ -270,7 +375,7 @@ describe('真实任务工作台', () => {
       await vi.advanceTimersByTimeAsync(25000)
       await flushPromises()
       expect(getMineTaskPage).toHaveBeenCalledTimes(calls + retries)
-      expect(wrapper.find('.el-table__row').text()).toContain('待排期')
+      expect(wrapper.find('.el-table__row').text()).toContain('历史任务待恢复')
       expect(wrapper.text()).toContain('状态自动刷新已暂停')
       getMineTaskPage.mockResolvedValue({ rows: [taskFixture(31, { taskStatus: 'in_progress' })], total: 1 })
       await wrapper.find('.workbench-section-heading').findComponent(ElButton).trigger('click')
@@ -306,7 +411,7 @@ describe('真实任务工作台', () => {
     const { wrapper } = await mountWorkbench()
     try {
       const calls = getMineTaskPage.mock.calls.length
-      expect(wrapper.find('.el-table__row').text()).toContain('待排期')
+      expect(wrapper.find('.el-table__row').text()).toContain('历史任务待恢复')
       await vi.advanceTimersByTimeAsync(10000)
       expect(getMineTaskPage).toHaveBeenCalledTimes(calls + 2)
       getMineTaskPage.mockResolvedValueOnce({ rows: [assetTaskFixture(31, { taskStatus: 'preparing' })], total: 1 })
@@ -464,16 +569,16 @@ describe('真实任务工作台', () => {
     expect(wrapper.text()).toContain('管理范围内')
     const queue = wrapper.find('.review-queue')
     const form = queue.findComponent(ElForm)
-    await setElSelectValue(form.findComponent(ElSelect), 8)
+    expect(form.find('input[placeholder=全部项目]').exists()).toBe(false)
     await flushPromises()
-    expect(getMineReviewListPage).toHaveBeenLastCalledWith(expect.objectContaining({ projectId: 8, isAsc: 'ascending' }), expect.anything())
+    expect(getMineReviewListPage).toHaveBeenLastCalledWith(expect.objectContaining({ projectId: '8', isAsc: 'ascending' }), expect.anything())
     await form.find('input[placeholder="搜索镜头号、任务或审核单"]').setValue('首版')
     await form.find('input[placeholder="搜索镜头号、任务或审核单"]').trigger('keydown', { key: 'Enter' })
     await flushPromises()
-    expect(getMineReviewListPage).toHaveBeenLastCalledWith(expect.objectContaining({ projectId: 8, keyword: '首版', pageNum: 1 }), expect.anything())
+    expect(getMineReviewListPage).toHaveBeenLastCalledWith(expect.objectContaining({ projectId: '8', keyword: '首版', pageNum: 1 }), expect.anything())
     await queue.find('input[type=radio][value=asset_image]').setValue()
     await flushPromises()
-    expect(getMineReviewListPage).toHaveBeenLastCalledWith(expect.objectContaining({ taskKind: 'asset_image', projectId: 8 }), expect.anything())
+    expect(getMineReviewListPage).toHaveBeenLastCalledWith(expect.objectContaining({ taskKind: 'asset_image', projectId: '8' }), expect.anything())
     const pager = queue.findComponent(ElPagination)
     pager.vm.$emit('current-change', 2)
     await flushPromises()
@@ -489,7 +594,7 @@ describe('真实任务工作台', () => {
     await vi.waitFor(() => expect(form.text()).toContain('不能超过 200'))
     await form.findAllComponents(ElButton).find(button => button.text() === '重置').trigger('click')
     await flushPromises()
-    expect(getMineReviewListPage).toHaveBeenLastCalledWith(expect.not.objectContaining({ projectId: 8 }), expect.anything())
+    expect(getMineReviewListPage).toHaveBeenLastCalledWith(expect.objectContaining({ projectId: '8' }), expect.anything())
     await queue.findAllComponents(ElButton).find(button => button.text() === '进入审核').trigger('click')
     await flushPromises()
     expect(router.currentRoute.value.path).toBe('/workbench')
@@ -499,14 +604,14 @@ describe('真实任务工作台', () => {
     await workButton.trigger('click')
     expect(queue.find('[data-testid=detail-drawer]').text()).toBe('/versions/71')
     expect(queue.text()).toContain('制作人甲')
-    const order = form.findAllComponents(ElSelect)[1]
+    const order = form.findAllComponents(ElSelect)[0]
     await setElSelectValue(order, 'shotNo:ascending')
     await flushPromises()
     expect(getMineReviewListPage).toHaveBeenLastCalledWith(expect.objectContaining({ orderByColumn: 'shotNo' }), expect.anything())
     expect(queue.find('.el-collapse').exists()).toBe(false)
-    expect(form.findAllComponents(ElSelect)[3].isVisible()).toBe(true)
-    await setElSelectValue(form.findAllComponents(ElSelect)[3], 7)
-    await setElSelectValue(form.findAllComponents(ElSelect)[2], 'auto_single')
+    expect(form.findAllComponents(ElSelect)[2].isVisible()).toBe(true)
+    await setElSelectValue(form.findAllComponents(ElSelect)[2], 7)
+    await setElSelectValue(form.findAllComponents(ElSelect)[1], 'auto_single')
     await flushPromises()
     expect(getMineReviewListPage).toHaveBeenLastCalledWith(expect.objectContaining({ submittedBy: 7, reviewMode: 'auto_single' }), expect.anything())
 
@@ -541,7 +646,7 @@ describe('真实任务工作台', () => {
   })
 
   it('审核项目选项失败可重试，快速切换类型不会被旧请求覆盖', async () => {
-    getMineReviewProjects.mockRejectedValueOnce(new Error('选项失败'))
+    getProjectDetail.mockRejectedValueOnce(new Error('选项失败'))
     const { wrapper } = await mountWorkbench(['shotgrid:reviewList:list', 'shotgrid:version:review'])
     expect(wrapper.text()).toContain('项目选项加载失败')
     await wrapper.findAllComponents(ElButton).find(button => button.text() === '重试项目选项').trigger('click')
@@ -560,39 +665,38 @@ describe('真实任务工作台', () => {
     await flushPromises()
     expect(wrapper.text()).toContain('单版新结果')
     expect(wrapper.text()).not.toContain('迟到批量结果')
-    const order = wrapper.find('.review-filters').findAllComponents(ElSelect)[1]
+    const order = wrapper.find('.review-filters').findAllComponents(ElSelect)[0]
     await setElSelectValue(order, 'submittedTime:descending')
     await flushPromises()
     expect(getMineReviewListPage).toHaveBeenLastCalledWith(expect.objectContaining({ isAsc: 'descending', pageNum: 1 }), expect.anything())
     wrapper.unmount()
   })
 
-  it('制作人来自项目成员，切换项目清空选择并隔离旧选项，加载失败可重试', async () => {
+  it('制作人选项固定在当前项目，刷新时隔离旧响应，失败可重试', async () => {
     const { wrapper } = await mountWorkbench(['shotgrid:reviewList:list', 'shotgrid:version:review'])
-    const selects = wrapper.find('.review-filters').findAllComponents(ElSelect)
-    await setElSelectValue(selects[3], 7)
+    const producer = wrapper.find('.review-field-producer').findComponent(ElSelect)
+    await setElSelectValue(producer, 7)
     await flushPromises()
-    expect(getMineReviewListPage).toHaveBeenLastCalledWith(expect.objectContaining({ submittedBy: 7 }), expect.anything())
+    expect(getMineReviewListPage).toHaveBeenLastCalledWith(expect.objectContaining({ projectId: '8', submittedBy: 7 }), expect.anything())
     let resolveOld
     getMineReviewProducers.mockImplementationOnce(() => new Promise(resolve => { resolveOld = resolve }))
-    await setElSelectValue(selects[0], 8)
+    const drawer = wrapper.findComponent({ name: 'RelatedDetailDrawer' })
+    drawer.vm.$emit('closed')
     await flushPromises()
-    expect(getMineReviewProducers).toHaveBeenLastCalledWith({ projectId: 8 }, expect.anything())
-    expect(selects[3].props('modelValue')).toBe('')
-    expect(selects[3].props('disabled')).toBe(true)
+    expect(getMineReviewProducers).toHaveBeenLastCalledWith({ projectId: '8' }, expect.anything())
+    expect(producer.props('disabled')).toBe(true)
     const signal = getMineReviewProducers.mock.lastCall[1].signal
     getMineReviewProducers.mockRejectedValueOnce(new Error('项目成员加载失败'))
-    await setElSelectValue(selects[0], '')
+    drawer.vm.$emit('closed')
     await flushPromises()
     expect(signal.aborted).toBe(true)
-    resolveOld({ data: [{ userId: 99, userName: '旧项目成员' }] })
+    resolveOld({ data: [{ userId: 99, userName: '旧请求成员' }] })
     await flushPromises()
     expect(wrapper.text()).toContain('制作人选项加载失败')
     await wrapper.findAllComponents(ElButton).find(button => button.text() === '重试制作人选项').trigger('click')
     await flushPromises()
-    expect(wrapper.text()).not.toContain('制作人选项加载失败')
-    expect(selects[3].props('disabled')).toBe(false)
-    expect(selects[3].findAllComponents(ElOption).map(item => item.props('value'))).toEqual([7])
+    expect(producer.props('disabled')).toBe(false)
+    expect(producer.findAllComponents(ElOption).map(item => item.props('value'))).toEqual([7])
     wrapper.unmount()
   })
 
@@ -631,7 +735,7 @@ describe('真实任务工作台', () => {
     await wrapper.find('#tab-submissions').trigger('click')
     await flushPromises()
     expect(findTag(wrapper, '最终版本').props()).toMatchObject({ type: 'success', effect: 'plain', round: true })
-    expect(findTag(wrapper, '人工批量').props()).toMatchObject({ type: 'info', size: 'small', effect: 'plain' })
+    expect(findTag(wrapper, '批量审核').props()).toMatchObject({ type: 'info', size: 'small', effect: 'plain' })
     expect(wrapper.find('.review-queue').text()).toContain('3 个版本')
     expect(wrapper.find('.recent-submissions').text()).toContain('V001')
     expect(wrapper.find('.recent-submissions').text()).not.toContain('完成首版')
@@ -776,6 +880,47 @@ describe('真实任务工作台', () => {
 })
 
 describe('任务详情、状态动作与异步上下文', () => {
+  it('详情接到快捷面板选项后进入成果区并调用原提交或反馈定位', async () => {
+    getTaskDetail.mockResolvedValue({ data: taskFixture(31, { taskStatus: 'in_progress', allowedActions: ['version.add'] }) })
+    const { wrapper } = await mountDetail('/tasks/31', ['shotgrid:task:query', 'shotgrid:version:add'])
+    useSessionStore().roles = ['shotgrid_creator']
+    await flushPromises()
+    const workspace = wrapper.findComponent({ name: 'VersionWorkspace' })
+    workspace.vm.focusSubmission = vi.fn()
+    workspace.vm.focusFeedback = vi.fn()
+    await wrapper.setProps({ initialSection: 'submit' })
+    await flushPromises()
+    expect(workspace.vm.focusSubmission).toHaveBeenCalledOnce()
+    expect(wrapper.get('[data-testid="version-workspace-anchor"]').element.style.display).not.toBe('none')
+    await wrapper.setProps({ initialSection: 'feedback' })
+    await flushPromises()
+    expect(workspace.vm.focusFeedback).toHaveBeenCalledOnce()
+    await wrapper.setProps({ initialSection: 'reference' })
+    await flushPromises()
+    expect(wrapper.get('[data-testid="task-relations"]').isVisible()).toBe(true)
+    expect(wrapper.get('[data-testid="version-workspace-anchor"]').element.style.display).toBe('none')
+    wrapper.unmount()
+  })
+  it('简洁任务详情按要求参考成果分栏，提交按钮定位原版本工作区', async () => {
+    getTaskDetail.mockResolvedValue({ data: taskFixture(31, { taskStatus: 'in_progress', allowedActions: ['version.add'], referenceDescription: '本次参考资料' }) })
+    const { wrapper } = await mountDetail('/tasks/31', ['shotgrid:task:query', 'shotgrid:version:add'])
+    useSessionStore().roles = ['shotgrid_creator']
+    await flushPromises()
+    const workspace = wrapper.findComponent({ name: 'VersionWorkspace' })
+    const focus = vi.fn()
+    workspace.vm.focusSubmission = focus
+    expect(wrapper.text()).not.toContain('审计与备注')
+    expect(wrapper.get('[data-testid="version-workspace"]').isVisible()).toBe(false)
+    await wrapper.findAll('button').find(item => item.text() === '提交成果').trigger('click')
+    await flushPromises()
+    expect(focus).toHaveBeenCalledOnce()
+    expect(wrapper.get('[data-testid="version-workspace-anchor"]').element.style.display).not.toBe('none')
+    await wrapper.findAll('.creator-sections .el-radio-button').find(item => item.text() === '参考与关联').trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('本次参考资料')
+    expect(wrapper.get('[data-testid="version-workspace"]').isVisible()).toBe(false)
+    wrapper.unmount()
+  })
   beforeEach(() => {
     getTaskDetail.mockResolvedValue({ data: taskFixture() })
     startTask.mockResolvedValue({ data: taskFixture(31, {
@@ -783,6 +928,23 @@ describe('任务详情、状态动作与异步上下文', () => {
       lockVersion: 3,
       allowedActions: ['task.assign', 'version.add']
     }) })
+  })
+
+  it('镜头任务详情直接反馈：按允许动作显示，并固定当前任务最新版本', async () => {
+    const value = taskFixture(31, { taskStatus: 'pending_review', allowedActions: ['task.feedback'], latestVersion: { versionId: 81, versionNumber: 'V001' } })
+    getTaskDetail.mockResolvedValue({ data: value })
+    getVersionReviewContext.mockResolvedValue({ data: { currentVersion: { versionId: 81, versionStatus: 'pending_review', lockVersion: 2 } } })
+    const { wrapper } = await mountDetail()
+    try {
+      await wrapper.findAllComponents(ElButton).find(item => item.text() === '添加反馈').trigger('click')
+      await flushPromises()
+      expect(getVersionReviewContext).toHaveBeenCalledWith(81, expect.objectContaining({ signal: expect.any(AbortSignal) }))
+      expect(document.body.textContent).toContain('共同反馈（适用于全部所选镜头）')
+      const dialog = wrapper.findComponent({ name: 'ShotTaskFeedbackDialog' })
+      await dialog.findAllComponents(ElButton).find(item => item.text() === '取消').trigger('click')
+      await flushPromises()
+      expect(dialog.getComponent(ElDialog).props('modelValue')).toBe(false)
+    } finally { wrapper.unmount() }
   })
 
   it.each(['shot_video', 'asset_image'])('两类任务均回显项目资料：%s', async taskKind => {
@@ -827,7 +989,7 @@ describe('任务详情、状态动作与异步上下文', () => {
     expect(brief.text()).toContain('保持冷蓝色调和稳定镜头')
     expect(brief.text()).toContain('杨景锋')
     expect(brief.text()).not.toContain('YJF')
-    expect(wrapper.get('[data-testid="project-references"]').text()).not.toContain('休眠舱启动')
+    expect(wrapper.find('[data-testid="project-references"]').exists()).toBe(false)
     expect(wrapper.get('[data-testid="version-workspace"]').attributes()).toMatchObject({
       'data-version-count': '0',
       'data-production-description': '休眠舱启动'
@@ -974,8 +1136,8 @@ describe('任务详情、状态动作与异步上下文', () => {
     const { wrapper } = await mountDetail()
     expect(wrapper.text()).toContain('动力舱主视角')
     expect(wrapper.findAllComponents(ElButton).map(button => button.text())).not.toContain('开始任务')
-    expect(wrapper.text()).toContain('等待管理人员设置计划起止时间')
-    expect(wrapper.text()).toContain('该制作分项')
+    expect(wrapper.text()).toContain('分配制作人后自动进入制作')
+    expect(wrapper.text()).toContain('计划时间选填')
     expect(wrapper.text()).toContain('编辑任务')
     expect(startTask).not.toHaveBeenCalled()
     wrapper.unmount()
@@ -1162,7 +1324,7 @@ describe('任务详情、状态动作与异步上下文', () => {
 })
 
 
-describe('先排期再确认开工', () => {
+describe('旧客户端开工弹窗兼容路径', () => {
   const button = (wrapper, name) => wrapper.findAllComponents(ElButton).find(item => buttonLabel(item) === name)
   function open(overrides = {}) {
     return mount(TaskStartDialog, {
@@ -1189,7 +1351,7 @@ describe('先排期再确认开工', () => {
       expect(updateTaskSchedule).toHaveBeenCalledWith(71, expect.objectContaining({ lockVersion: 4, changeReason: '安排制作' }), expect.any(String))
       expect(startTask).not.toHaveBeenCalled()
       expect(saved).toHaveBeenCalledOnce()
-      expect(button(wrapper, '调整排期')).toBeDefined()
+      expect(dialog.props('draft')).toEqual({ expectedStartTime: expectedTaskTimes.expectedStartTime, expectedEndTime: expectedTaskTimes.expectedEndTime })
       await button(wrapper, '确认开工').trigger('click'); await flushPromises()
       expect(startTask).toHaveBeenCalledWith(71, { lockVersion: 5, assetLockVersion: 2, assetItemLockVersion: 3, startConfirmed: true, priority: 'high' })
     } finally { wrapper.unmount() }
@@ -1197,18 +1359,18 @@ describe('先排期再确认开工', () => {
   it('取消改期或保存失败保留原排期和版本', async () => {
     startTask.mockReset().mockResolvedValue({ data: {} })
     updateTaskSchedule.mockRejectedValue({ httpStatus: 409, message: '版本冲突' })
-    const wrapper = open()
+    const wrapper = open({ task: { priority: 'high' } })
     try {
       await flushPromises()
-      await button(wrapper, '调整排期').trigger('click')
+      await button(wrapper, '设置排期').trigger('click')
       const dialog = wrapper.findComponent(ScheduleEditDialog)
       dialog.vm.$emit('save-request', { changeReason: '测试' }); await flushPromises()
       expect(dialog.props('error').message).toBe('版本冲突')
       expect(startTask).not.toHaveBeenCalled()
       dialog.vm.$emit('cancel'); await flushPromises()
-      await button(wrapper, '确认开工').trigger('click'); await flushPromises()
-      expect(startTask.mock.calls[0][1].lockVersion).toBe(4)
-      expect(startTask.mock.calls[0][1]).not.toHaveProperty('expectedStartTime')
+      expect(dialog.props('task').lockVersion).toBe(4)
+      expect(button(wrapper, '确认开工').props('disabled')).toBe(true)
+      expect(startTask).not.toHaveBeenCalled()
     } finally { wrapper.unmount() }
   })
   it('无排期权限隐藏改期入口，未确认条件及失效上下文不能开工', async () => {

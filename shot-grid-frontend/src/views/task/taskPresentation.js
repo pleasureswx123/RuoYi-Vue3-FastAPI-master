@@ -2,8 +2,8 @@ import { taskStage } from '@/views/task/taskStage'
 const FALLBACK_META = Object.freeze({ label: '未知', tone: 'neutral' })
 
 const TASK_STATUS = Object.freeze({
-  pending_schedule: Object.freeze({ label: '待排期', tone: 'warning' }),
-  not_started: Object.freeze({ label: '待开工', tone: 'neutral' }),
+  pending_schedule: Object.freeze({ label: '历史任务待恢复', tone: 'warning' }),
+  not_started: Object.freeze({ label: '历史任务待恢复', tone: 'neutral' }),
   preparing: Object.freeze({ label: '目录准备中', tone: 'warning' }),
   in_progress: Object.freeze({ label: '制作中', tone: 'info' }),
   pending_review: Object.freeze({ label: '待审核', tone: 'warning' }),

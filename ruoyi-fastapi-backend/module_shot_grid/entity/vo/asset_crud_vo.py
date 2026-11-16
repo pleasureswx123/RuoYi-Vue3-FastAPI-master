@@ -1,12 +1,13 @@
 from datetime import date, datetime
-from typing import Literal, get_args
+from typing import Annotated, Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from module_shot_grid.entity.vo.common_vo import (
     ShotGridApiModel,
+    ShotGridApprovedVersionModel,
     ShotGridLockVersionModel,
-    ShotGridPageQueryModel,
+    ShotGridProductionQueryModel,
 )
 from module_shot_grid.entity.vo.target_purge_vo import ShotGridTargetPurgeStatusModel
 
@@ -28,9 +29,26 @@ LifecycleStatus = Literal['active', 'archived']
 TaskStatus = Literal['not_started', 'preparing', 'in_progress', 'pending_review', 'revision', 'completed']
 SQL_INTEGER_MAX = 2_147_483_647
 SQL_BIGINT_MAX = 9_223_372_036_854_775_807
+AssetRelationId = Annotated[int, Field(strict=True, gt=0, le=SQL_BIGINT_MAX)]
 
 
-class ShotGridAssetListQueryModel(ShotGridPageQueryModel):
+class ShotGridAssetRelationsUpdateModel(ShotGridLockVersionModel):
+    """完整替换资产资料关联；空集合代表移除全部关联。"""
+
+    model_config = ConfigDict(extra='forbid')
+    related_asset_ids: list[AssetRelationId] = Field(max_length=50)
+
+    @field_validator('related_asset_ids')
+    @classmethod
+    def unique_ids(cls, value: list[int]) -> list[int]:
+        if len(value) != len(set(value)):
+            raise ValueError('关联资产不能重复')
+        return value
+
+
+class ShotGridAssetListQueryModel(ShotGridProductionQueryModel):
+    has_final: bool | None = Field(default=None, description='是否存在定稿（含历史通过记录）')
+
     """资产分页查询。"""
 
     asset_type: AssetType | None = Field(default=None, description='资产类型')
@@ -79,6 +97,7 @@ class ShotGridAssetCreateModel(ShotGridApiModel):
     sort_order: int = Field(default=0, ge=0, le=SQL_INTEGER_MAX, description='项目内排序')
     remark: str | None = Field(default=None, max_length=500, description='备注')
     items: list[ShotGridAssetItemWriteModel] = Field(min_length=1, max_length=200, description='制作分项')
+    related_asset_ids: list[AssetRelationId] = Field(default_factory=list, max_length=50)
 
     @field_validator('asset_name', mode='before')
     @classmethod
@@ -99,6 +118,7 @@ class ShotGridAssetCreateModel(ShotGridApiModel):
 
     @model_validator(mode='after')
     def validate_named_items_unique(self) -> 'ShotGridAssetCreateModel':
+        ShotGridAssetRelationsUpdateModel.unique_ids(self.related_asset_ids)
         normalized_names = [item.production_item.casefold() for item in self.items if item.production_item is not None]
         if len(normalized_names) != len(set(normalized_names)):
             raise ValueError('同一资产内制作分项名称不能重复')
@@ -286,6 +306,7 @@ class ShotGridAssetItemModel(ShotGridApiModel):
     asset_status: AssetWorkStatus
     task: ShotGridTaskSummaryModel | None = None
     latest_version: ShotGridVersionSummaryModel | None = None
+    approved_version: ShotGridApprovedVersionModel | None = None
     final_version: ShotGridVersionSummaryModel | None = None
     thumbnail: ShotGridAssetThumbnailModel | None = None
     allowed_actions: list[str] = Field(default_factory=list)
@@ -317,6 +338,9 @@ class ShotGridAssetItemTimeGroupModel(ShotGridApiModel):
 
 
 class ShotGridAssetListItemModel(ShotGridApiModel):
+    approved_item_count: int = Field(default=0, ge=0)
+    finalized_item_count: int = Field(default=0, ge=0)
+
     """资产列表项。"""
 
     asset_id: int
@@ -349,3 +373,28 @@ class ShotGridAssetDetailModel(ShotGridAssetListItemModel):
     create_by: str
     create_time: datetime
     update_by: str
+
+
+class ShotGridRelatedAssetItemModel(ShotGridApiModel):
+    asset_item_id: int
+    production_item: str | None = None
+    asset_status: AssetWorkStatus
+    task: ShotGridTaskSummaryModel | None = None
+    version: ShotGridVersionSummaryModel | None = None
+
+
+class ShotGridRelatedAssetModel(ShotGridApiModel):
+    asset_id: int
+    project_id: int
+    asset_name: str
+    asset_type: AssetType
+    lifecycle_status: LifecycleStatus
+    items: list[ShotGridRelatedAssetItemModel] = Field(default_factory=list)
+
+
+class ShotGridAssetRelationsModel(ShotGridApiModel):
+    asset_id: int
+    project_id: int
+    lock_version: int
+    can_edit: bool = False
+    related_assets: list[ShotGridRelatedAssetModel] = Field(default_factory=list)

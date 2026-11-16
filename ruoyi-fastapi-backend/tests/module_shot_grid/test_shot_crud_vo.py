@@ -201,3 +201,21 @@ def test_shot_number_range_rejects_invalid_bounds(fields: dict) -> None:
 def test_shot_number_range_accepts_open_or_equal_bounds(fields: dict) -> None:
     result = ShotGridShotListQueryModel.model_validate(fields).model_dump(by_alias=True)
     assert all(result[key] == value for key, value in fields.items())
+
+
+@pytest.mark.parametrize('statuses', ['completed,unknown', 'unassigned,', 'in_progress;drop table sg_shot'])
+def test_multiple_status_filter_rejects_unknown_status(statuses: str) -> None:
+    with pytest.raises(ValueError):
+        ShotGridShotListQueryModel(shotStatuses=statuses)
+
+
+def test_multiple_status_filter_normalizes_and_deduplicates() -> None:
+    assert (
+        ShotGridShotListQueryModel(shotStatuses=' unassigned,not_started,unassigned ').shot_statuses
+        == 'unassigned,not_started'
+    )
+
+
+def test_update_number_reserves_sort_key_integer_range() -> None:
+    with pytest.raises(ValueError):
+        ShotGridShotUpdateModel(sceneId=1, shotNo=214748365, lockVersion=0, assetIds=[])

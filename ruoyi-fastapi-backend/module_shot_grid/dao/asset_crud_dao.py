@@ -1,11 +1,18 @@
 from typing import Any
 
-from sqlalchemy import and_, asc, case, desc, exists, func, or_, select, update
+from sqlalchemy import and_, asc, case, delete, desc, exists, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from module_admin.entity.do.user_do import SysUser
-from module_shot_grid.dao.schedule_phase import task_phase_expression
-from module_shot_grid.entity.do.asset_do import ShotGridAsset, ShotGridAssetItem, ShotGridShotAsset
+from module_shot_grid.dao.final_delivery_dao import ShotGridFinalDeliveryDao
+from module_shot_grid.dao.schedule_phase import production_period_conditions, task_phase_expression
+from module_shot_grid.entity.do.asset_do import (
+    ShotGridAsset,
+    ShotGridAssetItem,
+    ShotGridAssetRelation,
+    ShotGridShotAsset,
+)
+from module_shot_grid.entity.do.final_delivery_do import ShotGridFinalDelivery
 from module_shot_grid.entity.do.project_do import ShotGridProjectMember
 from module_shot_grid.entity.do.storage_do import ShotGridProjectStorage, ShotGridStorageOperation
 from module_shot_grid.entity.do.task_do import ShotGridTask
@@ -29,6 +36,71 @@ STATUS_RANK_PENDING_SCHEDULE = 2
 
 class ShotGridAssetCrudDao:
     """资产及制作分项普通管理数据访问层。"""
+
+    @classmethod
+    async def related_assets(cls, db: AsyncSession, project_id: int, asset_id: int) -> list[ShotGridAsset]:
+        return list(
+            (
+                await db.scalars(
+                    select(ShotGridAsset)
+                    .join(
+                        ShotGridAssetRelation,
+                        (ShotGridAssetRelation.related_asset_id == ShotGridAsset.asset_id)
+                        & (ShotGridAssetRelation.project_id == ShotGridAsset.project_id),
+                    )
+                    .where(
+                        ShotGridAssetRelation.project_id == project_id,
+                        ShotGridAssetRelation.asset_id == asset_id,
+                        ShotGridAsset.del_flag == '0',
+                    )
+                    .order_by(ShotGridAsset.asset_type, ShotGridAsset.asset_name, ShotGridAsset.asset_id)
+                )
+            ).all()
+        )
+
+    @classmethod
+    async def relation_targets(cls, db: AsyncSession, project_id: int, ids: list[int]) -> list[ShotGridAsset]:
+        return list(
+            (
+                await db.scalars(
+                    select(ShotGridAsset).where(
+                        ShotGridAsset.project_id == project_id,
+                        ShotGridAsset.asset_id.in_(ids),
+                        ShotGridAsset.del_flag == '0',
+                    )
+                )
+            ).all()
+        )
+
+    @classmethod
+    async def replace_relations(
+        cls, db: AsyncSession, project_id: int, asset_id: int, ids: list[int], actor: str
+    ) -> None:
+        await db.execute(
+            delete(ShotGridAssetRelation).where(
+                ShotGridAssetRelation.project_id == project_id,
+                ShotGridAssetRelation.asset_id == asset_id,
+                ShotGridAssetRelation.related_asset_id.not_in(ids),
+            )
+        )
+        existing = set(
+            (
+                await db.scalars(
+                    select(ShotGridAssetRelation.related_asset_id).where(
+                        ShotGridAssetRelation.project_id == project_id, ShotGridAssetRelation.asset_id == asset_id
+                    )
+                )
+            ).all()
+        )
+        db.add_all(
+            [
+                ShotGridAssetRelation(
+                    project_id=project_id, asset_id=asset_id, related_asset_id=target, create_by=actor
+                )
+                for target in sorted(set(ids) - existing)
+            ]
+        )
+        await db.flush()
 
     @classmethod
     def _item_state_subquery(cls) -> Any:
@@ -70,6 +142,13 @@ class ShotGridAssetCrudDao:
                 ShotGridAssetItem.asset_item_id,
                 ShotGridTask.assignee_user_id,
                 item_state,
+                ShotGridFinalDeliveryDao.approved_statement(ShotGridTask.task_id, ShotGridAssetItem.project_id)
+                .where(ShotGridVersion.version_status == 'final', ShotGridFinalDelivery.delivery_status == 'published')
+                .exists()
+                .label('has_published_final'),
+                ShotGridFinalDeliveryDao.approved_statement(ShotGridTask.task_id, ShotGridAssetItem.project_id)
+                .exists()
+                .label('has_approved'),
                 and_(
                     ShotGridTask.task_status == 'not_started',
                     ShotGridTask.expected_start_time.is_not(None),
@@ -103,6 +182,10 @@ class ShotGridAssetCrudDao:
             select(
                 item_state.c.asset_id,
                 func.count(item_state.c.asset_item_id).label('item_count'),
+                func.count().filter(item_state.c.has_approved).label('approved_item_count'),
+                func.count()
+                .filter(and_(item_state.c.has_published_final, item_state.c.item_status == 'completed'))
+                .label('finalized_item_count'),
                 *[
                     func.count().filter(item_state.c.item_status == status).label(f'{status}_count')
                     for status in ASSET_ITEM_STATUSES
@@ -139,6 +222,8 @@ class ShotGridAssetCrudDao:
         return select(
             rollup.c.asset_id,
             rollup.c.item_count,
+            rollup.c.approved_item_count,
+            rollup.c.finalized_item_count,
             *[rollup.c[f'{status}_count'] for status in ASSET_ITEM_STATUSES],
             rollup.c.startable_item_count,
             asset_status,
@@ -173,6 +258,8 @@ class ShotGridAssetCrudDao:
                 ShotGridAsset.lifecycle_status,
                 effective_status.label('asset_status'),
                 func.coalesce(rollup.c.item_count, 0).label('item_count'),
+                func.coalesce(rollup.c.approved_item_count, 0).label('approved_item_count'),
+                func.coalesce(rollup.c.finalized_item_count, 0).label('finalized_item_count'),
                 *[
                     func.coalesce(rollup.c[f'{status}_count'], 0).label(f'{status}_count')
                     for status in ASSET_ITEM_STATUSES
@@ -198,6 +285,9 @@ class ShotGridAssetCrudDao:
                     ShotGridAsset.description.ilike(f'%{keyword}%'),
                 )
             )
+        if query.has_final is not None:
+            has_approved = func.coalesce(rollup.c.approved_item_count, 0) > 0
+            statement = statement.where(has_approved if query.has_final else ~has_approved)
         if query.asset_type:
             statement = statement.where(ShotGridAsset.asset_type == query.asset_type)
         if query.asset_status:
@@ -206,7 +296,7 @@ class ShotGridAssetCrudDao:
             if query.asset_status == 'unassigned':
                 status_match = or_(status_match, func.coalesce(rollup.c.item_count, 0) == 0)
             statement = statement.where(status_match)
-        if query.assignee_user_id:
+        if query.assignee_user_id or query.production_from or query.production_to:
             assigned = exists(
                 select(1)
                 .select_from(ShotGridAssetItem)
@@ -218,7 +308,8 @@ class ShotGridAssetCrudDao:
                     ShotGridAssetItem.asset_id == ShotGridAsset.asset_id,
                     ShotGridAssetItem.lifecycle_status == 'active',
                     ShotGridAssetItem.del_flag == '0',
-                    ShotGridTask.assignee_user_id == query.assignee_user_id,
+                    *([ShotGridTask.assignee_user_id == query.assignee_user_id] if query.assignee_user_id else []),
+                    *production_period_conditions(ShotGridTask, query),
                 )
             )
             statement = statement.where(assigned)
@@ -279,7 +370,9 @@ class ShotGridAssetCrudDao:
         return (await db.execute(statement)).scalar_one_or_none()
 
     @classmethod
-    async def get_asset_items(cls, db: AsyncSession, project_id: int, asset_id: int) -> list[dict[str, Any]]:
+    async def get_asset_items(
+        cls, db: AsyncSession, project_id: int, asset_id: int | list[int]
+    ) -> list[dict[str, Any]]:
         rows = (
             await db.execute(
                 select(
@@ -325,7 +418,9 @@ class ShotGridAssetCrudDao:
                 )
                 .where(
                     ShotGridAssetItem.project_id == project_id,
-                    ShotGridAssetItem.asset_id == asset_id,
+                    ShotGridAssetItem.asset_id.in_(asset_id)
+                    if isinstance(asset_id, list)
+                    else ShotGridAssetItem.asset_id == asset_id,
                     ShotGridAssetItem.del_flag == '0',
                 )
                 .order_by(
@@ -387,8 +482,18 @@ class ShotGridAssetCrudDao:
                     ShotGridVersion.version_no,
                     ShotGridVersion.version_status,
                     ShotGridVersion.submitted_time,
+                    ShotGridFinalDelivery.approved_time,
+                    ShotGridFinalDelivery.delivery_status,
                     thumbnail_file_id.label('thumbnail_file_id'),
                     thumbnail_business_file_name.label('thumbnail_business_file_name'),
+                )
+                .outerjoin(
+                    ShotGridFinalDelivery,
+                    and_(
+                        ShotGridFinalDelivery.version_id == ShotGridVersion.version_id,
+                        ShotGridFinalDelivery.task_id == ShotGridVersion.task_id,
+                        ShotGridFinalDelivery.project_id == ShotGridVersion.project_id,
+                    ),
                 )
                 .where(ShotGridVersion.task_id.in_(task_ids))
                 .order_by(ShotGridVersion.task_id, ShotGridVersion.version_no.desc())

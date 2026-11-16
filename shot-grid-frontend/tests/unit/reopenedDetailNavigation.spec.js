@@ -5,7 +5,7 @@ import { detailNavigationKey } from '@/composables/useDetailNavigation'
 import { useSessionStore } from '@/store/modules/session'
 import TaskDetailView from '@/views/task/TaskDetailView.vue'
 import VersionDetailView from '@/views/version/VersionDetailView.vue'
-vi.mock('vue-router', () => ({ useRoute: () => ({ params: {}, query: {} }), useRouter: () => ({ push: vi.fn() }) }))
+vi.mock('vue-router', () => ({ onBeforeRouteLeave: vi.fn(), onBeforeRouteUpdate: vi.fn(), useRoute: () => ({ params: {}, query: {} }), useRouter: () => ({ push: vi.fn() }) }))
 vi.mock('@/api/shot-grid/tasks', () => ({ getTaskDetail: vi.fn(() => new Promise(() => {})), updateTask: vi.fn() }))
 vi.mock('@/api/shot-grid/versions', () => ({ getVersionDetail: vi.fn(() => new Promise(() => {})) }))
 vi.mock('@/api/shot-grid/reviews', () => ({ getTaskIssues: vi.fn().mockResolvedValue({ data: [] }) }))

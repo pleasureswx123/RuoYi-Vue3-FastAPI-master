@@ -1,8 +1,11 @@
 <script setup>
+import FinalVersionTag from '@/components/version/FinalVersionTag.vue'
+import { assetFinalSummary } from '@/components/version/finalPresentation'
 import { versionSummaryLabel } from '@/components/version/versionPresentation'
-import { assetColumnWidths } from '../useAssetTablePresentation'
+import Sortable from 'sortablejs'
+import { assetColumnWidths, assetOptionalColumns } from '../useAssetTablePresentation'
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { View } from '@element-plus/icons-vue'
+import { View, Filter } from '@element-plus/icons-vue'
 
 import { getAssetItems } from '@/api/shot-grid/assets'
 import { useCurrentTime } from '@/composables/useCurrentTime'
@@ -14,6 +17,8 @@ import AssetDescriptionCell from './AssetDescriptionCell.vue'
 import { assetCompletionSummary, assetAssigneeSummary, assetDirectoryStatusMeta, assetErrorState, assetItemStatusEntries, assetItemTimeEntries, assetStatusMeta, assetStatusTagClass, assetTypeMeta, memberUserName, resolveAssetThumbnail } from '../assetPresentation'
 
 const props = defineProps({
+  activeFilters: { type: Object, default: () => ({}) },
+  itemFilters: { type: Object, default: () => ({}) },
   itemStatus: { type: String, default: '' },
   visibleColumns: { type: Array, default: () => ['thumbnail', 'description', 'plan', 'assignee', 'status'] },
   columnWidths: { type: Object, default: () => ({}) },
@@ -25,20 +30,57 @@ const props = defineProps({
   selectable: { type: Function, required: true },
   selectedItemIds: { type: Set, default: () => new Set() },
   itemSelectable: { type: Function, default: () => false },
+  fieldAction: { type: Function, default: () => null },
   canQuery: { type: Boolean, default: false },
   loading: { type: Boolean, default: false },
   selectionDisabled: { type: Boolean, default: false },
   backgroundRefresh: { type: Boolean, default: false }
 })
-const emit = defineEmits(['row-contextmenu', 'available-width', 'header-dragend', 'selection-change', 'item-selection-change', 'open-item'])
+const emit = defineEmits(['row-contextmenu', 'available-width', 'header-dragend', 'selection-change', 'item-selection-change', 'open-item', 'header-filter', 'column-order'])
+function openRow(row, _column, event) {
+  if (row.rowKind !== 'item' || event?.target?.closest('button,input,a,.el-checkbox,.el-table__expand-icon')) return
+  emit('open-item', row)
+}
 const table = ref(null)
 const tableContainer = ref(null)
+const orderedColumns = computed(() => props.visibleColumns.map(key => assetOptionalColumns.find(column => column.key === key)).filter(Boolean))
+const headerClass = ({ column }) => props.visibleColumns.includes(column.columnKey) ? 'asset-reorderable' : ''
+let headerSortable = null
+let headerSnapshot = []
+function moveColumn(key, offset) {
+  const order = [...props.visibleColumns]
+  const index = order.indexOf(key)
+  if (index < 0 || index + offset < 0 || index + offset >= order.length) return
+  ;[order[index], order[index + offset]] = [order[index + offset], order[index]]
+  emit('column-order', order)
+}
+function initHeaderSortable() {
+  if (disposed) return
+  headerSortable?.destroy()
+  headerSortable = null
+  const header = table.value?.$el?.querySelector('.el-table__header-wrapper tr')
+  if (!header) return
+  // Element Plus 负责列、选择和宽度；现有 Sortable 仅补充其未提供的表头排序。
+  headerSortable = Sortable.create(header, {
+    draggable: 'th.asset-reorderable', handle: '.asset-column-title', animation: 120,
+    forceFallback: true, fallbackOnBody: true, fallbackTolerance: 4,
+    onMove: event => event.related?.classList.contains('asset-reorderable'),
+    onStart: () => { headerSnapshot = [...header.children] },
+    onEnd: () => {
+      const order = [...header.querySelectorAll('.asset-column-title')].map(element => element.dataset.column)
+      // 先恢复 DOM，再由 Vue 更新列顺序，避免与 Element Plus 的列注册冲突。
+      headerSnapshot.forEach(element => header.appendChild(element))
+      if (!disposed) emit('column-order', order)
+    }
+  })
+}
 let widthObserver = null
 function updateAvailableWidth() {
   emit('available-width', tableContainer.value?.getBoundingClientRect().width || 0)
 }
 const currentTime = useCurrentTime()
 const tableGeneration = ref(0)
+watch([() => props.visibleColumns.join('|'), tableGeneration], () => nextTick(() => { initHeaderSortable(); table.value?.doLayout() }), { flush: 'post' })
 const errors = reactive(new Map())
 const childrenCache = reactive(new Map())
 const loadingKeys = reactive(new Set())
@@ -46,6 +88,17 @@ const expandedKeys = new Set()
 const initializedKeys = new Set()
 const pending = new Map()
 const treeProps = { children: 'children', hasChildren: 'hasChildren', checkStrictly: true }
+function matchesItemFilters(item) {
+  const { assigneeUserId, productionFrom, productionTo } = props.itemFilters
+  if (item.lifecycleStatus !== 'active' || props.itemStatus && item.assetStatus !== props.itemStatus) return false
+  if (assigneeUserId && Number(item.task?.assigneeUserId) !== Number(assigneeUserId)) return false
+  if (productionFrom || productionTo) {
+    const start = item.task?.expectedStartTime?.slice(0, 10)
+    const end = item.task?.expectedEndTime?.slice(0, 10)
+    if (!start || !end || productionFrom && end < productionFrom || productionTo && start > productionTo) return false
+  }
+  return true
+}
 let generation = 0
 let disposed = false
 let restoringSelection = false
@@ -137,7 +190,7 @@ async function fetchChildren(row) {
         Number(item.projectId) !== props.projectId || Number(item.assetId) !== Number(row.assetId))) {
         throw new Error('分项数据与当前资产不一致，请刷新后重试')
       }
-      const children = response.data.filter(item => item.lifecycleStatus === 'active' && (!props.itemStatus || item.assetStatus === props.itemStatus))
+      const children = response.data.filter(matchesItemFilters)
         .sort((left, right) => left.sortOrder - right.sortOrder || left.assetItemId - right.assetItemId)
         .map(item => ({ ...item, rowKind: 'item', rowKey: `item:${props.projectId}:${item.assetItemId}`, hasChildren: false }))
       childrenCache.set(row.rowKey, children)
@@ -287,6 +340,7 @@ watch(() => props.loading, loading => {
   }
 })
 onMounted(() => {
+  nextTick(initHeaderSortable)
   restoreSelection()
   updateAvailableWidth()
   if (typeof ResizeObserver !== 'undefined') {
@@ -296,9 +350,11 @@ onMounted(() => {
   window.addEventListener('resize', updateAvailableWidth)
 })
 onBeforeUnmount(() => {
+  disposed = true
+  headerSortable?.destroy()
+  headerSortable = null
   widthObserver?.disconnect()
   window.removeEventListener('resize', updateAvailableWidth)
-  disposed = true
   cancelRequests()
 })
 defineExpose({ waitForLoads, refreshLoadedChildren })
@@ -308,69 +364,74 @@ defineExpose({ waitForLoads, refreshLoadedChildren })
   <div ref="tableContainer" class="asset-table-wrap">
     <el-table @row-contextmenu="(...args) => emit('row-contextmenu', ...args)" ref="table" :key="tableGeneration" class="asset-data-table" :data="rows"
               row-key="rowKey" lazy :load="load" :tree-props="treeProps" :indent="20"
-              max-height="620" v-loading="loading" empty-text="当前筛选没有资产"
-              @header-dragend="(...args) => emit('header-dragend', ...args)" @selection-change="selectionChanged" @select-all="selectAll" @expand-change="expansionChanged">
+              :fit="false" border :header-cell-class-name="headerClass" max-height="620" v-loading="loading" empty-text="当前筛选没有资产"
+              @row-click="openRow" @header-dragend="(...args) => emit('header-dragend', ...args)" @selection-change="selectionChanged" @select-all="selectAll" @expand-change="expansionChanged">
       <el-table-column type="selection" width="48" fixed="left" :selectable="row => !selectionDisabled && canSelect(row)" :reserve-selection="true" />
-      <el-table-column column-key="identity" :min-width="columnWidths.identity || assetColumnWidths.identity" label="资产 / 制作分项" fixed="left">
+      <el-table-column column-key="identity" :width="columnWidths.identity || assetColumnWidths.identity" label="资产 / 制作分项" fixed="left">
+        <template #header><div class="asset-column-header"><span>资产 / 制作分项</span><el-button text circle size="small" class="asset-header-filter" :class="{ 'is-active': activeFilters.identity }" :icon="Filter" aria-label="筛选资产名称和分类" :aria-pressed="Boolean(activeFilters.identity)" :disabled="loading" @click.stop="emit('header-filter', 'identity', $event)" /></div></template>
         <template #default="{ row }">
           <div class="asset-identity">
             <div class="asset-identity-meta">
               <el-tag v-if="row.rowKind === 'asset'" size="small" effect="light" round :type="tagTypeFromTone(assetTypeMeta(row.assetType).tone)">{{ assetTypeMeta(row.assetType).label }}</el-tag>
               <el-tag v-else size="small" type="info" effect="plain">制作分项</el-tag>
-              <small v-if="row.rowKind === 'asset'">{{ row.itemCount }} 个分项</small>
+              <small v-if="row.rowKind === 'asset'">{{ assetFinalSummary(row) }}</small>
             </div>
-            <strong>{{ row.rowKind === 'asset' ? row.assetName : (row.productionItem || '未命名制作分项') }}</strong>
+            <el-button link type="primary" :aria-label="`查看${row.rowKind === 'asset' ? row.assetName : row.productionItem}详情`" @click="emit('open-item', row)">{{ row.rowKind === 'asset' ? row.assetName : (row.productionItem || '未命名制作分项') }}</el-button>
             <div v-if="errors.has(row.rowKey)" class="asset-items-error" role="alert">
               <span>{{ errors.get(row.rowKey).message }}</span>
               <el-button v-if="errors.get(row.rowKey).retryable" link type="primary" :loading="loadingKeys.has(row.rowKey)" :disabled="loading" @click="retry(row)">重试分项</el-button>
             </div>
-            <small v-else-if="childrenCache.has(row.rowKey) && !childrenCache.get(row.rowKey).length">暂无活动分项</small>
+            <small v-else-if="childrenCache.has(row.rowKey) && !childrenCache.get(row.rowKey).length">{{ itemStatus || itemFilters.assigneeUserId || itemFilters.productionFrom || itemFilters.productionTo ? '当前筛选没有匹配分项' : '暂无活动分项' }}</small>
           </div>
         </template>
       </el-table-column>
-      <el-table-column column-key="thumbnail" :width="columnWidths.thumbnail || assetColumnWidths.thumbnail" v-if="visibleColumns.includes('thumbnail')" label="缩略图">
-        <template #default="{ row }">
-          <div class="asset-thumbnail-cell">
-            <ProtectedAssetThumbnail class="asset-thumb--small" :thumbnail="resolveAssetThumbnail(row)" :alt="`${row.assetName || row.productionItem || '未命名制作分项'} 缩略图`" />
-            <small v-if="row.rowKind === 'item'">{{ versionSummaryLabel(row.latestVersion) }}</small>
+      <el-table-column v-for="column in orderedColumns" :key="column.key" :column-key="column.key" :width="columnWidths[column.key] || assetColumnWidths[column.key]" :label="column.label">
+        <template #header>
+          <div class="asset-column-header">
+            <el-button text class="asset-column-title" :data-column="column.key" :aria-label="`移动${column.label}列`" title="拖动调整列顺序，也可用 Alt + 左右方向键" @keydown.alt.left.prevent.stop="moveColumn(column.key, -1)" @keydown.alt.right.prevent.stop="moveColumn(column.key, 1)">{{ column.label }}</el-button>
+            <el-button v-if="['plan', 'assignee', 'status'].includes(column.key)" text circle size="small" class="asset-header-filter" :class="{ 'is-active': activeFilters[column.key] }" :icon="Filter" :aria-label="`筛选${column.label}`" :aria-pressed="Boolean(activeFilters[column.key])" :disabled="loading" @click.stop="emit('header-filter', column.key, $event)" />
           </div>
         </template>
-      </el-table-column>
-      <el-table-column column-key="description" :min-width="columnWidths.description || assetColumnWidths.description" v-if="visibleColumns.includes('description')" label="说明">
         <template #default="{ row }">
-          <AssetDescriptionCell :common-description="row.rowKind === 'asset' ? row.description : assetById.get(Number(row.assetId))?.description"
-                                :show-common-description="row.rowKind === 'asset'"
-                                :item-description="row.rowKind === 'item' ? row.description : ''" :is-item="row.rowKind === 'item'" />
-        </template>
-      </el-table-column>
-      <el-table-column column-key="plan" :width="columnWidths.plan || assetColumnWidths.plan" v-if="visibleColumns.includes('plan')" label="计划时间">
-        <template #default="{ row }">
-          <div class="asset-plan">
-            <span><small>起</small> <span class="task-date-cell task-expected-start">{{ formatTaskDateTime(row.rowKind === 'item' ? row.task?.expectedStartTime : null) }}</span></span>
-            <span><small>止</small> <span class="task-date-cell task-expected-end">{{ formatTaskDateTime(row.rowKind === 'item' ? row.task?.expectedEndTime : null) }}</span></span>
-            <div class="task-time-state">
-              <el-tag v-if="row.rowKind === 'item'" :type="tagTypeFromTone(itemTimeState(row).tone)" size="small" effect="light" round>{{ itemTimeState(row).label }}</el-tag>
-              <div v-else-if="timeEntriesByAssetId.get(Number(row.assetId))?.length" class="asset-time-summary">
-                <el-tag v-for="entry in timeEntriesByAssetId.get(Number(row.assetId))" :key="entry.state" :type="tagTypeFromTone(entry.tone)" size="small" effect="light" round>{{ entry.label }} {{ entry.count }}</el-tag>
+          <template v-if="column.key === 'thumbnail'">
+            <div class="asset-thumbnail-cell"><FinalVersionTag v-if="row.rowKind === 'item'" :row="row" />
+              <el-button link :aria-label="`查看 ${row.assetName || row.productionItem} 成果`" @click="emit('open-item', { ...row, previewFinal: true })"><ProtectedAssetThumbnail class="asset-thumb--small" :thumbnail="resolveAssetThumbnail(row)" :alt="`${row.assetName || row.productionItem || '未命名制作分项'} 缩略图`" /></el-button>
+              <small v-if="row.rowKind === 'item'">{{ versionSummaryLabel(row.latestVersion) }}</small>
+            </div>
+          </template>
+          <template v-else-if="column.key === 'description'">
+            <AssetDescriptionCell :common-description="row.rowKind === 'asset' ? row.description : assetById.get(Number(row.assetId))?.description"
+                                  :show-common-description="row.rowKind === 'asset'"
+                                  :item-description="row.rowKind === 'item' ? row.description : ''" :is-item="row.rowKind === 'item'" />
+            <el-button v-if="row.rowKind === 'item' && fieldAction(row, 'description')" link type="primary" :disabled="fieldAction(row, 'description').button.disabled" :aria-label="`编辑 ${row.productionItem} 制作要求`" @click="fieldAction(row, 'description').run()">编辑</el-button>
+          </template>
+          <template v-else-if="column.key === 'plan'">
+            <div class="asset-plan">
+              <span><small>起</small> <span class="task-date-cell task-expected-start">{{ formatTaskDateTime(row.rowKind === 'item' ? row.task?.expectedStartTime : null) }}</span></span>
+              <span><small>止</small> <span class="task-date-cell task-expected-end">{{ formatTaskDateTime(row.rowKind === 'item' ? row.task?.expectedEndTime : null) }}</span></span>
+              <div class="task-time-state">
+                <el-tag v-if="row.rowKind === 'item'" :type="tagTypeFromTone(itemTimeState(row).tone)" size="small" effect="light" round>{{ itemTimeState(row).label }}</el-tag>
+                <div v-else-if="timeEntriesByAssetId.get(Number(row.assetId))?.length" class="asset-time-summary">
+                  <el-tag v-for="entry in timeEntriesByAssetId.get(Number(row.assetId))" :key="entry.state" :type="tagTypeFromTone(entry.tone)" size="small" effect="light" round>{{ entry.label }} {{ entry.count }}</el-tag>
+                </div>
+                <span v-else>—</span>
               </div>
-              <span v-else>—</span>
             </div>
-          </div>
-        </template>
-      </el-table-column>
-      <el-table-column column-key="assignee" :width="columnWidths.assignee || assetColumnWidths.assignee" v-if="visibleColumns.includes('assignee')" label="制作人">
-        <template #default="{ row }"><span class="asset-assignee sg-table-assignee" :class="{ 'is-unassigned': row.rowKind === 'asset' ? !row.assigneeUserIds?.length : !row.task?.assigneeUserId }">{{ assigneeName(row) }}</span></template>
-      </el-table-column>
-      <el-table-column column-key="status" :width="columnWidths.status || assetColumnWidths.status" v-if="visibleColumns.includes('status')" label="状态">
-        <template #default="{ row }">
-          <div class="asset-status">
-            <span v-if="row.rowKind === 'asset'" class="asset-completion-summary">{{ assetCompletionSummary(row) }}</span>
-            <el-tag v-if="row.rowKind === 'item'" class="asset-status-tag" :class="assetStatusTagClass(row.assetStatus)" :type="tagTypeFromTone(assetStatusMeta(row.assetStatus).tone)" size="small" effect="light" round>{{ assetStatusMeta(row.assetStatus).label }}</el-tag>
-            <div v-if="statusEntries(row).length" class="asset-status-summary" aria-label="分项状态汇总">
-              <el-tag v-for="entry in statusEntries(row)" :key="entry.status" class="asset-status-tag" :class="assetStatusTagClass(entry.status)" size="small" effect="light" round :type="tagTypeFromTone(assetStatusMeta(entry.status).tone)">{{ entry.label }} {{ entry.count }}</el-tag>
+            <el-button v-if="row.rowKind === 'item' && fieldAction(row, 'plan')" link type="primary" :disabled="fieldAction(row, 'plan').button.disabled" :aria-label="`调整 ${row.productionItem} 计划时间`" @click="fieldAction(row, 'plan').run()">调整时间</el-button>
+          </template>
+          <template v-else-if="column.key === 'assignee'"><el-button v-if="row.rowKind === 'item' && fieldAction(row, 'assignee')" link type="primary" :disabled="fieldAction(row, 'assignee').button.disabled" :aria-label="`调整 ${row.productionItem} 制作人`" @click="fieldAction(row, 'assignee').run()">{{ row.task?.assigneeUserId ? assigneeName(row) : '点击分配' }}</el-button><span v-else class="asset-assignee sg-table-assignee" :class="{ 'is-unassigned': row.rowKind === 'asset' ? !row.assigneeUserIds?.length : !row.task?.assigneeUserId }">{{ assigneeName(row) }}</span>
+
+          </template>
+          <template v-else-if="column.key === 'status'">
+            <div class="asset-status">
+              <span v-if="row.rowKind === 'asset'" class="asset-completion-summary">{{ assetCompletionSummary(row) }}</span>
+              <el-tag v-if="row.rowKind === 'item'" class="asset-status-tag" :class="assetStatusTagClass(row.assetStatus)" :type="tagTypeFromTone(assetStatusMeta(row.assetStatus).tone)" size="small" effect="light" round>{{ assetStatusMeta(row.assetStatus).label }}</el-tag>
+              <div v-if="statusEntries(row).length" class="asset-status-summary" aria-label="分项状态汇总">
+                <el-tag v-for="entry in statusEntries(row)" :key="entry.status" class="asset-status-tag" :class="assetStatusTagClass(entry.status)" size="small" effect="light" round :type="tagTypeFromTone(assetStatusMeta(entry.status).tone)">{{ entry.label }} {{ entry.count }}</el-tag>
+              </div>
+              <el-tag v-if="row.rowKind === 'asset' && row.directoryStatus === 'failed'" class="asset-status-tag asset-status-tag--directory-failed" type="danger" size="small" effect="light" round>{{ assetDirectoryStatusMeta(row.directoryStatus).label }}</el-tag>
             </div>
-            <el-tag v-if="row.rowKind === 'asset' && row.directoryStatus === 'failed'" class="asset-status-tag asset-status-tag--directory-failed" type="danger" size="small" effect="light" round>{{ assetDirectoryStatusMeta(row.directoryStatus).label }}</el-tag>
-          </div>
+          </template>
         </template>
       </el-table-column>
       <el-table-column column-key="actions" :width="columnWidths.actions || assetColumnWidths.actions" label="操作" fixed="right">
@@ -386,6 +447,11 @@ defineExpose({ waitForLoads, refreshLoadedChildren })
 </template>
 
 <style scoped>
+.asset-column-header { display: flex; align-items: center; justify-content: space-between; gap: 4px; }
+.asset-column-title.el-button { padding: 0; height: auto; min-width: 0; color: inherit; font-size: inherit; cursor: grab; }
+.asset-column-title:active { cursor: grabbing; }
+.asset-header-filter.el-button { margin-left: 0; flex-shrink: 0; }
+.asset-header-filter.is-active { color: var(--el-color-primary); background: var(--el-color-primary-light-9); }
 .asset-table-wrap { overflow: hidden; background: var(--sg-surface); border: 1px solid var(--sg-border); border-radius: var(--sg-radius-md); }
 .asset-data-table { width: 100%; --el-table-text-color: var(--sg-text-secondary); --el-table-header-text-color: var(--sg-text-muted); --el-table-border-color: var(--sg-border); }
 .asset-data-table :deep(.el-table__cell) { padding: 11px 0; font-size: 12px; }
@@ -393,6 +459,7 @@ defineExpose({ waitForLoads, refreshLoadedChildren })
 .asset-identity-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .asset-identity small, .asset-thumbnail-cell small { color: var(--sg-text-muted); }
 .asset-identity strong, .asset-assignee, .asset-items-error { white-space: normal; overflow-wrap: anywhere; }
+.asset-identity>.el-button{white-space:normal;text-align:left;line-height:1.5;height:auto}.asset-identity>.el-button :deep(span){overflow-wrap:anywhere}
 .asset-thumbnail-cell { display: grid; justify-items: center; gap: 4px; }
 .asset-thumb--small { width: 78px; height: 52px; border-radius: 7px; }
 .asset-status { display: flex; flex-direction: column; align-items: flex-start; gap: 5px; }

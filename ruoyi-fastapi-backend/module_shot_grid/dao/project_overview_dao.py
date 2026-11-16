@@ -1,9 +1,8 @@
-from sqlalchemy import and_, func, select
+from sqlalchemy import and_, func, literal, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 from sqlalchemy.sql import Subquery
 
-from module_shot_grid.dao.shot_phase import missing_shot_content_expression
 from module_shot_grid.entity.do.asset_do import ShotGridAsset, ShotGridAssetItem
 from module_shot_grid.entity.do.project_do import (
     ShotGridEpisode,
@@ -54,12 +53,8 @@ class ShotGridProjectOverviewDao:
                 .filter(shot_task.task_status == 'pending_review')
                 .label('pending_review_shots'),
                 func.count(ShotGridShot.shot_id).filter(shot_task.task_status == 'revision').label('revision_shots'),
-                func.count(ShotGridShot.shot_id)
-                .filter(and_(shot_task.task_id.is_(None), missing_shot_content_expression(ShotGridShot)))
-                .label('pending_info_shots'),
-                func.count(ShotGridShot.shot_id)
-                .filter(and_(shot_task.task_id.is_(None), ~missing_shot_content_expression(ShotGridShot)))
-                .label('unassigned_shots'),
+                literal(0).label('pending_info_shots'),
+                func.count(ShotGridShot.shot_id).filter(shot_task.task_id.is_(None)).label('unassigned_shots'),
             )
             .outerjoin(
                 shot_task,

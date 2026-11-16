@@ -9,6 +9,7 @@ import { tagTypeFromTone } from '@/utils/tag'
 import { copyTextToClipboard } from '@/utils/clipboard'
 import { fileRoleLabel } from '@/views/file/filePresentation'
 import ProtectedVersionPreview from './ProtectedVersionPreview.vue'
+import VersionFolderButton from './VersionFolderButton.vue'
 import CandidateGenerationPrompt from './CandidateGenerationPrompt.vue'
 import { formatFileSize, formatVersionDateTime, versionErrorState, versionStatusMeta } from './versionPresentation'
 
@@ -266,6 +267,7 @@ onBeforeUnmount(() => {
             <el-tag v-if="version.versionStatus === 'final' && file.isPrimary" size="small" effect="plain" round type="success">最终交付文件</el-tag>
           </div>
           <div class="file-actions">
+            <VersionFolderButton :version="version" :file="file" :can-download="canDownload" />
             <el-button
               v-if="file.nasPath"
               size="small"

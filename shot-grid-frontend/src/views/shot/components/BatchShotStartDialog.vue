@@ -92,7 +92,10 @@ onMounted(async () => {
 })
 
 function close() {
-  if (!saving.value) emit('close', { attempted })
+  if (!saving.value) emit('close', closeResult())
+}
+function closeResult() {
+  return { attempted, completedShotIds: rows.value.filter(row => scheduleOnly ? row.scheduleDone : row.success).map(row => Number(row.shotId)) }
 }
 function reset() {
   if (saving.value || finished.value) return
@@ -128,6 +131,7 @@ async function saveSchedules() {
       const range = scheduleOnly ? [...row.draftRange] : scheduleForm.range
       if (hasSchedule(row) && new Date(row.detail.task.expectedStartTime).getTime() === new Date(range[0]).getTime() && new Date(row.detail.task.expectedEndTime).getTime() === new Date(range[1]).getTime()) {
         row.result = '排期未变更'
+        row.scheduleDone = true
         continue
       }
       attempted = true
@@ -140,7 +144,8 @@ async function saveSchedules() {
         if (data?.taskId !== row.taskId || !Number.isInteger(data.lockVersion) || !data.currentStart || !data.currentEnd) throw new Error('响应不完整，请关闭并刷新核对')
         row.taskLockVersion = data.lockVersion
         Object.assign(row.detail.task, { lockVersion: data.lockVersion, expectedStartTime: data.currentStart, expectedEndTime: data.currentEnd })
-        row.result = '排期已保存，尚未开工'
+        row.result = '排期已保存，任务状态保持不变'
+        row.scheduleDone = true
       } catch (failure) {
         if (!current()) return
         row.result = failure?.message || '结果未知，请关闭并刷新核对'
@@ -150,7 +155,7 @@ async function saveSchedules() {
       }
     }
     scheduleVisible.value = false
-    if ((context.single || scheduleOnly) && !failed) emit('close', { attempted })
+    if ((context.single || scheduleOnly) && !failed) emit('close', closeResult())
     scheduleError.value = failed ? '部分排期未保存，请查看逐项结果；失败项请关闭并刷新后核对。已保存项不会撤销，也不会自动开工。' : ''
   } finally { saving.value = false }
 }
@@ -191,7 +196,7 @@ async function submit() {
 <template>
   <el-drawer v-if="scheduleOnly" :model-value="true" :title="singleSchedule ? '设置排期' : '批量设置排期'" class="batch-schedule-drawer" size="min(1040px, 95vw)" direction="rtl" append-to-body :close-on-click-modal="!saving" :close-on-press-escape="!saving" :show-close="!saving" @close="close">
       <p class="batch-schedule-description">{{ singleSchedule ? '核对镜头信息，填写计划起止时间后保存' : `已选择 ${context.shots.length} 个镜头，请逐项核对制作信息和负责人` }}</p>
-      <el-alert :title="singleSchedule ? '保存计划时间不会自动开工，之后由管理人员确认开工。' : '先设置计划时间，再单独确认开工。保存逐项生效，成功项会保留。'" type="info" :closable="false" show-icon />
+      <el-alert title="计划时间为选填，不影响镜头制作。保存逐项生效，成功项会保留。" type="info" :closable="false" show-icon />
       <el-form ref="inlineFormRef" :model="inlineForm" :rules="{ reason: scheduleRules.reason }" :disabled="saving || loading || Boolean(error) || rows.some(row => row.blocked)" label-position="top" class="inline-schedule-form" :aria-label="singleSchedule ? '单项排期表单' : '批量排期表单'">
         <div v-if="!singleSchedule" class="inline-schedule-toolbar">
           <div><strong>批量设置</strong><small>已勾选 {{ selected.length }} 项</small></div>

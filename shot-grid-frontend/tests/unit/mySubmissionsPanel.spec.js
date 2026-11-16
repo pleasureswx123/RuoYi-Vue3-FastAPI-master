@@ -1,9 +1,11 @@
+import { getProjectDetail } from '@/api/shot-grid/projects'
+vi.mock('@/api/shot-grid/projects', () => ({ getProjectDetail: vi.fn(), assertPositiveId: value => Number(value) }))
 import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ElTable, ElAlert, ElButton, ElCard, ElForm, ElFormItem, ElInput, ElSelect, ElOption, ElDatePicker, ElPagination, ElTag } from 'element-plus'
 import MySubmissionsPanel from '@/views/workbench/MySubmissionsPanel.vue'
-import { getRecentMineVersions, getMineSubmissionProjects } from '@/api/shot-grid/reviews'
+import { getRecentMineVersions } from '@/api/shot-grid/reviews'
 import { useSessionStore } from '@/store/modules/session'
 
 const push = vi.hoisted(() => vi.fn())
@@ -24,8 +26,9 @@ beforeEach(() => {
   vi.clearAllMocks()
   setActivePinia(createPinia())
   useSessionStore().permissions = ['*:*:*']
+  useSessionStore().selectProject(13)
   getRecentMineVersions.mockResolvedValue({ rows: [row], total: 21 })
-  getMineSubmissionProjects.mockResolvedValue({ data: [{ projectId: 13, projectName: '罗刹夫人', projectCode: 'LCFR', projectStatus: 'archived' }] })
+  getProjectDetail.mockResolvedValue({ data: { projectId: 13, projectName: '罗刹夫人', projectCode: 'LCFR', projectStatus: 'archived' } })
 })
 describe('我的提交', () => {
   it('同任务各版本归为子级，按版本倒序且跨项目保持独立', async () => {
@@ -106,6 +109,7 @@ describe('我的提交', () => {
     expect(button(wrapper, 'V001')).toBeUndefined()
     wrapper.unmount()
     useSessionStore().permissions = ['*:*:*']
+  useSessionStore().selectProject(13)
     getRecentMineVersions.mockResolvedValue({ rows: [{ ...row, autoReviewListId: null }], total: 1 })
     const noReview = await render()
     expect(button(noReview, '查看修改意见')).toBeUndefined()
@@ -117,7 +121,6 @@ describe('我的提交', () => {
     const wrapper = await render()
     const input = wrapper.find('input[placeholder=搜索任务名称]')
     await input.setValue('0010')
-    wrapper.findComponent(ElSelect).vm.$emit('update:modelValue', 13)
     await wrapper.find('input[type=radio][value=rejected]').setValue()
     await flushPromises()
     getRecentMineVersions.mockClear()
@@ -129,16 +132,16 @@ describe('我的提交', () => {
     dates.vm.$emit('update:modelValue', ['2026-09-01', '2026-09-24'])
     await button(wrapper, '搜索').trigger('click')
     await flushPromises()
-    expect(getRecentMineVersions).toHaveBeenLastCalledWith(expect.objectContaining({ pageNum: 1, projectId: 13, taskKeyword: '0010', versionStatus: 'rejected', submittedFrom: '2026-09-01', submittedTo: '2026-09-24' }), expect.anything())
+    expect(getRecentMineVersions).toHaveBeenLastCalledWith(expect.objectContaining({ pageNum: 1, projectId: '13', taskKeyword: '0010', versionStatus: 'rejected', submittedFrom: '2026-09-01', submittedTo: '2026-09-24' }), expect.anything())
     await button(wrapper, '重置').trigger('click')
     await flushPromises()
-    expect(getRecentMineVersions.mock.lastCall[0]).not.toHaveProperty('projectId')
+    expect(getRecentMineVersions.mock.lastCall[0].projectId).toBe('13')
     expect(input.element.value).toBe('')
     wrapper.unmount()
   })
   it('项目选择与日期快捷项即时筛选，快速切换丢弃迟到响应', async () => {
     const wrapper = await render()
-    expect(wrapper.findComponent(ElSelect).props('filterable')).toBe(true)
+    expect(wrapper.find('input[placeholder=全部项目]').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('仅显示已退回')
     const shortcuts = wrapper.findComponent(ElDatePicker).props('shortcuts')
     expect(shortcuts.map(item => item.text)).toEqual(['今天', '近7天', '近30天'])
@@ -147,12 +150,10 @@ describe('我的提交', () => {
     expect(Math.round((new Date(end.getFullYear(), end.getMonth(), end.getDate()) - start) / 86400000)).toBe(6)
     let resolveOld
     getRecentMineVersions.mockImplementationOnce(() => new Promise(resolve => { resolveOld = resolve }))
-    const project = wrapper.findComponent(ElSelect)
-    project.vm.$emit('update:modelValue', 13)
-    project.vm.$emit('change', 13)
+    await button(wrapper, '刷新').trigger('click')
     await flushPromises()
     const oldSignal = getRecentMineVersions.mock.lastCall[1].signal
-    expect(getRecentMineVersions.mock.lastCall[0].projectId).toBe(13)
+    expect(getRecentMineVersions.mock.lastCall[0].projectId).toBe('13')
     expect(wrapper.text()).toContain('镜头制作')
     await wrapper.find('input[type=radio][value=rejected]').setValue()
     await flushPromises()
@@ -171,7 +172,7 @@ describe('我的提交', () => {
   })
 
   it('项目选项失败可重试，空结果提供清空筛选', async () => {
-    getMineSubmissionProjects.mockRejectedValueOnce(new Error('失败'))
+    getProjectDetail.mockRejectedValueOnce(new Error('失败'))
     getRecentMineVersions.mockResolvedValue({ rows: [], total: 0 })
     const wrapper = await render()
     expect(wrapper.text()).toContain('项目选项加载失败')
@@ -179,7 +180,7 @@ describe('我的提交', () => {
     await button(wrapper, '重试项目选项').trigger('click')
     await flushPromises()
     expect(wrapper.text()).not.toContain('项目选项加载失败')
-    expect(wrapper.findComponent(ElSelect).findAllComponents(ElOption)[0].props('label')).toContain('已归档')
+    expect(wrapper.text()).toContain('罗刹夫人')
     wrapper.unmount()
   })
 

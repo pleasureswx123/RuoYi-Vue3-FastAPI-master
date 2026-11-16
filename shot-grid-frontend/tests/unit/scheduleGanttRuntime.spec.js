@@ -136,7 +136,7 @@ describe('SVAR OSS 真实运行门禁', () => {
     expect(gantt.style.getPropertyValue('--wx-grid-body-cell-border')).toBe('var(--wx-gantt-border)')
     expect(gantt.style.getPropertyValue('--wx-grid-body-row-border')).toBe('var(--wx-gantt-border)')
     expect(canvasContext.strokeStyle).toBe('#d7dbde')
-    expect(headerTexts).toEqual(['任务名称', '开始日期'])
+    expect(headerTexts).toEqual(['任务名称', '起止日期'])
     expect(wrapper.text()).not.toContain('Duration')
     expect(gantt).toBeInstanceOf(HTMLElement)
     expect(headerCell).toBeInstanceOf(HTMLElement)

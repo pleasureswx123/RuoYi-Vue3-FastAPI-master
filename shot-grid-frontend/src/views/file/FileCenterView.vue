@@ -6,7 +6,6 @@ import { CopyDocument, Download, Refresh, RefreshLeft, Search } from '@element-p
 import { ElMessage } from 'element-plus'
 
 import { getProjectFilePage } from '@/api/shot-grid/files'
-import { getProjectPage } from '@/api/shot-grid/projects'
 import { downloadProtectedVersionFile } from '@/api/shot-grid/versions'
 import { useSessionStore } from '@/store/modules/session'
 import { copyTextToClipboard } from '@/utils/clipboard'
@@ -66,13 +65,7 @@ async function loadProjects() {
   projectsLoading.value = true
   projectsError.value = null
   try {
-    const response = await getProjectPage({
-      pageNum: 1,
-      pageSize: 100,
-      scope: canViewAll.value ? 'all' : undefined,
-      orderByColumn: 'createTime',
-      isAsc: 'descending'
-    }, { signal: controller.signal })
+    const response = { rows: await sessionStore.loadWorkspaceProjects({ signal: controller.signal }) }
     if (projectsController !== controller) return
     projects.value = response.rows || []
     if (!projects.value.some(item => String(item.projectId) === selectedProjectId.value)) {

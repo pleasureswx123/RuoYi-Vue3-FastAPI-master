@@ -24,7 +24,7 @@ const task = {
 
 describe('人员泳道任务条', () => {
   it.each([
-    ['not_started', '待开工', 'not-started'],
+    ['not_started', '历史任务待恢复', 'not-started'],
     ['preparing', '目录准备中', 'preparing'],
     ['in_progress', '制作中', 'in-progress'],
     ['pending_review', '待审核', 'reviewing'],

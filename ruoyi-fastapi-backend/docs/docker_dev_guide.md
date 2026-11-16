@@ -53,3 +53,30 @@ docker compose -f docker-compose.dev.yml down
 ```
 
 普通停止不会删除 PostgreSQL 或 Redis 数据卷。除非明确要清空本地数据，不要执行 `down -v`。
+
+
+## 当前 Windows 本机联调入口（2026-10-27）
+
+本机已配置真实本地 PostgreSQL、Redis 与 Windows UNC 存储，适合继续优化页面流程。业务源码目录结构保持原样，新增数据、示例媒体、日志及启动脚本位于原有 `output/local-runtime/` 运行目录。
+
+在仓库根目录执行：
+
+```powershell
+& ./output/local-runtime/start-local.ps1
+```
+
+打开 `http://127.0.0.1:5174/projects`，刷新登录态后选择“本地流程演示”。当前 admin 在此项目兼具管理与制作角色，可测试分配、排期、开工、版本提交和审核。已有 2 个场次、4 个镜头、角色/场景/道具各 1 个资产；保留待分配、待开工、待审核和已完成内容。日期筛选示例为 2026-10-27 至 2026-10-31。
+
+创建新项目时，选择“本地联调存储（当前电脑）”，给当前账号设置项目管理人（如需本人制作，同时选择制作人员）。其实际磁盘位置为 `D:/lqh/shot-grid-main/shot-grid/output/local-runtime/local-nas`，通过已有 `\\localhost\D$` 共享访问。不能把此本机根目录用于公司部署；服务账号或机器变更后须重新探测。
+
+已完成的运行验证：角色和存储选项、真实项目目录初始化、业务对象创建、任务分配/排期/开工、受保护图片及 MP4 上传、版本发布、缩略图与视频代理、图片审核通过、最终文件与清单落盘、文件哈希校验、视频 206 Range。匿名文件请求被鉴权拒绝。未执行完整浏览器 E2E；前轮记录的 8 个扩展回归失败未在本轮修复。
+
+本机 FFmpeg 通过 `python -m pip install imageio-ffmpeg` 安装到现有 .venv，并由 `.env.dev` 的 `SHOT_GRID_MEDIA_WORKER_FFMPEG_PATH` 指向实际程序；未改变生产依赖文件。目录、版本和媒体 Worker 均已开启。Redis/数据库/运行文件需一并保留，勿清理 output/local-runtime 来“重置页面”。
+
+### 网页“服务暂时不可用”排查（2026-10-28）
+
+本次故障由 PostgreSQL 15432 异常退出导致，其他三个服务仍在运行，单看页面或端口 9099 不能确认业务可用。数据库日志记录子进程异常码 `0xC0000135`，具体系统依赖原因尚未确认；原始日志保留在 `output/local-runtime/postgres-crash-20261028.err`。
+
+现有启动命令已增强：复用 `pg-data`，使用 `pg_ctl` 等待数据库恢复完成，再检查数据库查询和网页代理到后端/Redis 的验证码接口。新数据库服务日志追加至 `output/local-runtime/postgres-server.log`，启动控制信息位于 `postgres-control.log` / `postgres-control.err`；重新启动其他服务前也会备份旧日志。脚本只补启动缺失服务，不清空数据、不自动结束占用端口的程序、不注册系统服务或开机任务。
+
+本次已恢复并通过实际登录、项目列表和项目详情请求；原演示项目与媒体版本仍在。若再次提示不可用，可重新执行上述启动命令并保留输出及日志；不要删除 `pg-data`、运行 `initdb` 或手工移除数据库锁文件。此脚本是手动恢复入口，不是后台监控程序；完整浏览器 E2E 未在本次执行。

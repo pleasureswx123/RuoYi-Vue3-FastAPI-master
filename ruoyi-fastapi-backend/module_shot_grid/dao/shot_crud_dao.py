@@ -8,8 +8,8 @@ from sqlalchemy.orm import aliased
 from sqlalchemy.sql import Select
 
 from module_admin.entity.do.user_do import SysUser
-from module_shot_grid.dao.schedule_phase import task_phase_expression
-from module_shot_grid.dao.shot_phase import missing_shot_content_expression
+from module_shot_grid.dao.final_delivery_dao import ShotGridFinalDeliveryDao
+from module_shot_grid.dao.schedule_phase import production_period_conditions, task_phase_expression
 from module_shot_grid.entity.do.asset_do import ShotGridAsset, ShotGridShotAsset
 from module_shot_grid.entity.do.project_do import (
     ShotGridEpisode,
@@ -178,13 +178,28 @@ class ShotGridShotCrudDao:
             statement = statement.where(ShotGridShot.shot_no >= query.shot_no_start)
         if query.shot_no_end is not None:
             statement = statement.where(ShotGridShot.shot_no <= query.shot_no_end)
-        if query.shot_status is not None:
-            if query.shot_status in {'pending_schedule', 'not_started'}:
-                statement = statement.where(task_phase_expression(task) == query.shot_status)
-            else:
-                statement = statement.where(status_expression == query.shot_status)
+        # 新旧筛选同时传入时取交集；多选状态之间取并集，在分页前完成。
+        for statuses in (
+            [query.shot_status] if query.shot_status else [],
+            (query.shot_statuses or '').split(',') if query.shot_statuses else [],
+        ):
+            if statuses:
+                statement = statement.where(
+                    or_(
+                        *[
+                            task_phase_expression(task) == status
+                            if status in {'pending_schedule', 'not_started'}
+                            else status_expression == status
+                            for status in statuses
+                        ]
+                    )
+                )
+        statement = statement.where(*production_period_conditions(task, query))
         if query.assignee_user_id is not None:
             statement = statement.where(task.assignee_user_id == query.assignee_user_id)
+        if query.has_final is not None:
+            approved = ShotGridFinalDeliveryDao.approved_statement(task.task_id, project_id).exists()
+            statement = statement.where(approved if query.has_final else ~approved)
         if query.asset_id is not None:
             statement = statement.where(
                 exists(
@@ -305,6 +320,12 @@ class ShotGridShotCrudDao:
             .limit(1)
             .lateral('shot_latest_version')
         )
+        approved = (
+            ShotGridFinalDeliveryDao.approved_statement(task.task_id, project_id)
+            .order_by(ShotGridVersion.version_no.desc(), ShotGridVersion.version_id.desc())
+            .limit(1)
+            .lateral('shot_approved_version')
+        )
         display_candidate = (
             select(ShotGridVersionCandidate.candidate_id)
             .where(ShotGridVersionCandidate.version_id == latest_version.c.version_id)
@@ -385,6 +406,10 @@ class ShotGridShotCrudDao:
         return (
             select(
                 ShotGridShot.shot_id,
+                *[
+                    approved.c[key].label(f'approved_{key}')
+                    for key in ['version_id', 'version_no', 'version_status', 'delivery_status', 'approved_time']
+                ],
                 latest_version.c.version_id.label('latest_version_id'),
                 latest_version.c.version_no.label('latest_version_no'),
                 latest_version.c.version_status.label('latest_version_status'),
@@ -408,6 +433,7 @@ class ShotGridShotCrudDao:
                     task.del_flag == '0',
                 ),
             )
+            .outerjoin(approved, true())
             .outerjoin(latest_version, true())
             .outerjoin(display_candidate, true())
             .outerjoin(display_review_media, true())
@@ -1021,7 +1047,6 @@ class ShotGridShotCrudDao:
             )
         )
         return case(
-            (and_(task.task_id.is_(None), missing_shot_content_expression(ShotGridShot)), 'pending_info'),
             (task.task_id.is_(None), 'unassigned'),
             (task.task_status == 'pending_review', 'reviewing'),
             (and_(task.task_status == 'completed', final_exists), 'completed'),

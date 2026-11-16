@@ -7,7 +7,7 @@ from sqlalchemy.orm import aliased
 from sqlalchemy.sql import Select
 
 from module_admin.entity.do.user_do import SysUser
-from module_shot_grid.dao.schedule_phase import task_phase_expression
+from module_shot_grid.dao.schedule_phase import production_period_conditions, task_phase_expression
 from module_shot_grid.entity.do.asset_do import ShotGridAsset, ShotGridAssetItem
 from module_shot_grid.entity.do.project_do import (
     ShotGridEpisode,
@@ -227,6 +227,7 @@ class ShotGridTaskScheduleDao:
         *,
         include_display_filters: bool,
     ) -> Select:
+        statement = statement.where(*production_period_conditions(ShotGridTask, query))
         if query.target_kind == 'shot':
             statement = statement.where(ShotGridTask.task_kind == 'shot_video')
         elif query.target_kind == 'asset_item':

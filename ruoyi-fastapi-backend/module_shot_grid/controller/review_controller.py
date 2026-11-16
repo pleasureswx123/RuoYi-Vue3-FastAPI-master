@@ -20,6 +20,9 @@ from module_shot_grid.entity.vo.review_vo import (
     ShotGridCandidatePromptUpdateModel,
     ShotGridFinalDeliveryModel,
     ShotGridIssueAppendModel,
+    ShotGridIssueCommentCreateModel,
+    ShotGridIssueCommentModel,
+    ShotGridIssueCommentPageModel,
     ShotGridIssueDetailModel,
     ShotGridIssueDraftModel,
     ShotGridIssueDraftUpdateModel,
@@ -484,7 +487,7 @@ async def add_shot_grid_version_issue_draft(
 
 @review_controller.post(
     '/versions/{versionId}/additional-issues',
-    summary='向退回版本追加并发布问题',
+    summary='追加正式反馈；已通过镜头直接进入返修',
     response_model=DataResponseModel[ShotGridIssueDetailModel],
     dependencies=[UserInterfaceAuthDependency('shotgrid:note:add')],
 )
@@ -764,3 +767,40 @@ async def reopen_shot_grid_review(
 ) -> Response:
     result = await ShotGridReviewReopenService.reopen(query_db, version_id, command, idempotency_key, current_user)
     return ResponseUtil.success(data=result)
+
+
+@review_controller.get(
+    '/versions/{versionId}/issues/{issueId}/comments',
+    summary='读取反馈评论',
+    response_model=DataResponseModel[ShotGridIssueCommentPageModel],
+    dependencies=[UserInterfaceAuthDependency('shotgrid:note:list')],
+)
+async def get_shot_grid_issue_comments(
+    version_id: Annotated[int, Path(alias='versionId', gt=0, le=SQL_BIGINT_MAX)],
+    issue_id: Annotated[int, Path(alias='issueId', gt=0, le=SQL_BIGINT_MAX)],
+    query_db: Annotated[AsyncSession, DBSessionDependency()],
+    current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
+    before_id: Annotated[int | None, Query(alias='beforeId', gt=0, le=SQL_BIGINT_MAX)] = None,
+    page_size: Annotated[int, Query(alias='pageSize', ge=1, le=50)] = 20,
+) -> Response:
+    result = await ShotGridReviewService.get_issue_comments(
+        query_db, version_id, issue_id, before_id, page_size, current_user
+    )
+    return ResponseUtil.success(data=result)
+
+
+@review_controller.post(
+    '/versions/{versionId}/issues/{issueId}/comments',
+    summary='追加反馈评论',
+    response_model=DataResponseModel[ShotGridIssueCommentModel],
+    dependencies=[UserInterfaceAuthDependency(['shotgrid:note:list', 'shotgrid:note:comment'], is_strict=True)],
+)
+async def add_shot_grid_issue_comment(
+    version_id: Annotated[int, Path(alias='versionId', gt=0, le=SQL_BIGINT_MAX)],
+    issue_id: Annotated[int, Path(alias='issueId', gt=0, le=SQL_BIGINT_MAX)],
+    command: ShotGridIssueCommentCreateModel,
+    query_db: Annotated[AsyncSession, DBSessionDependency()],
+    current_user: Annotated[CurrentUserModel, CurrentUserDependency()],
+) -> Response:
+    result = await ShotGridReviewService.add_issue_comment(query_db, version_id, issue_id, command, current_user)
+    return ResponseUtil.success(msg='评论已保存', data=result)

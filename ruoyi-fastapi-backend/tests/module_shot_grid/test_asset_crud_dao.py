@@ -94,6 +94,8 @@ async def test_asset_page_applies_project_filters_assignee_and_whitelist_sort() 
         assetType='Environment',
         assetStatus='revision',
         assigneeUserId=2,
+        productionFrom='2026-10-01',
+        productionTo='2026-10-31',
         orderByColumn='updateTime',
         isAsc='ascending',
     )
@@ -107,6 +109,10 @@ async def test_asset_page_applies_project_filters_assignee_and_whitelist_sort() 
     assert "sg_asset.asset_type = 'Environment'" in compiled
     assert 'EXISTS (SELECT 1' in compiled
     assert 'sg_task.assignee_user_id = 2' in compiled
+    task_scope = compiled[compiled.rindex('EXISTS (SELECT 1') :]
+    assert 'sg_task.assignee_user_id = 2' in task_scope
+    assert "sg_task.expected_end_time >= '2026-10-01 00:00:00'" in task_scope
+    assert "sg_task.expected_start_time <= '2026-10-31 23:59:59.999999'" in task_scope
     assert 'ORDER BY sg_asset.update_time ASC' in compiled
     assert 'LIMIT 20 OFFSET 0' in compiled
 
@@ -228,3 +234,20 @@ async def test_asset_status_filter_matches_item_counts_before_pagination(status:
         assert f'coalesce(asset_status_rollup.{status}_count, 0) > 0' in compiled
         assert 'sg_asset.project_id = 10' in compiled
         assert f"coalesce(asset_status_rollup.asset_status, 'unassigned') = '{status}'" not in compiled
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('flag', [True, False])
+async def test_approved_asset_filter_runs_before_pagination_and_retains_active_item_scope(flag: bool) -> None:
+    db = _SequenceDb([_ScalarResult(0), _MappingResult([])])
+    await ShotGridAssetCrudDao.get_asset_page(db, 10, ShotGridAssetListQueryModel(hasFinal=flag))
+    for statement in db.statements:
+        sql = _sql(statement)
+        assert 'sg_asset.project_id = 10' in sql
+        assert "sg_asset_item.lifecycle_status = 'active'" in sql
+        assert "sg_asset_item.del_flag = '0'" in sql
+        assert 'sg_version.task_id = sg_task.task_id' in sql
+        assert 'sg_version.project_id = sg_asset_item.project_id' in sql
+        assert 'sg_final_delivery.approved_time IS NOT NULL' in sql
+        assert 'coalesce(asset_status_rollup.approved_item_count, 0)' in sql
+        assert "sg_final_delivery.delivery_status = 'published'" in sql

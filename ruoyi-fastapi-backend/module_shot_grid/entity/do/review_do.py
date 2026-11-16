@@ -162,6 +162,32 @@ class ShotGridNote(Base):
     )
 
 
+class ShotGridIssueComment(Base):
+    """已发布反馈下只追加的讨论，不参与审核状态流转。"""
+
+    __tablename__ = 'sg_issue_comment'
+    comment_id = Column(BigInteger, primary_key=True, autoincrement=True)
+    project_id = Column(BigInteger, nullable=False)
+    note_id = Column(BigInteger, nullable=False)
+    author_id = Column(BigInteger, ForeignKey('sys_user.user_id', ondelete='RESTRICT'), nullable=False)
+    author_name = Column(String(64), nullable=False)
+    content = Column(String(2000), nullable=False)
+    request_id = Column(String(100), nullable=False)
+    create_time = Column(SHOT_GRID_DATETIME, nullable=False, default=datetime.now)
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ['note_id', 'project_id'],
+            ['sg_note.note_id', 'sg_note.project_id'],
+            name='fk_sg_issue_comment_note_project',
+            ondelete='RESTRICT',
+        ),
+        UniqueConstraint('note_id', 'author_id', 'request_id', name='uk_sg_issue_comment_request'),
+        CheckConstraint("btrim(content) <> '' AND btrim(request_id) <> ''", name='ck_sg_issue_comment_content'),
+        Index('idx_sg_issue_comment_note_id', 'note_id', 'comment_id'),
+        {'comment': 'Shot Grid审核反馈讨论记录'},
+    )
+
+
 class ShotGridVersionIssueResponse(Base):
     """制作人随版本提交保存的逐条问题处理说明。"""
 

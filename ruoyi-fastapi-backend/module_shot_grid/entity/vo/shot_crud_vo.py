@@ -1,10 +1,15 @@
 from datetime import date, datetime
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 from uuid import UUID
 
 from pydantic import ConfigDict, Field, field_validator, model_validator
 
-from module_shot_grid.entity.vo.common_vo import ShotGridApiModel, ShotGridLockVersionModel, ShotGridPageQueryModel
+from module_shot_grid.entity.vo.common_vo import (
+    ShotGridApiModel,
+    ShotGridApprovedVersionModel,
+    ShotGridLockVersionModel,
+    ShotGridProductionQueryModel,
+)
 from module_shot_grid.entity.vo.target_purge_vo import ShotGridTargetPurgeStatusModel
 from module_shot_grid.entity.vo.task_vo import ShotGridTaskReferenceFileModel
 
@@ -34,7 +39,9 @@ def _strip_optional_text(value: Any) -> str | None:
     return normalized or None
 
 
-class ShotGridShotListQueryModel(ShotGridPageQueryModel):
+class ShotGridShotListQueryModel(ShotGridProductionQueryModel):
+    has_final: bool | None = Field(default=None, description='是否存在定稿（含历史通过记录）')
+
     """镜头分页列表筛选与白名单排序。"""
 
     episode_id: int | None = Field(default=None, gt=0, le=SQL_BIGINT_MAX, description='集ID')
@@ -42,6 +49,7 @@ class ShotGridShotListQueryModel(ShotGridPageQueryModel):
     shot_no_start: int | None = Field(default=None, gt=0, le=2_147_483_647, description='起始镜头号，包含边界')
     shot_no_end: int | None = Field(default=None, gt=0, le=2_147_483_647, description='结束镜头号，包含边界')
     shot_status: ShotStatus | None = Field(default=None, description='镜头聚合状态')
+    shot_statuses: str | None = Field(default=None, max_length=200, description='多个镜头状态，逗号分隔')
     assignee_user_id: int | None = Field(
         default=None,
         gt=0,
@@ -64,6 +72,16 @@ class ShotGridShotListQueryModel(ShotGridPageQueryModel):
         if self.shot_no_start is not None and self.shot_no_end is not None and self.shot_no_start > self.shot_no_end:
             raise ValueError('起始镜头号不能大于结束镜头号')
         return self
+
+    @field_validator('shot_statuses')
+    @classmethod
+    def validate_shot_statuses(cls, value: str | None) -> str | None:
+        if not value:
+            return None
+        statuses = list(dict.fromkeys(item.strip() for item in value.split(',')))
+        if any(item not in get_args(ShotStatus) for item in statuses):
+            raise ValueError('请选择有效镜头状态')
+        return ','.join(statuses)
 
 
 class ShotGridShotWriteFieldsModel(ShotGridApiModel):
@@ -172,6 +190,10 @@ class ShotGridShotUpdateModel(ShotGridShotWriteFieldsModel):
 
     lock_version: int = Field(ge=0, description='镜头乐观锁版本')
     asset_ids: list[int] = Field(description='完整关联资产ID集合')
+
+    shot_no: int | None = Field(
+        default=None, gt=0, le=SQL_INTEGER_MAX // 10, description='未冻结目录镜头的新编号；省略时保留原编号'
+    )
 
 
 class ShotGridShotReorderModel(ShotGridLockVersionModel):
@@ -383,6 +405,7 @@ class ShotGridShotListItemModel(ShotGridApiModel):
     previous_assignee_names: list[str] = Field(default_factory=list)
     thumbnail: ShotGridShotThumbnailModel | None = None
     proxy_media: ShotGridShotProxyMediaModel | None = None
+    approved_version: ShotGridApprovedVersionModel | None = None
     latest_version: ShotGridShotLatestVersionModel | None = None
     latest_feedback: ShotGridShotLatestFeedbackModel | None = None
     asset_count: int = Field(ge=0)

@@ -1,5 +1,5 @@
 <script setup>
-import { computed, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, reactive, ref } from 'vue'
 import { assignAssetItemTask } from '@/api/shot-grid/assets'
 import ProjectModal from '@/views/project/components/ProjectModal.vue'
 import AssetProductionInfo from './AssetProductionInfo.vue'
@@ -27,6 +27,8 @@ const form = reactive({
 })
 const assignForm = ref(null)
 const saving = ref(false)
+let disposed = false
+onBeforeUnmount(() => { disposed = true })
 const requestError = ref(null)
 const assignRules = {
   assigneeUserId: [{
@@ -35,8 +37,8 @@ const assignRules = {
         callback(new Error('请先编辑资产并填写制作分项，再分配或改派任务'))
         return
       }
-      if (!value) {
-        callback(new Error('请选择唯一主制作人'))
+      if (!props.members.some(member => Number(member.userId) === Number(value))) {
+        callback(new Error('请选择有效制作人'))
         return
       }
       callback()
@@ -46,22 +48,22 @@ const assignRules = {
 }
 
 async function submit() {
-  if (saving.value) return
-  requestError.value = null
-  const isValid = await assignForm.value?.validate().catch(() => false)
-  if (!isValid) return
+  if (saving.value || disposed) return
   saving.value = true
+  requestError.value = null
   try {
+    const isValid = await assignForm.value?.validate().catch(() => false)
+    if (!isValid || disposed) return
     const response = await assignAssetItemTask(operationContext.projectId, operationContext.assetItemId, {
       assigneeUserId: Number(form.assigneeUserId),
       taskDescription: form.taskDescription.trim() || null,
       taskLockVersion: props.item.task ? Number(props.item.task.lockVersion) : null
     })
-    emit('assigned', response.data, operationContext)
+    if (!disposed) emit('assigned', response.data, operationContext)
   } catch (error) {
-    requestError.value = assetErrorState(error, isReassign.value ? '资产任务改派失败' : '资产任务分配失败')
+    if (!disposed) requestError.value = assetErrorState(error, isReassign.value ? '资产任务改派失败' : '资产任务分配失败')
   } finally {
-    saving.value = false
+    if (!disposed) saving.value = false
   }
 }
 
@@ -75,12 +77,12 @@ function closeDialog() {
 </script>
 
 <template>
-  <ProjectModal :title="isReassign ? '改派资产任务' : '分配资产任务'" :description="`${asset.assetName} · ${item.productionItem || '未命名制作分项'}；制作分项名称完整后才能进入任务分配。`" :busy="saving" @close="closeDialog">
+  <ProjectModal :title="isReassign ? '改派制作人' : '分配制作人'" :description="`${asset.assetName} · ${item.productionItem || '未命名制作分项'}`" :busy="saving" @close="closeDialog">
     <el-form ref="assignForm" :model="form" :rules="assignRules" class="assign-form" size="large" label-position="top" aria-label="资产任务分配表单">
       <el-alert v-if="requestError" :title="requestError.title" type="error" show-icon :closable="false"><span>{{ requestError.message }}</span><el-button v-if="requestError.status === 409" link type="danger" @click="emit('refresh')">刷新后重试</el-button></el-alert>
-      <el-form-item label="唯一主制作人" prop="assigneeUserId"><el-select v-model="form.assigneeUserId" class="sg-select" placeholder="请选择" :disabled="saving"><el-option label="请选择" value="" /><el-option v-for="member in members" :key="member.userId" :label="memberLabel(member)" :value="String(member.userId)" /></el-select></el-form-item>
+      <el-form-item label="制作人" prop="assigneeUserId"><el-select v-model="form.assigneeUserId" filterable class="sg-select" placeholder="搜索或选择制作人" :disabled="saving"><el-option v-for="member in members" :key="member.userId" :label="memberLabel(member)" :value="String(member.userId)" /></el-select></el-form-item>
       <el-form-item label="任务要求" prop="taskDescription"><el-input v-model="form.taskDescription" type="textarea" :rows="4" :disabled="saving" placeholder="说明图片交付要求" /></el-form-item>
-      <AssetProductionInfo :asset="asset" :item="item" />
+      <el-collapse><el-collapse-item title="查看已有制作要求" name="requirements"><AssetProductionInfo :asset="asset" :item="item" /></el-collapse-item></el-collapse>
       <footer><el-button :disabled="saving" @click="closeDialog">取消</el-button><el-button type="primary" :loading="saving" @click="submit">{{ isReassign ? '确认改派' : '确认分配' }}</el-button></footer>
     </el-form>
   </ProjectModal>

@@ -7,6 +7,7 @@ import { getProjectStorage } from '@/api/shot-grid/projects'
 import { copyTextToClipboard } from '@/utils/clipboard'
 import { versionNasFolders, validateNasFolder } from '@/utils/nasExplorer'
 
+const folderForm = ref(null)
 const props = defineProps({ projectId: { type: Number, default: 0 }, canQuery: Boolean })
 const menu = ref(false)
 const visible = ref(false)
@@ -30,6 +31,7 @@ function reset() {
   loading.value = false
   target.value = null
   attempted.value = false
+  folderForm.value?.clearValidate()
 }
 watch(() => [props.projectId, props.canQuery], reset)
 function dismissMenu(event) {
@@ -103,6 +105,7 @@ async function loadFolders(autoLaunch = true) {
   }
 }
 async function launch() {
+  if (folderForm.value && !await folderForm.value.validate().catch(() => false)) return
   if (!props.canQuery || !folders.value.includes(selected.value)) return
   const current = target.value
   const ticket = generation
@@ -173,8 +176,8 @@ defineExpose({ open, openTarget })
   <el-dialog v-model="visible" title="打开 NAS 文件夹" width="620px" @close="reset">
     <div v-loading="loading">
       <el-alert v-if="error" :title="error" type="warning" :closable="false" />
-      <el-form v-if="folders.length" :model="{ folder: selected }" label-position="top">
-        <el-form-item label="NAS 文件夹" prop="folder">
+      <el-form ref="folderForm" v-if="folders.length" :model="{ folder: selected }" label-position="top">
+        <el-form-item label="NAS 文件夹" prop="folder" :rules="[{ required: true, message: '请选择 NAS 文件夹', trigger: 'change' }]">
           <el-select v-model="selected" style="width: 100%"><el-option v-for="folder in folders" :key="folder" :label="folder" :value="folder" /></el-select>
         </el-form-item>
         <el-input :model-value="selected" readonly type="textarea" :rows="3" aria-label="NAS 完整目录" />

@@ -19,6 +19,8 @@ import { formatVersionDateTime, versionErrorState, versionStatusMeta } from './v
 
 const props = defineProps({
   taskId: { type: Number, required: true },
+  initialVersionId: { type: Number, default: null },
+  compactFeedback: { type: Boolean, default: false },
   currentReviewVersionId: { type: Number, default: null },
   operationGeneration: { type: Number, default: 0 },
   refreshKey: { type: [Number, String], default: 0 },
@@ -428,7 +430,7 @@ async function loadDetail(versionId, generation = contextGeneration) {
       !stillCurrent(generation, targetTaskId, targetOperationGeneration) ||
       selectedVersionId.value !== normalizedVersionId
     ) return
-    if (Number(response.data?.taskId) !== targetTaskId) {
+    if (Number(response.data?.taskId) !== targetTaskId || Number(response.data?.versionId) !== normalizedVersionId) {
       throw new Error('版本详情与当前任务不匹配')
     }
     versionDetail.value = response.data
@@ -477,7 +479,7 @@ async function loadDetail(versionId, generation = contextGeneration) {
   }
 }
 
-async function loadVersions({ preserveSelection = true } = {}) {
+async function loadVersions({ preserveSelection = true, preferVersionId = null } = {}) {
   emit('selection-loading')
   listController?.abort()
   detailController?.abort()
@@ -510,9 +512,10 @@ async function loadVersions({ preserveSelection = true } = {}) {
     versions.value = rows
     total.value = Number(response.total || 0)
     const currentStillExists = preserveSelection && rows.some(row => Number(row.versionId) === selectedVersionId.value)
-    selectedVersionId.value = currentStillExists ? selectedVersionId.value : Number(rows[0]?.versionId) || null
+    selectedVersionId.value = Number(preferVersionId) || (currentStillExists ? selectedVersionId.value : Number(rows[0]?.versionId) || null)
     if (selectedVersionId.value) await loadDetail(selectedVersionId.value, generation)
     else versionDetail.value = null
+    if (stillCurrent(generation, targetTaskId, targetOperationGeneration) && versionDetail.value && !versions.value.some(row => Number(row.versionId) === Number(versionDetail.value.versionId))) versions.value = [versionDetail.value, ...versions.value]
   } catch (error) {
     if (!canceled(error, controller) && stillCurrent(generation, targetTaskId, targetOperationGeneration)) {
       versions.value = []
@@ -562,6 +565,7 @@ async function focusIssue(issue) {
     return
   }
   feedbackScope.value = note.displayScope === 'pending' ? 'pending' : 'history'
+  feedbackCategory.value = note.originCandidateId == null ? 'overall-feedback' : 'files'
   selectFeedbackGroup(issueFileKey(note))
   selectedFeedback.value = note
   opinionTab.value = 'current'
@@ -571,6 +575,7 @@ async function focusIssue(issue) {
 }
 
 async function selectFeedback(issue) {
+  if (props.compactFeedback) { openSourceNote(issue); return }
   selectedFeedback.value = issue
   await nextTick()
   feedbackMedia.value?.seekToNote()
@@ -613,11 +618,11 @@ function resetForContext() {
   selectedFeedback.value = null
   feedbackLoading.value = false
   feedbackError.value = null
-  loadVersions({ preserveSelection: false })
+  loadVersions({ preserveSelection: false, preferVersionId: props.initialVersionId })
 }
 
 watch(
-  () => [props.taskId, props.operationGeneration, props.canList, props.canQuery, props.canListNotes],
+  () => [props.taskId, props.operationGeneration, props.canList, props.canQuery, props.canListNotes, props.initialVersionId],
   resetForContext,
   { immediate: true }
 )
@@ -633,13 +638,18 @@ onBeforeUnmount(() => {
   detailController?.abort()
 })
 
-defineExpose({ focusIssue })
+async function focusFeedback() {
+  await nextTick()
+  const element = feedbackPanel.value || historyPanel.value
+  element?.scrollIntoView?.({ behavior: 'smooth', block: 'start' })
+}
+defineExpose({ focusIssue, focusFeedback })
 </script>
 
 <template>
-  <div :id="historyPanelId" ref="historyPanel" class="version-history-affix-target">
+  <div :id="historyPanelId" ref="historyPanel" class="version-history-affix-target" :class="{ 'is-compact-feedback': compactFeedback }">
     <el-card class="version-history-panel" shadow="never">
-    <header class="history-heading">
+    <header v-if="!compactFeedback" class="history-heading">
       <div class="history-title">
         <h3>版本记录</h3>
         <el-tooltip content="版本按提交顺序自动编号；每次修订都会新增版本，历史文件始终保留。" placement="top">
@@ -672,11 +682,11 @@ defineExpose({ focusIssue })
             <span class="version-tab-label"><strong>{{ version.versionNumber }}</strong><el-tag v-if="Number(version.versionId) === currentReviewVersionId" size="small" type="primary" effect="dark">当前审核版</el-tag><el-tag size="small" effect="plain" round :type="tagTypeFromTone(versionStatusMeta(version.versionStatus).tone)">{{ versionStatusMeta(version.versionStatus).label }}</el-tag></span>
           </template>
       <main v-if="selectedVersionId === Number(version.versionId)" class="history-detail">
-        <div class="version-tab-meta"><span>{{ version.submitterName || `用户 #${version.submittedBy}` }} · {{ formatVersionDateTime(version.submittedTime) }}</span><span>{{ version.changelog }}</span></div>
+        <div class="version-tab-meta"><span>{{ version.submitterName || `用户 #${version.submittedBy}` }} · {{ formatVersionDateTime(version.submittedTime) }}</span><span>{{ compactFeedback ? `提交说明：${version.changelog || '未填写'}` : version.changelog }}</span></div>
         <el-skeleton v-if="detailLoading" class="detail-placeholder" :rows="8" animated />
         <el-alert v-else-if="detailError" class="detail-placeholder is-error" :title="detailError.title" :description="detailError.message" type="error" :closable="false" show-icon />
         <template v-else-if="versionDetail">
-          <section class="version-info-content" aria-label="版本信息与文件列表">
+          <section v-if="!compactFeedback" class="version-info-content" aria-label="版本信息与文件列表">
           <VersionDetailCard
             :show-header="false"
             :version="versionDetail"
@@ -727,7 +737,7 @@ defineExpose({ focusIssue })
                 <nav v-if="currentFeedbackGroups.length" class="feedback-file-nav" aria-label="按文件查看修改意见">
                   <el-button v-for="group in currentFeedbackGroups" :key="group.key" class="feedback-file" :title="group.candidate.files?.find(file => file.role === 'review_media')?.businessFileName" :class="{ active: group.key === selectedFeedbackGroupKey }" :aria-pressed="group.key === selectedFeedbackGroupKey" @click="selectFeedbackGroup(group.key)">
                     <span class="feedback-file__content">
-                      <ReviewCandidateThumbnail :version-id="group.versionId" :candidate="group.candidate" :can-preview="canDownload" :active="group.key === selectedFeedbackGroupKey" />
+                      <ReviewCandidateThumbnail v-if="!compactFeedback" :version-id="group.versionId" :candidate="group.candidate" :can-preview="canDownload" :active="group.key === selectedFeedbackGroupKey" />
                       <strong>{{ group.label }}</strong>
 
                       <el-tag :class="{ 'feedback-pending-tag': group.pendingCount > 0 }" :type="group.pendingCount ? 'warning' : 'info'" :effect="group.pendingCount ? 'dark' : 'plain'" round size="small">{{ group.pendingCount ? `待处理 ${group.pendingCount} 条` : group.notes.some(note => note.noteStatus === 'open') ? '仍有问题转入后续版' : '无待修改问题' }}</el-tag>
@@ -735,7 +745,7 @@ defineExpose({ focusIssue })
                     </span>
                   </el-button>
                 </nav>
-                <div v-if="currentFeedbackGroups.length" class="feedback-media">
+                <div v-if="currentFeedbackGroups.length && !compactFeedback" class="feedback-media">
                   <ReviewMediaWorkspace v-if="feedbackMediaVersion" :ref="element => feedbackMedia = element" :version="feedbackMediaVersion" :selected-note="selectedFeedback" :can-download="canDownload" feedback-mode @clear-note-focus="selectedFeedback = null" />
                 </div>
                 <aside v-if="currentFeedbackGroups.length || previousNotes.length" class="feedback-list-panel">
@@ -1004,6 +1014,18 @@ defineExpose({ focusIssue })
 @media (max-width: 600px) {
   .version-rail { grid-template-columns: 1fr; }
 }
+
+.is-compact-feedback .history-layout { margin-top: 0; }
+.is-compact-feedback .version-tab-meta { display: grid; gap: 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.is-compact-feedback .feedback-layout { grid-template-columns: minmax(0, 1fr); }
+.is-compact-feedback .feedback-file-nav { grid-row: auto; grid-column: 1; display: flex; flex-wrap: wrap; gap: 6px; }
+.is-compact-feedback .feedback-file { width: auto; flex: 1 1 120px; margin: 0; }
+.is-compact-feedback .feedback-file__content { display: grid; gap: 4px; }
+.is-compact-feedback .feedback-list-panel { grid-column: 1; grid-row: auto; position: static; width: auto; min-width: 0; }
+.is-compact-feedback .feedback-summary__top { flex-wrap: wrap; }
+.is-compact-feedback .feedback-summary__top h3 { font-size: 13px; }
+.is-compact-feedback .feedback-category-tabs :deep(> .el-tabs__content) { padding: 6px; }
+.is-compact-feedback .version-tabs > :deep(.el-tabs__content) { padding: 8px; }
 </style>
 
 <style scoped>
@@ -1017,4 +1039,16 @@ defineExpose({ focusIssue })
 .feedback-category-label { writing-mode: vertical-rl; text-orientation: upright; letter-spacing: 2px; line-height: 18px; }
 .feedback-category-tabs .overall-feedback { background: transparent; }
 .version-feedback-panel .feedback-author { font-size: 10px; }
+
+.is-compact-feedback .history-layout { margin-top: 0; }
+.is-compact-feedback .version-tab-meta { display: grid; gap: 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.is-compact-feedback .feedback-layout { grid-template-columns: minmax(0, 1fr); }
+.is-compact-feedback .feedback-file-nav { grid-row: auto; grid-column: 1; display: flex; flex-wrap: wrap; gap: 6px; }
+.is-compact-feedback .feedback-file { width: auto; flex: 1 1 120px; margin: 0; }
+.is-compact-feedback .feedback-file__content { display: grid; gap: 4px; }
+.is-compact-feedback .feedback-list-panel { grid-column: 1; grid-row: auto; position: static; width: auto; min-width: 0; }
+.is-compact-feedback .feedback-summary__top { flex-wrap: wrap; }
+.is-compact-feedback .feedback-summary__top h3 { font-size: 13px; }
+.is-compact-feedback .feedback-category-tabs :deep(> .el-tabs__content) { padding: 6px; }
+.is-compact-feedback .version-tabs > :deep(.el-tabs__content) { padding: 8px; }
 </style>

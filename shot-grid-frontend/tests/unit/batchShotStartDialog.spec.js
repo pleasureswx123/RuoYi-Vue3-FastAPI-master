@@ -32,6 +32,7 @@ async function submit(wrapper) {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  vi.spyOn(Date, 'now').mockReturnValue(new Date('2026-09-01T09:00:00').getTime())
   updateTaskSchedule.mockReset()
   getShotDetail.mockImplementation((_projectId, shotId) => Promise.resolve({ data: {
     ...shots[shotId - 1], allowedActions: ['task.start'],
@@ -130,9 +131,11 @@ describe('镜头批量开工', () => {
       await button(wrapper, '应用到勾选项').trigger('click'); await flushPromises()
       await wrapper.findAllComponents(ElInput).find(input => input.props('type') === 'textarea').find('textarea').setValue('修改计划')
       await button(wrapper, '保存排期').trigger('click'); await flushPromises()
-      expect(document.body.textContent).toContain('排期已保存，尚未开工')
+      expect(document.body.textContent).toContain('排期已保存，任务状态保持不变')
       expect(document.body.textContent).toContain('版本冲突')
       expect(startTask).not.toHaveBeenCalled()
+      await button(wrapper, '关闭并刷新').trigger('click')
+      expect(wrapper.emitted('close')[0][0]).toEqual({ attempted: true, completedShotIds: [1] })
     } finally { wrapper.unmount() }
   })
 
@@ -151,7 +154,7 @@ describe('镜头批量开工', () => {
       expect(updateTaskSchedule).toHaveBeenCalledTimes(3)
       expect(updateTaskSchedule.mock.calls[1][1]).toMatchObject({ expectedStartTime: '2026-10-02T09:00:00', expectedEndTime: '2026-10-06T18:00:00', changeReason: '' })
       expect(startTask).not.toHaveBeenCalled()
-      expect(wrapper.emitted('close')[0][0]).toEqual({ attempted: true })
+      expect(wrapper.emitted('close')[0][0]).toEqual({ attempted: true, completedShotIds: [1, 2, 3] })
     } finally { wrapper.unmount() }
   })
   it('行内时间缺失阻止保存，取消不提交草稿', async () => {
@@ -162,7 +165,7 @@ describe('镜头批量开工', () => {
       await button(wrapper, '保存排期').trigger('click'); await flushPromises()
       expect(updateTaskSchedule).not.toHaveBeenCalled()
       await button(wrapper, '取消').trigger('click')
-      expect(wrapper.emitted('close')[0][0]).toEqual({ attempted: false })
+      expect(wrapper.emitted('close')[0][0]).toEqual({ attempted: false, completedShotIds: [] })
     } finally { wrapper.unmount() }
   })
 
@@ -208,7 +211,7 @@ describe('镜头批量开工', () => {
       expect(document.body.textContent).toContain('已开工，可以开始制作')
       expect(button(wrapper, '确认批量开工')).toBeUndefined()
       await button(wrapper, '关闭并刷新').trigger('click')
-      expect(wrapper.emitted('close')[0][0]).toEqual({ attempted: true })
+      expect(wrapper.emitted('close')[0][0]).toEqual({ attempted: true, completedShotIds: [409, 422].includes(status) ? [1, 3] : [1] })
     } finally { wrapper.unmount() }
   })
 

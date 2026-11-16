@@ -19,10 +19,10 @@ import {
 
 describe('资产展示模型', () => {
   it('父级提醒与独立分项状态分离，并显示完成进度', () => {
-    expect(assetStatusMeta('revision').label).toBe('待修改')
-    expect(assetStatusMeta('revision').label).toBe('待修改')
+    expect(assetStatusMeta('revision').label).toBe('反馈')
+    expect(assetStatusMeta('revision').label).toBe('反馈')
     expect(assetStatusMeta('reviewing').label).toBe('待审核')
-    expect(assetStatusMeta('completed').label).toBe('已完成')
+    expect(assetStatusMeta('completed').label).toBe('通过')
     expect(assetCompletionSummary({ itemCount: 4, itemStatusCounts: { revision: 1, reviewing: 1, in_progress: 1, completed: 1 } })).toBe('已完成 1/4')
     expect(assetCompletionSummary({ itemCount: 0 })).toBe('暂无制作分项')
   })
@@ -32,12 +32,12 @@ describe('资产展示模型', () => {
     expect(assetTypeMeta('Environment').label).toBe('场景')
     expect(assetTypeMeta('Prop').label).toBe('道具')
     expect(assetStatusMeta('unassigned')).toMatchObject({ label: '待分配', tone: 'warning' })
-    expect(assetStatusMeta('not_started')).toMatchObject({ label: '待开工', tone: 'muted' })
+    expect(assetStatusMeta('not_started')).toMatchObject({ label: '历史任务待恢复', tone: 'muted' })
     expect(assetStatusMeta('in_progress')).toMatchObject({ label: '制作中', tone: 'primary' })
     expect(assetStatusMeta('reviewing').label).toBe('待审核')
     expect(assetStatusTagClass('in_progress')).toBe('asset-status-tag--in_progress')
     expect(assetStatusTagClass('unexpected')).toBe('asset-status-tag--unknown')
-    expect(assetDirectoryStatusMeta('not_created')).toMatchObject({ label: '开始制作时创建', tone: 'muted' })
+    expect(assetDirectoryStatusMeta('not_created')).toMatchObject({ label: '分配后自动准备', tone: 'muted' })
     expect(assetDirectoryStatusMeta('ready')).toMatchObject({ label: '目录已就绪', tone: 'info' })
     expect(assetDirectoryStatusMeta('failed')).toMatchObject({ label: '目录处理异常', tone: 'danger' })
   })
@@ -46,13 +46,13 @@ describe('资产展示模型', () => {
     expect(assetItemStatusEntries({ not_started: 2, preparing: 1, in_progress: -4, unknown: 9 })).toEqual([
       { status: 'pending_info', label: '待完善', count: 0 },
       { status: 'unassigned', label: '待分配', count: 0 },
-      { status: 'pending_schedule', label: '待排期', count: 0 },
-      { status: 'not_started', label: '待开工', count: 2 },
+      { status: 'pending_schedule', label: '历史任务待恢复', count: 0 },
+      { status: 'not_started', label: '历史任务待恢复', count: 2 },
       { status: 'preparing', label: '目录准备中', count: 1 },
       { status: 'in_progress', label: '制作中', count: 0 },
       { status: 'reviewing', label: '待审核', count: 0 },
-      { status: 'revision', label: '待修改', count: 0 },
-      { status: 'completed', label: '已完成', count: 0 }
+      { status: 'revision', label: '反馈', count: 0 },
+      { status: 'completed', label: '通过', count: 0 }
     ])
   })
 

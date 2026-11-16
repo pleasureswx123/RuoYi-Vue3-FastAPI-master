@@ -137,7 +137,11 @@ class ShotGridTargetPurgeManifestDao:
         else:
             asset = await db.get(m.ShotGridAsset, graph.target_id)
             current = f'ASSET/{asset.asset_type}/{asset.storage_dir_name}'
-        normalize_target_path(current)
+        current_paths = [current]
+        if graph.kind == 'shot':
+            current_paths.append(f'SHOT/{episode.storage_dir_name}/{scene.scene_no:03d}/{shot.shot_no:04d}')
+        for path in current_paths:
+            normalize_target_path(path)
         # 旧目录可能因迁移留下不同归属，不能按历史字符串扩大递归删除范围。
         published_paths = list(
             await db.scalars(
@@ -167,7 +171,10 @@ class ShotGridTargetPurgeManifestDao:
             for field in fields:
                 published_paths.extend(await db.scalars(select(getattr(model, field)).where(scope)))
         if any(
-            not normalize_target_path(path).startswith(normalize_target_path(current) + '/') for path in published_paths
+            not any(
+                normalize_target_path(path).startswith(normalize_target_path(parent) + '/') for parent in current_paths
+            )
+            for path in published_paths
         ):
             raise shot_grid_error(
                 409, 'SG_TARGET_PURGE_PATH_AMBIGUOUS', '历史文件路径不在当前目标目录内，需先核对存储归属'
@@ -200,7 +207,8 @@ class ShotGridTargetPurgeManifestDao:
             for other, episode_dir, scene_no in rows:
                 directory = other.storage_dir_name or f'{scene_no:03d}_{other.shot_no:04d}'
                 other_paths.append(f'VIDEO/{episode_dir}/{directory}')
+                other_paths.append(f'SHOT/{episode_dir}/{scene_no:03d}/{other.shot_no:04d}')
         for path in other_paths:
-            if paths_overlap(current, path):
+            if any(paths_overlap(parent, path) for parent in current_paths):
                 raise shot_grid_error(409, 'SG_TARGET_PURGE_PATH_SHARED', '目标目录被其他版本引用，不能永久清理')
-        return [current]
+        return current_paths

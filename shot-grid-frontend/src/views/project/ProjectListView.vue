@@ -29,7 +29,7 @@ const filterFormRef = ref(null)
 const query = reactive({
   keyword: '',
   projectStatus: '',
-  scope: '',
+  scope: sessionStore.permissions.some(permission => ['*:*:*', 'shotgrid:project:all'].includes(permission)) ? 'all' : '',
   pageNum: 1,
   pageSize: 12,
   orderByColumn: 'createTime',
@@ -110,6 +110,10 @@ function changePage(nextPage) {
 }
 
 async function openProject(projectId) {
+  if (sessionStore.isCreatorWorkspace && sessionStore.allowedRouteKeys.has('workbench')) {
+    await router.push({ path: '/workbench', query: { projectId } })
+    return
+  }
   await router.push(`/projects/${projectId}/overview`)
 }
 

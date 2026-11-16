@@ -105,6 +105,7 @@ class ShotGridVersionSubmissionService:
             task_status=str(task_context['task_status']),
             open_issues=open_issues,
             issue_responses=command.issue_responses,
+            target_version_no=command.target_version_no,
         )
         if await ShotGridVersionSubmissionDao.has_unresolved_submission(db, task_id):
             raise shot_grid_error(
@@ -113,9 +114,10 @@ class ShotGridVersionSubmissionService:
                 '任务已有正在处理或待处理失败的版本提交',
             )
 
-        _, version_no, first_candidate_no = await cls._submission_target(
+        target_version, version_no, first_candidate_no = await cls._submission_target(
             db, task_id, task_context['task_status'], command.target_version_no, len(command.candidates)
         )
+        await cls._append_directory(db, task_context, target_version.version_id if target_version else None)
         candidate_results: list[ShotGridVersionSubmissionPreflightCandidateResultModel] = []
         for candidate_no, candidate in enumerate(command.candidates, start=first_candidate_no):
             extension = cls._preflight_file_extension(task_context['task_kind'], candidate.file_name)
@@ -269,6 +271,7 @@ class ShotGridVersionSubmissionService:
                 task_status=str(task.task_status),
                 open_issues=open_issues,
                 issue_responses=command.issue_responses,
+                target_version_no=command.target_version_no,
             )
 
             for file_id in sorted(source_snapshots):
@@ -284,8 +287,11 @@ class ShotGridVersionSubmissionService:
                 if await ShotGridVersionSubmissionDao.source_file_is_bound(db, file_id):
                     raise shot_grid_error(409, 'SG_VERSION_FILE_ALREADY_BOUND', '文件已经绑定到其他版本提交')
 
-            _, version_no, first_candidate_no = await cls._submission_target(
+            target_version, version_no, first_candidate_no = await cls._submission_target(
                 db, task_id, task.task_status, command.target_version_no, len(command.candidates), for_update=True
+            )
+            append_directory = await cls._append_directory(
+                db, task_context, target_version.version_id if target_version else None
             )
             # 批次生成时间仅作为元数据保存，不拼入业务文件名。
             generated_at_ms = int(time.time_ns() // 1_000_000)
@@ -300,7 +306,11 @@ class ShotGridVersionSubmissionService:
                     candidate_no=candidate_no,
                     extension=inspection.extension,
                 )
-                target_relative_path = cls.build_target_relative_path(task_context, business_file_name)
+                target_relative_path = (
+                    str(PureWindowsPath(append_directory) / business_file_name)
+                    if append_directory
+                    else cls.build_target_relative_path(task_context, business_file_name)
+                )
                 candidate_specs.append(
                     {
                         'candidate': candidate,
@@ -544,7 +554,7 @@ class ShotGridVersionSubmissionService:
                 await cls._submission_target(
                     db, task.task_id, task.task_status, submission.reserved_version_no, 0, for_update=True
                 )
-            elif task.task_status not in {'in_progress', 'revision'}:
+            elif task.task_status not in {'in_progress', 'revision', 'pending_review'}:
                 raise shot_grid_error(409, 'SG_INVALID_STATE_TRANSITION', '任务当前状态不能重试新轮次')
             task_context = await cls._require_task_context(db, row['task_id'])
             cls._require_context_ready(task_context)
@@ -574,8 +584,9 @@ class ShotGridVersionSubmissionService:
                         'SG_VERSION_SOURCE_FILE_CHANGED',
                         '平台源文件摘要或大小已发生变化',
                     )
-                expected_target = cls.build_target_relative_path(task_context, submission_file.business_file_name)
-                if expected_target != submission_file.target_relative_path:
+                if not cls._matches_target_snapshot(
+                    task_context, submission_file.business_file_name, submission_file.target_relative_path
+                ):
                     raise shot_grid_error(
                         409,
                         'SG_VERSION_TARGET_PATH_CONFLICT',
@@ -660,7 +671,7 @@ class ShotGridVersionSubmissionService:
                     0,
                     for_update=True,
                 )
-            elif task.task_status not in {'in_progress', 'revision'}:
+            elif task.task_status not in {'in_progress', 'revision', 'pending_review'}:
                 raise shot_grid_error(409, 'SG_INVALID_STATE_TRANSITION', '任务当前状态不能提交新版本')
             task_context = await cls._require_task_context(db, submission.task_id)
             cls._require_context_ready(task_context)
@@ -682,8 +693,8 @@ class ShotGridVersionSubmissionService:
                 source_file = await FileInfoDao.get_file_info_by_id_for_update(db, file_id, true())
                 source_files[file_id] = source_file
             for submission_file in submission_files:
-                if cls.build_target_relative_path(task_context, submission_file.business_file_name) != (
-                    submission_file.target_relative_path
+                if not cls._matches_target_snapshot(
+                    task_context, submission_file.business_file_name, submission_file.target_relative_path
                 ):
                     raise shot_grid_error(
                         409,
@@ -697,6 +708,18 @@ class ShotGridVersionSubmissionService:
             if not is_append:
                 previous_version = await ShotGridVersionSubmissionDao.get_latest_version(db, task.task_id)
                 previous_version_id = previous_version.version_id if previous_version else None
+                if previous_version is not None and previous_version.version_status == 'pending_review':
+                    # 新版发布成功才收起旧轮次；文件、意见草稿及审核历史仍保留。
+                    previous_review = await ShotGridReviewDao.get_auto_review_list_for_update(
+                        db, submission.project_id, previous_version.version_id
+                    )
+                    if previous_review is None or previous_review.review_status != 'active':
+                        raise shot_grid_error(409, 'SG_REVIEW_STATE_CHANGED', '上一轮审核状态已变化，请刷新')
+                    previous_review.review_status = 'archived'
+                    previous_review.lock_version += 1
+                    previous_review.update_by = actor_name
+                    previous_review.update_time = now
+                    previous_version.lock_version += 1
                 version = await ShotGridVersionSubmissionDao.add_version(
                     db,
                     ShotGridVersion(
@@ -994,25 +1017,58 @@ class ShotGridVersionSubmissionService:
             raise shot_grid_error(422, 'SG_STORAGE_PATH_INVALID', '生成的业务文件名不安全')
         return filename
 
-    @staticmethod
-    def build_target_relative_path(context: dict[str, Any], business_file_name: str) -> str:
+    @classmethod
+    def build_target_relative_path(
+        cls, context: dict[str, Any], business_file_name: str, *, legacy: bool = False
+    ) -> str:
+        """新提交按版本隔离；旧快照仅供原批次重试或同轮追加。"""
         if context['task_kind'] == 'shot_video':
-            parts = (
-                'VIDEO',
-                context.get('episode_storage_dir_name'),
-                context.get('shot_storage_dir_name'),
-                business_file_name,
-            )
+            if not context.get('shot_storage_dir_name'):
+                raise shot_grid_error(409, 'SG_VERSION_TARGET_PATH_CONFLICT', '镜头目录快照不完整')
+            parts = ('VIDEO', context.get('episode_storage_dir_name'), context.get('shot_storage_dir_name'))
+            if not legacy:
+                parts = (
+                    'SHOT',
+                    context.get('episode_storage_dir_name'),
+                    f'{int(context["scene_no"]):03d}',
+                    format_shot_code(int(context['shot_no'])),
+                )
         else:
-            parts = (
-                'ASSET',
-                context.get('asset_type'),
-                context.get('asset_storage_dir_name'),
-                business_file_name,
-            )
+            parts = ('ASSET', context.get('asset_type'), context.get('asset_storage_dir_name'))
+            if not legacy:
+                # 名称便于找文件，稳定分项 ID 防止清洗重名及归档后同名分项混用目录。
+                label = cls._normalize_filename_segment(context.get('production_item'))
+                item_id = context.get('asset_item_id')
+                if not label or not isinstance(item_id, int) or item_id <= 0:
+                    raise shot_grid_error(409, 'SG_VERSION_TARGET_PATH_CONFLICT', '制作分项目录身份不完整')
+                parts += (f'{label[:80]}__{item_id}',)
+        if not legacy:
+            match = re.search(r'_(V[0-9]{3,})_[0-9]+\.[a-z0-9]+$', business_file_name)
+            if not match:
+                raise shot_grid_error(409, 'SG_VERSION_TARGET_PATH_CONFLICT', '版本文件名缺少版本编号')
+            parts += (match.group(1),)
+        parts += (business_file_name,)
         if any(not isinstance(part, str) or not part for part in parts):
             raise shot_grid_error(409, 'SG_VERSION_TARGET_PATH_CONFLICT', '任务目录快照不完整')
-        return str(PureWindowsPath(*parts))
+        path = str(PureWindowsPath(*parts))
+        ShotGridVersionPublishPathAdapter._relative_parts_for_publish(path)
+        return path
+
+    @classmethod
+    def _matches_target_snapshot(cls, context: dict[str, Any], name: str, path: str) -> bool:
+        # 历史批次不换目录、不迁移；只接受当前任务精确匹配的新旧两种布局。
+        if path == cls.build_target_relative_path(context, name, legacy=True):
+            return True
+        return path == cls.build_target_relative_path(context, name)
+
+    @classmethod
+    async def _append_directory(cls, db: AsyncSession, context: dict[str, Any], version_id: int | None) -> str | None:
+        if version_id is None:
+            return None
+        path = await ShotGridVersionSubmissionDao.get_version_source_path(db, version_id)
+        if not path or not cls._matches_target_snapshot(context, PureWindowsPath(path).name, path):
+            raise shot_grid_error(409, 'SG_VERSION_TARGET_PATH_CONFLICT', '原版本目录无法核对，请刷新后重试')
+        return str(PureWindowsPath(path).parent)
 
     @staticmethod
     def _preflight_file_extension(task_kind: str, file_name: str) -> str:
@@ -1081,8 +1137,8 @@ class ShotGridVersionSubmissionService:
     ) -> tuple[Any, int, int]:
         """明确区分新轮次与追加，禁止过期追加请求转换成返修提交。"""
         if target_version_no is None:
-            if task_status not in {'in_progress', 'revision'}:
-                raise shot_grid_error(409, 'SG_VERSION_APPEND_TARGET_REQUIRED', '待审核任务请明确指定追加轮次')
+            if task_status not in {'in_progress', 'revision', 'pending_review'}:
+                raise shot_grid_error(409, 'SG_INVALID_STATE_TRANSITION', '当前任务不能提交新版本')
             return None, await ShotGridVersionSubmissionDao.next_reserved_version_no(db, task_id), 1
         version = await ShotGridVersionSubmissionDao.get_latest_version(db, task_id, for_update=for_update)
         if (
@@ -1316,17 +1372,18 @@ class ShotGridVersionSubmissionService:
         task_status: str,
         open_issues: list[dict[str, int]],
         issue_responses: list[Any],
+        target_version_no: int | None = None,
     ) -> str:
         expected_ids = {int(item['issue_id']) for item in open_issues}
         provided_ids = {int(item.issue_id) for item in issue_responses}
         if task_status == 'in_progress':
             if expected_ids or provided_ids:
                 raise shot_grid_error(422, 'SG_ISSUE_RESPONSES_NOT_ALLOWED', '首次制作版本不能携带问题处理说明')
-        elif task_status == 'pending_review':
+        elif task_status == 'pending_review' and target_version_no is not None:
             if provided_ids:
                 raise shot_grid_error(422, 'SG_ISSUE_RESPONSES_NOT_ALLOWED', '追加候选沿用本轮已有问题处理说明')
-        elif task_status == 'revision':
-            if not expected_ids:
+        elif task_status in {'revision', 'pending_review'}:
+            if task_status == 'revision' and not expected_ids:
                 raise shot_grid_error(409, 'SG_REVISION_ISSUES_REQUIRED', '修订任务没有待处理问题，请刷新任务状态')
             if provided_ids != expected_ids:
                 raise shot_grid_error(

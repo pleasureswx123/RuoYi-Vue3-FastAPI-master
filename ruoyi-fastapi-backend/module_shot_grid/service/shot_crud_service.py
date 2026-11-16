@@ -240,7 +240,7 @@ class ShotGridShotCrudService:
             raise
 
     @classmethod
-    async def update_shot(  # noqa: PLR0912 - 写入门禁和完整字段审计保持在同一事务入口
+    async def update_shot(
         cls,
         db: AsyncSession,
         project_id: int,
@@ -269,19 +269,11 @@ class ShotGridShotCrudService:
                 raise shot_grid_error(409, 'SG_OPTIMISTIC_LOCK_CONFLICT', '镜头已被其他用户修改')
 
             scene, episode = await cls._require_scene(db, project_id, command.scene_id)
-            if scene.scene_id != shot.scene_id:
-                raise shot_grid_error(409, 'SG_INVALID_STATE_TRANSITION', '跨场移动镜头需要受控 NAS 目录迁移')
-            if command.shot_no is not None and command.shot_no != shot.shot_no:
-                if await ShotGridShotCrudDao.shot_no_exists(
-                    db,
-                    scene.scene_id,
-                    command.shot_no,
-                    exclude_shot_id=shot_id,
-                ):
-                    raise shot_grid_error(409, 'SG_SHOT_NO_CONFLICT', '该场内镜头编号已被活动镜头占用')
-                raise shot_grid_error(409, 'SG_INVALID_STATE_TRANSITION', '修改镜头号需要受控 NAS 目录迁移')
-            if episode.episode_id != shot.episode_id:
-                raise shot_grid_error(409, 'SG_INVALID_STATE_TRANSITION', '跨集移动镜头需要受控 NAS 目录迁移')
+            target_shot_no = command.shot_no if command.shot_no is not None else shot.shot_no
+            identity_before = {'sceneId': shot.scene_id, 'episodeId': shot.episode_id, 'shotNo': shot.shot_no}
+            identity_changed = scene.scene_id != shot.scene_id or target_shot_no != shot.shot_no
+            if identity_changed:
+                await cls._validate_identity_change(db, project_id, shot, scene.scene_id, target_shot_no)
             await cls._require_assets(db, project_id, command.asset_ids)
 
             now = cls._now()
@@ -289,7 +281,7 @@ class ShotGridShotCrudService:
                 raise shot_grid_error(409, 'SG_INVALID_STATE_TRANSITION', '请使用场内拖拽调整镜头顺序')
             if command.sort_order is not None and command.sort_order != shot.sort_order:
                 raise shot_grid_error(409, 'SG_INVALID_STATE_TRANSITION', '请使用场内拖拽调整镜头顺序')
-            sort_order = shot.shot_no * 10
+            sort_order = target_shot_no * 10
             new_lock_version = await ShotGridShotCrudDao.update_shot(
                 db,
                 project_id=project_id,
@@ -298,7 +290,7 @@ class ShotGridShotCrudService:
                 values={
                     'scene_id': scene.scene_id,
                     'episode_id': episode.episode_id,
-                    'shot_no': shot.shot_no,
+                    'shot_no': target_shot_no,
                     'storage_dir_name': shot.storage_dir_name,
                     'duration_ms': command.duration_ms,
                     'shot_size': command.shot_size,
@@ -346,6 +338,12 @@ class ShotGridShotCrudService:
                 payload={
                     'lockVersion': command.lock_version,
                     'sceneId': command.scene_id,
+                    'identityBefore': identity_before,
+                    'identityAfter': {
+                        'sceneId': scene.scene_id,
+                        'episodeId': episode.episode_id,
+                        'shotNo': target_shot_no,
+                    },
                     'sequencePosition': command.sequence_position,
                     'assetIds': command.asset_ids,
                     'referenceFields': sorted(
@@ -370,6 +368,18 @@ class ShotGridShotCrudService:
         except Exception:
             await db.rollback()
             raise
+
+    @classmethod
+    async def _validate_identity_change(
+        cls, db: AsyncSession, project_id: int, shot: ShotGridShot, scene_id: int, shot_no: int
+    ) -> None:
+        # 项目协调锁已持有；只有从未冻结目录且没有制作记录的镜头可改身份。
+        row = await ShotGridShotCrudDao.get_shot_detail(db, project_id, shot.shot_id)
+        if shot.storage_dir_name is not None or row is None or row.get('directory_operation_status') is not None:
+            raise shot_grid_error(409, 'SG_SHOT_IDENTITY_FROZEN', '镜头已有制作目录记录，不能修改镜头号或场次')
+        await cls._require_scene_order_mutable(db, project_id, [shot.shot_id])
+        if await ShotGridShotCrudDao.shot_no_exists(db, scene_id, shot_no, exclude_shot_id=shot.shot_id):
+            raise shot_grid_error(409, 'SG_SHOT_NO_CONFLICT', '该场内镜头编号已被活动镜头占用')
 
     @classmethod
     async def reorder_shot(
@@ -1303,6 +1313,12 @@ class ShotGridShotCrudService:
             'previous_assignee_names': cls._previous_assignee_names(row),
             'thumbnail': cls._thumbnail(projection),
             'proxy_media': cls._proxy_media(projection),
+            'approved_version': {
+                key: projection.get(f'approved_{key}')
+                for key in ['version_id', 'version_no', 'version_status', 'delivery_status', 'approved_time']
+            }
+            if projection and projection.get('approved_version_id')
+            else None,
             'latest_version': cls._latest_version(projection),
             'latest_feedback': cls._latest_feedback(projection),
             'asset_count': len(assets),
@@ -1500,8 +1516,8 @@ class ShotGridShotCrudService:
             candidates.append(('task.review', 'shotgrid:reviewList:query'))
         if (
             row.get('task_id') is not None
-            and row.get('task_status') == 'revision'
-            and row.get('latest_version_status') == 'rejected'
+            and (row.get('task_status'), row.get('latest_version_status'))
+            in {('revision', 'rejected'), ('completed', 'final')}
             and not row['has_uncommitted_submission']
             and cls._has_permission(current_user, 'shotgrid:version:review')
             and cls._has_permission(current_user, 'shotgrid:version:query')
@@ -1514,13 +1530,18 @@ class ShotGridShotCrudService:
             and not row.get('has_uncommitted_submission')
         ):
             candidates.append(('task.adjust', 'shotgrid:task:edit'))
-        if row.get('task_id') is not None and row.get('task_status') == 'not_started':
-            candidates.append(('task.start', 'shotgrid:task:start'))
         if row.get('task_status') in {None, 'not_started'} and not row['has_uncommitted_submission']:
             candidates.append(('task.assign', 'shotgrid:task:assign'))
         candidates.append(('shot.forceDelete', 'shotgrid:shot:forceDelete'))
         if row.get('task_status') in {None, 'not_started'}:
             candidates.append(('shot.edit', 'shotgrid:shot:edit'))
+            if (
+                row.get('storage_dir_name') is None
+                and row.get('directory_operation_status') is None
+                and not row.get('has_uncommitted_submission')
+                and row.get('latest_version_id') is None
+            ):
+                candidates.append(('shot.editIdentity', 'shotgrid:shot:edit'))
             candidates.append(('shot.archive', 'shotgrid:shot:archive'))
         return [action for action, permission in candidates if cls._has_permission(current_user, permission)]
 
