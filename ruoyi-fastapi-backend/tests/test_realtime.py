@@ -126,3 +126,30 @@ async def test_ticket_ttl_no_token_in_response_and_rate_limit() -> None:
     redis.eval.return_value = 31
     with pytest.raises(Exception, match='频繁'):
         await realtime.issue_ticket(request, 7)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('auth_rejected', [False, True])
+async def test_disconnected_socket_always_releases_resources(
+    monkeypatch: pytest.MonkeyPatch, auth_rejected: bool
+) -> None:
+    """正常断线及鉴权拒绝后的关闭竞态都不能泄漏后台资源或向 ASGI 抛错。"""
+    c, ws, _ = connection()
+    ws.headers = {'origin': 'http://local'}
+    ws.accept = AsyncMock()
+    ws.close = AsyncMock(side_effect=realtime.WebSocketDisconnect(code=1006))
+    c.authenticate = AsyncMock(side_effect=ValueError('会话已失效') if auth_rejected else None)
+    c.listen = AsyncMock(side_effect=realtime.WebSocketDisconnect(code=1000))
+    c.close = AsyncMock()
+    monkeypatch.setattr(realtime.AppConfig, 'app_cors_allowed_origins', 'http://local')
+    monkeypatch.setattr(realtime, 'RealtimeConnection', lambda _websocket: c)
+
+    await realtime.run_connection(ws)
+
+    ws.accept.assert_awaited_once()
+    c.close.assert_awaited_once()
+    if auth_rejected:
+        ws.close.assert_awaited_once_with(code=4401)
+        c.listen.assert_not_awaited()
+    else:
+        ws.close.assert_not_awaited()

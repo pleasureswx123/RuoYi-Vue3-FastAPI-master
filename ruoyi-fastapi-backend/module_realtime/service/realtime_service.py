@@ -5,7 +5,7 @@ import json
 import secrets
 from uuid import uuid4
 
-from fastapi import Request, WebSocket
+from fastapi import Request, WebSocket, WebSocketDisconnect
 
 from config.database import AsyncSessionLocal
 from config.env import AppConfig
@@ -194,11 +194,14 @@ async def run_connection(websocket: WebSocket) -> None:
     try:
         await connection.authenticate(origin)
         await connection.listen()
+    except WebSocketDisconnect:
+        # 浏览器切页或退出属于正常断线，仍由 finally 释放订阅与后台任务。
+        pass
     except Exception:
         # 不回显令牌、Redis 载荷及鉴权异常详情。
         try:
             await websocket.close(code=4401)
-        except RuntimeError:
+        except (RuntimeError, WebSocketDisconnect):
             pass
     finally:
         await connection.close()
