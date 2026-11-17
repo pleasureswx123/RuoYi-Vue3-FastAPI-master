@@ -2,7 +2,7 @@
   <div class="app-container">
     <el-alert
       class="nas-help"
-      title="这里维护 Shot Grid 允许使用的 NAS 根目录。新增后必须探测通过，才会出现在 5174 创建项目的下拉框中。"
+      title="这里维护 Shot Grid 允许使用的 NAS 根目录。新增后必须探测通过，才会出现在制作平台创建项目的下拉框中。"
       type="info"
       :closable="false"
       show-icon
