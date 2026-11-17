@@ -49,7 +49,9 @@ async def test_project_purge_worker_marks_success_after_physical_cleanup(monkeyp
     adapter = SimpleNamespace(purge=AsyncMock())
     claim = AsyncMock(return_value=_claimed_row())
     mark_succeeded = AsyncMock(return_value=True)
-    monkeypatch.setattr('module_shot_grid.service.project_purge_worker_service.ShotGridProjectPurgeDao.claim_next', claim)
+    monkeypatch.setattr(
+        'module_shot_grid.service.project_purge_worker_service.ShotGridProjectPurgeDao.claim_next', claim
+    )
     monkeypatch.setattr(
         'module_shot_grid.service.project_purge_worker_service.ShotGridProjectPurgeDao.mark_succeeded',
         mark_succeeded,

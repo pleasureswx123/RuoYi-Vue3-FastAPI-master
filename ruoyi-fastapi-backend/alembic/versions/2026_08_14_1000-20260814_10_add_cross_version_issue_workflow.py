@@ -16,6 +16,7 @@ down_revision: str | Sequence[str] | None = '20260813_09'
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
+
 def _is_postgresql() -> bool:
     return op.get_context().dialect.name == 'postgresql'
 
@@ -38,7 +39,7 @@ def upgrade() -> None:
     )
     op.execute('DROP TABLE sg_note_reply')
 
-    op.execute("ALTER TABLE sg_note DROP CONSTRAINT ck_sg_note_content")
+    op.execute('ALTER TABLE sg_note DROP CONSTRAINT ck_sg_note_content')
     op.execute('ALTER TABLE sg_note ALTER COLUMN content DROP NOT NULL')
     op.execute('ALTER TABLE sg_note DROP CONSTRAINT ck_sg_note_mandatory')
     op.execute('ALTER TABLE sg_note DROP COLUMN is_mandatory')
@@ -80,9 +81,7 @@ def upgrade() -> None:
             CHECK (open_issue_snapshot_hash ~ '^[0-9a-f]{64}$')
         """
     )
-    op.execute(
-        "COMMENT ON COLUMN sg_version_submission.open_issue_snapshot_hash IS '提交时未关闭问题集合SHA-256'"
-    )
+    op.execute("COMMENT ON COLUMN sg_version_submission.open_issue_snapshot_hash IS '提交时未关闭问题集合SHA-256'")
 
     op.execute(
         """
@@ -108,8 +107,7 @@ def upgrade() -> None:
         """
     )
     op.execute(
-        'CREATE INDEX idx_sg_issue_response_note_time '
-        'ON sg_version_issue_response (note_id, create_time, response_id)'
+        'CREATE INDEX idx_sg_issue_response_note_time ON sg_version_issue_response (note_id, create_time, response_id)'
     )
     op.execute("COMMENT ON TABLE sg_version_issue_response IS 'Shot Grid版本提交逐条问题处理说明表'")
 
@@ -139,13 +137,9 @@ def upgrade() -> None:
         """
     )
     op.execute(
-        'CREATE INDEX idx_sg_issue_verification_version_time '
-        'ON sg_issue_verification (checked_version_id, create_time)'
+        'CREATE INDEX idx_sg_issue_verification_version_time ON sg_issue_verification (checked_version_id, create_time)'
     )
-    op.execute(
-        'CREATE INDEX idx_sg_issue_verification_note_time '
-        'ON sg_issue_verification (note_id, create_time)'
-    )
+    op.execute('CREATE INDEX idx_sg_issue_verification_note_time ON sg_issue_verification (note_id, create_time)')
     op.execute("COMMENT ON TABLE sg_issue_verification IS 'Shot Grid跨版本问题审核确认表'")
 
     op.execute(

@@ -338,7 +338,9 @@ async def test_review_filter_by_submitter_id_uses_version_owner() -> None:
             ]
         )
     )
-    await ShotGridReviewDao.get_mine_review_lists(db, USER_ID, ShotGridMineReviewQueryModel(submittedBy=SUBMITTER_ID), False)
+    await ShotGridReviewDao.get_mine_review_lists(
+        db, USER_ID, ShotGridMineReviewQueryModel(submittedBy=SUBMITTER_ID), False
+    )
     for call in db.execute.await_args_list:
         statement = call.args[0].compile(dialect=postgresql.dialect())
         assert 'sg_version_1.submitted_by =' in str(statement)

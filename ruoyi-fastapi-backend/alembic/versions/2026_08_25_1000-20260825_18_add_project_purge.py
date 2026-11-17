@@ -45,7 +45,9 @@ def upgrade() -> None:
             nullable=False,
             comment='待清理的项目独占平台文件快照',
         ),
-        sa.Column('purge_status', sa.String(length=20), server_default='pending', nullable=False, comment='删除任务状态'),
+        sa.Column(
+            'purge_status', sa.String(length=20), server_default='pending', nullable=False, comment='删除任务状态'
+        ),
         sa.Column('attempt_count', sa.Integer(), server_default='0', nullable=False, comment='已执行次数'),
         sa.Column('next_retry_time', sa.DateTime(), nullable=True, comment='下次允许重试时间'),
         sa.Column('lease_owner', sa.String(length=100), nullable=True, comment='Worker租约持有者'),

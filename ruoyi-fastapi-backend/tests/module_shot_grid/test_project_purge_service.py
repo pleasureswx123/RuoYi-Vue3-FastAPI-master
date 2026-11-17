@@ -80,13 +80,25 @@ async def test_purge_project_deletes_graph_and_enqueues_physical_cleanup(monkeyp
     delete_graph = AsyncMock()
     sync_roles = AsyncMock(return_value=[{'userId': 11, 'revokedRoleKeys': ['shotgrid_creator']}])
     audit = AsyncMock()
-    monkeypatch.setattr('module_shot_grid.service.project_purge_service.ShotGridProjectPurgeDao.lock_project_context', lock_context)
-    monkeypatch.setattr('module_shot_grid.service.project_purge_service.ShotGridProjectPurgeDao.lock_runtime_dependencies', lock_runtime)
-    monkeypatch.setattr('module_shot_grid.service.project_purge_service.ShotGridProjectPurgeDao.get_member_user_ids', get_members)
-    monkeypatch.setattr('module_shot_grid.service.project_purge_service.ShotGridProjectPurgeDao.prepare_exclusive_files', prepare_files)
+    monkeypatch.setattr(
+        'module_shot_grid.service.project_purge_service.ShotGridProjectPurgeDao.lock_project_context', lock_context
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.project_purge_service.ShotGridProjectPurgeDao.lock_runtime_dependencies', lock_runtime
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.project_purge_service.ShotGridProjectPurgeDao.get_member_user_ids', get_members
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.project_purge_service.ShotGridProjectPurgeDao.prepare_exclusive_files', prepare_files
+    )
     monkeypatch.setattr('module_shot_grid.service.project_purge_service.ShotGridProjectPurgeDao.add_purge', add_purge)
-    monkeypatch.setattr('module_shot_grid.service.project_purge_service.ShotGridProjectPurgeDao.delete_project_graph', delete_graph)
-    monkeypatch.setattr('module_shot_grid.service.project_purge_service.ShotGridPlatformRoleService.synchronize_user_roles', sync_roles)
+    monkeypatch.setattr(
+        'module_shot_grid.service.project_purge_service.ShotGridProjectPurgeDao.delete_project_graph', delete_graph
+    )
+    monkeypatch.setattr(
+        'module_shot_grid.service.project_purge_service.ShotGridPlatformRoleService.synchronize_user_roles', sync_roles
+    )
     monkeypatch.setattr('module_shot_grid.service.project_purge_service.ShotGridProjectAuditDao.add_success_log', audit)
 
     result = await ShotGridProjectPurgeService.purge_project(
