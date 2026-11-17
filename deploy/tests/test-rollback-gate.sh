@@ -21,6 +21,20 @@ export RUOYI_DEPLOY_STATE_DIR="$test_dir/state"
 export GATE_LOG="$test_dir/calls"
 printf 'COMPOSE_PROJECT_NAME=sg-rollback-gate-test\n' > "$RUOYI_ENV_FILE"
 
+# 持有与发布相同的锁时，必须在调用 Docker 或读取发布指针前拒绝回滚。
+export GATE_CHECK_EXIT=0
+: > "$GATE_LOG"
+(
+    exec 8>"$test_dir/state/deploy.lock"
+    flock -n 8
+    if bash "$ROOT_DIR/deploy/rollback.sh" previous > "$test_dir/locked.log" 2>&1; then
+        echo '错误：持有发布锁时仍允许回滚' >&2
+        exit 1
+    fi
+    grep -q '拒绝并发回滚' "$test_dir/locked.log"
+    [[ ! -s "$GATE_LOG" ]]
+)
+
 # 手动回滚：失败时既不切换应用，也不改写发布指针。
 export GATE_CHECK_EXIT=7
 printf 'candidate\n' > "$test_dir/state/current-release"
@@ -66,4 +80,4 @@ for expected in 7 0; do
         grep -q ' up ' "$GATE_LOG"
     fi
 done
-echo '回滚预检控制流：手动与自动、兼容与不兼容四种情况均通过'
+echo '回滚预检控制流：并发锁及手动与自动、兼容与不兼容五种情况均通过'

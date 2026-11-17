@@ -35,6 +35,9 @@ set -a
 source "$ENV_FILE"
 set +a
 
+[[ "${DEPLOY_STOP_BACKEND_FOR_MIGRATION:-1}" = 1 ]] \
+    || fail '当前发布要求备份和迁移期间停写，不允许 DEPLOY_STOP_BACKEND_FOR_MIGRATION=0'
+
 PROJECT_NAME="${COMPOSE_PROJECT_NAME:-$PROJECT_NAME}"
 nas_server_mount_map_compact="${SHOT_GRID_NAS_SERVER_MOUNT_MAP:-}"
 nas_server_mount_map_compact="${nas_server_mount_map_compact//[[:space:]]/}"
@@ -187,11 +190,9 @@ fi
 echo '启动并等待独立 PostgreSQL / Redis 健康'
 "${COMPOSE[@]}" up -d --wait --wait-timeout 180 postgres redis
 
-if [[ "${DEPLOY_STOP_BACKEND_FOR_MIGRATION:-0}" = 1 ]]; then
-    echo '停止旧后端写服务，备份和迁移期间保持停写'
-    migration_stop_started=1
-    "${COMPOSE[@]}" stop backend
-fi
+echo '停止旧后端写服务，备份和迁移期间保持停写'
+migration_stop_started=1
+"${COMPOSE[@]}" stop backend
 
 backup_file="$STATE_DIR/backups/postgres-$(date -u +%Y%m%dT%H%M%SZ)-before-${RELEASE_ID}.dump"
 echo "备份数据库到：$backup_file"

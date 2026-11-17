@@ -6,7 +6,7 @@ param(
     [string]$RemoteEnvFile = '/etc/ruoyi-shot-grid/production.env',
     [string]$RemoteStateDir = '/var/lib/ruoyi-shot-grid',
     [switch]$SkipBuild,
-    [switch]$StopBackendForMigration,
+    [switch]$StopBackendForMigration = $true,
     [string]$DebianMirror = 'http://mirrors.cloud.tencent.com/debian',
     [string]$DebianSecurityMirror = 'http://mirrors.cloud.tencent.com/debian-security',
     [string]$PipIndexUrl = 'https://mirrors.aliyun.com/pypi/simple',
@@ -14,6 +14,10 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+if (-not $StopBackendForMigration.IsPresent) {
+    throw '当前发布必须在备份与迁移期间停写，不允许关闭 StopBackendForMigration'
+}
 
 function Invoke-NativeCommand {
     param(

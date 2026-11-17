@@ -16,6 +16,18 @@ fi
     exit 1
 }
 
+set -a
+# shellcheck disable=SC1090
+source "$ENV_FILE"
+set +a
+
+# 发布与回滚共用一把锁，读取发布指针也必须在锁内。
+mkdir -p "$STATE_DIR"
+exec 9>"$STATE_DIR/deploy.lock"
+flock -n 9 || {
+    echo '已有发布或回滚正在执行，拒绝并发回滚' >&2
+    exit 1
+}
 if [[ -z "$TARGET_RELEASE" && -f "$STATE_DIR/previous-release" ]]; then
     TARGET_RELEASE="$(tr -d '\r\n' < "$STATE_DIR/previous-release")"
 fi
@@ -27,11 +39,6 @@ fi
     echo 'release-id 格式非法' >&2
     exit 1
 }
-
-set -a
-# shellcheck disable=SC1090
-source "$ENV_FILE"
-set +a
 
 PROJECT_NAME="${COMPOSE_PROJECT_NAME:-$PROJECT_NAME}"
 export RUOYI_ENV_FILE="$ENV_FILE"

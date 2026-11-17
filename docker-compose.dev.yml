@@ -69,7 +69,7 @@ services:
       - ruoyi-dev-postgres-data:/var/lib/postgresql/data
       - ./ruoyi-fastapi-backend/sql/ruoyi-fastapi-pg.sql:/docker-entrypoint-initdb.d/ruoyi-fastapi-pg.sql:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d ruoyi-fastapi"]
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d ruoyi-fastapi"]
       interval: 5s
       timeout: 5s
       retries: 20
