@@ -78,7 +78,8 @@ test "`$(stat -c '%a' '$RemoteEnvFile')" = 600
 test -z "`$(git status --porcelain)"
 git rev-parse HEAD
 "@
-$remoteHead = ((& ssh -o BatchMode=yes $Server $remoteProbe) -join "`n").Trim()
+# 远端 Bash 只接受 LF，避免 Windows 工作区 CRLF 破坏命令和路径。
+$remoteHead = ((& ssh -o BatchMode=yes $Server ($remoteProbe.Replace("`r", ""))) -join "`n").Trim()
 if ($LASTEXITCODE -ne 0 -or $remoteHead -notmatch '^[0-9a-f]{40}$') {
     throw '服务器仓库、生产环境文件或 SSH 核验失败。'
 }
@@ -185,7 +186,7 @@ RUOYI_DEPLOY_STATE_DIR='$RemoteStateDir' \
 SERVER_IP='192.168.10.122' \
 bash deploy/deploy.sh
 "@
-    & ssh -o BatchMode=yes $Server $remoteDeploy
+    & ssh -o BatchMode=yes $Server ($remoteDeploy.Replace("`r", ""))
     if ($LASTEXITCODE -ne 0) {
         throw "服务器发布失败，SSH 退出码：$LASTEXITCODE"
     }
@@ -198,7 +199,7 @@ cd '$RemotePath'
 test "`$(git rev-parse HEAD)" = '$localHead'
 RUOYI_ENV_FILE='$RemoteEnvFile' RUOYI_DEPLOY_STATE_DIR='$RemoteStateDir' SERVER_IP='192.168.10.122' bash deploy/status.sh
 "@
-    & ssh -o BatchMode=yes $Server $remoteVerify
+    & ssh -o BatchMode=yes $Server ($remoteVerify.Replace("`r", ""))
     if ($LASTEXITCODE -ne 0) {
         throw "发布后复核失败，SSH 退出码：$LASTEXITCODE"
     }
