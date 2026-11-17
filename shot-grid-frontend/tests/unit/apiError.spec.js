@@ -1,8 +1,19 @@
 import { describe, expect, it } from 'vitest'
 
-import { ApiError, createApiError } from '@/utils/apiError'
+import { ApiError, createApiError, getDefaultErrorMessage } from '@/utils/apiError'
 
 describe('ApiError', () => {
+  it.each([
+    [422, '提交内容不符合要求，请检查填写内容'],
+    [429, '请求过于频繁，请稍后重试']
+  ])('HTTP %s 不误报为服务不可用，并保留校验详情', (status, message) => {
+    const detail = [{ loc: ['body', 'shotNo'], msg: '字段不合法' }]
+    const error = createApiError({ status, data: { detail } })
+    expect(error).toMatchObject({ status, httpStatus: status, message, details: detail })
+    expect(getDefaultErrorMessage(status)).toBe(message)
+    expect(createApiError({ status, data: { msg: '业务提供的具体原因' } }).message).toBe('业务提供的具体原因')
+  })
+
   it('保留真实 HTTP 状态、业务码、稳定错误键与详情', () => {
     const error = createApiError({
       status: 409,

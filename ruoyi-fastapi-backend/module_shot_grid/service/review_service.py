@@ -544,8 +544,10 @@ class ShotGridReviewService:
                 payload=command.model_dump(mode='json', by_alias=True),
                 result={'reviewListId': review_list.review_list_id, 'reviewStatus': 'draft'},
             )
+            # 提交后 ORM 属性可能过期，先保存主键，避免异步会话触发隐式同步查询。
+            review_list_id = int(review_list.review_list_id)
             await db.commit()
-            return await cls.get_review_list_detail(db, int(review_list.review_list_id), current_user)
+            return await cls.get_review_list_detail(db, review_list_id, current_user)
         except Exception:
             await db.rollback()
             raise

@@ -96,8 +96,10 @@ class ShotGridTargetPurgeService:
                 oper_param={'projectId': project_id, 'purgeId': purge_id},
                 result={'purgeStatus': 'pending'},
             )
+            # 在提交使 ORM 属性过期前构造响应，避免重试已成功却返回异步查询错误。
+            result = cls.status(row)
             await db.commit()
-            return cls.status(row)
+            return result
         except Exception:
             await db.rollback()
             raise

@@ -1,4 +1,5 @@
 import subprocess
+import sys
 from collections.abc import Callable
 from pathlib import Path
 
@@ -174,7 +175,7 @@ def test_dry_run_text_output_contains_preview_command_and_workdir(
     assert completed.stdout.startswith('OK SUCCESS\n')
     assert 'message: 数据库已升级到 head（dry-run）\n' in completed.stdout
     assert 'dry_run: true\n' in completed.stdout
-    assert 'command:\n  - alembic\n  - -c\n' in completed.stdout
+    assert f'command:\n  - {sys.executable}\n  - -m\n  - alembic\n  - -c\n' in completed.stdout
     assert f'  - {backend_dir / "alembic.ini"}\n' in completed.stdout
     assert f'cwd: {backend_dir}\n' in completed.stdout
 

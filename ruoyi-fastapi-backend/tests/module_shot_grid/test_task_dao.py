@@ -1,18 +1,19 @@
-import asyncio
 import os
 
 import pytest
 from pydantic import ValidationError
 from sqlalchemy import DateTime, Integer, select, text
 from sqlalchemy.dialects import postgresql
+from sqlalchemy.engine import URL
+from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
-from config.database import async_engine
 from module_shot_grid.dao.schedule_phase import production_period_conditions
 from module_shot_grid.dao.task_dao import ShotGridTaskDao
 from module_shot_grid.entity.vo.task_vo import (
     ShotGridMineTaskListQueryModel,
     ShotGridTaskListQueryModel,
 )
+from tests.module_shot_grid.test_asset_manager_start_pg import isolated_pg_url  # noqa: F401
 
 
 def _compile(statement: object) -> str:
@@ -150,7 +151,7 @@ def test_planned_period_rejects_reversed_dates() -> None:
         ShotGridMineTaskListQueryModel(productionFrom='2026-11-01', productionTo='2026-10-01')
 
 
-async def _verify_period_on_postgresql() -> None:
+async def _verify_period_on_postgresql(async_engine: AsyncEngine) -> None:
 
     tasks = (
         text("""SELECT * FROM (VALUES
@@ -170,8 +171,12 @@ async def _verify_period_on_postgresql() -> None:
         assert list((await connection.execute(statement)).scalars()) == [1, 2, 5]
 
 
-def test_period_boundaries_on_real_postgresql() -> None:
-
-    if os.getenv('SHOT_GRID_RUN_PG_TESTS') != '1':
-        pytest.skip('显式开启才连接本地 PostgreSQL；仅执行只读 VALUES 查询')
-    asyncio.run(_verify_period_on_postgresql())
+@pytest.mark.asyncio
+@pytest.mark.skipif(os.getenv('SHOT_GRID_RUN_PG_TESTS') != '1', reason='显式开启才创建随机隔离 PostgreSQL')
+async def test_period_boundaries_on_real_postgresql(isolated_pg_url: URL) -> None:  # noqa: F811
+    # 不复用应用全局连接，确保不会因本地环境配置而连接原业务库。
+    engine = create_async_engine(isolated_pg_url)
+    try:
+        await _verify_period_on_postgresql(engine)
+    finally:
+        await engine.dispose()

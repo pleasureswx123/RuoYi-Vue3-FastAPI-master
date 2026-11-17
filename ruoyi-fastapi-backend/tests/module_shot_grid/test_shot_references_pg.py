@@ -69,6 +69,10 @@ async def test_create_edit_omit_clear_and_task_projection(pg_sessions):
     assert shot.reference_files[0].file_id == file_id
     shot = await save(pg_sessions, shot)
     assert shot.reference_description == '初始参考'
+    shot = await save(pg_sessions, shot, referenceDescription=None, referenceFileIds=[])
+    assert shot.shot_reference_description is None
+    assert shot.reference_files == []
+    shot = await save(pg_sessions, shot, referenceDescription='初始参考', referenceFileIds=[file_id])
     async with pg_sessions() as db:
         user = _user(DIRECTOR_ID, ['*:*:*'])
         access = await ShotGridProjectAccessService.resolve_access(db, user, PROJECT_ID)
@@ -80,9 +84,9 @@ async def test_create_edit_omit_clear_and_task_projection(pg_sessions):
         )
         assert detail.reference_description == '初始参考'
         assert '/shot/reference-files/' in detail.reference_files[0].download_url
-    shot = await save(pg_sessions, shot, referenceDescription=None, referenceFileIds=[])
-    assert shot.shot_reference_description is None
-    assert shot.reference_files == []
+    # 分配后自动进入目录准备，普通制作信息编辑必须被拒绝，不能沿用旧的未开工假设。
+    with pytest.raises(ShotGridDomainException, match='已经开始'):
+        await save(pg_sessions, shot, referenceDescription=None, referenceFileIds=[])
 
 
 async def test_foreign_file_rejected_and_whole_edit_rolled_back(pg_sessions):
