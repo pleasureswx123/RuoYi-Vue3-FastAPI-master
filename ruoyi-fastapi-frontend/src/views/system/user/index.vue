@@ -352,9 +352,8 @@
             >
               <el-input
                 v-model="form.password"
-                placeholder="请输入用户密码"
+                placeholder="请输入 6～20 位用户密码"
                 type="password"
-                maxlength="20"
                 show-password
               />
             </el-form-item>
