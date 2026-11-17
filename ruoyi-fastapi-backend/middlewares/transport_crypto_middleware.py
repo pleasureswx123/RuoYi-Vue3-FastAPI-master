@@ -36,6 +36,14 @@ class TransportCryptoMiddleware:
         r'^/shot-grid/versions/([1-9][0-9]*)/files/'
         r'([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})/download$'
     )
+    _SHOT_GRID_REFERENCE_FILE_DOWNLOAD_PATTERN = re.compile(
+        r'^/shot-grid/(?:'
+        r'(?:issue-drafts|issues)/(?P<issue>[1-9][0-9]*)'
+        r'|projects/(?P<project>[1-9][0-9]*)(?:/shots/(?P<shot>[1-9][0-9]*))?'
+        r'|tasks/(?P<task>[1-9][0-9]*)(?:/(?:project|shot))?'
+        r')/reference-files/'
+        r'(?P<file>[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})/download$'
+    )
     _SHOT_GRID_PLAYBACK_PATTERN = re.compile(
         r'^/shot-grid/playback/'
         r'([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})/'
@@ -73,6 +81,7 @@ class TransportCryptoMiddleware:
             self._is_excluded_path(path)
             or self._is_shot_grid_template_download(method, path)
             or self._is_shot_grid_version_file_download(method, path)
+            or self._is_shot_grid_reference_file_download(method, path)
             or self._is_shot_grid_playback(method, path)
             or TransportCryptoConfig.transport_crypto_mode == 'off'
             or not self._is_enabled_path(path)
@@ -751,6 +760,21 @@ class TransportCryptoMiddleware:
             return False
         try:
             return str(UUID(match.group(2))) == match.group(2).lower()
+        except ValueError:
+            return False
+
+    @classmethod
+    def _is_shot_grid_reference_file_download(cls, method: str, path: str) -> bool:
+        """仅放行已有附件下载 GET 的二进制传输，业务鉴权仍由原路由执行。"""
+        if method != 'GET':
+            return False
+        match = cls._SHOT_GRID_REFERENCE_FILE_DOWNLOAD_PATTERN.fullmatch(path)
+        if match is None:
+            return False
+        if any(int(value) > cls._SQL_BIGINT_MAX for key, value in match.groupdict().items() if key != 'file' and value):
+            return False
+        try:
+            return str(UUID(match.group('file'))) == match.group('file').lower()
         except ValueError:
             return False
 
