@@ -52,6 +52,8 @@ export default defineConfig(({ mode }) => {
       include: ['tests/**/*.spec.js'],
       setupFiles: ['./tests/setup.js'],
       clearMocks: true,
+      // Vitest 4 的 restoreMocks 不再重置 vi.fn，显式隔离各用例的实现与一次性响应。
+      mockReset: true,
       restoreMocks: true,
       coverage: {
         reportsDirectory: path.resolve(process.cwd(), 'coverage')

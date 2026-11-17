@@ -5,12 +5,13 @@ WORKDIR /app
 ARG NPM_REGISTRY=https://registry.npmmirror.com
 
 COPY package.json package-lock.json ./
-RUN npm ci --registry="${NPM_REGISTRY}" --no-audit --no-fund
+RUN --mount=type=cache,id=ruoyi-npm-build-cache,target=/root/.npm,sharing=locked \
+    npm ci --registry="${NPM_REGISTRY}" --no-audit --no-fund
 
 COPY . .
 RUN npm run build:prod
 
-FROM nginx:1.27-alpine
+FROM nginx:1.30.6-alpine
 
 ENV BACKEND_UPSTREAM=http://ruoyi-backend-pg:9099
 

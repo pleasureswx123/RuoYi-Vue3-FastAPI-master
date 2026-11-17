@@ -14,7 +14,7 @@
   "dependencies": {
     "@element-plus/icons-vue": "2.3.2",
     "@svar-ui/vue-gantt": "2.7.2",
-    "axios": "1.19.0",
+    "axios": "1.21.1",
     "dompurify": "3.4.17",
     "element-plus": "2.14.3",
     "exceljs": "4.4.0",
@@ -37,8 +37,8 @@
     "globals": "16.5.0",
     "jsdom": "26.1.0",
     "sass-embedded": "1.97.2",
-    "vite": "6.4.3",
-    "vitest": "3.2.7"
+    "vite": "6.4.6",
+    "vitest": "4.1.11"
   },
   "engines": {
     "node": ">=22.13.0"

@@ -1,5 +1,10 @@
 # 前端 Codex 协作指南
 
+## 2026-11-17 发布依赖门禁
+
+两端均使用 npm 与已跟踪锁文件，干净安装必须使用 `npm ci`。CI 执行 `npm audit --omit=dev --audit-level=high`，拒绝生产依赖高危或严重告警；中低危及仅构建工具的告警仍须记录适用路径和风险，不得声称审计零告警。不使用 `audit fix --force` 自动跨主版本降级。版本与依赖树以 package.json、package-lock.json 为准；依赖升级需重新运行相关测试、构建和浏览器验收。
+
+
 ## 1. 适用范围
 
 本文件适用于 `ruoyi-fastapi-frontend/` 及其所有子目录，并补充仓库根目录的 `AGENTS.md`。根目录规则仍然有效；涉及前端代码时，还必须遵循本文件。

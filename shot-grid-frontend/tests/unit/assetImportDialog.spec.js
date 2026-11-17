@@ -41,6 +41,10 @@ const preview = {
 
 describe('资产 Excel 导入对话框', () => {
   beforeEach(() => {
+    // 每个用例独立设置响应，避免一次性模拟队列影响下一次预检。
+    previewAssetImport.mockReset()
+    commitAssetImport.mockReset()
+    downloadAssetImportTemplate.mockReset()
     previewAssetImport.mockResolvedValue({ data: preview })
     commitAssetImport.mockResolvedValue({ data: {
       batchId: 9,
