@@ -11,6 +11,7 @@
     "build:docker": "vite build --mode docker",
     "build:stage": "vite build --mode staging",
     "test:plugin": "node tests/plugins/run-plugin-tests.js",
+    "test:dependencies": "node --test tests/dependencies/*.test.js",
     "preview": "vite preview"
   },
   "repository": {
@@ -65,6 +66,12 @@
     "dompurify": "3.4.17",
     "mermaid": {
       "katex": "0.18.2"
+    },
+    "js-beautify": {
+      "glob": "14.0.6",
+      "editorconfig": {
+        "minimatch": "11.0.5"
+      }
     }
   }
 }
