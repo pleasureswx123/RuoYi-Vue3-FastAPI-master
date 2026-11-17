@@ -13,6 +13,18 @@ vi.mock('@/utils/request', () => ({ default: vi.fn(() => Promise.resolve({ code:
 describe('任务排期 API 契约', () => {
   beforeEach(() => request.mockClear())
 
+  it('空镜头号筛选不进入加密请求，保留有效筛选和布尔值', () => {
+    const params = { shotNoStart: null, shotNoEnd: undefined, onlyConflicts: false, sceneIds: [191], keyword: '' }
+    getProjectSchedule(19, params)
+    getUnscheduledScheduleTasks(19, params)
+    for (const [config] of request.mock.calls) {
+      expect(config.params).toEqual({ onlyConflicts: false, sceneIds: [191], keyword: '' })
+    }
+    expect(params.shotNoStart).toBeNull()
+    getProjectSchedule(19, { shotNoStart: 1, shotNoEnd: 9001 })
+    expect(request.mock.lastCall[0].params).toEqual({ shotNoStart: 1, shotNoEnd: 9001 })
+  })
+
   it('项目排期和未排期池保留窗口筛选与取消信号', () => {
     const signal = new AbortController().signal
     const params = {

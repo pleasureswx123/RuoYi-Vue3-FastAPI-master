@@ -9,11 +9,16 @@ function taskScheduleUrl(taskId, suffix = '') {
   return `/shot-grid/tasks/${assertPositiveId(taskId, '任务')}${suffix}`
 }
 
+function scheduleQuery(params = {}) {
+  // 空筛选不进入加密载荷，避免服务端还原查询时将 null 转为字符串 None。
+  return Object.fromEntries(Object.entries(params).filter(([, value]) => value !== null && value !== undefined))
+}
+
 export function getProjectSchedule(projectId, params, options = {}) {
   return request({
     url: projectScheduleUrl(projectId),
     method: 'get',
-    params,
+    params: scheduleQuery(params),
     paramsSerializer: { indexes: null },
     signal: options.signal,
     silentError: true
@@ -24,7 +29,7 @@ export function getUnscheduledScheduleTasks(projectId, params, options = {}) {
   return request({
     url: projectScheduleUrl(projectId, '/unscheduled'),
     method: 'get',
-    params,
+    params: scheduleQuery(params),
     paramsSerializer: { indexes: null },
     signal: options.signal,
     silentError: true
