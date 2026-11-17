@@ -132,8 +132,14 @@ rollback_on_error() {
         "${COMPOSE[@]}" stop backend || true
     elif [[ "$switch_started" = 1 && -n "$previous_release" && "$previous_release" != "$RELEASE_ID" ]]; then
         echo "尝试回到上一应用镜像 $previous_release；数据库不会自动降级。" >&2
-        APP_RELEASE_ID="$previous_release" "${COMPOSE[@]}" up -d --no-build --wait --wait-timeout 240 \
-            backend admin-frontend shot-grid-frontend || true
+        if APP_RELEASE_ID="$previous_release" "${COMPOSE[@]}" run --rm --no-deps backend \
+            python -m alembic -c alembic.ini current; then
+            APP_RELEASE_ID="$previous_release" "${COMPOSE[@]}" up -d --no-build --wait --wait-timeout 240 \
+                backend admin-frontend shot-grid-frontend || true
+        else
+            echo '上一镜像无法识别当前数据库版本，已阻止自动回退；停止后端，等待兼容版本或受控恢复。' >&2
+            "${COMPOSE[@]}" stop backend || true
+        fi
     fi
     exit "$exit_code"
 }

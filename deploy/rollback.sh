@@ -52,6 +52,12 @@ done
 current_release=''
 [[ -f "$STATE_DIR/current-release" ]] && current_release="$(tr -d '\r\n' < "$STATE_DIR/current-release")"
 
+echo '先验证目标镜像能够识别当前数据库迁移版本；预检失败时不切换应用。'
+"${COMPOSE[@]}" run --rm --no-deps backend python -m alembic -c alembic.ini current || {
+    echo '回滚已阻止：目标镜像无法读取当前迁移版本，请使用兼容镜像或执行已评审的数据库恢复方案。' >&2
+    exit 1
+}
+
 echo "仅回滚应用镜像到 $TARGET_RELEASE；数据库不会降级。"
 "${COMPOSE[@]}" up -d --no-build --wait --wait-timeout 240 \
     backend admin-frontend shot-grid-frontend
