@@ -11,6 +11,11 @@ build
 dist
 *.egg-info
 logs
+output
+.playwright-cli
+htmlcov
+.coverage*
+*.log
 vf_admin
 tests
 docs

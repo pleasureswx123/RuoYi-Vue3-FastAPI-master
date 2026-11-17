@@ -24,10 +24,11 @@ RUN sed -ri \
     && addgroup --system --gid "${APP_GID}" app \
     && adduser --system --uid "${APP_UID}" --ingroup app --home /app app
 
-COPY requirements-pg.txt pyproject.toml ./
+COPY requirements-pg.txt requirements-pg.lock.txt pyproject.toml ./
 COPY cli ./cli
 ARG PIP_INSTALL_INDEX_URL=${PIP_INDEX_URL}
-RUN python -m pip install --no-cache-dir --index-url "${PIP_INSTALL_INDEX_URL}" -r requirements-pg.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python -m pip install --index-url "${PIP_INSTALL_INDEX_URL}" -r requirements-pg.lock.txt
 
 COPY . .
 COPY docker/entrypoint.prod.sh /usr/local/bin/ruoyi-entrypoint

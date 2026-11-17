@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import typer
+from click.shell_completion import BashComplete
 from pytest import MonkeyPatch
 
 from cli.completion.installers import (
@@ -9,6 +10,24 @@ from cli.completion.installers import (
     CompletionShellRuntimePolicy,
     CompletionShellRuntimePolicyRegistry,
 )
+
+
+def test_bash_script_generation_does_not_probe_host_shell(monkeypatch: MonkeyPatch) -> None:
+    """宿主 Bash 不可用或输出非 UTF-8 时，仍可生成安装脚本。"""
+
+    def reject_probe() -> None:
+        raise UnicodeDecodeError('utf-8', b'\x8e', 0, 1, '模拟 WSL 非 UTF-8 输出')
+
+    monkeypatch.setattr(BashComplete, '_check_version', staticmethod(reject_probe))
+    app = typer.Typer()
+
+    @app.command()
+    def sample() -> None:
+        pass
+
+    script = CompletionInstallerService().render_completion_script(app, 'bash')
+    assert '_ruoyi_completion()' in script
+    assert 'if command -v compopt' in script
 
 
 def test_build_source_command_uses_shell_runtime_policy() -> None:

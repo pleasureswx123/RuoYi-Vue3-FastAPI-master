@@ -159,7 +159,7 @@ npm.cmd run dev -- --host 127.0.0.1 --port 5174 --strictPort
 - Docker Desktop（支持 `docker compose`）
 - Node.js `^18.0.0 || ^20.0.0 || >=22.0.0`
 - npm
-- 仅在宿主机启动后端时需要 Python `>=3.10`；团队建议使用 Python 3.11.x
+- 仅在宿主机启动后端时需要 Python `>=3.11`；当前生产镜像固定 Python 3.11.15，Pillow 安全版本不再支持 Python 3.10
 - 仅在宿主机执行媒体派生时需要 FFmpeg
 
 ### 方式一：Docker 后端 + 宿主机前端（推荐）

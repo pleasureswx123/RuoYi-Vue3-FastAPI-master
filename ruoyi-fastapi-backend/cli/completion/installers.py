@@ -8,7 +8,7 @@ from typing import Any
 import click
 import typer
 import typer.main
-from click.shell_completion import BashComplete, FishComplete, ZshComplete
+from click.shell_completion import BashComplete, FishComplete, ShellComplete, ZshComplete
 
 from cli.completion.providers import COMPLETION_PROVIDER_GATEWAY, CompletionProviderGateway
 from cli.completion.shells import PowerShellComplete, ensure_custom_completion_classes_registered
@@ -17,6 +17,14 @@ from cli.metadata import COMPLETION_SHELL_SPEC_REGISTRY, CompletionShellSpec, Co
 from cli.utils import format_cli_path
 
 CLICK_COMPLETE_ENV_VAR = '_RUOYI_COMPLETE'
+
+
+class PortableBashComplete(BashComplete):
+    """生成跨机器可用的脚本，不调用宿主 Bash/WSL 探测版本。"""
+
+    def source(self) -> str:
+        # 安装目标可以是其他机器；兼容指令由下方转换器处理。
+        return ShellComplete.source(self)
 
 
 class CompletionInstallerShellSupport:
@@ -161,7 +169,7 @@ DEFAULT_COMPLETION_SHELL_RUNTIME_POLICIES = CompletionShellRuntimePolicyRegistry
     policies={
         'bash': CompletionShellRuntimePolicy(
             name='bash',
-            click_completion_class=BashComplete,
+            click_completion_class=PortableBashComplete,
             script_transformer=CompletionInstallerShellSupport.make_bash_completion_script_compatible,
             source_command_builder=CompletionInstallerShellSupport.build_posix_source_command,
         ),

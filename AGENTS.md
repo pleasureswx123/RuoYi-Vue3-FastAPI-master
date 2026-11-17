@@ -146,7 +146,7 @@ Controller → Service → DAO → DO
 
 ## 5. 后端开发约定
 
-- 最低 Python 版本为 3.10。
+- 最低 Python 版本为 3.11（Pillow 安全修复要求）；当前生产镜像固定 3.11.15。
 - 优先使用异步 FastAPI、`AsyncSession` 和异步 Redis API。
 - 不要在异步请求链中直接执行长时间同步 I/O；确需同步处理时，应明确隔离。
 - 复用现有 `ResponseUtil`、异常类型、日志、缓存、限流和权限依赖，不要在单个接口中另建一套返回协议。
@@ -353,7 +353,7 @@ python -m pytest -v
 - 本地开发优先使用 `docker-compose.dev.yml` 启动后端、PostgreSQL 和 Redis；前端继续在宿主机运行。后端开发镜像固定 Python 3.11.15 并内置 FFmpeg。本地 Linux 容器默认关闭 NAS 目录与版本发布 Worker；公司 Linux 生产节点只允许用户配置 `\\192.168.10.64\<共享>\<子目录>`，宿主机通过 autofs 在 `/mnt/ruoyi-shot-grid/dynamic/<共享>` 按需挂载 CIFS，Compose 以 `rslave` 把该挂载命名空间传入容器，后端通过 `SHOT_GRID_NAS_SERVER_MOUNT_MAP` 做固定服务器级解析。不得为每个业务根手工增加 Compose bind，不得允许其他 UNC 服务器，也不得在后端容器内授予挂载权限。生产后端应用身份固定为 UID 100 / GID 101，所有动态 CIFS 共享必须使用 `uid=100,gid=101,forceuid,forcegid`；每次探测和真实 I/O 仍须确认目标共享实际位于 `cifs/smb3`，安装脚本必须以该非 root 身份验证创建、回读、删除和硬链接。平台数据库根目录白名单控制业务可选根，NAS 服务账号 ACL 控制可访问共享；root 探测、普通 bind 目录或手工修改数据库健康状态都不能作为真实 NAS 验收。
 - 公司内网 `192.168.10.122` 的正式部署使用 `docker-compose.prod.yml` 和固定项目名 `ruoyi-shot-grid-prod`；映射平台管理端 `12580`、Shot Grid `12581` 和 PostgreSQL Navicat 只读入口 `12582`。宿主机 `5432` 属于既有项目，禁止复用；`12582` 只能使用受限只读角色查询 `sg_*` 表，应用数据库超级用户不得交给客户端。Redis、后端和业务文件必须留在本项目独立网络/命名卷内，不得复用或重启服务器既有项目。
 - 当前两个入口固定使用 HTTP；由于浏览器不会为普通内网 HTTP IP 开放 Web Crypto，服务器生产环境必须按已评审例外关闭传输加密，并把 `APP_CORS_ALLOWED_ORIGINS` 限制为两个明确的 HTTP 来源。不得通过前端伪随机降级或隐藏错误来冒充加密仍然生效。
-- 生产发布统一走 `deploy/deploy.sh`：先构建版本镜像，再等待独立依赖健康、创建 PostgreSQL 备份、执行 Alembic 迁移和应用/加密预检，最后健康门禁切换；禁止把 `docker-compose.pg.yml` 当作该服务器的生产文件。
+- 生产发布统一走 `deploy/deploy.sh`：先构建版本镜像，再等待独立依赖健康、停止旧后端写服务、创建 PostgreSQL 备份、执行 Alembic 迁移和应用/加密预检，最后健康门禁切换；发布与回滚共用 `deploy.lock`，不得关闭迁移停写；PostgreSQL 健康检查必须检测正式 TCP 服务，不能只检测初始化期间的临时 Unix socket。禁止把 `docker-compose.pg.yml` 当作该服务器的生产文件。
 - 生产默认关闭 `DB_ECHO` 和文件日志，由 Docker `local` 日志驱动限额轮转；真实密钥只允许保存在服务器 `/etc/ruoyi-shot-grid/production.env`（0600），不得写入仓库、GitHub Secrets 输出或镜像层。
 - MySQL/PostgreSQL 完整拓扑分别使用 `docker-compose.my.yml`、`docker-compose.pg.yml`。
 - 生产部署前必须为数据库、Redis 和文件目录配置持久化卷。
