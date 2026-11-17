@@ -286,7 +286,7 @@ ruoyi-fastapi-backend/docs/file_management_usage_guide.md
 - 大型依赖如 Monaco、Mermaid、Shiki、KaTeX 和 AI 消息组件应优先按页面懒加载。
 - 不要继续提高 `chunkSizeWarningLimit` 来掩盖大包问题；应优先拆包或延迟加载。
 - 当前项目使用 npm；不要无说明地切换包管理器。
-- 当前 `package-lock.json` 被忽略，涉及依赖变更时必须明确指出构建不可复现风险，不得声称依赖已被锁定。
+- 两个前端均跟踪 `package-lock.json`，干净安装、CI 和生产镜像使用 `npm ci`；依赖变更必须同步锁文件。锁文件不固定基础镜像及操作系统包，不代表整个镜像位级可复现。
 
 Windows PowerShell 下使用：
 
@@ -388,7 +388,7 @@ git status --short
 2. 后端 `.env.*` 被 Git 跟踪，其中包含示例密码和私钥材料。
 3. Alembic 当前已有 Shot Grid `20260810_01 → 20260831_26` 增量迁移链；`05` 至 `19` 保持目录执行、任务/版本/审核、媒体派生、NAS 管理、镜头号治理、跨版本问题、受管角色、延迟目录、审核草稿和项目永久删除语义；`20` 增加一轮多候选、候选级媒体和审核选择；`21` 增加审核通过后的最终版本 NAS 交付 Outbox；`22` 将仅有一个候选的版本自动设为本轮最佳并回填历史单候选；`23` 将标准权限菜单“开始本人任务”更名为“开始任务”；`24` 增加任务预期制作时间范围；`25` 增加不可变首版排期基线、只追加改期历史、独立排期权限与索引；`26` 增加 NAS 根目录平台配置删除权限，不授权删除实际目录或文件。固定角色包仍由平台管理端显式配置。媒体 Worker 默认关闭，视频派生必须配置 FFmpeg。全平台仍缺少能够从真正空库独立建立全部 RuoYi 平台表的完整 baseline。新库使用同步后的 PostgreSQL 初始化 SQL并写入 head，已有平台库执行增量迁移。无版本标记的历史库必须先备份并在克隆库核验结构，不能未经确认直接 `stamp`。
 4. Shot Grid 当前 PostgreSQL head 为 `20260831_26`：除既有多候选与最终交付语义外，任务排期以当前计划、首次冻结基线和只追加结构化改期历史组成；同一人员重叠只警告并要求二次确认，不改变负责人或任务状态。一个 `sg_version` 仍表示 V001/V002 轮次，一轮包含 `1..N` 个不可变候选；审核通过后的最终交付继续通过 Leader Worker、短事务、租约、`SKIP LOCKED` 和 owner + attempt fencing 发布。
-5. Shot Grid 前端已提交依赖锁文件并使用 `npm ci`；平台管理端仍没有提交 `package-lock.json`，其 CI 与生产镜像使用 `npm install`，存在依赖漂移风险。
+5. 2026-11-17 已将管理端 npm 锁文件纳入跟踪并将 CI、生产 Dockerfile 对齐 `npm ci`，与 Shot Grid 一致；基础镜像及系统包仍未按摘要完整锁定，不能宣称整个镜像位级可复现。
 6. 新生产 `docker-compose.prod.yml` 已提供独立持久化卷；历史 `docker-compose.my.yml` / `docker-compose.pg.yml` 仍没有完整持久化与安全边界，只能作为兼容参考，不能直接上线。
 7. 后端 CORS 默认仍允许任意 Origin 以兼容开发环境；生产必须通过 `APP_CORS_ALLOWED_ORIGINS` 显式收紧，新生产环境模板固定为 `192.168.10.122:12580/12581` 两个来源。
 8. 前端生产构建产物较大，Monaco、AI、Mermaid、Shiki 等需要进一步拆包。

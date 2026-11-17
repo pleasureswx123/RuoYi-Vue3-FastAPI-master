@@ -143,7 +143,7 @@ cd .\shot-grid-frontend
 npm.cmd run dev -- --host 127.0.0.1 --port 5174 --strictPort
 ```
 
-两个前端统一使用 npm，PowerShell 中通过 `npm.cmd` 执行。管理端依赖使用 `npm.cmd install`，制作平台依赖使用 `npm.cmd ci`；不要混用 pnpm 锁文件。两个前端终端均需保持运行，默认本机访问地址分别为 <http://127.0.0.1:80> 和 <http://127.0.0.1:5174>，API 代理均指向 `127.0.0.1:9099`。端口被占用时，`--strictPort` 会退出，避免静默切换端口。
+两个前端统一使用 npm，PowerShell 中通过 `npm.cmd` 执行。依赖均使用 `npm.cmd ci` 按已提交的锁文件安装；不要混用 pnpm 锁文件。两个前端终端均需保持运行，默认本机访问地址分别为 <http://127.0.0.1:80> 和 <http://127.0.0.1:5174>，API 代理均指向 `127.0.0.1:9099`。端口被占用时，`--strictPort` 会退出，避免静默切换端口。
 
 停止开发时，在后端和两个前端终端分别按 `Ctrl+C`；PostgreSQL 和 Redis 的停止方式见下方“停止本地环境”。
 
@@ -194,11 +194,11 @@ Vite 默认把 `/dev-api` 转发到 `http://127.0.0.1:9099`。全新本地数据
 
 ```powershell
 cd ruoyi-fastapi-frontend
-npm.cmd install
+npm.cmd ci
 npm.cmd run dev
 ```
 
-平台管理端默认地址为 <http://127.0.0.1:80>。该工程当前没有提交依赖锁文件，安装结果可能随依赖版本变化；不要把一次本地安装描述为可复现构建。
+平台管理端默认地址为 <http://127.0.0.1:80>。新增或升级依赖时同步提交 `package.json` 与 `package-lock.json`，并验证干净安装及构建。
 
 
 常用诊断命令：
@@ -443,7 +443,7 @@ self-hosted, linux, x64, ruoyi-prod
 
 Runner 用户必须能使用 Docker，并只读访问 `/etc/ruoyi-shot-grid/production.env`，可写 `/var/lib/ruoyi-shot-grid`。Docker 组等价于宿主机高权限，只能使用专用 Runner，不得与不可信仓库共享。建议为 GitHub Environment `intranet-production` 配置人工审批；当前 CD 只允许手动选择明确的分支、标签或提交 SHA，不会在每次 push 后未经审批自动上线。
 
-已有后端、Ruff、Playwright 工作流已对齐实际 `main` 分支；新增前端工作流会检查两个前端和生产 Compose。管理端仍未跟踪 `package-lock.json`，因此其 `npm install` 与镜像构建仍有依赖漂移风险，不能声称完全可复现。
+已有后端、Ruff、Playwright 工作流已对齐实际 `main` 分支；前端工作流检查两个前端、生产 Compose 及回滚预检控制流。两个前端均跟踪 `package-lock.json`，CI 和生产镜像使用 `npm ci`。基础镜像和系统包尚未完整按摘要锁定，依赖锁定不代表整个镜像位级可复现。
 
 ### 状态、日志、备份与回滚
 

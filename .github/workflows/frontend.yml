@@ -37,8 +37,10 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: "22"
-      - name: 安装依赖（当前仓库未跟踪管理端锁文件）
-        run: npm install --no-audit --no-fund
+          cache: npm
+          cache-dependency-path: ruoyi-fastapi-frontend/package-lock.json
+      - name: 按管理端锁文件安装依赖
+        run: npm ci --no-audit --no-fund
       - run: npm run test:plugin
       - run: npm run build:prod
 
@@ -55,3 +57,5 @@ jobs:
         run: docker compose --project-name ruoyi-shot-grid-prod --env-file deploy/.env.production -f docker-compose.prod.yml config --quiet
       - name: 校验部署脚本语法
         run: bash -n deploy/init-env.sh deploy/deploy.sh deploy/status.sh deploy/rollback.sh ruoyi-fastapi-backend/docker/entrypoint.prod.sh
+      - name: 校验回滚兼容预检控制流
+        run: bash deploy/tests/test-rollback-gate.sh
