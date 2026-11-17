@@ -24,13 +24,16 @@ RUN sed -ri \
     && addgroup --system --gid "${APP_GID}" app \
     && adduser --system --uid "${APP_UID}" --ingroup app --home /app app
 
-COPY requirements-pg.txt requirements-pg.lock.txt pyproject.toml ./
-COPY cli ./cli
+COPY requirements-pg.lock.txt ./
 ARG PIP_INSTALL_INDEX_URL=${PIP_INDEX_URL}
+# 锁文件末尾的本项目安装移到源码复制后，CLI 改动不重装第三方依赖。
 RUN --mount=type=cache,target=/root/.cache/pip \
-    python -m pip install --index-url "${PIP_INSTALL_INDEX_URL}" -r requirements-pg.lock.txt
+    sed 's/\r$//; /^\.$/d' requirements-pg.lock.txt > /tmp/requirements-deps.txt \
+    && python -m pip install --index-url "${PIP_INSTALL_INDEX_URL}" -r /tmp/requirements-deps.txt
 
 COPY . .
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python -m pip install --no-deps --no-build-isolation .
 COPY docker/entrypoint.prod.sh /usr/local/bin/ruoyi-entrypoint
 
 # 兼容服务器严格 umask，应用身份只获源码读取和目录遍历权限。

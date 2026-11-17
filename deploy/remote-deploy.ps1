@@ -6,6 +6,8 @@ param(
     [string]$RemoteEnvFile = '/etc/ruoyi-shot-grid/production.env',
     [string]$RemoteStateDir = '/var/lib/ruoyi-shot-grid',
     [switch]$SkipBuild,
+    [switch]$BuildOnly,
+    [switch]$ForceBuild,
     [switch]$StopBackendForMigration = $true,
     [string]$DebianMirror = 'http://mirrors.cloud.tencent.com/debian',
     [string]$DebianSecurityMirror = 'http://mirrors.cloud.tencent.com/debian-security',
@@ -14,6 +16,9 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'image-cache.ps1')
+if ($SkipBuild -and $ForceBuild) { throw 'SkipBuild 与 ForceBuild 不能同时使用' }
+
 
 if (-not $StopBackendForMigration.IsPresent) {
     throw '当前发布必须在备份与迁移期间停写，不允许关闭 StopBackendForMigration'
@@ -32,7 +37,9 @@ function Invoke-NativeCommand {
     }
 }
 
-foreach ($commandName in @('git', 'docker', 'ssh', 'scp', 'cmd.exe')) {
+$requiredCommands = @('git', 'docker')
+if (-not $BuildOnly) { $requiredCommands += @('ssh', 'scp', 'cmd.exe') }
+foreach ($commandName in $requiredCommands) {
     if (-not (Get-Command $commandName -ErrorAction SilentlyContinue)) {
         throw "缺少本地命令：$commandName"
     }
@@ -69,24 +76,6 @@ if ($dirtyCount -gt 0) {
     Write-Warning "工作区有 $dirtyCount 项未提交内容；本次只部署已提交的 $releaseId，不会包含这些内容。"
 }
 
-Write-Host '[1/7] 核对服务器仓库和生产配置'
-$remoteProbe = @"
-set -Eeuo pipefail
-cd '$RemotePath'
-test -r '$RemoteEnvFile'
-test "`$(stat -c '%a' '$RemoteEnvFile')" = 600
-test -z "`$(git status --porcelain)"
-git rev-parse HEAD
-"@
-# 远端 Bash 只接受 LF，避免 Windows 工作区 CRLF 破坏命令和路径。
-$remoteHead = ((& ssh -o BatchMode=yes $Server ($remoteProbe.Replace("`r", ""))) -join "`n").Trim()
-if ($LASTEXITCODE -ne 0 -or $remoteHead -notmatch '^[0-9a-f]{40}$') {
-    throw '服务器仓库、生产环境文件或 SSH 核验失败。'
-}
-Invoke-NativeCommand -Command git -CommandArguments @(
-    '-C', $repoRoot, 'merge-base', '--is-ancestor', $remoteHead, $localHead
-)
-
 $deployRoot = [System.IO.Path]::GetFullPath((Join-Path $repoRoot '.deploy'))
 $releaseRoot = [System.IO.Path]::GetFullPath((Join-Path $deployRoot "release-$releaseId-$PID"))
 $requiredPrefix = $deployRoot.TrimEnd([System.IO.Path]::DirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
@@ -106,41 +95,51 @@ $images = @($backendImage, $adminImage, $businessImage)
 try {
     New-Item -ItemType Directory -Path $releaseRoot -Force | Out-Null
 
-    Write-Host "[2/7] 创建提交 $releaseId 的干净构建目录"
+    Write-Host "[1/7] 创建提交 $releaseId 的干净构建目录"
     Invoke-NativeCommand -Command git -CommandArguments @(
         '-C', $repoRoot, 'worktree', 'add', '--detach', $buildRoot, $localHead
     )
     $worktreeCreated = $true
 
-    if (-not $SkipBuild) {
-        Write-Host '[3/7] 构建三个生产镜像（首次执行时间较长）'
-        Invoke-NativeCommand -Command docker -CommandArguments @(
-            'build', '--build-arg', "DEBIAN_MIRROR=$DebianMirror",
-            '--build-arg', "DEBIAN_SECURITY_MIRROR=$DebianSecurityMirror",
-            '--build-arg', "PIP_INSTALL_INDEX_URL=$PipIndexUrl",
-            '-f', (Join-Path $buildRoot 'ruoyi-fastapi-backend/Dockerfile.prod'),
-            '-t', $backendImage,
-            (Join-Path $buildRoot 'ruoyi-fastapi-backend')
-        )
-        Invoke-NativeCommand -Command docker -CommandArguments @(
-            'build', '--build-arg', "NPM_REGISTRY=$NpmRegistry",
-            '-f', (Join-Path $buildRoot 'ruoyi-fastapi-frontend/Dockerfile.prod'),
-            '-t', $adminImage,
-            (Join-Path $buildRoot 'ruoyi-fastapi-frontend')
-        )
-        Invoke-NativeCommand -Command docker -CommandArguments @(
-            'build', '--build-arg', "NPM_REGISTRY=$NpmRegistry",
-            '-f', (Join-Path $buildRoot 'shot-grid-frontend/Dockerfile'),
-            '-t', $businessImage,
-            (Join-Path $buildRoot 'shot-grid-frontend')
-        )
+    Write-Host '[2/7] 按模块核对并准备镜像'
+    # 按模块完整 Git 树及构建参数识别内容；文档等无关提交不再触发三个镜像重建。
+    $modules = @(
+        @{ Name = 'backend'; Directory = 'ruoyi-fastapi-backend'; Dockerfile = 'Dockerfile.prod'; Image = $backendImage;
+           Arguments = @("DEBIAN_MIRROR=$DebianMirror", "DEBIAN_SECURITY_MIRROR=$DebianSecurityMirror", "PIP_INSTALL_INDEX_URL=$PipIndexUrl") },
+        @{ Name = 'admin'; Directory = 'ruoyi-fastapi-frontend'; Dockerfile = 'Dockerfile.prod'; Image = $adminImage;
+           Arguments = @("NPM_REGISTRY=$NpmRegistry") },
+        @{ Name = 'business'; Directory = 'shot-grid-frontend'; Dockerfile = 'Dockerfile'; Image = $businessImage;
+           Arguments = @("NPM_REGISTRY=$NpmRegistry") }
+    )
+    foreach ($module in $modules) {
+        $tree = ((& git -C $repoRoot rev-parse "${localHead}:$($module.Directory)") -join "`n").Trim()
+        if ($LASTEXITCODE -ne 0 -or $tree -notmatch '^[0-9a-f]{40}$') { throw '无法读取模块 Git 树' }
+        $key = Get-BuildContentKey $module.Name $tree $module.Arguments
+        Build-CachedImage -Image $module.Image -Key $key -Context (Join-Path $buildRoot $module.Directory) `
+            -Dockerfile $module.Dockerfile -BuildArguments $module.Arguments -SkipBuild:$SkipBuild -ForceBuild:$ForceBuild
     }
-    else {
-        Write-Host '[3/7] 跳过构建，核对本地预载镜像'
-        foreach ($imageName in $images) {
-            Invoke-NativeCommand -Command docker -CommandArguments @('image', 'inspect', $imageName)
-        }
+    if ($BuildOnly) {
+        Write-Host "本地镜像准备完成：$releaseId；未连接服务器，未部署。"
+        return
     }
+
+    Write-Host '[3/7] 核对服务器仓库和生产配置'
+    $remoteProbe = @"
+    set -Eeuo pipefail
+    cd '$RemotePath'
+    test -r '$RemoteEnvFile'
+    test "`$(stat -c '%a' '$RemoteEnvFile')" = 600
+    test -z "`$(git status --porcelain)"
+    git rev-parse HEAD
+"@
+    # 远端 Bash 只接受 LF，避免 Windows 工作区 CRLF 破坏命令和路径。
+    $remoteHead = ((& ssh -o BatchMode=yes $Server ($remoteProbe.Replace("`r", ""))) -join "`n").Trim()
+    if ($LASTEXITCODE -ne 0 -or $remoteHead -notmatch '^[0-9a-f]{40}$') {
+        throw '服务器仓库、生产环境文件或 SSH 核验失败。'
+    }
+    Invoke-NativeCommand -Command git -CommandArguments @(
+        '-C', $repoRoot, 'merge-base', '--is-ancestor', $remoteHead, $localHead
+    )
 
     Write-Host '[4/7] 生成服务器可快进的 Git 增量包'
     if ($remoteHead -ne $localHead) {
@@ -152,11 +151,21 @@ try {
         )
     }
 
-    Write-Host '[5/7] 离线传输三个镜像（不会访问服务器外网）'
-    $imageCommand = "docker save $($images -join ' ') | ssh -o BatchMode=yes $Server docker load"
-    & cmd.exe /d /s /c $imageCommand
-    if ($LASTEXITCODE -ne 0) {
-        throw "镜像传输失败，退出码：$LASTEXITCODE"
+    Write-Host '[5/7] 仅传输服务器缺少或内容不同的镜像'
+    $transferImages = @()
+    $imageChecks = @()
+    foreach ($imageName in $images) {
+        $localId = Get-LocalImageId $imageName
+        $remoteId = ((& ssh -o BatchMode=yes $Server "docker image inspect --format '{{.Id}}' '$imageName' 2>/dev/null || true") -join "`n").Trim()
+        if ($LASTEXITCODE -ne 0) { throw '远端镜像查询失败，停止发布' }
+        if ($remoteId -ne $localId) { $transferImages += $imageName }
+        else { Write-Host "服务器已有相同镜像，跳过传输：$imageName" }
+        $imageChecks += "test `"`$(docker image inspect --format '{{.Id}}' '$imageName')`" = '$localId'"
+    }
+    if ($transferImages.Count -gt 0) {
+        $imageCommand = "docker save $($transferImages -join ' ') | ssh -o BatchMode=yes $Server docker load"
+        & cmd.exe /d /s /c $imageCommand
+        if ($LASTEXITCODE -ne 0) { throw "镜像传输失败，退出码：$LASTEXITCODE" }
     }
 
     if ($remoteHead -ne $localHead) {
@@ -176,9 +185,7 @@ trap 'rm -f "$remoteBundle"' EXIT
 cd '$RemotePath'
 $bundleApply
 test "`$(git rev-parse HEAD)" = '$localHead'
-for image_name in '$backendImage' '$adminImage' '$businessImage'; do
-  docker image inspect "`$image_name" >/dev/null
-done
+$($imageChecks -join "`n")
 DEPLOY_SKIP_BUILD=1 \
 DEPLOY_STOP_BACKEND_FOR_MIGRATION='$([int]$StopBackendForMigration.IsPresent)' \
 RUOYI_ENV_FILE='$RemoteEnvFile' \

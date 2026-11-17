@@ -69,3 +69,6 @@ jobs:
         run: bash deploy/tests/test-rollback-gate.sh
       - name: 校验停写迁移与失败关闭
         run: bash deploy/tests/test-deploy-gate.sh
+      - name: 校验快捷部署镜像缓存与隔离模式
+        shell: pwsh
+        run: ./deploy/tests/test-image-cache.ps1

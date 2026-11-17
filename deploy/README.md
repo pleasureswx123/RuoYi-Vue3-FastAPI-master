@@ -344,11 +344,11 @@ APP_CORS_ALLOWED_ORIGINS=http://192.168.10.122:12580,http://192.168.10.122:12581
 
 脚本会自动完成：
 
-1. 核对服务器 Git 工作区干净、生产配置权限正确；
-2. 创建当前提交的临时干净 worktree，避免夹带本地未提交文件；
-3. 在 Windows 开发机构建后端、管理端和 Shot Grid 三个生产镜像；
+1. 创建当前提交的临时干净 worktree，避免夹带本地未提交文件；
+2. 本地镜像准备完成后、传输与发布前核对服务器 Git 工作区干净、生产配置权限正确；
+3. 按各模块 Git 树、构建参数和 Linux amd64 平台核对镜像内容标签：未变化的模块复用本地镜像，只构建变化或缺失的模块；
 4. 生成只允许服务器仓库快进的 Git 增量包；
-5. 通过 SSH 离线传输镜像，不依赖服务器访问 Docker Hub、npm 或 PyPI；
+5. 比较本地与服务器的精确镜像 ID，仅通过 SSH 传输缺少或不同的镜像；切换前再次核对内容，不依赖服务器访问 Docker Hub、npm 或 PyPI；
 6. 在服务器创建数据库备份、执行 Alembic 迁移和配置预检；
 7. 切换三个应用容器，等待五个服务健康；
 8. 复核 `current-release`、数据库和 Redis 健康状态。
@@ -359,7 +359,27 @@ APP_CORS_ALLOWED_ORIGINS=http://192.168.10.122:12580,http://192.168.10.122:12581
 .\deploy\remote-deploy.ps1 -SkipBuild
 ```
 
-`-SkipBuild` 不会跳过服务器备份、迁移和健康门禁。镜像标签缺失时脚本会失败。
+默认已自动复用匹配镜像，通常不需要 `-SkipBuild`。该参数现在严格校验构建输入标签，缺失或不匹配即失败；旧脚本构建的无内容标签镜像需先正常构建一次。不能仅凭版本名称相同认定镜像可用。
+
+只准备本地镜像，不连接或修改服务器：
+
+```powershell
+.\deploy\remote-deploy.ps1 -BuildOnly
+```
+
+强制重新执行构建（仍保留 Docker 层缓存和 pip/npm 下载缓存）：
+
+```powershell
+.\deploy\remote-deploy.ps1 -BuildOnly -ForceBuild
+```
+
+所有模式只构建已提交的分支内容，不包含未提交 Dockerfile 或源码。仅修改仓库根文档等模块外文件，可复用三个旧镜像并打上新提交标签；修改某个模块，仅该模块缓存失效。构建参数或模块内任意已跟踪文件变化都会重新进入构建，Docker 再按层判断复用。后端第三方依赖安装层与项目 CLI 安装分离，修改 CLI 不再重装全部依赖。
+
+缓存属于当前 Docker 引擎及 builder，换机器、清理镜像或执行 builder prune 后可能需要重新下载；不会自动共享服务器缓存。普通运行不主动拉取基础镜像更新，基础镜像安全升级应修改 Dockerfile 固定版本并重新验证；`-ForceBuild` 不等于刷新基础镜像或禁用层缓存。尚未按摘要锁定基础镜像，不宣称镜像位级可复现。
+
+复用只减少构建和传输，正式发布仍调用原 `deploy.sh`，保留停写、数据库备份、迁移、配置预检和健康门禁，镜像全部命中也不跳过。脚本没有自动清理镜像或依赖缓存。
+
+定向回归：`pwsh -NoProfile -File deploy/tests/test-image-cache.ps1` 使用命令替身验证复用、失效、差异传输及失败关闭，不连接真实服务。发布/回滚门禁继续使用 `test-deploy-gate.sh` 和 `test-rollback-gate.sh` 在 Linux 执行。
 
 发布脚本不会自动 `git push`。如果团队需要远程仓库和生产服务器保持一致，发布前仍应单独完成代码评审和 `git push origin main`。
 
