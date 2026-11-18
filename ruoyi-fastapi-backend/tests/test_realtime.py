@@ -84,7 +84,7 @@ async def test_authorize_checks_session_permission_and_project(monkeypatch: pyte
     factory = AsyncMock()
     factory.__aenter__.return_value = db
     monkeypatch.setattr(realtime, 'AsyncSessionLocal', lambda: factory)
-    user = SimpleNamespace(user=SimpleNamespace(status='0'), permissions=['shotgrid:version:query'])
+    user = SimpleNamespace(user=SimpleNamespace(status='0', user_id=105), permissions=['shotgrid:version:query'])
     login = AsyncMock(return_value=user)
     scope = AsyncMock()
     monkeypatch.setattr(realtime.LoginService, 'get_current_user', login)
@@ -153,3 +153,19 @@ async def test_disconnected_socket_always_releases_resources(
         c.listen.assert_not_awaited()
     else:
         ws.close.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_inbox_only_allows_authenticated_recipient(monkeypatch: pytest.MonkeyPatch) -> None:
+    conn, _, _ = connection()
+    conn.pubsub = conn.redis.pubsub()
+    monkeypatch.setattr(realtime, 'authorize', AsyncMock(return_value=105))
+    event = {'type': 'subscribe', 'topic': publisher.INBOX_TOPIC, 'resourceId': 105}
+    with pytest.raises(ValueError, match='本人'):
+        await conn.handle_message(json.dumps({**event, 'resourceId': 106}))
+    conn.pubsub.subscribe.assert_not_awaited()
+    await conn.handle_message(json.dumps(event))
+    conn.pubsub.subscribe.assert_awaited_once_with('realtime:v1:shot-grid.inbox:105')
+    conn.websocket.send_json.reset_mock()
+    await conn.handle_event({'data': json.dumps({**event, 'type': 'event', 'resourceId': 106})})
+    conn.websocket.send_json.assert_not_awaited()

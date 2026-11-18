@@ -1,11 +1,12 @@
 <script setup>
+import { finalDeliveryFiles } from '@/components/version/finalPresentation'
 import ReopenReviewButton from '@/components/review/ReopenReviewButton.vue'
 import RevisionTransferDialog from '@/components/version/RevisionTransferDialog.vue'
 import { showWorkflowSuccess } from '@/utils/workflowSuccess'
 import { useVersionRealtime } from '@/composables/useVersionRealtime'
 import CandidateGenerationPrompt from '@/components/version/CandidateGenerationPrompt.vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute } from 'vue-router'
 import { useDetailNavigation } from '@/composables/useDetailNavigation'
 import { ArrowLeft, ArrowRight, Refresh } from '@element-plus/icons-vue'
 import { ElAffix, ElTabs, ElTabPane, ElMessage, ElMessageBox, ElRadio, ElRadioGroup } from 'element-plus'
@@ -39,7 +40,6 @@ import { tagTypeFromTone } from '@/utils/tag'
 import ProjectStatePanel from '@/views/project/components/ProjectStatePanel.vue'
 import ReviewCandidateThumbnail from '@/views/review/components/ReviewCandidateThumbnail.vue'
 import ReviewMediaWorkspace from '@/views/review/components/ReviewMediaWorkspace.vue'
-import ReviewProductionTarget from '@/views/review/components/ReviewProductionTarget.vue'
 import { taskVersionStatusMeta } from '@/views/task/taskPresentation'
 import {
   formatMediaTime,
@@ -129,6 +129,9 @@ const canListVersions = computed(() => hasPermission('shotgrid:version:list'))
 const candidates = computed(() => reviewContext.value?.candidates || version.value?.candidates || [])
 const selectedCandidateId = computed(() => reviewContext.value?.currentVersion?.selectedCandidateId ?? version.value?.selectedCandidateId ?? null)
 const finalDelivery = computed(() => reviewContext.value?.currentVersion?.finalDelivery || version.value?.finalDelivery || null)
+const finalCandidateIds = computed(() => finalDelivery.value
+  ? finalDeliveryFiles(finalDelivery.value).map(file => Number(file.candidateId))
+  : [Number(selectedCandidateId.value)])
 const canRetryDeliveryState = computed(() => finalDelivery.value?.operation === 'revoke' || finalDelivery.value?.revocationStatus === 'failed' || (reviewContext.value?.currentVersion?.versionStatus || version.value?.versionStatus) === 'final')
 const finalDeliveryAlert = computed(() => {
   const delivery = finalDelivery.value
@@ -146,7 +149,7 @@ const finalDeliveryAlert = computed(() => {
     return {
       type: 'success',
       title: '最终版本已发布到 NAS',
-      path: delivery.finalNasRelativePath,
+      paths: finalDeliveryFiles(delivery).map(file => file.finalNasRelativePath),
       description: '同目录交付清单记录本版最终候选和文件摘要。'
     }
   }
@@ -215,26 +218,18 @@ watch(() => activeCandidate.value?.candidateId, candidateId => {
   if (issueScope.value === 'candidate') savedIssuesTab.value = String(candidateId ?? '')
 }, { immediate: true })
 
-function canChangeIssueScope(scope) {
-  if (scope !== issueScope.value && (hasUnsavedIssueDraft.value || editingDraftId.value || editingPublishedId.value || issueBusy.value || actionBusy.value)) {
-    ElMessage.warning('请先保存或清空当前意见再切换反馈范围')
-    return false
-  }
-  return true
+async function canChangeIssueScope(scope) {
+  if (scope === issueScope.value) return true
+  return finishIssueEditor()
 }
 
 function changeIssueScope(scope) {
-  if (!canChangeIssueScope(scope)) return
   issueScope.value = scope
   savedIssuesTab.value = scope === 'version' ? 'overall' : String(activeCandidate.value?.candidateId ?? '')
 }
 
 function canLeaveSavedIssueTab(candidateId) {
-  if (savedIssuesTab.value !== String(candidateId) && hasUnsavedIssueDraft.value) {
-    ElMessage.warning('请先保存或清空当前问题草稿，再切换候选预览')
-    return false
-  }
-  return true
+  return savedIssuesTab.value === String(candidateId) || finishIssueEditor()
 }
 
 async function switchSavedIssueCandidate(candidateId) {
@@ -289,12 +284,12 @@ const canApprove = computed(() => (
   canSubmitDecision.value
   && verificationComplete.value
   && unresolvedVerificationCount.value === 0
-  && currentIssueCount.value === 0
+  && currentIssueCount.value === 0 && !hasUnsavedIssueDraft.value
 ))
 const canReject = computed(() => (
   canSubmitDecision.value
   && verificationComplete.value
-  && (unresolvedVerificationCount.value > 0 || currentIssueCount.value > 0)
+  && (unresolvedVerificationCount.value > 0 || currentIssueCount.value > 0 || Boolean(issueContent() || draftAnnotationCount.value))
 ))
 const mediaIssues = computed(() => [...carriedIssues.value, ...currentVersionIssues.value].map(issue => ({
   ...issue,
@@ -449,6 +444,7 @@ async function loadReview() {
 
 async function selectManualVersion(item) {
   if (Number(item.versionId) === Number(version.value?.versionId)) return
+  if (!await finishIssueEditor()) return
   loading.value = true
   try {
     applyVersionReview(await loadVersionReview(item.versionId), item.versionId)
@@ -489,6 +485,9 @@ function validateMediaSeconds(_rule, value, callback) {
 }
 
 function clearIssueDraft() {
+  clearTimeout(saveTimer)
+  savedSignature.value = null
+  saveStatus.value = ''
   editingDraftId.value = null
   editingPublishedId.value = null
   editingPublishedLockVersion.value = null
@@ -523,10 +522,103 @@ async function focusIssueDraft() {
   issueDraftPulseTimer = setTimeout(() => { issueDraftPulse.value = false }, 1500)
 }
 
+const savedSignature = ref(null)
+const saveStatus = ref('')
+let saveTimer
+let savePending
+const autoDraft = computed(() => canAddIssue.value && isReviewDecisionOpen.value && !canAppendIssue.value)
+const signature = computed(() => JSON.stringify([issueDraft.content, issueDraft.mediaSeconds, issueDraft.annotations,
+  referenceAttachments.value.map(file => file.clientKey || file.fileId)]))
+
+function issuePayload() {
+  return {
+    reviewCycle: reviewContext.value?.currentVersion?.reviewCycle || 1,
+    issueScope: issueScope.value,
+    candidateId: issueScope.value === 'version' ? null : activeCandidate.value.candidateId,
+    content: issueContent(),
+    mediaTimeMs: issueDraftMediaTimeMs.value,
+    annotations: cloneIssueAnnotations(issueDraft.annotations),
+    referenceFileIds: []
+  }
+}
+
+watch(signature, () => {
+  clearTimeout(saveTimer)
+  if (!autoDraft.value) return
+  if (!hasUnsavedIssueDraft.value && !editingDraftId.value) { saveStatus.value = ''; return }
+  if (signature.value === savedSignature.value) { saveStatus.value = '草稿已自动保存'; return }
+  saveStatus.value = '等待自动保存'
+  saveTimer = setTimeout(savePrivateDraft, 700)
+})
+
+async function writePrivateDraft() {
+  const versionId = version.value?.versionId
+  const generation = pageGeneration
+  while (autoDraft.value && signature.value !== savedSignature.value) {
+    if (!hasUnsavedIssueDraft.value && !editingDraftId.value) return true
+    if (realtimeConflict.value) { saveStatus.value = '审核状态已变化，请核对后再保存'; return false }
+    const valid = await issueFormRef.value?.validate().catch(() => false)
+    if (!valid) { saveStatus.value = '请填写修改意见或添加画面标注'; return false }
+    const snapshot = signature.value
+    const payload = issuePayload()
+    saveStatus.value = '正在保存…'
+    payload.referenceFileIds = await uploadPendingReferenceFiles()
+    const response = editingDraftId.value
+      ? await updateVersionIssueDraft(versionId, editingDraftId.value, { ...payload, lockVersion: editingDraftLockVersion.value })
+      : await addVersionIssueDraft(versionId, payload)
+    if (disposed || generation !== pageGeneration || version.value?.versionId !== versionId) return false
+    const draft = response.data
+    editingDraftId.value = draft.draftId
+    editingDraftLockVersion.value = draft.lockVersion
+    const drafts = [...currentVersionDrafts.value]
+    const index = drafts.findIndex(item => item.draftId === draft.draftId)
+    if (index === -1) drafts.push(draft)
+    else drafts[index] = draft
+    reviewContext.value.currentVersionDrafts = drafts
+    savedSignature.value = snapshot
+    saveStatus.value = '草稿已自动保存'
+  }
+  return true
+}
+
+function savePrivateDraft() {
+  clearTimeout(saveTimer)
+  if (!savePending) {
+    savePending = writePrivateDraft().catch(error => {
+      saveStatus.value = reviewErrorState(error, '草稿保存失败').message
+      return false
+    }).finally(() => { savePending = null })
+  }
+  return savePending
+}
+
+async function discardIncompleteDraft() {
+  if (savePending) await savePending
+  clearIssueDraft()
+}
+
+async function finishIssueEditor() {
+  if (issueBusy.value || actionBusy.value) return false
+  if (autoDraft.value) {
+    if (!await savePrivateDraft()) return false
+    clearIssueDraft()
+    return true
+  }
+  if (hasUnsavedIssueDraft.value) {
+    ElMessage.warning('请先处理当前未发送的意见')
+    return false
+  }
+  return true
+}
+
+const canLeave = () => autoDraft.value ? savePrivateDraft() : true
+defineExpose({ canLeave })
+onBeforeRouteLeave(canLeave)
+onBeforeRouteUpdate(canLeave)
+
 async function submitIssue() {
   if (realtimeConflict.value) return ElMessage.warning('审核状态已变化，请先保留当前意见，再刷新页面')
-  if (!canAddIssue.value || issueBusy.value || actionBusy.value) return
-  const isAppending = canAppendIssue.value
+  if (!canAppendIssue.value || !canAddIssue.value || issueBusy.value || actionBusy.value) return
   issueBusy.value = true
   try {
     let valid = false
@@ -534,31 +626,20 @@ async function submitIssue() {
       valid = result
     })
     if (!valid) return
-    const content = issueContent()
     const seconds = issueDraft.mediaSeconds === null ? null : Number(issueDraft.mediaSeconds)
     if (seconds !== null && (!Number.isFinite(seconds) || seconds < 0)) {
       ElMessage.error('作品时间点无效，请重新从播放器记录')
       return
     }
-    const payload = {
-      reviewCycle: reviewContext.value?.currentVersion?.reviewCycle || 1,
-      issueScope: issueScope.value,
-      candidateId: issueScope.value === 'version' ? null : activeCandidate.value.candidateId,
-      content,
-      mediaTimeMs: seconds === null ? null : Math.round(seconds * 1000),
-      annotations: issueDraft.annotations,
-      referenceFileIds: []
-    }
-    if (isAppending) {
-      try {
-        await ElMessageBox.confirm(
-          editingPublishedId.value ? '修改将立即同步给制作人，并保留修改记录。确认保存吗？' : '追加问题将立即发送给制作人，制作人提交下一版前可编辑本人意见。确认追加吗？',
-          editingPublishedId.value ? '修改已发布意见' : '确认追加问题',
-          { type: 'warning', confirmButtonText: editingPublishedId.value ? '保存并同步' : '追加并发送', cancelButtonText: '继续补充' }
-        )
-      } catch {
-        return
-      }
+    const payload = issuePayload()
+    try {
+      await ElMessageBox.confirm(
+        editingPublishedId.value ? '修改将立即同步给制作人，并保留修改记录。确认保存吗？' : '追加问题将立即发送给制作人，制作人提交下一版前可编辑本人意见。确认追加吗？',
+        editingPublishedId.value ? '修改已发布意见' : '确认追加问题',
+        { type: 'warning', confirmButtonText: editingPublishedId.value ? '保存并同步' : '追加并发送', cancelButtonText: '继续补充' }
+      )
+    } catch {
+      return
     }
     await uploadPendingReferenceFiles()
     payload.referenceFileIds = referenceAttachments.value.map(file => file.fileId)
@@ -566,35 +647,26 @@ async function submitIssue() {
       await updatePublishedVersionIssue(version.value.versionId, editingPublishedId.value, {
         ...payload, lockVersion: editingPublishedLockVersion.value
       })
-    } else if (isAppending) {
+    } else {
       await appendVersionIssue(version.value.versionId, {
         ...payload,
         lockVersion: reviewContext.value?.currentVersion?.lockVersion ?? version.value.lockVersion
       })
-    } else if (editingDraftId.value) {
-      await updateVersionIssueDraft(version.value.versionId, editingDraftId.value, {
-        ...payload,
-        lockVersion: editingDraftLockVersion.value
-      })
-    } else {
-      await addVersionIssueDraft(version.value.versionId, payload)
     }
     const wasPublishedEditing = Boolean(editingPublishedId.value)
-    const wasEditing = Boolean(editingDraftId.value)
     clearIssueDraft()
     if (wasPublishedEditing) ElMessage.success('修改已保存并同步给制作人')
-    else if (isAppending) showWorkflowSuccess('issueAppended')
-    else ElMessage.success(wasEditing ? '问题草稿已更新，制作人仍不可见' : '问题已保存为草稿，点击“退回并发送问题”后才会发送给制作人')
+    else showWorkflowSuccess('issueAppended')
     await loadReview()
   } catch (error) {
-    ElMessage.error(reviewErrorState(error, isAppending ? '追加问题失败' : editingDraftId.value ? '更新问题草稿失败' : '保存问题草稿失败').message)
+    ElMessage.error(reviewErrorState(error, editingPublishedId.value ? '同步修改失败' : '追加问题失败').message)
   } finally {
     issueBusy.value = false
   }
 }
 
 async function editIssueDraft(draft) {
-  if (hasUnsavedIssueDraft.value) return ElMessage.warning('请先保存或清空当前草稿')
+  if (hasUnsavedIssueDraft.value && !await finishIssueEditor()) return
   if (draft.candidateId != null && !candidates.value.some(item => Number(item.candidateId) === Number(draft.candidateId))) return ElMessage.warning('问题所属文件不可用')
   issueScope.value = draft.candidateId == null ? 'version' : 'candidate'
   if (draft.candidateId != null) previewCandidateId.value = draft.candidateId
@@ -610,6 +682,7 @@ async function editIssueDraft(draft) {
     annotations: cloneIssueAnnotations(draft.annotations)
   })
   resetReferenceAttachments((draft.referenceFiles || []).map(file => ({ ...file })))
+  savedSignature.value = signature.value
   selectedIssueId.value = `draft-${draft.draftId}`
   await nextTick()
   mediaWorkspace.value?.loadDraft(draft.annotations, draft.mediaTimeMs)
@@ -641,12 +714,16 @@ async function removeIssueDraft(draft) {
   } catch {
     return
   }
+  if (savePending && !await savePending) return
+  const latest = currentVersionDrafts.value.find(item => item.draftId === draft.draftId)
+  if (!latest) return
   draftActionBusyId.value = draft.draftId
   try {
-    await deleteVersionIssueDraft(version.value.versionId, draft.draftId, { lockVersion: draft.lockVersion })
+    if (editingDraftId.value === draft.draftId) clearTimeout(saveTimer)
+    await deleteVersionIssueDraft(version.value.versionId, draft.draftId, { lockVersion: latest.lockVersion })
     if (editingDraftId.value === draft.draftId) clearIssueDraft()
+    reviewContext.value.currentVersionDrafts = currentVersionDrafts.value.filter(item => item.draftId !== draft.draftId)
     ElMessage.success('问题草稿已删除')
-    await loadReview()
   } catch (error) {
     ElMessage.error(reviewErrorState(error, '删除问题草稿失败').message)
   } finally {
@@ -686,10 +763,7 @@ async function focusIssue(issue) {
       return
     }
     if (Number(activeCandidate.value?.candidateId) !== Number(targetCandidate.candidateId)) {
-      if (hasUnsavedIssueDraft.value) {
-        ElMessage.warning('请先保存或清空当前问题草稿，再查看其他候选的问题')
-        return
-      }
+      if (!await finishIssueEditor()) return
       previewCandidateId.value = targetCandidate.candidateId
       clearIssueDraft()
     }
@@ -710,11 +784,8 @@ function candidateMediaName(candidate) {
 
 async function previewCandidate(candidate) {
   const isSwitching = Number(activeCandidate.value?.candidateId) !== Number(candidate.candidateId)
-  if (isSwitching && hasUnsavedIssueDraft.value) {
-    ElMessage.warning('请先保存或清空当前问题草稿，再切换候选预览')
-    return
-  }
   if (isSwitching) {
+    if (!await finishIssueEditor()) return
     previewCandidateId.value = candidate.candidateId
     selectedIssueId.value = null
     clearIssueDraft()
@@ -732,13 +803,13 @@ async function previewCandidate(candidate) {
 
 const approvalVisible = ref(false)
 const approvalFormRef = ref(null)
-const approvalForm = reactive({ candidateId: null })
-const approvalRules = { candidateId: [{ required: true, message: '请选择最终交付文件', trigger: 'change' }] }
+const approvalForm = reactive({ candidateIds: [] })
+const approvalRules = { candidateIds: [{ type: 'array', min: 1, required: true, message: '请选择最终交付文件', trigger: 'change' }] }
 
 function openApproval() {
   if (!canApprove.value || actionBusy.value || issueBusy.value) return
   if (hasUnsavedIssueDraft.value) return ElMessage.warning('请先保存或清空未保存的问题草稿')
-  approvalForm.candidateId = null
+  approvalForm.candidateIds = []
   approvalVisible.value = true
   nextTick(() => approvalFormRef.value?.clearValidate())
 }
@@ -758,10 +829,7 @@ function candidateIssueCount(candidate) {
 async function submitDecision(actionType, revisionTransfer = null, confirmed = false) {
   if (realtimeConflict.value) return ElMessage.warning('审核状态已变化，请先保留当前意见，再刷新页面')
   if (!canSubmitDecision.value || actionBusy.value || issueBusy.value) return
-  if (hasUnsavedIssueDraft.value) {
-    ElMessage.warning('还有未保存的问题草稿，请先保存或清空后再提交审核结论')
-    return
-  }
+  if (!await finishIssueEditor() || actionBusy.value) return
   if (actionType !== 'defer' && !verificationComplete.value) {
     ElMessage.warning('请逐条确认上一版问题；选择“仍然存在”时必须填写未解决原因')
     return
@@ -794,7 +862,7 @@ async function submitDecision(actionType, revisionTransfer = null, confirmed = f
     const payload = {
       actionType,
       ...(revisionTransfer ? { revisionTransfer } : {}),
-      selectedCandidateId: actionType === 'approve' ? approvalForm.candidateId : null,
+      ...(actionType === 'approve' ? { selectedCandidateIds: [...approvalForm.candidateIds] } : { selectedCandidateId: null }),
       reason: decisionReason.value.trim() || null,
       lockVersion: reviewContext.value?.currentVersion?.lockVersion ?? version.value.lockVersion,
       issueVerifications: actionType === 'defer' ? [] : verificationItems.value
@@ -861,6 +929,7 @@ onMounted(() => {
   loadReview()
 })
 onBeforeUnmount(() => {
+  clearTimeout(saveTimer)
   disposed = true
   drawerResizeObserver?.disconnect()
   pageGeneration += 1
@@ -916,10 +985,10 @@ onBeforeUnmount(() => {
             <header><div><p class="sg-eyebrow">CANDIDATES</p><h3>候选导航</h3><p>逐个查看文件，记录批注和修改意见。</p></div><el-tag effect="plain" round>{{ candidates.length }} 个文件</el-tag></header>
             <el-scrollbar class="candidate-navigation__scroll">
             <ElRadioGroup :model-value="activeCandidate?.candidateId" class="candidate-selector__list" aria-label="选择要预览的候选文件">
-              <el-card v-for="candidate in candidates" :key="candidate.candidateId" class="candidate-choice" :class="{ 'is-previewing': Number(activeCandidate?.candidateId) === Number(candidate.candidateId), 'is-selected': version.versionStatus === 'final' && Number(selectedCandidateId) === Number(candidate.candidateId) }" shadow="never">
+              <el-card v-for="candidate in candidates" :key="candidate.candidateId" class="candidate-choice" :class="{ 'is-previewing': Number(activeCandidate?.candidateId) === Number(candidate.candidateId), 'is-selected': version.versionStatus === 'final' && finalCandidateIds.includes(Number(candidate.candidateId)) }" shadow="never">
                 <ElRadio class="candidate-choice__preview" :value="candidate.candidateId" @click="previewCandidate(candidate)">
                   <ReviewCandidateThumbnail :version-id="version.versionId" :candidate="candidate" :active="Number(activeCandidate?.candidateId) === Number(candidate.candidateId)" :can-preview="canDownload" />
-                  <span class="candidate-choice__meta"><span><strong>{{ candidate.candidateNumber }}</strong><el-tag v-if="version.versionStatus === 'final' && Number(selectedCandidateId) === Number(candidate.candidateId)" size="small" type="success" effect="plain" round>最终交付</el-tag></span><small v-if="candidate.candidateNote?.trim()">{{ candidate.candidateNote }}</small><small class="candidate-choice__file">{{ candidateMediaName(candidate) }}</small></span>
+                  <span class="candidate-choice__meta"><span><strong>{{ candidate.candidateNumber }}</strong><el-tag v-if="version.versionStatus === 'final' && finalCandidateIds.includes(Number(candidate.candidateId))" size="small" type="success" effect="plain" round>最终交付</el-tag></span><small v-if="candidate.candidateNote?.trim()">{{ candidate.candidateNote }}</small><small class="candidate-choice__file">{{ candidateMediaName(candidate) }}</small></span>
                 </ElRadio>
                 <div class="candidate-choice__actions"><el-tag class="candidate-choice__issue-count" :class="{ 'has-issues': candidateIssueCount(candidate) > 0 }" :type="candidateIssueCount(candidate) > 0 ? 'warning' : 'info'" :effect="candidateIssueCount(candidate) > 0 ? 'dark' : 'plain'" size="small" round>{{ candidateIssueCount(candidate) }} 条问题</el-tag><el-tag v-if="Number(activeCandidate?.candidateId) === Number(candidate.candidateId)" size="small">正在审阅</el-tag></div>
               </el-card>
@@ -933,7 +1002,6 @@ onBeforeUnmount(() => {
             <div><strong>当前审核 · {{ version.versionNumber }}</strong><p>{{ version.submitterName || '制作人' }} · {{ formatReviewDateTime(version.submittedTime) }}</p></div>
             <el-button v-if="canListVersions && canQueryVersion" type="primary" plain @click="historyVisible = true">版本记录</el-button>
           </div>
-          <ReviewProductionTarget v-if="version.productionTarget" :target="version.productionTarget" :task-id="Number(version.taskId)" :project-id="Number(version.projectId)" :can-read-references="hasPermission('shotgrid:task:query')" />
 
           <section ref="reviewWorkStep" class="review-work-step" :class="{ 'is-candidate-focus': candidatePreviewPulse }">
             <header class="work-step-heading"><span class="step-number">1</span><div><strong>播放并检查 {{ activeCandidate?.candidateNumber || '当前候选' }}</strong><p>可对每个文件记录问题和画面批注；通过时再选择最终交付文件。</p></div></header>
@@ -954,7 +1022,7 @@ onBeforeUnmount(() => {
           </section>
 
           <CandidateGenerationPrompt :candidate="activeCandidate" :version="version" @saved="version = $event" />
-          <VersionDetailCard :version="reviewVersion" :can-download="canDownload" :show-preview="false" />
+          <VersionDetailCard :version="reviewVersion" :can-download="canDownload" :show-preview="false" files-only />
 
           <el-card class="action-history" shadow="never">
             <header><div><p class="sg-eyebrow">HISTORY</p><h3>审核动作记录</h3></div><span>{{ actions.length }} 条</span></header>
@@ -1002,13 +1070,13 @@ onBeforeUnmount(() => {
               <ElTabPane name="current" :label="`本轮意见 ${currentIssueCount}`">
                 <el-scrollbar class="assistant-body">
                 <section ref="issueComposer" class="assistant-section current-panel" :class="{ 'is-draft-focus': issueDraftPulse }">
-                  <header class="assistant-section-heading"><span class="step-number">2</span><div><div class="issue-compose-heading"><h3>{{ canReview ? '填写修改意见' : '已发送的修改意见' }}</h3></div><p>{{ !canReview ? '查看已正式发送的意见、画面标注和处理记录。' : canAppendIssue ? '制作人提交下一版前可追加问题；确认发送后制作人立即可见。' : isReviewDecisionOpen ? '先保存草稿，退回时统一发送给制作人。' : '本轮已结束。仅在任务待修改且制作人尚未提交下一版时可以追加问题。' }}</p></div></header>
+                  <header class="assistant-section-heading"><span class="step-number">2</span><div><div class="issue-compose-heading"><h3>{{ canReview ? '填写修改意见' : '已发送的修改意见' }}</h3></div><p>{{ !canReview ? '查看已正式发送的意见、画面标注和处理记录。' : canAppendIssue ? '制作人提交下一版前可追加问题；确认发送后制作人立即可见。' : isReviewDecisionOpen ? '修改意见自动保存为草稿，退回时统一发送给制作人。' : '本轮已结束。仅在任务待修改且制作人尚未提交下一版时可以追加问题。' }}</p></div></header>
                   <ElTabs v-if="canAddIssue" :model-value="issueScope" type="border-card" :before-leave="canChangeIssueScope" @update:model-value="changeIssueScope" class="issue-scope-tabs" aria-label="选择反馈范围">
                     <ElTabPane v-for="scope in [{ name: 'version', label: '整体反馈意见' }, { name: 'candidate', label: '填写修改意见' }]" :key="scope.name" :name="scope.name" :label="scope.label">
                       <template #label>
                         <span class="issue-scope-label">{{ scope.label }}<el-tag v-if="scope.name === 'candidate' && activeCandidate" class="issue-candidate-tag" size="small" effect="dark" round :aria-label="`当前文件：${activeCandidate.candidateNumber}`">{{ activeCandidate.candidateNumber }}</el-tag></span>
                       </template>
-                  <el-form v-if="issueScope === scope.name" :ref="el => { if (el) issueFormRef = el }" :disabled="issueBusy || Boolean(actionBusy)" :model="issueDraft" :rules="issueRules" class="issue-compose" label-position="top" aria-label="记录当前版新问题">
+                  <el-form v-if="issueScope === scope.name" :ref="el => { if (el) issueFormRef = el }" :disabled="issueBusy || Boolean(actionBusy) || Boolean(draftActionBusyId)" :model="issueDraft" :rules="issueRules" class="issue-compose" label-position="top" aria-label="记录当前版新问题">
                     <el-form-item label="修改意见" prop="content"><el-input :ref="el => { if (el) issueContentInput = el }" v-model="issueDraft.content" type="textarea" :rows="4" maxlength="10000" show-word-limit placeholder="请说明需要修改的内容，例如：降低眼睛红色饱和度，并保持肤色不变。" /></el-form-item>
                     <el-form-item label="参考内容（可选）" prop="referenceFiles">
                       <ReviewReferenceInput :files="referenceAttachments" :disabled="issueBusy || Boolean(actionBusy)" @add="addReferenceFile" @remove="removeReferenceFile" />
@@ -1022,7 +1090,18 @@ onBeforeUnmount(() => {
                         <el-button link type="danger" @click="clearIssueDraft">清除定位</el-button>
                       </div>
                     </el-form-item>
-                    <el-form-item class="issue-compose__actions"><el-button v-if="hasUnsavedIssueDraft" :disabled="issueBusy" @click="clearIssueDraft">{{ editingDraftId || editingPublishedId ? '取消编辑' : canAppendIssue ? '清空内容' : '清空草稿' }}</el-button><el-button type="primary" :loading="issueBusy" @click="submitIssue">{{ editingPublishedId ? '保存并同步修改' : canAppendIssue ? '追加并发送问题' : editingDraftId ? '更新问题草稿' : '保存问题草稿' }}</el-button></el-form-item>
+                    <el-form-item class="issue-compose__actions">
+                      <template v-if="autoDraft">
+                        <span role="status">{{ saveStatus }}</span>
+                        <el-button v-if="saveStatus && signature !== savedSignature && saveStatus !== '等待自动保存' && saveStatus !== '正在保存…'" link type="primary" @click="savePrivateDraft">重试保存</el-button>
+                        <el-button v-if="!issueContent() && !draftAnnotationCount && (hasUnsavedIssueDraft || editingDraftId)" link @click="discardIncompleteDraft">{{ editingDraftId ? '放弃本次编辑' : '清空内容' }}</el-button>
+                        <el-button v-if="editingDraftId" link type="primary" @click="finishIssueEditor">新增一条意见</el-button>
+                      </template>
+                      <template v-else>
+                        <el-button v-if="hasUnsavedIssueDraft" :disabled="issueBusy" @click="clearIssueDraft">{{ editingPublishedId ? '取消编辑' : '清空内容' }}</el-button>
+                        <el-button type="primary" :loading="issueBusy" @click="submitIssue">{{ editingPublishedId ? '保存并同步修改' : '追加并发送问题' }}</el-button>
+                      </template>
+                    </el-form-item>
                   </el-form>
                     </ElTabPane>
                   </ElTabs>
@@ -1089,7 +1168,7 @@ onBeforeUnmount(() => {
                 :closable="false"
                 show-icon
               >
-                <code v-if="finalDeliveryAlert.path" class="final-delivery-path" aria-label="NAS 发布路径">{{ finalDeliveryAlert.path }}</code>
+                <code v-for="path in finalDeliveryAlert.paths" :key="path" class="final-delivery-path" aria-label="NAS 发布路径">{{ path }}</code>
                 <span class="final-delivery-note">{{ finalDeliveryAlert.description }}</span>
               </el-alert>
               <el-button v-if="(finalDelivery?.deliveryStatus === 'failed' || finalDelivery?.revocationStatus === 'failed') && canRetryFinalDelivery && canRetryDeliveryState" type="warning" plain :loading="finalDeliveryRetryBusy" @click="retryFailedFinalDelivery">{{ finalDelivery?.operation === 'revoke' || finalDelivery?.revocationStatus === 'failed' ? '重试同步撤销清单' : '重新发布最终版本' }}</el-button>
@@ -1124,8 +1203,8 @@ onBeforeUnmount(() => {
     <el-dialog v-model="approvalVisible" title="选择最终交付文件并通过" width="520px" :close-on-click-modal="false" :close-on-press-escape="!actionBusy" :show-close="!actionBusy" destroy-on-close>
       <p>本轮审核通过后，所选文件将交付到 NAS 的 FINAL 目录。</p>
       <el-form ref="approvalFormRef" :model="approvalForm" :rules="approvalRules" label-position="top" :disabled="Boolean(actionBusy)">
-        <el-form-item label="最终交付文件" prop="candidateId">
-          <el-select v-model="approvalForm.candidateId" placeholder="选择最终交付文件" style="width:100%">
+        <el-form-item label="最终交付文件" prop="candidateIds">
+          <el-select v-model="approvalForm.candidateIds" multiple placeholder="选择一个或多个最终交付文件" style="width:100%">
             <el-option v-for="candidate in candidates" :key="candidate.candidateId" :value="candidate.candidateId" :label="`${candidate.candidateNumber} · ${candidateMediaName(candidate)}`" />
           </el-select>
         </el-form-item>

@@ -169,6 +169,7 @@ class ShotGridReviewReopenService:
             )
             revoke = ShotGridFinalDelivery(
                 **{field: getattr(delivery, field) for field in fields},
+                additional_files=getattr(delivery, 'additional_files', None) or [],
                 review_cycle=version.review_cycle,
                 operation='revoke',
                 validity_status='revoked',

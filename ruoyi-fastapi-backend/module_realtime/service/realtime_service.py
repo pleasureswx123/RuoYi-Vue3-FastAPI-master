@@ -10,6 +10,7 @@ from fastapi import Request, WebSocket, WebSocketDisconnect
 from config.database import AsyncSessionLocal
 from config.env import AppConfig
 from module_admin.service.login_service import LoginService
+from module_realtime.service.realtime_publisher import INBOX_TOPIC
 from module_shot_grid.exceptions import shot_grid_error
 from module_shot_grid.service.review_service import ShotGridReviewService
 
@@ -50,16 +51,23 @@ async def issue_ticket(request: Request, user_id: int) -> dict[str, object]:
     return {'ticket': ticket, 'expiresIn': 30}
 
 
-async def authorize(websocket: WebSocket, token: str, resource_ids: set[int]) -> None:
+async def authorize(websocket: WebSocket, token: str, resource_ids: set[int], *, inbox: bool = False) -> int:
     """每次订阅、推送及心跳均重新检查登录、接口权限和项目数据范围。"""
     async with AsyncSessionLocal() as db:
         user = await LoginService.get_current_user(websocket, token, db)
         if not user.user or user.user.status != '0':
             raise ValueError('账号不可用')
-        if not {'*:*:*', 'shotgrid:version:query'}.intersection(user.permissions):
-            raise ValueError('无版本读取权限')
+        permissions = set(user.permissions)
+        if '*:*:*' not in permissions:
+            if resource_ids and 'shotgrid:version:query' not in permissions:
+                raise ValueError('无版本读取权限')
+            if inbox and 'shotgrid:note:list' not in permissions:
+                raise ValueError('无个人反馈读取权限')
+            if not permissions.intersection({'shotgrid:version:query', 'shotgrid:note:list'}):
+                raise ValueError('无版本读取权限')
         for resource_id in resource_ids:
             await ShotGridReviewService._resolve_version_access(db, resource_id, user)
+        return int(user.user.user_id)
 
 
 def validate_subscription(message: dict[str, object]) -> int:
@@ -77,6 +85,7 @@ class RealtimeConnection:
         self.redis = websocket.app.state.redis
         self.pubsub = None
         self.token = ''
+        self.inbox_user_id = None
         self.subscriptions: set[int] = set()
         self.receive_task = None
         self.event_task = None
@@ -121,6 +130,19 @@ class RealtimeConnection:
             return
         if message.get('type') not in {'subscribe', 'unsubscribe'}:
             raise ValueError('不支持的消息')
+        if message.get('topic') == INBOX_TOPIC:
+            user_id = await authorize(self.websocket, self.token, set(), inbox=True)
+            if type(message.get('resourceId')) is not int or message['resourceId'] != user_id:
+                raise ValueError('只能订阅本人收件箱')
+            channel = f'{CHANNEL_PREFIX}{INBOX_TOPIC}:{user_id}'
+            if message['type'] == 'unsubscribe':
+                await self.pubsub.unsubscribe(channel)
+                self.inbox_user_id = None
+            else:
+                await self.pubsub.subscribe(channel)
+                self.inbox_user_id = user_id
+                await self.send({'type': 'subscribed', 'topic': INBOX_TOPIC, 'resourceId': user_id})
+            return
         resource_id = validate_subscription(message)
         channel = f'{CHANNEL_PREFIX}{TOPIC}:{resource_id}'
         if message['type'] == 'unsubscribe':
@@ -139,6 +161,10 @@ class RealtimeConnection:
             return
         event = json.loads(item['data'])
         resource_id = event.get('resourceId')
+        if event.get('topic') == INBOX_TOPIC and self.inbox_user_id and resource_id == self.inbox_user_id:
+            if await authorize(self.websocket, self.token, set(), inbox=True) == resource_id:
+                await self.send(event)
+            return
         if resource_id in self.subscriptions and event.get('topic') == TOPIC:
             await authorize(self.websocket, self.token, {resource_id})
             await self.send(event)
@@ -158,7 +184,7 @@ class RealtimeConnection:
             if now - self.last_ping > HEARTBEAT_TIMEOUT_SECONDS:
                 raise ValueError('心跳超时')
             if now - last_check >= AUTH_REFRESH_SECONDS:
-                await authorize(self.websocket, self.token, self.subscriptions)
+                await authorize(self.websocket, self.token, self.subscriptions, inbox=self.inbox_user_id is not None)
                 last_check = now
                 count = 0
             if self.receive_task in done:

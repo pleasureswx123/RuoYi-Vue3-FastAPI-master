@@ -1,4 +1,5 @@
 <script setup>
+import FeedbackNotification from '@/components/FeedbackNotification.vue'
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox, ElSubMenu } from 'element-plus'
@@ -419,6 +420,7 @@ onBeforeUnmount(() => {
       <el-alert v-if="passwordNotice" class="app-security-notice" :title="passwordNotice" type="warning" :closable="false" show-icon />
 
       <el-main class="app-content">
+        <FeedbackNotification />
         <router-view :key="workspaceKey" />
       </el-main>
     </el-container>

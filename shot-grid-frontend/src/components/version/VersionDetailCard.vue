@@ -1,8 +1,9 @@
 <script setup>
+import { finalDeliveryFiles } from './finalPresentation'
 import NasOpenButton from '@/components/NasOpenButton.vue'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { CopyDocument, Download, Document, VideoPlay } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
+import { ElCard, ElMessage } from 'element-plus'
 
 import { downloadProtectedVersionFile } from '@/api/shot-grid/versions'
 import { tagTypeFromTone } from '@/utils/tag'
@@ -17,6 +18,7 @@ const props = defineProps({
   version: { type: Object, required: true },
   canDownload: { type: Boolean, default: false },
   showPreview: { type: Boolean, default: true },
+  filesOnly: { type: Boolean, default: false },
   showHeader: { type: Boolean, default: true },
   showFilePreviewAction: { type: Boolean, default: false }
 })
@@ -35,6 +37,12 @@ let versionGeneration = 0
 let disposed = false
 
 const statusMeta = computed(() => versionStatusMeta(props.version?.versionStatus))
+function isFinalCandidate(candidate) {
+  if (!candidate || props.version.versionStatus !== 'final') return false
+  return props.version.finalDelivery
+    ? finalDeliveryFiles(props.version.finalDelivery).some(file => Number(file.candidateId) === Number(candidate.candidateId))
+    : candidate.isSelected
+}
 const hiddenDerivedFileRoles = new Set(['thumbnail', 'proxy_media'])
 const deliveryFiles = computed(() => (
   Array.isArray(props.version?.files)
@@ -218,42 +226,44 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <el-card class="version-detail-card" shadow="never">
-    <header v-if="showHeader">
-      <div>
-        <p class="sg-eyebrow">VERSION DETAIL</p>
-        <h3>{{ version.versionNumber }}</h3>
-        <p>{{ version.changelog }}</p>
-      </div>
-      <el-tag size="small" effect="light" round :type="tagTypeFromTone(statusMeta.tone)">{{ statusMeta.label }}</el-tag>
-    </header>
+  <component :is="filesOnly ? 'section' : ElCard" :class="filesOnly ? 'review-file-rows' : 'version-detail-card'" v-bind="filesOnly ? { 'aria-label': '当前候选文件' } : { shadow: 'never' }">
+    <template v-if="!filesOnly">
+      <header v-if="showHeader">
+        <div>
+          <p class="sg-eyebrow">VERSION DETAIL</p>
+          <h3>{{ version.versionNumber }}</h3>
+          <p>{{ version.changelog }}</p>
+        </div>
+        <el-tag size="small" effect="light" round :type="tagTypeFromTone(statusMeta.tone)">{{ statusMeta.label }}</el-tag>
+      </header>
 
-    <slot name="review-summary" />
+      <slot name="review-summary" />
 
-    <section v-if="showPreview && versionCandidates.length > 1" class="candidate-preview-switcher" aria-label="切换版本候选预览">
-      <div class="candidate-preview-switcher__heading">
-        <div><strong>本轮候选</strong><span>共 {{ versionCandidates.length }} 个，可逐个切换预览</span></div>
-        <el-tag v-if="version.versionStatus === 'final' && activeCandidate?.isSelected" type="success" size="small" effect="plain" round>最终交付文件</el-tag>
-      </div>
-      <el-radio-group v-model="activeCandidateId" class="candidate-preview-options" aria-label="选择要预览的候选文件">
-        <el-radio-button v-for="candidate in versionCandidates" :key="candidate.candidateId" :value="Number(candidate.candidateId)">
-          <span><strong>{{ candidate.candidateNumber }}</strong><small>{{ candidateFileName(candidate) }}</small></span>
-        </el-radio-button>
-      </el-radio-group>
-      <p><strong>当前预览 {{ activeCandidate?.candidateNumber }}</strong><span>{{ activeCandidate?.candidateNote || '该候选未填写补充说明。' }}</span></p>
-    </section>
+      <section v-if="showPreview && versionCandidates.length > 1" class="candidate-preview-switcher" aria-label="切换版本候选预览">
+        <div class="candidate-preview-switcher__heading">
+          <div><strong>本轮候选</strong><span>共 {{ versionCandidates.length }} 个，可逐个切换预览</span></div>
+          <el-tag v-if="isFinalCandidate(activeCandidate)" type="success" size="small" effect="plain" round>最终交付文件</el-tag>
+        </div>
+        <el-radio-group v-model="activeCandidateId" class="candidate-preview-options" aria-label="选择要预览的候选文件">
+          <el-radio-button v-for="candidate in versionCandidates" :key="candidate.candidateId" :value="Number(candidate.candidateId)">
+            <span><strong>{{ candidate.candidateNumber }}</strong><small>{{ candidateFileName(candidate) }}</small></span>
+          </el-radio-button>
+        </el-radio-group>
+        <p><strong>当前预览 {{ activeCandidate?.candidateNumber }}</strong><span>{{ activeCandidate?.candidateNote || '该候选未填写补充说明。' }}</span></p>
+      </section>
 
-    <ProtectedVersionPreview v-if="showPreview" :version="previewVersion" :can-preview="canDownload" />
-    <CandidateGenerationPrompt v-if="showPreview" :candidate="activeCandidate" :version="version" @saved="emit('prompt-saved', $event)" />
+      <ProtectedVersionPreview v-if="showPreview" :version="previewVersion" :can-preview="canDownload" />
+      <CandidateGenerationPrompt v-if="showPreview" :candidate="activeCandidate" :version="version" @saved="emit('prompt-saved', $event)" />
 
-    <el-descriptions class="version-facts" :column="2" border size="small">
-      <el-descriptions-item label="提交人">{{ version.submitterName || `用户 #${version.submittedBy}` }}</el-descriptions-item>
-      <el-descriptions-item label="提交时间">{{ formatVersionDateTime(version.submittedTime) }}</el-descriptions-item>
-      <el-descriptions-item label="审核单">{{ version.autoReviewList?.reviewListName || '—' }}</el-descriptions-item>
-    </el-descriptions>
+      <el-descriptions class="version-facts" :column="2" border size="small">
+        <el-descriptions-item label="提交人">{{ version.submitterName || `用户 #${version.submittedBy}` }}</el-descriptions-item>
+        <el-descriptions-item label="提交时间">{{ formatVersionDateTime(version.submittedTime) }}</el-descriptions-item>
+        <el-descriptions-item label="审核单">{{ version.autoReviewList?.reviewListName || '—' }}</el-descriptions-item>
+      </el-descriptions>
+    </template>
 
     <section class="version-files">
-      <div class="subheading"><strong>版本文件</strong><span>{{ deliveryFiles.length }} 个交付文件</span></div>
+      <div v-if="!filesOnly" class="subheading"><strong>版本文件</strong><span>{{ deliveryFiles.length }} 个交付文件</span></div>
       <div v-if="deliveryFiles.length" class="file-list">
         <div v-for="file in deliveryFiles" :key="file.fileId" class="file-row" :class="{ 'is-previewing': showPreview && Number(file.candidateId) === Number(activeCandidateId) }">
           <span class="file-icon"><el-icon><Document /></el-icon></span>
@@ -264,7 +274,7 @@ onBeforeUnmount(() => {
           <div class="file-tags">
             <el-tag v-if="fileCandidate(file)" size="small" effect="plain" round>{{ fileCandidate(file).candidateNumber }}</el-tag>
             <el-tag size="small" effect="plain" round type="info">{{ fileRoleLabel(file.role) }}</el-tag>
-            <el-tag v-if="version.versionStatus === 'final' && file.isPrimary" size="small" effect="plain" round type="success">最终交付文件</el-tag>
+            <el-tag v-if="isFinalCandidate(fileCandidate(file)) || (!version.finalDelivery && version.versionStatus === 'final' && file.isPrimary)" size="small" effect="plain" round type="success">最终交付文件</el-tag>
           </div>
           <div class="file-actions">
             <VersionFolderButton :version="version" :file="file" :can-download="canDownload" />
@@ -308,7 +318,7 @@ onBeforeUnmount(() => {
 
     <el-alert v-if="downloadError" class="download-error" :title="downloadError.title" :description="downloadError.message" type="error" :closable="false" show-icon />
 
-    <el-collapse v-if="version.aiParams" v-model="activeAiSections" class="ai-snapshot">
+    <el-collapse v-if="!filesOnly && version.aiParams" v-model="activeAiSections" class="ai-snapshot">
       <el-collapse-item title="AI 参数快照" name="ai-params"><pre>{{ JSON.stringify(version.aiParams, null, 2) }}</pre></el-collapse-item>
     </el-collapse>
 
@@ -326,7 +336,7 @@ onBeforeUnmount(() => {
       <CandidateGenerationPrompt v-if="filePreviewVisible" :candidate="filePreviewCandidate" :version="version" @saved="emit('prompt-saved', $event)" />
       <template #footer><el-button @click="filePreviewVisible = false">关闭</el-button></template>
     </el-dialog>
-  </el-card>
+  </component>
 </template>
 
 <style scoped lang="scss">
@@ -360,6 +370,8 @@ onBeforeUnmount(() => {
 .subheading span { color: var(--sg-text-muted); }
 .file-list { display: grid; gap: 8px; }
 .file-row { display: grid; padding: 12px; background: rgba(255, 255, 255, 0.025); border: 1px solid var(--sg-border); border-radius: 10px; grid-template-columns: auto minmax(0, 1fr) auto auto; gap: 12px; align-items: center; }
+.review-file-rows .file-row { grid-template-columns: auto minmax(0, 1fr) auto; }
+.review-file-rows .file-actions { grid-column: 1 / -1; }
 .file-row.is-previewing { background: rgba(255, 182, 87, 0.045); border-color: rgba(255, 182, 87, 0.42); }
 .file-icon { display: grid; width: 34px; height: 34px; color: var(--sg-accent); background: var(--sg-accent-soft); border-radius: 9px; place-items: center; }
 .file-row strong,

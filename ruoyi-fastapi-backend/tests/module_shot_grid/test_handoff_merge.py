@@ -16,7 +16,8 @@ from module_shot_grid.service.review_service import ShotGridReviewService
 
 def test_merge_head_keeps_both_existing_revision_histories() -> None:
     script = ScriptDirectory(str(Path(__file__).resolve().parents[2] / 'alembic'))
-    assert script.get_heads() == ['20261116_44']
+    assert script.get_heads() == ['20261118_46']
+    assert script.get_revision('20261118_45').down_revision == '20261116_44'
     assert set(script.get_revision('20261116_44').down_revision) == {'20261026_41', '20261111_43'}
     assert script.get_revision('20261030_41').down_revision == '20261013_40'
 
@@ -29,6 +30,7 @@ async def test_formal_feedback_preserves_delivery_fencing(monkeypatch: pytest.Mo
         task_id=2,
         version_id=3,
         candidate_id=4,
+        additional_files=[{'candidate_id': 5}],
         source_file_id='file',
         business_file_name='a.mp4',
         source_nas_relative_path='source',
@@ -56,6 +58,7 @@ async def test_formal_feedback_preserves_delivery_fencing(monkeypatch: pytest.Mo
         await ShotGridReviewService._revoke_feedback_delivery(db, version, 9, datetime.now())
         revoke = add.await_args.args[1]
         assert revoke.operation == 'revoke' and revoke.review_cycle == version.review_cycle
+        assert revoke.additional_files == delivery.additional_files
         assert revoke.delivery_status == 'pending'
         assert delivery.validity_status == 'revoked'
         assert delivery.delivery_status == ('cancelled' if status == 'pending' else status)

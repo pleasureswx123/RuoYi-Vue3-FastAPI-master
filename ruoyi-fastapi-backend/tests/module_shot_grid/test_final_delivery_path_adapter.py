@@ -203,3 +203,43 @@ async def test_final_delivery_stays_inside_its_version_directory(tmp_path: Path)
     if os.name == 'nt':
         assert manifest.stat().st_file_attributes & stat.FILE_ATTRIBUTE_HIDDEN
         assert not (folder / 'FINAL' / name).stat().st_file_attributes & stat.FILE_ATTRIBUTE_HIDDEN
+
+
+@pytest.mark.asyncio
+async def test_multiple_finals_retry_as_one_batch_and_revoke(tmp_path: Path) -> None:
+    context, project, content = _prepare_context(tmp_path)
+    first = project / Path(context.source_nas_relative_path.replace('\\', '/'))
+    second = first.with_name(first.name.replace('_02_', '_03_'))
+    second.write_bytes(b'second')
+    extra = {
+        'candidate_id': 23,
+        'candidate_no': 3,
+        'business_file_name': second.name,
+        'source_nas_relative_path': context.source_nas_relative_path.replace(first.name, second.name),
+        'final_nas_relative_path': context.final_nas_relative_path.replace(first.name, second.name),
+        'source_sha256': hashlib.sha256(b'second').hexdigest(),
+        'source_file_size': 6,
+    }
+    context = replace(context, additional_files=(extra,))
+    adapter = ShotGridFinalDeliveryPathAdapter(allow_local_root=True)
+    final = first.parent / 'FINAL'
+    manifest = final / 'FINAL.json'
+    current = final / 'CURRENT-10.json'
+    first.write_bytes(b'changed')
+    with pytest.raises(VersionPublishPathAdapterError):
+        await adapter.publish(context)
+    assert not current.exists() and not manifest.exists()
+    first.write_bytes(content)
+    await adapter.publish(context)
+    await adapter.publish(context)
+    assert (final / first.name).read_bytes() == content
+    assert (final / second.name).read_bytes() == b'second'
+    history = manifest.read_bytes()
+    assert [row['candidateId'] for row in json.loads(history)['files']] == [22, 23]
+    assert json.loads(current.read_bytes())['finalNasRelativePaths'] == [
+        context.final_nas_relative_path,
+        extra['final_nas_relative_path'],
+    ]
+    await adapter.publish(replace(context, final_delivery_id=20, operation='revoke'))
+    assert json.loads(current.read_bytes())['finalNasRelativePaths'] == []
+    assert manifest.read_bytes() == history and (final / second.name).exists()

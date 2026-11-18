@@ -2,7 +2,7 @@
 import { computed, defineAsyncComponent, onBeforeUnmount, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { FolderOpened } from '@element-plus/icons-vue'
-import { approvedVersion } from '@/components/version/finalPresentation'
+import { approvedVersion, finalDeliveryFiles } from '@/components/version/finalPresentation'
 import FinalVersionTag from '@/components/version/FinalVersionTag.vue'
 import { candidateFolderPath, requestLocalDemoFolder } from '@/utils/folderOpener'
 import { getShotDetail } from '@/api/shot-grid/shots'
@@ -59,14 +59,17 @@ const visibleVersions = computed(() => approvedId.value && !showHistory.value ? 
 const isApproved = computed(() => Number(version.value?.versionId) === approvedId.value)
 const delivery = computed(() => isApproved.value && Number(version.value?.finalDelivery?.versionId) === selectedVersionId.value ? version.value.finalDelivery : null)
 const finalRow = computed(() => ({ ...shot.value, approvedVersion: approved.value ? { ...approved.value, ...(delivery.value ? { deliveryStatus: delivery.value.deliveryStatus, approvedTime: delivery.value.approvedTime } : {}), ...(isApproved.value && version.value ? { versionStatus: version.value.versionStatus } : {}) } : null }))
-const finalOutputs = computed(() => isApproved.value ? candidates.value.filter(item => Number(item.candidateId) === Number(delivery.value?.candidateId || version.value?.selectedCandidateId)) : candidates.value)
+const finalOutputs = computed(() => isApproved.value ? candidates.value.filter(item => (delivery.value ? finalDeliveryFiles(delivery.value).some(file => Number(file.candidateId) === Number(item.candidateId)) : Number(item.candidateId) === Number(version.value?.selectedCandidateId))) : candidates.value)
 const deliveryLabel = computed(() => delivery.value?.deliveryStatus === 'published' ? '定稿已归档' : delivery.value?.deliveryStatus === 'failed' ? '定稿整理失败，请联系管理人员处理' : ['pending', 'publishing'].includes(delivery.value?.deliveryStatus) ? '定稿整理中' : '归档状态待核对')
 function finalFolder(output) {
   const file = output?.files?.find(item => item.role === 'review_media')
-  if (!file || delivery.value?.deliveryStatus !== 'published' || Number(output.candidateId) !== Number(delivery.value.candidateId)) return null
-  const relative = file.folderRelativePath
-  // 只指向本版本原文件旁的 FINAL，不能用其他版本路径替代。
-  return { ...output, files: [{ ...file, folderRelativePath: relative ? `${relative}\\FINAL` : '', nasPath: file.nasPath ? `${candidateFolderPath([file])}\\FINAL\\${delivery.value.businessFileName}` : '' }] }
+  const final = finalDeliveryFiles(delivery.value).find(item => Number(item.candidateId) === Number(output.candidateId))
+  if (!file || !final || delivery.value.deliveryStatus !== 'published') return null
+  const relativePath = final.finalNasRelativePath || (final.businessFileName ? `FINAL/${final.businessFileName}` : '')
+  const finalPath = relativePath.replaceAll('/', '\\')
+  const suffix = finalPath?.match(/(?:^|\\)(FINAL\\.+)$/i)?.[1]
+  if (!suffix) return null
+  return { ...output, files: [{ ...file, folderRelativePath: file.folderRelativePath ? `${file.folderRelativePath}\\FINAL` : '', nasPath: file.nasPath ? `${candidateFolderPath([file])}\\${suffix}` : '' }] }
 }
 function openFinalFolder(output) {
   const target = finalFolder(output)

@@ -5525,3 +5525,15 @@ Windows 不得直接绕过 `rmtree.avoids_symlink_attacks` 检查。Windows 分�
 - 本机服务重启后数据库/Redis/前端代理通过，运行中 OpenAPI 有3条新增路径（4个操作），新页面 Vite 模块 HTTP200。未登录请求按现有平台协议返回HTTP200、业务code401，并未获得记录。只读验证真实角色菜单：admin有记录/统计，creator_demo仅每日记录；本月示例源版本自动返回4次提交、2个曾通过任务。现有会话需重新登录刷新权限。
 - 未运行全量E2E、人工浏览器验收、真实平台积分API或正式部署；没有读取真实平台账单，平台名称自由填写，大小写/多余空白规范化，同平台别名暂由团队约定。日期范围最多366天，明细50条一页，单次保存最多30行，导出最多10000条且逐页查询（导出期间有他人修改时不是数据库快照）。
 - 2026-11-03交接压缩包仍为当时快照，不含本次功能；下次交接须重新打包当前代码及43迁移。
+
+### 2026-11-18 多文件最终交付
+
+审核通过接受非空、无重复的当前版本候选数组 `selectedCandidateIds`，旧客户端仍可提交 `selectedCandidateId`。首项供既有主文件、封面与单候选投影使用。一次审核只产生一条同周期 FINAL Outbox，其他文件快照记录在 `additional_files`，响应通过 `finalDelivery.additionalFiles` 返回。多文件历史清单使用 `files`，CURRENT 使用 `finalNasRelativePaths`；全部文件校验成功后才发布清单，重试复用匹配文件，撤销整批且保留历史。单文件沿用既有清单。迁移版本为 `20261118_45`。发布时须停旧 Worker、升级数据库并使用支持多文件的后端；已产生多文件历史时禁止降级到单文件 Worker。
+
+## 制作人反馈消息
+
+审核退回（含批量）按版本和接手制作人保存一次完整反馈，事件键为 reject:<actionId>。正式追加使用 append:<noteId>。数据库以收件人和事件键作唯一约束。消息正文保存发送时的问题、复核说明、时间点、标注和受保护附件引用。项目成员资格和制作人角色在读取时复核。
+
+制作平台沿用 /realtime/ws。个人主题 shot-grid.inbox 只接受当前身份的 userId，事件只提示客户端重新查询。GET /shot-grid/my-messages/unread 返回 count 和 latestId。GET /shot-grid/my-messages 接受 page、size 和可选 focus，按发送顺序倒序返回 rows、page、total。PUT /shot-grid/my-messages/{messageId}/read 只标记本人的该条记录，重复点击保留首次阅读时间。
+
+制作人从“我的任务 → 我的消息”逐行查看全文及附件。同一窗口聚合未读提醒；断线期间发布的消息在重连后补查，查看消息不改变任务状态。迁移 20261118_46 从启用时起记录反馈，不回填历史审核。

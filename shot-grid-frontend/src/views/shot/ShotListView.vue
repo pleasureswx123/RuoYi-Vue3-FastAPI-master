@@ -1,4 +1,5 @@
 <script setup>
+import ShotResultsDrawer from './components/ShotResultsDrawer.vue'
 import NasFolderMenu from '@/components/NasFolderMenu.vue'
 
 import FinalVersionTag from '@/components/version/FinalVersionTag.vue'
@@ -2051,10 +2052,10 @@ onBeforeUnmount(() => { disposed = true; closeSingleAssign(); destroyRowSortable
   </section>
   <NasFolderMenu ref="nasFolderMenu" :project-id="Number(currentProjectId) || 0" :can-query="hasPermission('shotgrid:version:query')" />
 
-  <el-drawer :model-value="Boolean(resultsShotId)" title="镜头" size="min(440px, 92vw)" :modal="false" modal-penetrable :lock-scroll="false" :close-on-click-modal="false" aria-modal="false" modal-class="shot-results-drawer" append-to-body destroy-on-close :before-close="beforeCloseResults">
+  <ShotResultsDrawer :model-value="Boolean(resultsShotId)" title="镜头" :modal="false" modal-penetrable :lock-scroll="false" :close-on-click-modal="false" aria-modal="false" modal-class="shot-results-drawer" append-to-body destroy-on-close :before-close="beforeCloseResults">
     <template #header><div class="shot-results-navigation"><strong>镜头</strong><el-button size="small" :disabled="batchBusy || shotsLoading || resultsIndex <= 0" @click="moveShotResults(-1)">上一镜头</el-button><el-button size="small" :disabled="batchBusy || shotsLoading || resultsIndex < 0 || resultsIndex >= shots.length - 1" @click="moveShotResults(1)">下一镜头</el-button><el-text size="small" type="info">↑ ↓ 快速切换</el-text></div></template>
     <ShotResultsPanel v-if="resultsShotId && currentProjectId" ref="resultsPanel" :key="`${currentProjectId}:${resultsShotId}`" :project-id="currentProjectId" :shot-id="resultsShotId" :preview-on-load="resultsPreview" @updated="refreshAfterBatch([])" />
-  </el-drawer>
+  </ShotResultsDrawer>
 </template>
 
 <style scoped>
@@ -2068,7 +2069,7 @@ onBeforeUnmount(() => { disposed = true; closeSingleAssign(); destroyRowSortable
 .shot-batch-toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:8px 18px;padding:10px 12px;margin-bottom:10px;border:1px solid var(--sg-border);border-radius:8px;background:var(--sg-surface)}
 .shot-batch-toolbar__selection,.shot-batch-toolbar__actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px}.shot-batch-toolbar .el-button{margin-left:0}.shot-batch-toolbar__hint{flex-basis:100%;color:var(--sg-text-muted);font-size:12px}
 .shot-data-table :deep(.el-table-column--selection .el-checkbox__inner){width:17px;height:17px;border-color:var(--sg-text-muted)}
-.shot-data-table :deep(.el-table-column--selection .el-checkbox__inner::after){left:5px;top:2px}
+.shot-data-table :deep(.el-table-column--selection .is-indeterminate .el-checkbox__inner::before){top:calc(50% - 1px)}
 
 .shot-results-trigger { padding: 0; height: auto; width: 100%; justify-content: flex-start; }
 .shot-results-navigation { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }.shot-results-navigation .el-button { margin-left: 0; }

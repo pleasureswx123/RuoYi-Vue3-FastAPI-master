@@ -35,6 +35,7 @@ const routes = [
       {
         path: 'tasks/:taskId',
         name: 'task-detail',
+        props: route => ({ initialSection: route.query.section === 'feedback' ? 'feedback' : 'brief' }),
         component: () => import('@/views/task/TaskDetailView.vue'),
         meta: { title: '任务详情', routeKey: 'workbench' }
       },
