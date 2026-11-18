@@ -2069,7 +2069,7 @@ onBeforeUnmount(() => { disposed = true; closeSingleAssign(); destroyRowSortable
 .shot-batch-toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:8px 18px;padding:10px 12px;margin-bottom:10px;border:1px solid var(--sg-border);border-radius:8px;background:var(--sg-surface)}
 .shot-batch-toolbar__selection,.shot-batch-toolbar__actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px}.shot-batch-toolbar .el-button{margin-left:0}.shot-batch-toolbar__hint{flex-basis:100%;color:var(--sg-text-muted);font-size:12px}
 .shot-data-table :deep(.el-table-column--selection .el-checkbox__inner){width:17px;height:17px;border-color:var(--sg-text-muted)}
-.shot-data-table :deep(.el-table-column--selection .el-checkbox__inner::after){left:5px;top:2px}
+.shot-data-table :deep(.el-table-column--selection .is-indeterminate .el-checkbox__inner::before){top:calc(50% - 1px)}
 
 .shot-results-trigger { padding: 0; height: auto; width: 100%; justify-content: flex-start; }
 .shot-results-navigation { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }.shot-results-navigation .el-button { margin-left: 0; }
