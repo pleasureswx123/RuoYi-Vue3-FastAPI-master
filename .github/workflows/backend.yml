@@ -6,12 +6,22 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   pytest:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     env:
       # Typer otherwise forces ANSI help output when GITHUB_ACTIONS is set.
       _TYPER_FORCE_DISABLE_TERMINAL: "1"
+      # 本任务不提供真实集成库；跳过项单独报告，不访问外部数据库。
+      SHOT_GRID_RUN_PG_TESTS: "0"
     strategy:
       fail-fast: false
       matrix:
@@ -56,10 +66,18 @@ jobs:
             portkey-ai==2.3.4
 
       - name: Run backend tests
-        run: pytest -q
+        run: pytest -q --junitxml=test-results/backend.xml
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: backend-failure-${{ matrix.python-version }}
+          path: ruoyi-fastapi-backend/test-results/
+          retention-days: 7
 
   dependency-security:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v5

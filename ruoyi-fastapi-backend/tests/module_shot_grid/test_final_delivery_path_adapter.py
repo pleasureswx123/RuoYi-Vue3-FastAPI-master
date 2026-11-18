@@ -3,7 +3,7 @@ import json
 import os
 import stat
 from dataclasses import replace
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 import pytest
 
@@ -138,8 +138,8 @@ async def test_reopen_revokes_manifest_and_reapproval_preserves_both_deliveries(
     first_dir = source_directory / 'FINAL' / 'T10-V001-R001'
     first = replace(
         context,
-        final_nas_relative_path=str(first_dir / context.business_file_name),
-        manifest_nas_relative_path=str(first_dir / 'FINAL.json'),
+        final_nas_relative_path=str(PureWindowsPath(first_dir / context.business_file_name)),
+        manifest_nas_relative_path=str(PureWindowsPath(first_dir / 'FINAL.json')),
     )
     adapter = ShotGridFinalDeliveryPathAdapter(allow_local_root=True)
     await adapter.publish(first)
@@ -154,8 +154,8 @@ async def test_reopen_revokes_manifest_and_reapproval_preserves_both_deliveries(
         first,
         final_delivery_id=21,
         review_cycle=2,
-        final_nas_relative_path=str(second_dir / context.business_file_name),
-        manifest_nas_relative_path=str(second_dir / 'FINAL.json'),
+        final_nas_relative_path=str(PureWindowsPath(second_dir / context.business_file_name)),
+        manifest_nas_relative_path=str(PureWindowsPath(second_dir / 'FINAL.json')),
     )
     await adapter.publish(second)
     assert json.loads(current.read_text(encoding='utf-8'))['generation'] == second.final_delivery_id

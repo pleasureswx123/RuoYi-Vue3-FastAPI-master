@@ -1,4 +1,5 @@
 import re
+from http import HTTPStatus
 
 import pytest
 from playwright.async_api import async_playwright, expect
@@ -63,7 +64,12 @@ class GenTableTest(BasePageTest):
 
         # 搜索要导入的表
         await dialog.get_by_placeholder('请输入表名称').fill(table_name)
-        await dialog.get_by_role('button', name='搜索').click()
+        # 初始列表可能已包含目标表；必须等本次筛选响应，避免刷新清空刚选中的行。
+        async with self.page.expect_response(
+            lambda response: '/tool/gen/db/list' in response.url and f'tableName={table_name}' in response.url
+        ) as search_response:
+            await dialog.get_by_role('button', name='搜索').click()
+        assert (await search_response.value).ok
 
         # 等待搜索结果
         await dialog.locator(f"tr:has-text('{table_name}')").wait_for()
@@ -79,47 +85,20 @@ class GenTableTest(BasePageTest):
         # Element Plus checkbox 选中时，最外层 label.el-checkbox 会有 is-checked 类
         await expect(checkbox).to_have_class(re.compile(r'is-checked'))
 
-        await self.page.wait_for_timeout(500)
+        async with self.page.expect_response(
+            lambda response: '/tool/gen/importTable' in response.url and response.request.method == 'POST'
+        ) as import_response:
+            await dialog.get_by_role('button', name='确 定').click()
+        response = await import_response.value
+        assert response.ok
+        result = await response.json()
+        assert result.get('code') == HTTPStatus.OK, result.get('msg')
+        await expect(dialog).to_be_hidden()
 
-        await dialog.get_by_role('button', name='确 定').click()
-
-        # 检查是否有"请选择要导入的表"错误
-        try:
-            await expect(self.page.get_by_text('请选择要导入的表')).to_be_visible(timeout=2000)
-            print("ERROR: Selection failed, '请选择要导入的表' appeared.")
-        except AssertionError:
-            pass
-
-        # 等待一会，让弹窗自动关闭
-        await self.page.wait_for_timeout(5000)
-
-        # 如果弹窗还在，尝试关闭它以免阻塞后续操作
-        if await dialog.is_visible():
-            print('WARNING: Import dialog still visible after timeout. Forcing close.')
-            # Check for error messages
-            if await self.page.locator('.el-message--error').count() > 0:
-                msg = await self.page.locator('.el-message--error').all_inner_texts()
-                print(f'ERROR MESSAGE: {msg}')
-
-            # 点击取消关闭弹窗
-            await dialog.get_by_role('button', name='取 消').click()
-            await expect(dialog).to_be_hidden()
-
-            # 手动刷新列表
-            await self.page.get_by_role('button', name='搜索').click()
-
-        # 验证导入成功 (搜索并在列表中看到)
-        # 使用 .app-container 限定在主页面表格，避免匹配到弹窗中的隐藏行
         await self.search_table(table_name)
         row = self.page.locator('.app-container .el-table__body-wrapper tbody tr').filter(
             has=self.page.get_by_text(table_name, exact=True)
         )
-        for _i in range(5):
-            try:
-                await expect(row.first).to_be_visible(timeout=3000)
-                break
-            except AssertionError:
-                await self.search_table(table_name)
         await expect(row.first).to_be_visible(timeout=5000)
 
     async def edit_table(self, table_name: str, remark: str) -> None:

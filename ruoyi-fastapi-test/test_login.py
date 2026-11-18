@@ -1,5 +1,5 @@
 import pytest
-from playwright.async_api import async_playwright
+from playwright.async_api import async_playwright, expect
 
 from common.config import Config
 from common.login_helper import LoginHelper
@@ -17,11 +17,11 @@ async def test_login_page_loads() -> None:
 
         # 检查页面标题或特定元素是否存在
         title = await page.title()
-        assert 'vfadmin' in title
+        assert 'SHOT GRID' in title
 
         # 检查登录表单元素是否存在
-        username_input = await page.query_selector('input[placeholder="账号"]')
-        password_input = await page.query_selector('input[placeholder="密码"]')
+        username_input = await page.query_selector('input[placeholder="请输入用户名称"]')
+        password_input = await page.query_selector('input[placeholder="请输入密码"]')
 
         assert username_input is not None
         assert password_input is not None
@@ -41,7 +41,7 @@ async def test_captcha_generation() -> None:
 
         # 在测试环境中验证码已禁用，但仍应能访问登录页面
         title = await page.title()
-        assert 'vfadmin' in title
+        assert 'SHOT GRID' in title
 
         await browser.close()
 
@@ -69,39 +69,16 @@ async def test_login_flow_with_playwright() -> None:
         await page.goto(Config.frontend_url + '/login')
 
         # 等待页面加载
-        await page.wait_for_selector('input[placeholder="账号"]')
+        await page.wait_for_selector('input[placeholder="请输入用户名称"]')
 
         # 输入用户名和密码
-        await page.fill('input[placeholder="账号"]', 'admin')
-        await page.fill('input[placeholder="密码"]', 'admin123')
+        await page.fill('input[placeholder="请输入用户名称"]', 'admin')
+        await page.fill('input[placeholder="请输入密码"]', 'admin123')
 
-        # 在测试环境中验证码已禁用，所以不需要处理验证码
-        # 直接点击登录按钮
-        # 尝试多种可能的选择器
-        try:
-            await page.click('button:has-text("登录")')
-        except Exception:
-            try:
-                await page.click('button[type="submit"]')
-            except Exception:
-                await page.click('button.el-button')
-
-        # 等待页面跳转或检查登录结果
-        try:
-            # 等待跳转到主页或检查登录成功消息
-            await page.wait_for_url('**/index**', timeout=10000)
-            success = True
-        except Exception:
-            # 检查是否有错误消息
-            error_message = await page.query_selector('.el-message')
-            if error_message:
-                error_text = await error_message.text_content()
-                print(f'登录失败: {error_text}')
-                success = False
-            else:
-                success = False
-
-        assert success, '登录应该成功'
+        # 使用当前页面真实业务按钮，必须跳转且已建立登录状态。
+        await page.get_by_role('button', name='进入管理平台', exact=True).click()
+        await expect(page).to_have_url(Config.frontend_url + '/index', timeout=15000)
+        await expect(page.get_by_role('button', name='超级管理员')).to_be_visible()
 
         await browser.close()
 

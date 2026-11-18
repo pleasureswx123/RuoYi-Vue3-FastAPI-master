@@ -2,6 +2,9 @@ import subprocess
 from collections.abc import Callable
 from pathlib import Path
 
+from click.shell_completion import BashComplete, add_completion_class, get_completion_class
+
+from cli.completion.shells import PowerShellComplete, ensure_custom_completion_classes_registered
 from cli.exit_codes import SUCCESS
 
 
@@ -205,3 +208,15 @@ def test_app_run_help_only_exposes_env_option(
     assert 'Usage: ruoyi app run [OPTIONS]' in completed.stdout
     assert '--env' in completed.stdout
     assert '--output' not in completed.stdout
+
+
+def test_project_powershell_completion_replaces_foreign_registration() -> None:
+    previous = get_completion_class('powershell')
+    try:
+        add_completion_class(BashComplete, name='powershell')
+        ensure_custom_completion_classes_registered()
+        assert get_completion_class('powershell') is PowerShellComplete
+        ensure_custom_completion_classes_registered()
+        assert get_completion_class('powershell') is PowerShellComplete
+    finally:
+        add_completion_class(previous or PowerShellComplete, name='powershell')

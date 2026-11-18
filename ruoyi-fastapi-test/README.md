@@ -1,115 +1,44 @@
-# RuoYi-Vue3-FastAPI 项目测试套件
+# 管理平台浏览器测试
 
-这是一个为 RuoYi-Vue3-FastAPI 项目创建的完整测试套件，使用 Playwright 进行端到端测试。测试环境已禁用验证码功能，以简化测试流程。
+本目录使用真实 Chromium 检查管理平台的登录、页面及管理操作。当前完整应用以 PostgreSQL 为准，MySQL Compose 仅保留历史参考，不作为 Shot Grid 的有效验收环境。
 
-## 功能特性
+## 启动独立环境
 
-- 使用默认方式手动启动前后端服务或`Docker Compose`自动启动项目前后端服务
-- 测试环境已禁用验证码功能
-- 验证登录流程和认证机制
-- 测试所有受保护的页面功能
-- 验证未登录用户访问受保护页面时的重定向行为
+从仓库根目录执行，先设置随机测试密钥（只用于临时库）：
 
-## 依赖安装
-
-```bash
-pip install -r requirements.txt
-playwright install
+```powershell
+$env:COMPOSE_PROJECT_NAME = 'shotgrid-ci-local'
+$env:CI_DB_PASSWORD = [guid]::NewGuid().ToString('N')
+$env:CI_JWT_SECRET = [guid]::NewGuid().ToString('N') + [guid]::NewGuid().ToString('N')
+docker compose -f ruoyi-fastapi-test/docker-compose.test.pg.yml up -d --build --wait --wait-timeout 240
 ```
 
-## 使用方法
+管理端默认 `http://localhost:18080`，后端默认 `http://localhost:19099`。独立 PostgreSQL/Redis 不开放宿主端口，未配置 NAS，目录、版本发布和媒体 Worker 均关闭。不要把测试连接指向生产环境。
 
-### 方式一：默认方法
+该环境使用全新初始化 SQL 和测试专用的验证码关闭脚本，账号为初始化测试账号 `admin / admin123`。Swagger/Redoc 在本环境显式关闭，测试验证禁用提示。明文 HTTP 仅用于此本机隔离测试；这些测试不证明验证码或传输加密流程通过，也不是使用生产账号进行业务验收。
 
-#### 启动前端
+## 执行测试
 
-```bash
-cd ruoyi-fastapi-frontend
-npm install
-npm run dev
-```
+使用 Python 3.11 及以上，在独立虚拟环境执行：
 
-#### 启动后端
-
-```bash
-cd ruoyi-fastapi-backend
-pip install -r requirements.txt
-python app.py --env=dev
-```
-
-#### 运行测试
-
-```bash
+```powershell
+python -m pip install -r ruoyi-fastapi-test/requirements.txt
+python -m playwright install chromium
 cd ruoyi-fastapi-test
-pip install -r requirements.txt
-python -m pytest -v
+python -m pytest -v --junitxml=test-results/results.xml
 ```
 
-### 方式二：使用Docker
+需要更换端口时，启动前设置 `CI_FRONTEND_PORT` / `CI_BACKEND_PORT`，测试时同时设置 `TEST_FRONTEND_URL` / `TEST_BACKEND_URL`。默认测试主机名为 localhost，认证 Cookie 与该主机匹配。
 
-#### 进入测试目录
+完成后仅清理上述独立 Compose 项目（会删除其临时数据库）：
 
-```bash
-cd ruoyi-fastapi-test
+```powershell
+# 回到仓库根目录，保留同一个 COMPOSE_PROJECT_NAME 和测试密钥环境变量
+docker compose -f ruoyi-fastapi-test/docker-compose.test.pg.yml down -v --remove-orphans
 ```
 
-#### 启动 Docker 服务
+## GitHub 自动检查
 
-```bash
-# MySQL版本
-docker compose -f docker-compose.test.my.yml up -d --build
-# PostgreSQL版本
-docker compose -f docker-compose.test.pg.yml up -d --build
-```
+`.github/workflows/playwright.yml` 使用生产 Dockerfile 构建测试镜像，通过 GitHub 缓存复用镜像层；每次运行使用独立 Compose 项目名和随机密钥。等待真实健康检查后执行本目录完整测试，失败时保存容器日志和 JUnit 结果，最后清理本轮环境。
 
-#### 运行测试
-
-```bash
-pip install -r requirements.txt
-python -m pytest -v
-```
-
-## 测试内容
-
-### 登录测试
-
-- 验证登录页面正常加载
-- 验证登录流程（测试环境已禁用验证码）
-- 测试认证后的页面访问
-
-### 页面访问和功能测试
-
-- 仪表盘页面
-- 用户管理页面
-- 角色管理页面
-- 菜单管理页面
-- 部门管理页面
-- 岗位管理页面
-- 字典管理页面
-- 参数配置页面
-- 通知公告页面
-- 日志管理页面（操作日志、登录日志）
-- 在线用户页面
-- 定时任务页面
-- 服务监控页面
-- 数据监控页面
-- 缓存监控页面
-- 缓存列表页面
-- 代码生成页面
-- 系统接口页面
-
-### 认证测试
-
-- 验证未登录用户访问受保护页面时被重定向到登录页
-- 验证登录后可以访问受保护页面
-
-## 配置说明
-
-使用 `docker-compose.test.my.yml`或`docker-compose.test.pg.yml`启动服务，默认前端端口为 `80`，后端端口为 `9099`。测试环境已禁用验证码功能。
-
-## 注意事项
-
-1. 确保系统已安装 Docker 和 Docker Compose
-2. 确保端口 `80` 和 `9099` 未被占用
-3. 首次运行时 Docker 镜像构建可能需要几分钟时间
-4. 测试使用默认管理员账户：用户名 `admin`，密码 `admin123`
+多 Python 版本的后端检查由 `backend.yml` 负责，浏览器流程不再重复启动八套包含不受支持配置的环境。此流程覆盖管理平台，不等同于 Shot Grid 全部制作流程、真实 NAS 或生产部署验收。

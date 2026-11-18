@@ -106,6 +106,8 @@ class CompletionDispatcher:
             return
 
         click_command = typer.main.get_command(cli)
+        # 命令构建可能初始化 Typer 补全，随后恢复本项目的 PowerShell 协议。
+        ensure_custom_completion_classes_registered()
         if self.support.is_click_style_instruction(instruction):
             raise SystemExit(
                 click_shell_complete(click_command, {}, 'ruoyi', self.support.complete_env_var, instruction)

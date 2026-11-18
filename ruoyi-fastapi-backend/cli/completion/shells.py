@@ -109,5 +109,6 @@ def ensure_custom_completion_classes_registered() -> None:
 
     :return: None
     """
-    if get_completion_class(PowerShellComplete.name) is None:
+    # Typer 可能预注册同名实现；本项目脚本发送的是词文本而非数字索引。
+    if get_completion_class(PowerShellComplete.name) is not PowerShellComplete:
         add_completion_class(PowerShellComplete)
