@@ -2630,6 +2630,7 @@ ALTER TABLE sg_version ADD CONSTRAINT fk_sg_version_selected_candidate
 
 -- sg_final_delivery
 CREATE TABLE sg_final_delivery (
+    additional_files jsonb NOT NULL DEFAULT '[]'::jsonb,
 	final_delivery_id BIGSERIAL PRIMARY KEY,
 	project_id BIGINT NOT NULL,
 	task_id BIGINT NOT NULL,
@@ -3294,8 +3295,21 @@ create table if not exists alembic_version (
     version_num varchar(32) not null,
     constraint alembic_version_pkc primary key (version_num)
 );
+CREATE TABLE IF NOT EXISTS sg_feedback_message (
+  message_id bigserial PRIMARY KEY,
+  recipient_id bigint NOT NULL REFERENCES sys_user(user_id),
+  version_id bigint NOT NULL REFERENCES sg_version(version_id) ON DELETE CASCADE,
+  event_key varchar(80) NOT NULL,
+  sender_name varchar(64) NOT NULL,
+  issues jsonb NOT NULL,
+  created_at timestamp NOT NULL,
+  read_at timestamp,
+  CONSTRAINT uk_sg_feedback_message_event UNIQUE (recipient_id, event_key)
+);
+CREATE INDEX IF NOT EXISTS ix_sg_feedback_message_recipient ON sg_feedback_message(recipient_id, message_id);
+
 delete from alembic_version;
-insert into alembic_version(version_num) values ('20261116_44');
+insert into alembic_version(version_num) values ('20261118_46');
 
 
 CREATE OR REPLACE FUNCTION "find_in_set"(int8, varchar)

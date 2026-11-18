@@ -2,7 +2,7 @@ import json
 from datetime import datetime
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from sqlalchemy.exc import IntegrityError, MissingGreenlet
@@ -138,6 +138,7 @@ async def _patch_review_action_graph(
     existing: ShotGridReviewAction | None = None,
 ) -> tuple[AsyncMock, SimpleNamespace, SimpleNamespace, SimpleNamespace, list[str]]:
     db = AsyncMock()
+    db.add = Mock()
     task, version, review_list = _locked_graph()
     monkeypatch.setattr(
         'module_shot_grid.service.review_service.ShotGridVersionSubmissionDao.has_unresolved_submission',
@@ -262,6 +263,7 @@ async def _patch_candidate_selection_graph(
     has_drafts: bool = False,
 ) -> tuple[AsyncMock, SimpleNamespace, AsyncMock, AsyncMock, SimpleNamespace]:
     db = AsyncMock()
+    db.add = Mock()
     task, version, review_list = _locked_graph()
     version.selected_candidate_id = selected_candidate_id
     version.selected_by = None
@@ -563,7 +565,9 @@ async def test_review_action_rejects_foreign_candidate_before_writes(
 async def test_approve_with_private_issue_draft_fails_without_publishing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    draft = SimpleNamespace(draft_id=4101, candidate_id=CANDIDATE_ID)
+    draft = SimpleNamespace(
+        draft_id=4101, candidate_id=CANDIDATE_ID, content='调整亮度', media_time_ms=0, annotations=None
+    )
     db, task, version, review_list, events = await _patch_review_action_graph(
         monkeypatch,
         issue_drafts=[draft],
@@ -590,7 +594,9 @@ async def test_approve_with_private_issue_draft_fails_without_publishing(
 async def test_reject_publishes_private_drafts_before_committing_review_action(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    draft = SimpleNamespace(draft_id=4101, candidate_id=CANDIDATE_ID)
+    draft = SimpleNamespace(
+        draft_id=4101, candidate_id=CANDIDATE_ID, content='调整亮度', media_time_ms=0, annotations=None
+    )
     db, task, version, review_list, events = await _patch_review_action_graph(
         monkeypatch,
         issue_drafts=[draft],
@@ -644,6 +650,11 @@ async def test_reject_publishes_private_drafts_before_committing_review_action(
     assert task.task_status == 'revision'
     assert review_list.review_status == 'completed'
     assert events == ['publish', 'action', 'audit', 'commit']
+    message = db.add.call_args.args[0]
+    assert message.recipient_id == task.assignee_user_id
+    assert message.issues[0]['content'] == '调整亮度'
+    assert message.issues[0]['referenceFiles'][0]['originalName'] == '效果参考.png'
+    review_service.publish_inbox_changed.assert_awaited_once_with(task.assignee_user_id)
     review_service.publish_version_changed.assert_awaited_once_with(VERSION_ID, 'review.reject')
     replace_references.assert_awaited_once()
     assert replace_references.await_args.args[1:4] == (
@@ -1369,6 +1380,7 @@ async def test_append_rejected_issue_only_before_next_submission(  # noqa: PLR09
     if editing == 'delete' and blocked in {'scope', 'reference_failed'}:
         pytest.skip('删除不改变范围或上传附件')
     db = AsyncMock()
+    db.add = Mock()
     publisher = AsyncMock()
     monkeypatch.setattr('module_shot_grid.service.review_service.publish_version_changed', publisher)
     task, version, review_list = _locked_graph()
@@ -1541,6 +1553,7 @@ async def test_review_context_exposes_append_window(
 def mute_realtime_notifications(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr('module_shot_grid.service.version_submission_service.publish_version_changed', AsyncMock())
     monkeypatch.setattr('module_shot_grid.service.review_service.publish_version_changed', AsyncMock())
+    monkeypatch.setattr('module_shot_grid.service.review_service.publish_inbox_changed', AsyncMock())
 
 
 @pytest.mark.asyncio
@@ -1667,7 +1680,7 @@ async def test_batch_overall_drafts_atomic_boundary(monkeypatch: pytest.MonkeyPa
             for call in writer.await_args_list
         )
         db.commit.assert_awaited_once()
-        assert all(call.kwargs == {'commit': False} for call in actions.await_args_list)
+        assert all(call.kwargs == {'commit': False, 'recipients': set()} for call in actions.await_args_list)
         assert publisher.await_count == len(command.version_ids)
 
 
@@ -1693,3 +1706,35 @@ async def test_batch_reject_internal_action_defers_commit_and_notification(monke
     assert events == ['action', 'audit']
     db.commit.assert_not_awaited()
     publisher.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_multiple_candidates_frozen_in_one_approval(monkeypatch: pytest.MonkeyPatch) -> None:
+    db, _, _, _, events = await _patch_review_action_graph(monkeypatch)
+
+    async def source(_db: Any, *, version_id: int, candidate_id: int) -> dict[str, Any]:
+        assert version_id == VERSION_ID
+        name = f'{candidate_id}.mov'
+        return {
+            'candidate_no': candidate_id - CANDIDATE_ID + 1,
+            'file_id': str(candidate_id),
+            'business_file_name': name,
+            'nas_relative_path': f'VIDEO\\EP01\\000_S001\\{name}',
+            'nas_sha256': 'a' * 64,
+            'nas_file_size': 1024,
+        }
+
+    monkeypatch.setattr(review_service.ShotGridFinalDeliveryDao, 'get_selected_source', source)
+    command = ShotGridReviewActionCreateModel(
+        actionType='approve', selectedCandidateIds=[CANDIDATE_ID, SECOND_CANDIDATE_ID], lockVersion=0
+    )
+    result = await ShotGridReviewService.create_review_action(db, VERSION_ID, command, 'multi-final', _current_user())
+    assert result.final_delivery.candidate_id == CANDIDATE_ID
+    assert [item.candidate_id for item in result.final_delivery.additional_files] == [SECOND_CANDIDATE_ID]
+    assert events == ['action', 'audit', 'commit']
+
+
+@pytest.mark.parametrize('ids', [[], [CANDIDATE_ID, CANDIDATE_ID], [0]])
+def test_invalid_final_selection_rejected(ids: list[int]) -> None:
+    with pytest.raises(ValueError):
+        ShotGridReviewActionCreateModel(actionType='approve', selectedCandidateIds=ids, lockVersion=0)

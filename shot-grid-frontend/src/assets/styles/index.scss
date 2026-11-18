@@ -387,7 +387,6 @@ input:focus-visible,
 }
 
 .el-select__popper.el-popper {
-  z-index: 4000 !important;
   background: var(--sg-surface-raised);
   border-color: var(--sg-border-strong);
 }

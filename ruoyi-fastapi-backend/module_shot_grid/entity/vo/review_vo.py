@@ -3,7 +3,7 @@ import re
 import unicodedata
 import uuid
 from datetime import date, datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import ConfigDict, Field, field_validator, model_validator
 
@@ -250,6 +250,12 @@ class ShotGridVersionProductionTargetModel(ShotGridApiModel):
         return self
 
 
+class ShotGridDeliveredFileModel(ShotGridApiModel):
+    candidate_id: int
+    business_file_name: str
+    final_nas_relative_path: str
+
+
 class ShotGridFinalDeliveryModel(ShotGridApiModel):
     """最终版本到 NAS FINAL 目录的可见发布状态。"""
 
@@ -262,6 +268,7 @@ class ShotGridFinalDeliveryModel(ShotGridApiModel):
     business_file_name: str
     final_nas_relative_path: str
     manifest_nas_relative_path: str
+    additional_files: list[ShotGridDeliveredFileModel] = Field(default_factory=list)
     revocation_status: FinalDeliveryStatus | None = None
     delivery_status: FinalDeliveryStatus
     attempt_count: int
@@ -811,6 +818,9 @@ class ShotGridReviewActionCreateModel(ShotGridLockVersionModel):
     action_type: Literal['approve', 'reject', 'defer']
     revision_transfer: ShotGridRevisionTransferModel | None = None
     selected_candidate_id: int | None = Field(default=None, gt=0, le=SQL_BIGINT_MAX)
+    selected_candidate_ids: list[Annotated[int, Field(gt=0, le=SQL_BIGINT_MAX)]] | None = Field(
+        default=None, min_length=1
+    )
     reason: str | None = Field(default=None, max_length=1000)
     issue_verifications: list[ShotGridIssueVerificationInputModel] = Field(default_factory=list, max_length=200)
 
@@ -828,6 +838,13 @@ class ShotGridReviewActionCreateModel(ShotGridLockVersionModel):
     def validate_issue_verifications(self) -> 'ShotGridReviewActionCreateModel':
         if self.revision_transfer is not None and self.action_type != 'reject':
             raise ValueError('只有退回时可以转交修改')
+        if self.selected_candidate_ids is not None:
+            ids = self.selected_candidate_ids
+            if self.action_type != 'approve' or len(ids) != len(set(ids)):
+                raise ValueError('仅审核通过时可提交不重复的最终交付文件')
+            if self.selected_candidate_id is not None and self.selected_candidate_id != ids[0]:
+                raise ValueError('主候选与最终交付文件不一致')
+            self.selected_candidate_id = ids[0]
         if self.action_type == 'approve' and self.selected_candidate_id is None:
             raise ValueError('审核通过时必须选择最终交付文件')
         issue_ids = [item.issue_id for item in self.issue_verifications]

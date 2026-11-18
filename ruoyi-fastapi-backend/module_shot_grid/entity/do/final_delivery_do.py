@@ -11,6 +11,7 @@ from sqlalchemy import (
     Integer,
     String,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 
 from config.database import Base
 from module_shot_grid.entity.do.base_do import SHOT_GRID_DATETIME
@@ -26,6 +27,7 @@ class ShotGridFinalDelivery(Base):
     task_id = Column(BigInteger, nullable=False, comment='任务ID')
     version_id = Column(BigInteger, nullable=False, comment='最终版本ID')
     candidate_id = Column(BigInteger, nullable=False, comment='最终候选ID')
+    additional_files = Column(JSONB, nullable=False, server_default='[]', comment='同批其他终稿的不可变文件快照')
     source_file_id = Column(
         String(36),
         ForeignKey('sys_file_info.file_id', ondelete='RESTRICT'),

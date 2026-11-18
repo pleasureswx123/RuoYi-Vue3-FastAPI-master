@@ -359,6 +359,7 @@ class ShotGridFinalDeliveryWorkerService:
             version_no=int(row['version_no']),
             candidate_id=int(row['candidate_id']),
             candidate_no=int(row['candidate_no']),
+            additional_files=tuple(row.get('additional_files') or ()),
             approved_by=int(row['approved_by']),
             approved_time_iso=approved_time.isoformat(timespec='seconds'),  # type: ignore[union-attr]
             business_file_name=str(row['business_file_name']),

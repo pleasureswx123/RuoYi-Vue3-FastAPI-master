@@ -77,7 +77,6 @@ class ShotGridFinalDeliveryDao:
                         ShotGridVersionCandidate.version_id == version_id,
                         ShotGridVersionCandidate.candidate_id == candidate_id,
                         ShotGridVersionFile.file_role == 'review_media',
-                        ShotGridVersionFile.is_primary == '1',
                     )
                 )
             )
@@ -111,6 +110,7 @@ class ShotGridFinalDeliveryDao:
                         ShotGridFinalDelivery.operation,
                         ShotGridFinalDelivery.validity_status,
                         ShotGridFinalDelivery.version_id,
+                        ShotGridFinalDelivery.additional_files,
                         ShotGridFinalDelivery.candidate_id,
                         ShotGridFinalDelivery.business_file_name,
                         ShotGridFinalDelivery.final_nas_relative_path,
@@ -240,6 +240,7 @@ class ShotGridFinalDeliveryDao:
                         ShotGridFinalDelivery.project_id,
                         ShotGridFinalDelivery.task_id,
                         ShotGridFinalDelivery.version_id,
+                        ShotGridFinalDelivery.additional_files,
                         ShotGridFinalDelivery.candidate_id,
                         ShotGridFinalDelivery.business_file_name,
                         ShotGridFinalDelivery.source_nas_relative_path,

@@ -18,3 +18,8 @@ export function finalBadge(row) {
 export function assetFinalSummary(asset) {
   return `已定稿 ${Number(asset?.finalizedItemCount || 0)}/${Number(asset?.itemCount || 0)}`
 }
+
+export function finalDeliveryFiles(delivery) {
+  if (!delivery || delivery.operation === 'revoke' || delivery.validityStatus === 'revoked') return []
+  return [delivery, ...(delivery.additionalFiles || [])]
+}

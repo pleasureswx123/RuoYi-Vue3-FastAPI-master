@@ -104,7 +104,7 @@ export const useRealtimeStore = defineStore('realtime', () => {
     attempt = 0
   }
   function subscribe(topic, resourceId, listener) {
-    if (topic !== 'shot-grid.version' || !Number.isSafeInteger(resourceId) || resourceId < 1) throw new Error('无效实时订阅')
+    if (!['shot-grid.version', 'shot-grid.inbox'].includes(topic) || !Number.isSafeInteger(resourceId) || resourceId < 1) throw new Error('无效实时订阅')
     const key = `${topic}:${resourceId}`
     if (!listeners.has(key)) {
       listeners.set(key, new Set())

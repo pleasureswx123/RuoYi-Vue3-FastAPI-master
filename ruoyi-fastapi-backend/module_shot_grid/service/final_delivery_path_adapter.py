@@ -5,7 +5,7 @@ import os
 import re
 import stat
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal
 
@@ -50,6 +50,7 @@ class FinalDeliveryPathContext:
     root_del_flag: str
     operation: str = 'publish'
     review_cycle: int = 1
+    additional_files: tuple[dict, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -78,11 +79,41 @@ class ShotGridFinalDeliveryPathAdapter(ShotGridVersionPublishPathAdapter):
 
     async def publish(self, context: FinalDeliveryPathContext) -> FinalDeliveryPublishResult:
         plan = self._build_final_plan(context)
-        return await asyncio.to_thread(self._execute_delivery_sync, plan)
+        extras = []
+        paths = {plan.target_path}
+        for item in context.additional_files:
+            extra = self._build_final_plan(
+                replace(
+                    context,
+                    **{
+                        key: item[key]
+                        for key in (
+                            'candidate_id',
+                            'candidate_no',
+                            'business_file_name',
+                            'source_nas_relative_path',
+                            'final_nas_relative_path',
+                            'source_sha256',
+                            'source_file_size',
+                        )
+                    },
+                    additional_files=(),
+                )
+            )
+            if extra.final_directory != plan.final_directory or extra.target_path in paths:
+                raise self._invalid_path_error()
+            paths.add(extra.target_path)
+            extras.append(extra)
+        return await asyncio.to_thread(self._execute_delivery_sync, plan, extras)
 
     @classmethod
-    def _execute_delivery_sync(cls, plan: _FinalDeliveryPlan) -> FinalDeliveryPublishResult:
+    def _execute_delivery_sync(
+        cls, plan: _FinalDeliveryPlan, extras: list[_FinalDeliveryPlan]
+    ) -> FinalDeliveryPublishResult:
         # 同任务按 Outbox ID 串行，发布和撤销共用不可自动接管的执行租约。
+        if plan.context.operation == 'publish':
+            for extra in extras:
+                cls._publish_final_sync(extra, write_manifest=False)
         result = (
             FinalDeliveryPublishResult(plan.context.source_sha256, plan.context.source_file_size, 'reused')
             if plan.context.operation == 'revoke'
@@ -116,6 +147,17 @@ class ShotGridFinalDeliveryPathAdapter(ShotGridVersionPublishPathAdapter):
             else None,
             'notice': '仅本清单 valid=true 所指文件为当前有效终稿；其他文件仅供历史追溯',
         }
+        if plan.context.additional_files:
+            payload['schemaVersion'] = 2
+            payload['finalNasRelativePaths'] = (
+                [
+                    plan.context.final_nas_relative_path,
+                    *(item['final_nas_relative_path'] for item in plan.context.additional_files),
+                ]
+                if plan.context.operation == 'publish'
+                else []
+            )
+            payload['notice'] = '仅 valid=true 时清单中的文件为当前有效终稿'
         if current.exists():
             previous = json.loads(current.read_text(encoding='utf-8'))
             if int(previous['generation']) > plan.context.final_delivery_id:
@@ -209,7 +251,7 @@ class ShotGridFinalDeliveryPathAdapter(ShotGridVersionPublishPathAdapter):
 
     @classmethod
     def _publish_final_sync(  # noqa: PLR0912, PLR0915 - 文件、清单与补偿必须作为一个同步守护单元
-        cls, plan: _FinalDeliveryPlan
+        cls, plan: _FinalDeliveryPlan, *, write_manifest: bool = True
     ) -> FinalDeliveryPublishResult:
         target_temp_created = False
         manifest_temp_created = False
@@ -255,6 +297,8 @@ class ShotGridFinalDeliveryPathAdapter(ShotGridVersionPublishPathAdapter):
                 cls._require_content(plan, size, sha256)
                 result = FinalDeliveryPublishResult(sha256=sha256, file_size=size, publish_mode=publish_mode)
 
+            if not write_manifest:
+                return result
             manifest_bytes = cls._manifest_bytes(plan, result)
             if plan.manifest_path.exists():
                 cls._verify_existing_manifest(plan, manifest_bytes)
@@ -272,6 +316,8 @@ class ShotGridFinalDeliveryPathAdapter(ShotGridVersionPublishPathAdapter):
             raise
         except FileExistsError:
             result = cls._verify_existing_target(plan)
+            if not write_manifest:
+                return result
             cls._verify_existing_manifest(plan, cls._manifest_bytes(plan, result))
             cls._hide_manifest(plan.manifest_path)
             return result
@@ -357,6 +403,30 @@ class ShotGridFinalDeliveryPathAdapter(ShotGridVersionPublishPathAdapter):
             'approvedBy': plan.context.approved_by,
             'approvedTime': plan.context.approved_time_iso,
         }
+        if plan.context.additional_files:
+            payload['schemaVersion'] = 2
+            keys = (
+                'candidateId',
+                'candidateNumber',
+                'businessFileName',
+                'sourceNasRelativePath',
+                'finalNasRelativePath',
+                'sha256',
+                'fileSize',
+            )
+            payload['files'] = [{key: payload[key] for key in keys}]
+            for item in plan.context.additional_files:
+                payload['files'].append(
+                    {
+                        'candidateId': item['candidate_id'],
+                        'candidateNumber': f'{item["candidate_no"]:02d}',
+                        'businessFileName': item['business_file_name'],
+                        'sourceNasRelativePath': item['source_nas_relative_path'],
+                        'finalNasRelativePath': item['final_nas_relative_path'],
+                        'sha256': item['source_sha256'],
+                        'fileSize': item['source_file_size'],
+                    }
+                )
         return (json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(',', ':')) + '\n').encode()
 
     @classmethod

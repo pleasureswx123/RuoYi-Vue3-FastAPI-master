@@ -1,4 +1,6 @@
 <script setup>
+import FeedbackMessages from './FeedbackMessages.vue'
+import { useFeedbackInbox } from '@/store/modules/feedbackInbox'
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ElTable, ElTableColumn, ElTabs, ElTabPane, ElRadioGroup, ElRadioButton } from 'element-plus'
 import { useRoute, useRouter } from 'vue-router'
@@ -27,6 +29,7 @@ import {
 } from '@/views/task/taskPresentation'
 
 const sessionStore = useSessionStore()
+const inbox = useFeedbackInbox()
 const route = useRoute()
 const router = useRouter()
 const advancedFilters = ref(false)
@@ -93,10 +96,11 @@ const canViewTasks = computed(() => hasProductionRole.value && hasPermission('sh
 const canViewRecentSubmissions = computed(() => hasProductionRole.value && hasPermission('shotgrid:version:list'))
 const activeTab = ref(canReviewQueue.value ? 'reviews' : canViewTasks.value ? 'tasks' : 'submissions')
 watch(() => route.query.tab, tab => {
-  if (sessionStore.isCreatorWorkspace) activeTab.value = tab === 'submissions' && canViewRecentSubmissions.value ? 'submissions' : canViewTasks.value ? 'tasks' : 'submissions'
+  if (tab === 'messages' && canViewTasks.value) activeTab.value = 'tasks'
+  else if (sessionStore.isCreatorWorkspace) activeTab.value = tab === 'submissions' && canViewRecentSubmissions.value ? 'submissions' : canViewTasks.value ? 'tasks' : 'submissions'
 }, { immediate: true })
 watch(activeTab, tab => {
-  if (sessionStore.isCreatorWorkspace) router.replace({ query: { ...route.query, tab: tab === 'submissions' ? 'submissions' : undefined } })
+  if (sessionStore.isCreatorWorkspace) router.replace({ query: { ...route.query, tab: tab === 'submissions' ? 'submissions' : route.query.tab === 'messages' ? 'messages' : undefined } })
 })
 const welcomeDescription = computed(() => canReviewQueue.value
   ? '在“待审核”中查看管理范围内的审核内容，跟进审核进度。'
@@ -291,9 +295,17 @@ onBeforeUnmount(() => {
         <el-button :icon="Refresh" :loading="loading" @click="loadTasks()">刷新</el-button>
       </header>
 
-      <el-radio-group v-model="query.taskStatus" class="task-status-shortcuts" aria-label="按任务状态筛选" @change="submitFilters">
-        <el-radio-button v-for="option in visibleStatuses" :key="option.value" :value="option.value">{{ option.label }}</el-radio-button>
-      </el-radio-group>
+      <div class="task-status-toolbar">
+        <el-radio-group v-if="route.query.tab !== 'messages' || !hasPermission('shotgrid:note:list')" v-model="query.taskStatus" class="task-status-shortcuts" aria-label="按任务状态筛选" @change="submitFilters">
+          <el-radio-button v-for="option in visibleStatuses" :key="option.value" :value="option.value">{{ option.label }}</el-radio-button>
+        </el-radio-group>
+        <div class="feedback-navigation">
+          <el-button v-if="route.query.tab === 'messages'" @click="router.push({query: { projectId: route.query.projectId }})">返回任务列表</el-button>
+          <el-button v-if="hasPermission('shotgrid:note:list')" :type="route.query.tab === 'messages' ? 'primary' : 'default'" @click="router.push({query: {...route.query, tab: 'messages'}})">我的消息{{ inbox.count ? '（' + inbox.count + '）' : '' }}</el-button>
+        </div>
+      </div>
+      <FeedbackMessages v-if="route.query.tab === 'messages' && hasPermission('shotgrid:note:list')" />
+      <template v-else>
 
       <el-form ref="taskFilterForm" :model="query" :rules="taskFilterRules" class="task-filters" size="large" label-position="top" aria-label="我的任务筛选">
         <el-form-item class="task-filter-item task-filter-item--search" label="搜索" prop="keyword">
@@ -385,6 +397,7 @@ onBeforeUnmount(() => {
       </el-table>
 
       <el-pagination v-if="total" class="task-pagination" background layout="total, sizes, prev, pager, next" :current-page="query.pageNum" :page-size="query.pageSize" :page-sizes="[10, 20, 50]" :total="total" :disabled="loading" aria-label="任务分页" @current-change="changePage" @update:page-size="changePageSize" />
+      </template>
     </section>
 
     </el-tab-pane>
@@ -398,6 +411,8 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped lang="scss">
+.task-status-toolbar { display: flex; align-items: center; gap: 12px; }
+.feedback-navigation { display: flex; flex: none; margin-inline-start: auto; gap: 8px; }
 .workbench-page {
   display: grid;
   gap: 20px;
