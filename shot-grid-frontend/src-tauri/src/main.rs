@@ -7,11 +7,12 @@ use tauri::{
     Wry,
 };
 use webview2_com::{
-    take_pwstr, Microsoft::Web::WebView2::Win32::COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL,
+    take_pwstr, LaunchingExternalUriSchemeEventHandler,
+    Microsoft::Web::WebView2::Win32::{ICoreWebView2_18, COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL},
     WebResourceRequestedEventHandler,
 };
 use windows::{
-    core::{HSTRING, PWSTR},
+    core::{Interface, HSTRING, PWSTR},
     Win32::UI::{
         Shell::SHCreateMemStream,
         WindowsAndMessaging::{MessageBoxW, MB_ICONERROR},
@@ -51,6 +52,36 @@ fn load_frontend(
     // 仅从安装包提供制作平台页面。API、媒体 Range 和 WebSocket 走公司原有同域网关。
     unsafe {
         let browser = view.controller().CoreWebView2()?;
+        // 在 WebView2 弹出外部应用确认前接管请求，只运行安装包内的固定验签工具。
+        let external = browser.cast::<ICoreWebView2_18>()?;
+        let mut external_token = 0;
+        external.add_LaunchingExternalUriScheme(
+            &LaunchingExternalUriSchemeEventHandler::create(Box::new(|_, event| {
+                let Some(event) = event else { return Ok(()) };
+                event.SetCancel(true)?;
+                let mut origin = PWSTR::null();
+                event.InitiatingOrigin(&mut origin)?;
+                if take_pwstr(origin).trim_end_matches('/') != ORIGIN {
+                    return Ok(());
+                }
+                let mut uri = PWSTR::null();
+                event.Uri(&mut uri)?;
+                let uri = take_pwstr(uri);
+                if !uri.starts_with("shotgrid-nas://open-v1/") || uri.len() > 14000 {
+                    return Ok(());
+                }
+                let launched = std::env::current_exe().and_then(|exe| {
+                    std::process::Command::new(exe.with_file_name("tools").join("ShotGridNas.exe"))
+                        .arg(uri)
+                        .spawn()
+                });
+                if launched.is_err() {
+                    show_error("无法启动安装包内的 NAS 工具，请重新安装桌面端。");
+                }
+                Ok(())
+            })),
+            &mut external_token,
+        )?;
         let environment = view.environment();
         browser.AddWebResourceRequestedFilter(
             &HSTRING::from(format!("{ORIGIN}{APP_PATH}*")),
@@ -112,6 +143,7 @@ fn open_window(app: &AppHandle, label: String, start: Url) -> tauri::Result<()> 
         label,
         WebviewUrl::External("about:blank".parse().unwrap()),
     )
+    .initialization_script("Object.defineProperty(window, '__SHOTGRID_DESKTOP__', {value: true});")
     .title("Shot Grid 制作工作台")
     .inner_size(1360.0, 860.0)
     .min_inner_size(900.0, 600.0)

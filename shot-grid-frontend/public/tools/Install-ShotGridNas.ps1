@@ -1,5 +1,5 @@
 ﻿# Windows PowerShell 5.1；仅安装到当前用户，无需管理员权限。
-param([switch]$Uninstall, [switch]$ValidateOnly)
+param([switch]$Uninstall, [switch]$ValidateOnly, [switch]$BuildDesktop)
 $ErrorActionPreference = 'Stop'
 $source = @'
 using System;
@@ -82,6 +82,21 @@ public static class ShotGridNas {
 '@
 
 # 验证模式只加载类型；不写注册表、不安装、不访问 NAS、不启动资源管理器。
+if ($BuildDesktop) {
+    # 桌面构建从 src-tauri 运行，只编译安装包内的工具，不注册系统协议。
+    $key = [IO.File]::ReadAllText((Resolve-Path 'nas-public-key.xml')).Trim()
+    if ($key -cnotmatch '\A<RSAKeyValue><Modulus>[A-Za-z0-9+/=]+</Modulus><Exponent>[A-Za-z0-9+/=]+</Exponent></RSAKeyValue>\z') { throw '桌面 NAS 验签公钥格式无效。' }
+    $source = $source.Replace('__SHOTGRID_NAS_PUBLIC_KEY__', $key)
+    $dest = New-Item -ItemType Directory -Force 'gen/native'
+    $temp = Join-Path $dest.FullName ("ShotGridNas-" + [guid]::NewGuid() + ".exe")
+    try {
+        Add-Type -TypeDefinition $source -ReferencedAssemblies System.Windows.Forms -OutputAssembly $temp -OutputType WindowsApplication
+        Move-Item -LiteralPath $temp -Destination (Join-Path $dest.FullName 'ShotGridNas.exe') -Force
+    } finally {
+        if (Test-Path -LiteralPath $temp) { Remove-Item -LiteralPath $temp }
+    }
+    return
+}
 if ($ValidateOnly) {
     Add-Type -TypeDefinition $source -ReferencedAssemblies System.Windows.Forms
     return

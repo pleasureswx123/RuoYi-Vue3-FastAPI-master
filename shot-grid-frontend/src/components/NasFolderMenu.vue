@@ -8,6 +8,7 @@ import { copyTextToClipboard } from '@/utils/clipboard'
 import { versionNasFolders, validateNasFolder } from '@/utils/nasExplorer'
 
 const folderForm = ref(null)
+const desktop = window.__SHOTGRID_DESKTOP__ === true
 const props = defineProps({ projectId: { type: Number, default: 0 }, canQuery: Boolean })
 const menu = ref(false)
 const visible = ref(false)
@@ -170,7 +171,7 @@ defineExpose({ open, openTarget })
     <div class="nas-folder-menu">
       <el-button class="nas-folder-menu__item nas-folder-menu__item--primary" text :icon="FolderOpened" :loading="loading" @click="loadFolders(true)">在文件资源管理器中打开</el-button>
       <div class="nas-folder-menu__divider" aria-hidden="true" />
-      <el-button class="nas-folder-menu__item" text :icon="QuestionFilled" :disabled="loading" @click="loadFolders(false)">安装／打开帮助</el-button>
+      <el-button class="nas-folder-menu__item" text :icon="QuestionFilled" :disabled="loading" @click="loadFolders(false)">{{ desktop ? '打开帮助' : '安装／打开帮助' }}</el-button>
     </div>
   </el-popover>
   <el-dialog v-model="visible" title="打开 NAS 文件夹" width="620px" @close="reset">
@@ -182,11 +183,14 @@ defineExpose({ open, openTarget })
         </el-form-item>
         <el-input :model-value="selected" readonly type="textarea" :rows="3" aria-label="NAS 完整目录" />
       </el-form>
-      <p>首次使用：下载下方安装脚本，在 Windows PowerShell 中运行一次（当前用户，无需管理员权限）。已安装的用户直接点击“打开文件夹”。</p>
-      <p>安装命令：<code>powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install-ShotGridNas.ps1</code></p>
-      <el-button :loading="installing" @click="downloadInstaller">下载 Windows 安装工具</el-button>
-      <p>浏览器无法可靠检测是否安装。若内置浏览器没有响应，请改用 Windows Chrome 打开本页面；仍无响应时安装后重试，或复制目录到文件资源管理器地址栏。NAS 访问使用你自己的 Windows 账号权限。</p>
-      <el-alert v-if="attempted" title="已发起打开请求，若未打开，请安装或更新工具后重试，或复制目录。网页无法确认是否打开成功。" type="info" :closable="false" />
+      <p v-if="desktop">桌面端已内置 NAS 工具。打开目录时使用当前 Windows 账号的共享权限。</p>
+      <template v-else>
+        <p>首次使用：下载下方安装脚本，在 Windows PowerShell 中运行一次（当前用户，无需管理员权限）。已安装的用户直接点击“打开文件夹”。</p>
+        <p>安装命令：<code>powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install-ShotGridNas.ps1</code></p>
+        <el-button :loading="installing" @click="downloadInstaller">下载 Windows 安装工具</el-button>
+        <p>浏览器无法可靠检测是否安装。若内置浏览器没有响应，请改用 Windows Chrome 打开本页面；仍无响应时安装后重试，或复制目录到文件资源管理器地址栏。NAS 访问使用你自己的 Windows 账号权限。</p>
+        <el-alert v-if="attempted" title="已发起打开请求，若未打开，请安装或更新工具后重试，或复制目录。网页无法确认是否打开成功。" type="info" :closable="false" />
+      </template>
     </div>
     <template #footer>
       <el-button @click="visible = false">关闭</el-button>
