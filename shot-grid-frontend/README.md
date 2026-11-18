@@ -328,3 +328,20 @@ npm.cmd run build:prod
 - 后端 `.venv/Scripts/python.exe -m pytest -q`：全量套件在 CLI/TUI 段耗时较长并出现失败，本轮中断，不能声称完整后端测试通过。
 - 后端 `.venv/Scripts/python.exe -m pytest tests/module_shot_grid -q --tb=short`：1311 通过、197 跳过、1 失败。唯一失败为 `test_nas_mount_resolver.py::test_directory_worker_uses_mapped_unc_without_enabling_test_local_root`，在 `f6393ef` 基线复跑同样失败（已有目录缺少项目归属标记）。
 - 本次定向测试、构建和真实本地附件预览验证通过；上述既有失败未混入本次功能修改，生产发布与完整业务 E2E 仍须区分。
+
+## Windows 桌面版
+
+制作人员可在公司内网运行 Shot Grid 的 x64 安装程序，按当前 Windows 用户安装，从开始菜单打开 Shot Grid，使用原有业务账号登录。桌面端有独立的登录会话。任务、版本、审核和文件权限均由公司服务器管理。工作站需要 Microsoft Edge WebView2 Runtime；无外网的工作站请由 IT 预装运行时。
+
+工作台和详情窗口都从程序内置的 Vue 构建产物加载页面，通过现有公司网关 `http://192.168.10.122:12581/prod-api/` 使用 API、媒体和实时通知。此 HTTP 地址仅适用于现有可信公司内网。NAS 继续使用个人 Windows 共享权限和原有签名工具。新工作站首次打开 NAS 时，按页面中“安装／打开帮助”绑定公司服务器公钥并安装工具。
+
+### 构建安装包
+
+在 Windows x64 上安装项目所需 Node.js、Rust stable MSVC 工具链、Visual Studio C++ 生成工具及 Windows SDK，在本目录执行：
+
+```powershell
+npm.cmd ci
+npm.cmd run build:desktop
+```
+
+桌面构建先生成 `dist-desktop/`，再用 Tauri 打包。NSIS 安装程序位于 `src-tauri/target/release/bundle/nsis/`。新版本通过分发新安装包升级。网页继续使用原命令 `npm.cmd run build:prod` 生成 `dist/`。更换公司服务地址时，需要核对桌面壳的网关与前端部署前缀，并重新构建安装包。

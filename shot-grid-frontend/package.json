@@ -9,7 +9,9 @@
     "build:prod": "vite build --mode production",
     "lint": "eslint . --max-warnings=0",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "build:desktop": "cd src-tauri && tauri build -- --locked",
+    "build:desktop-ui": "vite build --mode production --outDir dist-desktop"
   },
   "dependencies": {
     "@element-plus/icons-vue": "2.3.2",
@@ -30,6 +32,7 @@
   },
   "devDependencies": {
     "@eslint/js": "9.39.1",
+    "@tauri-apps/cli": "2.12.5",
     "@vitejs/plugin-vue": "5.2.4",
     "@vue/test-utils": "2.4.6",
     "eslint": "9.39.1",

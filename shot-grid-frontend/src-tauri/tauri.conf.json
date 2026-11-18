@@ -1,0 +1,20 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "Shot Grid",
+  "version": "0.1.0",
+  "identifier": "cn.laputta.shotgrid",
+  "build": {
+    "beforeBuildCommand": "npm.cmd run build:desktop-ui",
+    "frontendDist": "../dist-desktop"
+  },
+  "app": {
+    "windows": [],
+    "security": { "capabilities": [] }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "icon": ["icons/icon.ico"],
+    "windows": { "nsis": { "languages": ["SimpChinese"], "installMode": "currentUser" } }
+  }
+}

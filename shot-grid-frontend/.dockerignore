@@ -10,3 +10,6 @@ tests
 *.log
 *.orig
 design-qa.md
+
+dist-desktop
+src-tauri

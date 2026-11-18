@@ -9,3 +9,7 @@ coverage/
 
 # 历史参考工程不属于正式业务前端源码。
 参考资料/
+
+dist-desktop/
+src-tauri/target/
+src-tauri/gen/
