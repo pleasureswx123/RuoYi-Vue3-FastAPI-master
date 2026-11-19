@@ -21,26 +21,26 @@ function resize(event) {
 
 <template>
   <ElDrawer
-    class="shot-results-resizable"
-    :style="{ '--shot-results-width': width }"
+    class="sg-results-resizable"
+    :style="{ '--sg-results-width': width }"
     direction="rtl"
     resizable
     @resize-start="startResize"
     @resize="resize"
   >
-    <template #header><slot name="header" /></template>
+    <template v-if="$slots.header" #header><slot name="header" /></template>
     <slot />
   </ElDrawer>
 </template>
 
 <style>
-.el-drawer.rtl.shot-results-resizable {
+.el-drawer.rtl.sg-results-resizable {
   /* Element Plus 拖动时会写入内联宽度；保留非模态抽屉的半屏上限。 */
-  width: var(--shot-results-width) !important;
+  width: var(--sg-results-width) !important;
   max-width: 50%;
   --el-drawer-dragger-size: 10px;
 }
-.shot-results-resizable > .el-drawer__dragger::before {
+.sg-results-resizable > .el-drawer__dragger::before {
   left: 0;
   background-color: var(--el-border-color);
 }

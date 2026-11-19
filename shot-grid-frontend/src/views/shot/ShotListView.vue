@@ -1,5 +1,5 @@
 <script setup>
-import ShotResultsDrawer from './components/ShotResultsDrawer.vue'
+import ResultsDrawer from '@/components/ResultsDrawer.vue'
 import NasFolderMenu from '@/components/NasFolderMenu.vue'
 
 import FinalVersionTag from '@/components/version/FinalVersionTag.vue'
@@ -2052,10 +2052,10 @@ onBeforeUnmount(() => { disposed = true; closeSingleAssign(); destroyRowSortable
   </section>
   <NasFolderMenu ref="nasFolderMenu" :project-id="Number(currentProjectId) || 0" :can-query="hasPermission('shotgrid:version:query')" />
 
-  <ShotResultsDrawer :model-value="Boolean(resultsShotId)" title="镜头" :modal="false" modal-penetrable :lock-scroll="false" :close-on-click-modal="false" aria-modal="false" modal-class="shot-results-drawer" append-to-body destroy-on-close :before-close="beforeCloseResults">
+  <ResultsDrawer :model-value="Boolean(resultsShotId)" title="镜头" :modal="false" modal-penetrable :lock-scroll="false" :close-on-click-modal="false" aria-modal="false" modal-class="shot-results-drawer" append-to-body destroy-on-close :before-close="beforeCloseResults">
     <template #header><div class="shot-results-navigation"><strong>镜头</strong><el-button size="small" :disabled="batchBusy || shotsLoading || resultsIndex <= 0" @click="moveShotResults(-1)">上一镜头</el-button><el-button size="small" :disabled="batchBusy || shotsLoading || resultsIndex < 0 || resultsIndex >= shots.length - 1" @click="moveShotResults(1)">下一镜头</el-button><el-text size="small" type="info">↑ ↓ 快速切换</el-text></div></template>
     <ShotResultsPanel v-if="resultsShotId && currentProjectId" ref="resultsPanel" :key="`${currentProjectId}:${resultsShotId}`" :project-id="currentProjectId" :shot-id="resultsShotId" :preview-on-load="resultsPreview" @updated="refreshAfterBatch([])" />
-  </ShotResultsDrawer>
+  </ResultsDrawer>
 </template>
 
 <style scoped>

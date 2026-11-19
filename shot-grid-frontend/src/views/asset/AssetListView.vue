@@ -15,6 +15,7 @@ import AssetProductionAdjustmentDialog from './components/AssetProductionAdjustm
 import AssetItemScheduleDialog from '@/views/asset/components/AssetItemScheduleDialog.vue'
 import AssetItemBatchWorkspace from '@/views/asset/components/AssetItemBatchWorkspace.vue'
 import RelatedDetailDrawer from '@/components/RelatedDetailDrawer.vue'
+import ResultsDrawer from '@/components/ResultsDrawer.vue'
 import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useLeaveProtection } from '@/composables/useLeaveProtection'
@@ -1160,9 +1161,9 @@ onBeforeUnmount(() => {
       <el-form-item><el-button type="primary" :loading="headerFilterBusy" :disabled="assetsLoading" @click="applyHeaderFilter">应用</el-button><el-button :disabled="assetsLoading || headerFilterBusy" @click="clearHeaderFilter">清除</el-button><el-button :disabled="headerFilterBusy" @click="headerFilterKind = ''">取消</el-button></el-form-item>
     </el-form>
   </el-popover>
-  <el-drawer :model-value="Boolean(resultsTarget)" title="资产制作分项" size="min(440px, 92vw)" :modal="false" modal-penetrable :lock-scroll="false" :close-on-click-modal="false" aria-modal="false" append-to-body destroy-on-close :before-close="beforeCloseResults">
+  <ResultsDrawer :model-value="Boolean(resultsTarget)" title="资产制作分项" :modal="false" modal-penetrable :lock-scroll="false" :close-on-click-modal="false" aria-modal="false" append-to-body destroy-on-close :before-close="beforeCloseResults">
     <AssetResultsPanel v-if="resultsTarget && currentProjectId" ref="resultsPanel" :key="`${currentProjectId}:${resultsTarget.assetId}:${resultsTarget.assetItemId}`" :project-id="currentProjectId" :asset-id="resultsTarget.assetId" :asset-item-id="resultsTarget.assetItemId" :preview-on-load="resultsTarget.previewFinal" @updated="refreshWorkspace" @feedback="feedbackFromResults" @work="taskDrawer.open(`/tasks/${$event}`)" />
-  </el-drawer>
+  </ResultsDrawer>
 </template>
 
 <style scoped>
