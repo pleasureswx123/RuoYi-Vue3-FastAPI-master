@@ -196,8 +196,14 @@ watch(() => sessionStore.workspaceFilters, value => {
 
 const userDisplayName = computed(() => sessionStore.displayName)
 
-const pageTitle = computed(() => sessionStore.isCreatorWorkspace && route.name === 'workbench'
-  ? route.query.tab === 'submissions' ? '提交记录' : '我的任务' : route.meta?.title || 'Shot Grid')
+const pageTitle = computed(() => {
+  if (sessionStore.isCreatorWorkspace && route.name === 'workbench') {
+    if (route.query.tab === 'submissions') return '提交记录'
+    if (route.query.tab === 'messages' && hasPermission('shotgrid:note:list')) return '我的消息'
+    return '我的任务'
+  }
+  return route.meta?.title || 'Shot Grid'
+})
 const activeNavigationPath = computed(() => {
   if (sessionStore.isCreatorWorkspace && route.name === 'workbench') return route.query.tab === 'submissions' ? 'submissions' : '/workbench'
   const routeKey = route.meta?.routeKey

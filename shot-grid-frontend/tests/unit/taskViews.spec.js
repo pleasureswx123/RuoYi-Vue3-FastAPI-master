@@ -31,6 +31,7 @@ import { getMineTaskPage, getTaskDetail, startTask, updateTask } from '@/api/sho
 import { getMineReviewListPage, getMineReviewProducers, getRecentMineVersions, getVersionReviewContext } from '@/api/shot-grid/reviews'
 import { createApiError } from '@/utils/apiError'
 import { useSessionStore } from '@/store/modules/session'
+import { useFeedbackInbox } from '@/store/modules/feedbackInbox'
 import { buttonLabel, expectedTaskTimes, setElSelectValue } from '../helpers/elementPlus'
 import TaskDetailView from '@/views/task/TaskDetailView.vue'
 import TaskEditDialog from '@/views/task/components/TaskEditDialog.vue'
@@ -38,6 +39,7 @@ import ScheduleEditDialog from '@/views/schedule/components/ScheduleEditDialog.v
 import { updateTaskSchedule } from '@/api/shot-grid/schedules'
 import TaskStartDialog from '@/views/task/components/TaskStartDialog.vue'
 import WorkbenchView from '@/views/workbench/WorkbenchView.vue'
+vi.mock('@/views/workbench/FeedbackMessages.vue', () => ({ default: { template: '<section aria-label="我的反馈消息" />' } }))
 vi.mock('@/views/task/components/TaskRelationsShortcut.vue', () => ({ default: { props: ['task'], emits: ['open'], template: '<button @click.stop="$emit(\'open\')">关联资产 3 项</button>' } }))
 vi.mock('@/views/asset/components/AssetRelationsPanel.vue', () => ({ __esModule: true, default: { name: 'AssetRelationsPanel', props: ['projectId', 'shotId', 'assetId'], template: '<div data-testid="task-relations" />' } }))
 const collection = vi.hoisted(() => ({ ids: null, refresh: null }))
@@ -296,6 +298,34 @@ describe('真实任务工作台', () => {
     expect(labels()).toEqual(['镜头制作', '资产制作'])
     wrapper.unmount()
   })
+  it.each([false, true])('消息标签在空列表时也显示，支持通知直达和返回任务（审核权限 %s）', async review => {
+    const permissions = ['shotgrid:task:list', 'shotgrid:version:list', 'shotgrid:note:list']
+    if (review) permissions.push('shotgrid:reviewList:list', 'shotgrid:version:review')
+    const { wrapper, router } = await mountWorkbench(permissions, ['shotgrid_creator'])
+    const inbox = useFeedbackInbox()
+    expect(wrapper.get('#tab-messages').text()).toBe('我的消息')
+    await wrapper.get('#tab-messages').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('#tab-messages').attributes('aria-selected')).toBe('true')
+    await router.push('/workbench?projectId=8&tab=messages&message=12')
+    inbox.count = 1
+    await flushPromises()
+    expect(wrapper.findAll('[role="tab"]').at(-1).text()).toBe('我的消息（1）')
+    expect(wrapper.get('#tab-messages').attributes('aria-selected')).toBe('true')
+    inbox.count = 0
+    await flushPromises()
+    expect(wrapper.get('#tab-messages').text()).toBe('我的消息')
+    await wrapper.get('#tab-tasks').trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.query.projectId).toBe('8')
+    expect(router.currentRoute.value.query.message).toBeUndefined()
+    expect(wrapper.get('#tab-tasks').attributes('aria-selected')).toBe('true')
+    useSessionStore().permissions = permissions.filter(item => item !== 'shotgrid:note:list')
+    await flushPromises()
+    expect(wrapper.find('#tab-messages').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
   it('简洁制作工作台折叠高级筛选，点击行打开任务，提交记录与导航查询同步', async () => {
     getMineTaskPage.mockResolvedValue({ rows: [taskFixture(31, { taskStatus: 'in_progress', allowedActions: ['version.add'] })], total: 1 })
     const { wrapper, router } = await mountWorkbench(undefined, ['shotgrid_creator'])

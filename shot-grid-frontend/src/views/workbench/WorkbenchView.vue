@@ -94,13 +94,21 @@ const canReviewQueue = computed(() => (
 const hasProductionRole = computed(() => !canReviewQueue.value || sessionStore.roles.includes('shotgrid_creator'))
 const canViewTasks = computed(() => hasProductionRole.value && hasPermission('shotgrid:task:list'))
 const canViewRecentSubmissions = computed(() => hasProductionRole.value && hasPermission('shotgrid:version:list'))
-const activeTab = ref(canReviewQueue.value ? 'reviews' : canViewTasks.value ? 'tasks' : 'submissions')
-watch(() => route.query.tab, tab => {
-  if (tab === 'messages' && canViewTasks.value) activeTab.value = 'tasks'
-  else if (sessionStore.isCreatorWorkspace) activeTab.value = tab === 'submissions' && canViewRecentSubmissions.value ? 'submissions' : canViewTasks.value ? 'tasks' : 'submissions'
-}, { immediate: true })
-watch(activeTab, tab => {
-  if (sessionStore.isCreatorWorkspace) router.replace({ query: { ...route.query, tab: tab === 'submissions' ? 'submissions' : route.query.tab === 'messages' ? 'messages' : undefined } })
+const canViewMessages = computed(() => hasPermission('shotgrid:note:list'))
+const defaultTab = computed(() => canReviewQueue.value ? 'reviews' : canViewTasks.value ? 'tasks' : canViewRecentSubmissions.value ? 'submissions' : '')
+const activeTab = computed({
+  get() {
+    const tab = route.query.tab
+    if (tab === 'messages' && canViewMessages.value) return tab
+    if (tab === 'tasks' && canViewTasks.value) return tab
+    if (tab === 'submissions' && canViewRecentSubmissions.value) return tab
+    return defaultTab.value || (canViewMessages.value ? 'messages' : '')
+  },
+  set(tab) {
+    const query = { ...route.query, tab: tab === defaultTab.value ? undefined : tab }
+    if (tab !== 'messages') delete query.message
+    router.replace({ query })
+  }
 })
 const welcomeDescription = computed(() => canReviewQueue.value
   ? '在“待审核”中查看管理范围内的审核内容，跟进审核进度。'
@@ -296,16 +304,10 @@ onBeforeUnmount(() => {
       </header>
 
       <div class="task-status-toolbar">
-        <el-radio-group v-if="route.query.tab !== 'messages' || !hasPermission('shotgrid:note:list')" v-model="query.taskStatus" class="task-status-shortcuts" aria-label="按任务状态筛选" @change="submitFilters">
+        <el-radio-group v-model="query.taskStatus" class="task-status-shortcuts" aria-label="按任务状态筛选" @change="submitFilters">
           <el-radio-button v-for="option in visibleStatuses" :key="option.value" :value="option.value">{{ option.label }}</el-radio-button>
         </el-radio-group>
-        <div class="feedback-navigation">
-          <el-button v-if="route.query.tab === 'messages'" @click="router.push({query: { projectId: route.query.projectId }})">返回任务列表</el-button>
-          <el-button v-if="hasPermission('shotgrid:note:list')" :type="route.query.tab === 'messages' ? 'primary' : 'default'" @click="router.push({query: {...route.query, tab: 'messages'}})">我的消息{{ inbox.count ? '（' + inbox.count + '）' : '' }}</el-button>
-        </div>
       </div>
-      <FeedbackMessages v-if="route.query.tab === 'messages' && hasPermission('shotgrid:note:list')" />
-      <template v-else>
 
       <el-form ref="taskFilterForm" :model="query" :rules="taskFilterRules" class="task-filters" size="large" label-position="top" aria-label="我的任务筛选">
         <el-form-item class="task-filter-item task-filter-item--search" label="搜索" prop="keyword">
@@ -397,12 +399,14 @@ onBeforeUnmount(() => {
       </el-table>
 
       <el-pagination v-if="total" class="task-pagination" background layout="total, sizes, prev, pager, next" :current-page="query.pageNum" :page-size="query.pageSize" :page-sizes="[10, 20, 50]" :total="total" :disabled="loading" aria-label="任务分页" @current-change="changePage" @update:page-size="changePageSize" />
-      </template>
     </section>
 
     </el-tab-pane>
     <el-tab-pane v-if="canViewRecentSubmissions" label="提交记录" name="submissions" lazy>
       <MySubmissionsPanel />
+    </el-tab-pane>
+    <el-tab-pane v-if="canViewMessages" :label="inbox.count ? `我的消息（${inbox.count}）` : '我的消息'" name="messages" lazy>
+      <FeedbackMessages v-if="activeTab === 'messages'" />
     </el-tab-pane>
     </el-tabs>
     <RelatedDetailDrawer ref="taskDetailDrawer" @closed="canViewTasks && loadTasks()" />
@@ -412,7 +416,6 @@ onBeforeUnmount(() => {
 
 <style scoped lang="scss">
 .task-status-toolbar { display: flex; align-items: center; gap: 12px; }
-.feedback-navigation { display: flex; flex: none; margin-inline-start: auto; gap: 8px; }
 .workbench-page {
   display: grid;
   gap: 20px;
@@ -658,7 +661,6 @@ onBeforeUnmount(() => {
 .creator-task-kind { display: flex; width: max-content; margin-bottom: 6px; }
 .creator-task-kinds { flex-wrap: wrap; }
 .creator-workbench .task-filter-item--search { grid-column: auto; }
-.creator-workbench :deep(.workbench-tabs > .el-tabs__header) { display: none; }
 .creator-workbench :deep(.task-list .el-table__row) { cursor: pointer; }
 @media (max-width: 1100px) { .creator-workbench .task-filters { grid-template-columns: minmax(0, 1fr); } }
 </style>
