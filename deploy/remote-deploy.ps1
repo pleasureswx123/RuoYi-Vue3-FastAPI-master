@@ -159,8 +159,20 @@ try {
         $localId = Get-LocalImageId $imageName
         $remoteId = ((& ssh -o BatchMode=yes $Server "docker image inspect --format '{{.Id}}' '$imageName' 2>/dev/null || true") -join "`n").Trim()
         if ($LASTEXITCODE -ne 0) { throw '远端镜像查询失败，停止发布' }
-        if ($remoteId -ne $localId) { $transferImages += $imageName }
-        else { Write-Host "服务器已有相同镜像，跳过传输：$imageName" }
+        if ($remoteId -ne $localId) {
+            # 新版本标签可能尚未创建，但同一镜像 ID 已随旧版本传到服务器。
+            $reuseById = @"
+set -eu
+if docker image inspect '$localId' >/dev/null 2>&1; then
+    docker tag '$localId' '$imageName'
+    docker image inspect --format '{{.Id}}' '$imageName'
+fi
+"@
+            $remoteId = ((& ssh -o BatchMode=yes $Server ($reuseById.Replace("`r", ""))) -join "`n").Trim()
+            if ($LASTEXITCODE -ne 0) { throw "服务器复用镜像失败：$imageName" }
+        }
+        if ($remoteId -eq $localId) { Write-Host "服务器已有相同镜像，跳过传输：$imageName" }
+        else { $transferImages += $imageName }
         $imageChecks += "test `"`$(docker image inspect --format '{{.Id}}' '$imageName')`" = '$localId'"
     }
     if ($transferImages.Count -gt 0) {

@@ -57,6 +57,14 @@ function docker {
 function ssh {
     $global:LASTEXITCODE=0
     $s=$args[-1]; $global:cacheTest.Calls.Add('ssh '+$s)
+    if ($s -match "docker tag '(sha256:[0-9a-f]{64})' '([^']+)'") {
+        $id=$Matches[1]; $name=$Matches[2]
+        if ($global:cacheTest.Remote.ContainsValue($id)) {
+            $global:cacheTest.Remote[$name]=$id
+            return $id
+        }
+        return
+    }
     if ($s -match '^docker image inspect.*\x27([^\x27]+)\x27') { return $global:cacheTest.Remote[$Matches[1]] }
     if ($s -match 'stat -c') { return '1'*40 }
     if ($s -match 'bash deploy/deploy.sh') {
@@ -98,6 +106,17 @@ try {
     & $deploymentScript
     Assert ((Count-Calls '^transfer ') -eq 0) '远端已有相同镜像时不得传输'
     Assert ((Count-Calls 'bash deploy/deploy.sh') -eq 1) '镜像全命中仍必须执行备份迁移健康门禁'
+    foreach ($module in 'backend','admin-frontend') {
+        $name="ruoyi-shot-grid-${module}:123456789abc"
+        $global:cacheTest.Remote["ruoyi-shot-grid-${module}:previous"]=$global:cacheTest.Remote[$name]
+        $global:cacheTest.Remote.Remove($name)
+    }
+    $global:cacheTest.Remote.Remove('ruoyi-shot-grid-business-frontend:123456789abc')
+    $global:cacheTest.Calls.Clear()
+    & $deploymentScript
+    Assert ((Count-Calls '^transfer .*docker save ruoyi-shot-grid-business-frontend:123456789abc \|') -eq 1) '只改网页时应复用旧标签下的后端和管理端，只传网页'
+    $global:cacheTest.Remote['ruoyi-shot-grid-business-frontend:123456789abc']=$global:cacheTest.Images['ruoyi-shot-grid-business-frontend:123456789abc'].Id
+    $global:cacheTest.Remote.Remove('ruoyi-shot-grid-backend:previous')
     $global:cacheTest.Remote['ruoyi-shot-grid-backend:123456789abc']='sha256:'+('0'*64)
     $global:cacheTest.Calls.Clear()
     & $deploymentScript
