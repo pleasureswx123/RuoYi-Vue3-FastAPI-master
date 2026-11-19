@@ -1,4 +1,6 @@
-FROM node:22-alpine AS builder
+ARG NODE_BASE=node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32
+ARG NGINX_BASE=nginx:1.30.6-alpine@sha256:901e593c95dc85f5a729f5765516321366ef4ac401821431d408897e95287d0a
+FROM ${NODE_BASE} AS builder
 
 WORKDIR /app
 
@@ -11,7 +13,7 @@ RUN --mount=type=cache,id=ruoyi-npm-build-cache,target=/root/.npm,sharing=locked
 COPY . .
 RUN npm run build:prod
 
-FROM nginx:1.30.6-alpine
+FROM ${NGINX_BASE}
 
 ENV BACKEND_UPSTREAM=http://ruoyi-backend-pg:9099
 

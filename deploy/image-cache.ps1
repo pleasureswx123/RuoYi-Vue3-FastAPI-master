@@ -14,9 +14,29 @@ function Get-LocalImageId {
     return $id
 }
 
+function Get-WebBaseBuildArguments {
+    param([string]$DockerfilePath)
+    # 独立或远程 builder 不一定能看到本机引擎中的镜像，沿用 Dockerfile 默认来源。
+    $builder = & docker buildx inspect
+    if ($LASTEXITCODE -ne 0 -or -not ($builder -match '^Driver:\s+docker\s*$')) { return }
+    foreach ($line in Get-Content -LiteralPath $DockerfilePath) {
+        if ($line -notmatch '^ARG (NODE_BASE|NGINX_BASE)=((node|nginx):[\w.-]+)@(sha256:[0-9a-f]{64})$') { continue }
+        $argument, $upstream, $name, $digest = $Matches[1], $Matches[2], $Matches[3], $Matches[4]
+        $source = "${upstream}@${digest}"
+        $platform = & docker image inspect --platform linux/amd64 --format '{{.Os}}/{{.Architecture}}' $source 2>$null
+        if ($LASTEXITCODE -ne 0 -or $platform -ne 'linux/amd64') {
+            Invoke-NativeCommand docker @('pull', '--platform', 'linux/amd64', $source) | Out-Host
+        }
+        $alias = "localhost/shot-grid-base/${name}:$($digest.Substring(7))"
+        Invoke-NativeCommand docker @('tag', $source, $alias) | Out-Host
+        "--build-arg"
+        "${argument}=${alias}@${digest}"
+    }
+}
+
 function Build-CachedImage {
     param([string]$Image, [string]$Key, [string]$Context, [string]$Dockerfile,
-          [string[]]$BuildArguments, [switch]$SkipBuild, [switch]$ForceBuild)
+          [string[]]$BuildArguments, [switch]$SkipBuild, [switch]$ForceBuild, [switch]$UseLocalWebBases)
     $label = 'cn.shotgrid.build-key'
     $metadata = (& docker image inspect $Image 2>$null) -join "`n"
     $valid = $false
@@ -47,6 +67,9 @@ function Build-CachedImage {
     Write-Host "构建模块镜像（保留 Docker 层和下载缓存）：$Image"
     $arguments = @('build', '--platform', 'linux/amd64', '--label', "$label=$Key")
     foreach ($value in $BuildArguments) { $arguments += @('--build-arg', $value) }
+    if ($UseLocalWebBases) {
+        $arguments += @(Get-WebBaseBuildArguments (Join-Path $Context $Dockerfile))
+    }
     $arguments += @('-f', (Join-Path $Context $Dockerfile), '-t', $Image, $Context)
     Invoke-NativeCommand docker $arguments
     $null = Get-LocalImageId $Image

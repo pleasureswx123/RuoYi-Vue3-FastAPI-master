@@ -11,6 +11,12 @@ function git {
     $s=$args -join ' '
     if ($s -match '--show-toplevel') { return $global:cacheTest.Root }
     if ($s -match '--short=12') { return '123456789abc' }
+    if ($s -match 'worktree add') {
+        $frontend = Join-Path $args[-2] 'shot-grid-frontend'
+        New-Item -ItemType Directory -Force -Path $frontend | Out-Null
+        Copy-Item (Join-Path $PSScriptRoot '../../shot-grid-frontend/Dockerfile') $frontend
+        return
+    }
     if ($s -match 'rev-parse') {
         foreach ($entry in @(@('ruoyi-fastapi-backend','backend'),@('ruoyi-fastapi-frontend','admin'),@('shot-grid-frontend','business'))) {
             if ($s.Contains(':'+$entry[0])) { return $global:cacheTest.Trees[$entry[1]] }
@@ -21,6 +27,12 @@ function git {
 function docker {
     $global:LASTEXITCODE=0
     $s=$args -join ' '; $global:cacheTest.Calls.Add('docker '+$s)
+    if ($s -eq 'buildx inspect') { return 'Driver: docker' }
+    if ($s -match '^image inspect --platform linux/amd64 .* (\S+@sha256:[0-9a-f]{64})$') {
+        if ($global:cacheTest.Images.ContainsKey($Matches[1])) { return 'linux/amd64' }
+        $global:LASTEXITCODE=1; return
+    }
+    if ($s -match '^pull --platform linux/amd64 ') { $global:cacheTest.Images[$args[-1]]=@{}; return }
     if ($s -match '^image inspect') {
         $name=$args[-1]; $item=$global:cacheTest.Images[$name]
         if (-not $item) { $global:LASTEXITCODE=1; return }
@@ -58,6 +70,8 @@ function Count-Calls($Pattern) { return @($global:cacheTest.Calls | Where-Object
 try {
     & $deploymentScript -BuildOnly
     Assert ((Count-Calls '^docker build ') -eq 3) '首次应构建三个模块'
+    Assert ((Count-Calls '^docker pull --platform linux/amd64 .*@sha256:') -eq 2) '缺少网页基础镜像时应按摘要拉取'
+    Assert ((Count-Calls '^docker build .*NODE_BASE=localhost/shot-grid-base/node:.*@sha256:.*NGINX_BASE=localhost/shot-grid-base/nginx:.*@sha256:') -eq 1) '制作平台必须使用同摘要的本地基础镜像'
     Assert ((Count-Calls '^ssh |^transfer |^scp') -eq 0) 'BuildOnly 不得连接服务器'
     $global:cacheTest.Calls.Clear()
     & $deploymentScript -BuildOnly
@@ -71,6 +85,7 @@ try {
     $global:cacheTest.Calls.Clear()
     & $deploymentScript -BuildOnly
     Assert ((Count-Calls '^docker build ') -eq 1) '只修改制作端只能重建一个模块'
+    Assert ((Count-Calls '^docker pull ') -eq 0) '只改页面时已有基础镜像不应重新拉取'
     $global:cacheTest.Calls.Clear()
     & $deploymentScript -BuildOnly -NpmRegistry 'https://example.invalid'
     Assert ((Count-Calls '^docker build ') -eq 2) 'npm 参数变化必须使两个前端缓存失效'

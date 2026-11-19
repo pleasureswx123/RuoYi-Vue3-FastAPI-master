@@ -116,7 +116,8 @@ try {
         if ($LASTEXITCODE -ne 0 -or $tree -notmatch '^[0-9a-f]{40}$') { throw '无法读取模块 Git 树' }
         $key = Get-BuildContentKey $module.Name $tree $module.Arguments
         Build-CachedImage -Image $module.Image -Key $key -Context (Join-Path $buildRoot $module.Directory) `
-            -Dockerfile $module.Dockerfile -BuildArguments $module.Arguments -SkipBuild:$SkipBuild -ForceBuild:$ForceBuild
+            -Dockerfile $module.Dockerfile -BuildArguments $module.Arguments -SkipBuild:$SkipBuild -ForceBuild:$ForceBuild `
+            -UseLocalWebBases:($module.Name -eq 'business')
     }
     if ($BuildOnly) {
         Write-Host "本地镜像准备完成：$releaseId；未连接服务器，未部署。"
