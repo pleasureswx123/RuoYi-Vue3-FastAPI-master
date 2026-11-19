@@ -344,4 +344,6 @@ npm.cmd ci
 npm.cmd run build:desktop
 ```
 
-桌面构建先生成 `dist-desktop/`，再用 Tauri 打包。NSIS 安装程序位于 `src-tauri/target/release/bundle/nsis/`。新版本通过分发新安装包升级。网页继续使用原命令 `npm.cmd run build:prod` 生成 `dist/`。更换公司服务地址时，需要核对桌面壳的网关与前端部署前缀，并重新构建安装包。
+网页构建使用本目录的 npm 锁文件，运行 `npm.cmd run build:prod` 生成 `dist/`。网页镜像只安装这份锁文件中的依赖。
+
+`build:desktop` 会按 `src-tauri/package-lock.json` 安装专用 Tauri CLI，生成 `dist-desktop/` 并打包。NSIS 安装程序位于 `src-tauri/target/release/bundle/nsis/`。新版本通过分发新安装包升级。更换公司服务地址时，需要核对桌面壳的网关与前端部署前缀，并重新构建安装包。
