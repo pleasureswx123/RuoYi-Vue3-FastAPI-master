@@ -73,6 +73,10 @@ function ssh {
     }
 }
 function scp { $global:LASTEXITCODE=0; $global:cacheTest.Calls.Add('scp') }
+function python {
+    $global:cacheTest.Calls.Add('layers '+($args[3..($args.Count-1)] -join ' '))
+    $global:LASTEXITCODE=[int][bool]$global:cacheTest.FailLayers
+}
 function cmd.exe { $global:LASTEXITCODE=0; $global:cacheTest.Calls.Add('transfer '+$args[-1]) }
 function Count-Calls($Pattern) { return @($global:cacheTest.Calls | Where-Object {$_ -match $Pattern}).Count }
 try {
@@ -114,10 +118,11 @@ try {
     $global:cacheTest.Remote.Remove('ruoyi-shot-grid-business-frontend:123456789abc')
     $global:cacheTest.Calls.Clear()
     & $deploymentScript
-    Assert ((Count-Calls '^transfer .*docker save ruoyi-shot-grid-business-frontend:123456789abc \|') -eq 1) '只改网页时应复用旧标签下的后端和管理端，只传网页'
+    Assert ((Count-Calls '^layers ruoyi-shot-grid-business-frontend:123456789abc$') -eq 1 -and (Count-Calls '^transfer ') -eq 0) '只改网页时应复用旧标签下的后端和管理端，只同步缺少的网页层'
     $global:cacheTest.Remote['ruoyi-shot-grid-business-frontend:123456789abc']=$global:cacheTest.Images['ruoyi-shot-grid-business-frontend:123456789abc'].Id
     $global:cacheTest.Remote.Remove('ruoyi-shot-grid-backend:previous')
     $global:cacheTest.Remote['ruoyi-shot-grid-backend:123456789abc']='sha256:'+('0'*64)
+    $global:cacheTest.FailLayers=$true
     $global:cacheTest.Calls.Clear()
     & $deploymentScript
     $transfer=@($global:cacheTest.Calls | Where-Object {$_ -match '^transfer '})

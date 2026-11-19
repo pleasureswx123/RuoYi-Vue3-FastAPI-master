@@ -176,9 +176,17 @@ fi
         $imageChecks += "test `"`$(docker image inspect --format '{{.Id}}' '$imageName')`" = '$localId'"
     }
     if ($transferImages.Count -gt 0) {
-        $imageCommand = "docker save $($transferImages -join ' ') | ssh -o BatchMode=yes $Server docker load"
-        & cmd.exe /d /s /c $imageCommand
-        if ($LASTEXITCODE -ne 0) { throw "镜像传输失败，退出码：$LASTEXITCODE" }
+        $layerTransferDone = $false
+        if (Get-Command python -ErrorAction SilentlyContinue) {
+            & python (Join-Path $PSScriptRoot 'transfer-image-layers.py') $Server $releaseRoot @transferImages
+            $layerTransferDone = $LASTEXITCODE -eq 0
+        }
+        if (-not $layerTransferDone) {
+            Write-Host '按层传输不可用，使用完整镜像包'
+            $imageCommand = "docker save $($transferImages -join ' ') | ssh -o BatchMode=yes $Server docker load"
+            & cmd.exe /d /s /c $imageCommand
+            if ($LASTEXITCODE -ne 0) { throw "镜像传输失败，退出码：$LASTEXITCODE" }
+        }
     }
 
     if ($remoteHead -ne $localHead) {
