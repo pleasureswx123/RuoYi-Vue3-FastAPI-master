@@ -94,7 +94,7 @@ const canReviewQueue = computed(() => (
 const hasProductionRole = computed(() => !canReviewQueue.value || sessionStore.roles.includes('shotgrid_creator'))
 const canViewTasks = computed(() => hasProductionRole.value && hasPermission('shotgrid:task:list'))
 const canViewRecentSubmissions = computed(() => hasProductionRole.value && hasPermission('shotgrid:version:list'))
-const canViewMessages = computed(() => hasPermission('shotgrid:note:list'))
+const canViewMessages = computed(() => hasPermission('shotgrid:note:list') && inbox.total > 0)
 const defaultTab = computed(() => canReviewQueue.value ? 'reviews' : canViewTasks.value ? 'tasks' : canViewRecentSubmissions.value ? 'submissions' : '')
 const activeTab = computed({
   get() {

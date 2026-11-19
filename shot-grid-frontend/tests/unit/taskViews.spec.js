@@ -298,11 +298,14 @@ describe('真实任务工作台', () => {
     expect(labels()).toEqual(['镜头制作', '资产制作'])
     wrapper.unmount()
   })
-  it.each([false, true])('消息标签在空列表时也显示，支持通知直达和返回任务（审核权限 %s）', async review => {
+  it.each([false, true])('消息标签在空列表时隐藏、有已读历史时显示，支持通知直达和返回任务（审核权限 %s）', async review => {
     const permissions = ['shotgrid:task:list', 'shotgrid:version:list', 'shotgrid:note:list']
     if (review) permissions.push('shotgrid:reviewList:list', 'shotgrid:version:review')
     const { wrapper, router } = await mountWorkbench(permissions, ['shotgrid_creator'])
     const inbox = useFeedbackInbox()
+    expect(wrapper.find('#tab-messages').exists()).toBe(false)
+    inbox.total = 1
+    await flushPromises()
     expect(wrapper.get('#tab-messages').text()).toBe('我的消息')
     await wrapper.get('#tab-messages').trigger('click')
     await flushPromises()

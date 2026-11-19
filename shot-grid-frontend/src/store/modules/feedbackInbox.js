@@ -4,6 +4,7 @@ import request from '@/utils/request'
 import { useRealtimeStore } from './realtime'
 
 export const useFeedbackInbox = defineStore('feedbackInbox', () => {
+  const total = ref(0)
   const count = ref(0)
   const latestId = ref(null)
   const revision = ref(0)
@@ -13,7 +14,9 @@ export const useFeedbackInbox = defineStore('feedbackInbox', () => {
     const token = ++sequence
     const { data } = await request.get('/shot-grid/my-messages/unread', { silentError: true })
     if (token !== sequence) return
-    if (count.value !== data.count || latestId.value !== data.latestId) revision.value++
+    const visibleTotal = data.total ?? data.count
+    if (total.value !== visibleTotal || count.value !== data.count || latestId.value !== data.latestId) revision.value++
+    total.value = visibleTotal
     count.value = data.count
     latestId.value = data.latestId
   }
@@ -32,6 +35,7 @@ export const useFeedbackInbox = defineStore('feedbackInbox', () => {
       clearInterval(timer)
       window.removeEventListener('online', sync)
       sequence++
+      total.value = 0
       count.value = 0
       latestId.value = null
     }
@@ -41,5 +45,5 @@ export const useFeedbackInbox = defineStore('feedbackInbox', () => {
     await request.put(`/shot-grid/my-messages/${id}/read`)
     await refresh()
   }
-  return { count, latestId, revision, refresh, listen, markRead }
+  return { total, count, latestId, revision, refresh, listen, markRead }
 })

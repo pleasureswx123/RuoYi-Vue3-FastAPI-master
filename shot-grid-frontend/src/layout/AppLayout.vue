@@ -19,6 +19,7 @@ import {
   Tickets
 } from '@element-plus/icons-vue'
 
+import { useFeedbackInbox } from '@/store/modules/feedbackInbox'
 import { useSessionStore } from '@/store/modules/session'
 import GlobalSearchDialog from '@/components/search/GlobalSearchDialog.vue'
 import ThemeModeSwitch from '@/components/theme/ThemeModeSwitch.vue'
@@ -29,6 +30,7 @@ import { getMineReviewProducers } from '@/api/shot-grid/reviews'
 const route = useRoute()
 const router = useRouter()
 const sessionStore = useSessionStore()
+const inbox = useFeedbackInbox()
 const collapsed = ref(typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 820px)').matches)
 const searchVisible = ref(false)
 const fullscreenSupported = ref(false)
@@ -199,7 +201,7 @@ const userDisplayName = computed(() => sessionStore.displayName)
 const pageTitle = computed(() => {
   if (sessionStore.isCreatorWorkspace && route.name === 'workbench') {
     if (route.query.tab === 'submissions') return '提交记录'
-    if (route.query.tab === 'messages' && hasPermission('shotgrid:note:list')) return '我的消息'
+    if (route.query.tab === 'messages' && hasPermission('shotgrid:note:list') && inbox.total > 0) return '我的消息'
     return '我的任务'
   }
   return route.meta?.title || 'Shot Grid'

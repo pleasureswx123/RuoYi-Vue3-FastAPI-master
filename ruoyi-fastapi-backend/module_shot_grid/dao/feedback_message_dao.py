@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Select, func, select, update
+from sqlalchemy import Select, case, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from module_shot_grid.entity.do.feedback_message_do import ShotGridFeedbackMessage as Message
@@ -29,9 +29,12 @@ def visible_messages(user_id: int) -> Select:
 
 
 async def unread_summary(db: AsyncSession, user_id: int) -> dict:
-    ids = visible_messages(user_id).with_only_columns(Message.message_id).where(Message.read_at.is_(None)).subquery()
-    count, latest = (await db.execute(select(func.count(), func.max(ids.c.message_id)).select_from(ids))).one()
-    return {'count': count, 'latestId': latest}
+    unread_id = case((Message.read_at.is_(None), Message.message_id))
+    summary = visible_messages(user_id).with_only_columns(
+        func.count(Message.message_id), func.count(unread_id), func.max(unread_id)
+    )
+    total, count, latest = (await db.execute(summary)).one()
+    return {'count': count, 'latestId': latest, 'total': total}
 
 
 async def list_messages(db: AsyncSession, user_id: int, page: int, size: int, focus: int | None) -> dict:

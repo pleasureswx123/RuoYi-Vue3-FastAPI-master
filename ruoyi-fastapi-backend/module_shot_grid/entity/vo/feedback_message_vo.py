@@ -8,6 +8,7 @@ from module_shot_grid.entity.vo.review_vo import ShotGridIssueReferenceFileModel
 
 
 class FeedbackUnreadModel(ShotGridApiModel):
+    total: int
     count: int
     latest_id: int | None
 
