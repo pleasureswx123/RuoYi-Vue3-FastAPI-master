@@ -2,6 +2,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { ElAlert, ElButton, ElDialog, ElMessageBox, ElTabPane, ElTabs } from 'element-plus'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import NasOpenButton from '@/components/NasOpenButton.vue'
 import ShotResultsPanel from '@/views/shot/components/ShotResultsPanel.vue'
 import { useSessionStore } from '@/store/modules/session'
 import { getShotDetail } from '@/api/shot-grid/shots'
@@ -181,6 +182,21 @@ describe('镜头三页签侧栏', () => {
       wrapper.findComponent({ name: 'ShotFeedbackPanel' }).vm.sending = true
       expect(await wrapper.vm.$.exposed.canLeave()).toBe(false)
     } finally { wrapper.unmount() }
+  })
+  it('桌面端按所点候选打开目录，缺少文件编号时禁用入口', async () => {
+    vi.stubGlobal('__SHOTGRID_DESKTOP__', true)
+    const detail = versionDetail(2)
+    detail.candidates[0].files = []
+    getVersionDetail.mockResolvedValueOnce({ data: detail })
+    const wrapper = await mountPanel()
+    try {
+      const buttons = wrapper.findAllComponents(NasOpenButton)
+      expect(buttons[0].props('disabled')).toBe(true)
+      expect(buttons[1].text()).toContain('在文件资源管理器中打开')
+      expect(buttons[1].props()).toMatchObject({ projectId: 8, taskId: 71, versionId: 2, fileId: 'file-2-2', disabled: false })
+      await wrapper.get('[aria-label="查看成果 V001"]').trigger('click'); await flushPromises()
+      expect(wrapper.findComponent(NasOpenButton).props()).toMatchObject({ versionId: 1, fileId: 'file-1-1' })
+    } finally { wrapper.unmount(); vi.unstubAllGlobals() }
   })
   it('文件夹入口只演示当前原文件位置，不触发协议；换版和无路径均不借用其他文件', async () => {
     const folder = String.raw`\\192.168.10.64\制作\项目 A\V002`

@@ -3,6 +3,7 @@ import { computed, defineAsyncComponent, onBeforeUnmount, ref, watch } from 'vue
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { FolderOpened } from '@element-plus/icons-vue'
 import { approvedVersion, finalDeliveryFiles } from '@/components/version/finalPresentation'
+import NasOpenButton from '@/components/NasOpenButton.vue'
 import FinalVersionTag from '@/components/version/FinalVersionTag.vue'
 import { candidateFolderPath, requestLocalDemoFolder } from '@/utils/folderOpener'
 import { getShotDetail } from '@/api/shot-grid/shots'
@@ -88,6 +89,7 @@ const versionPage = ref(1)
 const feedback = ref(null)
 const mediaVisible = ref(false)
 const folderPreview = ref(null)
+const desktop = window.__SHOTGRID_DESKTOP__ === true
 const localFolderDemo = import.meta.env.DEV && ['127.0.0.1', 'localhost', '[::1]'].includes(window.location.hostname)
 const folderButtonLabel = localFolderDemo ? '打开所在文件夹（本地模拟）' : '打开所在文件夹（演示）'
 const versionIndex = computed(() => versions.value.findIndex(item => Number(item.versionId) === selectedVersionId.value))
@@ -112,8 +114,11 @@ function openFolder(output, final = false) {
   folderPreview.value = { name: outputName(output), versionNumber: version.value.versionNumber,
     path: candidateFolderPath(output.files), reason: folderReason(output) }
 }
+function reviewFile(output) {
+  return output.files?.find(item => item.role === 'review_media')
+}
 function outputName(output) {
-  const file = output.files?.find(item => item.role === 'review_media')
+  const file = reviewFile(output)
   return file?.businessFileName || file?.originalName || file?.name || output.candidateNumber || '成果文件'
 }
 async function toggleHistory() {
@@ -316,10 +321,15 @@ defineExpose({ canLeave, reload, dirty, previewApproved })
                 <el-button class="candidate-tile" :disabled="!canDownload" :aria-label="`预览候选 ${output.candidateNumber}`" @click="previewCandidate(output.candidateId)"><ReviewCandidateThumbnail :version-id="item.versionId" :candidate="output" :can-preview="canDownload" /><span>{{ output.candidateNumber }}</span></el-button>
                 <div class="candidate-file__info"><el-text size="small" class="candidate-file__name">{{ outputName(output) }}</el-text><el-text v-if="output.candidateNote" size="small">{{ output.candidateNote }}</el-text>
                   <el-button v-if="isApproved" size="small" :icon="FolderOpened" :disabled="!canDownload || !finalFolder(output) || localFolderDemo && !finalFolder(output)?.files[0]?.folderRelativePath" @click="openFinalFolder(output)">打开定稿文件夹{{ localFolderDemo ? '（本地模拟）' : '（演示）' }}</el-button>
+                  <NasOpenButton v-else-if="desktop" text :project-id="projectId" :task-id="taskId" :version-id="item.versionId"
+                    :file-id="reviewFile(output)?.fileId" :disabled="!canDownload || !reviewFile(output)?.fileId" />
                   <el-tooltip v-else :content="localFolderDemo ? '打开本机的模拟成果副本，不连接 NAS' : '当前为演示，仅查看位置，不会实际打开文件夹'"><span><el-button size="small" :icon="FolderOpened" :disabled="!canDownload" :aria-label="`打开 ${output.candidateNumber} 所在文件夹（${localFolderDemo ? '本地模拟' : '演示'}）`" @click="openFolder(output)">{{ folderButtonLabel }}</el-button></span></el-tooltip>
                 </div>
               </section>
-              <el-alert v-if="isApproved && !finalOutputs.length" title="定稿文件信息暂不可用，请刷新后重试" type="warning" :closable="false" /><template v-if="!isApproved && !candidates.length && version"><el-button :disabled="!canDownload" @click="mediaVisible = true">查看成果</el-button><el-button :icon="FolderOpened" :disabled="!canDownload" @click="openFolder(version)">{{ folderButtonLabel }}</el-button></template>
+              <el-alert v-if="isApproved && !finalOutputs.length" title="定稿文件信息暂不可用，请刷新后重试" type="warning" :closable="false" /><template v-if="!isApproved && !candidates.length && version"><el-button :disabled="!canDownload" @click="mediaVisible = true">查看成果</el-button>
+                <NasOpenButton v-if="desktop" text :project-id="projectId" :task-id="taskId" :version-id="item.versionId"
+                  :file-id="reviewFile(version)?.fileId" :disabled="!canDownload || !reviewFile(version)?.fileId" />
+                <el-button v-else :icon="FolderOpened" :disabled="!canDownload" @click="openFolder(version)">{{ folderButtonLabel }}</el-button></template>
             </div>
           </template>
         </el-card>
