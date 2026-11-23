@@ -48,7 +48,11 @@ describe('镜头三页签侧栏', () => {
   it.each(['pending', 'publishing', 'published', 'failed'])('定稿默认聚焦选中候选并按真实归档状态启用入口：%s', async state => {
     const approvedVersion = { versionId: 1, versionNo: 1, versionStatus: 'final', deliveryStatus: state, approvedTime: '2026-10-30T09:00:00' }
     getShotDetail.mockResolvedValue({ data: { ...shot, status: 'completed', approvedVersion } })
-    getVersionDetail.mockImplementation(id => Promise.resolve({ data: { ...versionDetail(id), versionStatus: 'final', finalDelivery: { versionId: id, candidateId: id * 10 + 2, deliveryStatus: state, businessFileName: 'result.mp4', approvedTime: approvedVersion.approvedTime } } }))
+    getVersionDetail.mockImplementation(async id => {
+      const detail = versionDetail(id)
+      if (state === 'published') detail.candidates[1].files[0].finalNasPath = 'archive'
+      return { data: { ...detail, versionStatus: 'final', finalDelivery: { versionId: id, candidateId: id * 10 + 2, deliveryStatus: state, businessFileName: 'result.mp4', approvedTime: approvedVersion.approvedTime } } }
+    })
     const wrapper = await mountPanel()
     try {
       expect(wrapper.text()).toContain('通过日期：2026/10/30')
@@ -56,7 +60,8 @@ describe('镜头三页签侧栏', () => {
       expect(wrapper.find('[aria-label="查看成果 V002"]').exists()).toBe(false)
       expect(wrapper.find('[aria-label="预览候选 V001_01"]').exists()).toBe(false)
       expect(wrapper.find('[aria-label="预览候选 V001_02"]').exists()).toBe(true)
-      const folder = wrapper.findAllComponents(ElButton).find(button => button.text().startsWith('打开定稿文件夹'))
+      const folder = wrapper.getComponent(NasOpenButton)
+      expect(folder.props()).toMatchObject({ kind: 'final', fileId: 'file-1-2' })
       expect(folder.props('disabled')).toBe(state !== 'published')
       await wrapper.findAllComponents(ElButton).find(button => button.text() === '历史版本').trigger('click')
       expect(wrapper.find('[aria-label="查看成果 V002"]').exists()).toBe(true)
@@ -176,7 +181,7 @@ describe('镜头三页签侧栏', () => {
       expect(wrapper.findAllComponents(ElTabPane).map(item => item.props('label'))).toEqual(['成果展示', '反馈说明', '制作参考'])
       expect(wrapper.text()).toContain('第 2 轮成果')
       expect(wrapper.text()).toContain('2026/10/29')
-      expect(wrapper.text()).toContain('打开所在文件夹（演示）')
+      expect(wrapper.text()).toContain('在文件资源管理器中打开')
       expect(wrapper.text()).not.toMatch(/文件夹帮助|提交成果|提示词/)
       expect(wrapper.findComponent({ name: 'ProtectedVersionPreview' }).exists()).toBe(false)
       await wrapper.find('[aria-label="预览候选 V002_01"]').trigger('click')
@@ -203,8 +208,8 @@ describe('镜头三页签侧栏', () => {
       expect(await wrapper.vm.$.exposed.canLeave()).toBe(false)
     } finally { wrapper.unmount() }
   })
-  it('桌面端按所点候选打开目录，缺少文件编号时禁用入口', async () => {
-    vi.stubGlobal('__SHOTGRID_DESKTOP__', true)
+  it.each([false, true])('按所点候选打开目录，缺少文件编号时禁用入口（桌面模式 %s）', async desktop => {
+    vi.stubGlobal('__SHOTGRID_DESKTOP__', desktop)
     const detail = versionDetail(2)
     detail.candidates[0].files = []
     getVersionDetail.mockResolvedValueOnce({ data: detail })
@@ -218,26 +223,12 @@ describe('镜头三页签侧栏', () => {
       expect(wrapper.findComponent(NasOpenButton).props()).toMatchObject({ versionId: 1, fileId: 'file-1-1' })
     } finally { wrapper.unmount(); vi.unstubAllGlobals() }
   })
-  it('文件夹入口只演示当前原文件位置，不触发协议；换版和无路径均不借用其他文件', async () => {
-    const folder = String.raw`\\192.168.10.64\制作\项目 A\V002`
-    getVersionDetail.mockImplementation(id => {
-      const detail = versionDetail(id)
-      if (id === 2) detail.candidates[0].files[0].nasPath = folder + '\\clip.mp4'
-      return Promise.resolve({ data: detail })
-    })
+  it('无候选列表的旧版镜头使用版本原文件打开目录', async () => {
+    getVersionDetail.mockResolvedValueOnce({ data: { ...versionRow(2), files: [{ role: 'review_media', fileId: 'legacy' }] } })
     const wrapper = await mountPanel()
-    const clickLink = vi.spyOn(HTMLAnchorElement.prototype, 'click')
     try {
-      await wrapper.get('[aria-label="打开 V002_01 所在文件夹（演示）"]').trigger('click'); await flushPromises()
-      expect(document.body.textContent).toContain(folder)
-      expect(document.body.textContent).toContain('不会打开文件夹或连接 NAS')
-      expect(clickLink).not.toHaveBeenCalled()
-      wrapper.findAllComponents(ElDialog)[1].vm.$emit('update:modelValue', false); await flushPromises()
-      await wrapper.get('[aria-label="查看成果 V001"]').trigger('click'); await flushPromises()
-      await wrapper.get('[aria-label="打开 V001_01 所在文件夹（演示）"]').trigger('click'); await flushPromises()
-      expect(document.body.textContent).toContain('尚未提供原文件 NAS 路径')
-      expect(document.body.textContent).not.toContain(folder)
-    } finally { clickLink.mockRestore(); wrapper.unmount() }
+      expect(wrapper.getComponent(NasOpenButton).props()).toMatchObject({ kind: 'version', fileId: 'legacy', disabled: false })
+    } finally { wrapper.unmount() }
   })
   it('预览弹窗内切换上一版本，播放器绑定新版本文件', async () => {
     const wrapper = await mountPanel()
@@ -275,7 +266,7 @@ describe('镜头三页签侧栏', () => {
   it('没有文件权限不能预览，没有评论权限仅阅读', async () => {
     const wrapper = await mountPanel(['shotgrid:shot:query', 'shotgrid:version:list', 'shotgrid:version:query', 'shotgrid:note:list'])
     expect(wrapper.find('[aria-label="预览候选 V002_01"]').attributes('disabled')).toBeDefined()
-    expect(wrapper.find('[aria-label="打开 V002_01 所在文件夹（演示）"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.getComponent(NasOpenButton).props('disabled')).toBe(true)
     wrapper.findComponent(ElTabs).vm.$emit('update:modelValue', 'feedback'); await flushPromises()
     expect(wrapper.findComponent({ name: 'ShotFeedbackPanel' }).props('canComment')).toBe(false)
     wrapper.unmount()

@@ -88,31 +88,19 @@ const hasMore = ref(false)
 const versionPage = ref(1)
 const feedback = ref(null)
 const mediaVisible = ref(false)
-const folderPreview = ref(null)
 const desktop = window.__SHOTGRID_DESKTOP__ === true
 const localFolderDemo = import.meta.env.DEV && ['127.0.0.1', 'localhost', '[::1]'].includes(window.location.hostname)
-const folderButtonLabel = localFolderDemo ? '打开所在文件夹（本地模拟）' : '打开所在文件夹（演示）'
+const useNasOpener = computed(() => desktop || isAsset.value || !localFolderDemo)
 const versionIndex = computed(() => versions.value.findIndex(item => Number(item.versionId) === selectedVersionId.value))
-function folderReason(output) {
-  if (!canDownload.value) return '当前账号没有文件访问权限'
-  if (!output.files?.some(file => file.role === 'review_media' && file.nasPath)) return '尚未提供原文件 NAS 路径'
-  return candidateFolderPath(output.files) ? '' : '原文件路径不符合当前 NAS 配置，请联系管理员核对'
-}
 function openFolder(output, final = false) {
-  if (!version.value || versionLoading.value || !canDownload.value) return
-  if (localFolderDemo) {
-    try {
-      const relative = output.files?.find(file => file.role === 'review_media')?.folderRelativePath
-      if (final && !relative) { ElMessage.warning('缺少定稿目录信息，请刷新或联系管理人员'); return }
-      const opened = requestLocalDemoFolder(props.projectId, isAsset.value ? props.assetItemId : props.shotId, selectedVersionId.value, Number(output.candidateId || 0), isAsset.value ? props.assetId : 0, ...(relative ? [relative] : []))
-      if (opened) ElMessage.info('已请求打开本地模拟文件夹，请允许浏览器打开 Shot Grid。文件夹内为演示副本，不是正式成果。')
-      else ElMessage.warning('镜头或版本编号无效，请刷新后重试')
-    } catch { ElMessage.warning('未能请求本地打开器，请检查本机是否安装') }
-    return
-  }
-  // 非本机开发页面继续使用只读位置预览，不开放本地磁盘路径。
-  folderPreview.value = { name: outputName(output), versionNumber: version.value.versionNumber,
-    path: candidateFolderPath(output.files), reason: folderReason(output) }
+  if (!localFolderDemo || !version.value || versionLoading.value || !canDownload.value) return
+  try {
+    const relative = output.files?.find(file => file.role === 'review_media')?.folderRelativePath
+    if (final && !relative) { ElMessage.warning('缺少定稿目录信息，请刷新或联系管理人员'); return }
+    const opened = requestLocalDemoFolder(props.projectId, isAsset.value ? props.assetItemId : props.shotId, selectedVersionId.value, Number(output.candidateId || 0), isAsset.value ? props.assetId : 0, ...(relative ? [relative] : []))
+    if (opened) ElMessage.info('已请求打开本地模拟文件夹，请允许浏览器打开 Shot Grid。文件夹内为演示副本，不是正式成果。')
+    else ElMessage.warning('镜头或版本编号无效，请刷新后重试')
+  } catch { ElMessage.warning('未能请求本地打开器，请检查本机是否安装') }
 }
 function reviewFile(output) {
   return output.files?.find(item => item.role === 'review_media')
@@ -281,7 +269,7 @@ async function loadMoreVersions() {
 }
 
 watch(loading, value => { if (!value && props.previewOnLoad && approvedId.value) previewApproved() })
-watch([scopeKey, permissionsKey], () => { mediaVisible.value = false; folderPreview.value = null; reload() }, { immediate: true })
+watch([scopeKey, permissionsKey], () => { mediaVisible.value = false; reload() }, { immediate: true })
 onBeforeUnmount(() => { disposed = true; generation++; controller?.abort(); versionController?.abort(); moreController?.abort() })
 async function previewApproved() {
   const expectedGeneration = generation
@@ -320,18 +308,18 @@ defineExpose({ canLeave, reload, dirty, previewApproved })
               <section v-for="output in finalOutputs" :key="output.candidateId" class="candidate-file">
                 <el-button class="candidate-tile" :disabled="!canDownload" :aria-label="`预览候选 ${output.candidateNumber}`" @click="previewCandidate(output.candidateId)"><ReviewCandidateThumbnail :version-id="item.versionId" :candidate="output" :can-preview="canDownload" /><span>{{ output.candidateNumber }}</span></el-button>
                 <div class="candidate-file__info"><el-text size="small" class="candidate-file__name">{{ outputName(output) }}</el-text><el-text v-if="output.candidateNote" size="small">{{ output.candidateNote }}</el-text>
-                  <NasOpenButton v-if="isAsset && isApproved" text kind="final" :project-id="projectId" :task-id="taskId" :version-id="item.versionId"
+                  <NasOpenButton v-if="useNasOpener && isApproved" text kind="final" :project-id="projectId" :task-id="taskId" :version-id="item.versionId"
                     :file-id="reviewFile(output)?.fileId" :disabled="!canDownload || !reviewFile(output)?.fileId || !reviewFile(output)?.finalNasPath" />
-                  <el-button v-else-if="isApproved" size="small" :icon="FolderOpened" :disabled="!canDownload || !finalFolder(output) || localFolderDemo && !finalFolder(output)?.files[0]?.folderRelativePath" @click="openFinalFolder(output)">打开定稿文件夹{{ localFolderDemo ? '（本地模拟）' : '（演示）' }}</el-button>
-                  <NasOpenButton v-else-if="desktop || isAsset" text :project-id="projectId" :task-id="taskId" :version-id="item.versionId"
+                  <el-button v-else-if="isApproved" size="small" :icon="FolderOpened" :disabled="!canDownload || !finalFolder(output) || !finalFolder(output)?.files[0]?.folderRelativePath" @click="openFinalFolder(output)">打开定稿文件夹（本地模拟）</el-button>
+                  <NasOpenButton v-else-if="useNasOpener" text :project-id="projectId" :task-id="taskId" :version-id="item.versionId"
                     :file-id="reviewFile(output)?.fileId" :disabled="!canDownload || !reviewFile(output)?.fileId" />
-                  <el-tooltip v-else :content="localFolderDemo ? '打开本机的模拟成果副本，不连接 NAS' : '当前为演示，仅查看位置，不会实际打开文件夹'"><span><el-button size="small" :icon="FolderOpened" :disabled="!canDownload" :aria-label="`打开 ${output.candidateNumber} 所在文件夹（${localFolderDemo ? '本地模拟' : '演示'}）`" @click="openFolder(output)">{{ folderButtonLabel }}</el-button></span></el-tooltip>
+                  <el-tooltip v-else :content="'打开本机的模拟成果副本，不连接 NAS'"><span><el-button size="small" :icon="FolderOpened" :disabled="!canDownload" :aria-label="`打开 ${output.candidateNumber} 所在文件夹（本地模拟）`" @click="openFolder(output)">打开所在文件夹（本地模拟）</el-button></span></el-tooltip>
                 </div>
               </section>
               <el-alert v-if="isApproved && !finalOutputs.length" title="定稿文件信息暂不可用，请刷新后重试" type="warning" :closable="false" /><template v-if="!isApproved && !candidates.length && version"><el-button :disabled="!canDownload" @click="mediaVisible = true">查看成果</el-button>
-                <NasOpenButton v-if="desktop || isAsset" text :project-id="projectId" :task-id="taskId" :version-id="item.versionId"
+                <NasOpenButton v-if="useNasOpener" text :project-id="projectId" :task-id="taskId" :version-id="item.versionId"
                   :file-id="reviewFile(version)?.fileId" :disabled="!canDownload || !reviewFile(version)?.fileId" />
-                <el-button v-else :icon="FolderOpened" :disabled="!canDownload" @click="openFolder(version)">{{ folderButtonLabel }}</el-button></template>
+                <el-button v-else :icon="FolderOpened" :disabled="!canDownload" @click="openFolder(version)">打开所在文件夹（本地模拟）</el-button></template>
             </div>
           </template>
         </el-card>
@@ -364,12 +352,6 @@ defineExpose({ canLeave, reload, dirty, previewApproved })
       <el-alert v-if="versionError" :title="versionError" type="error" :closable="false"><el-button @click="selectVersion(selectedVersionId)">重试</el-button></el-alert>
       <ProtectedVersionPreview v-if="mediaVisible && previewVersion" :key="`${selectedVersionId}:${candidateId}`" :version="previewVersion" :can-preview="canDownload" />
     </el-dialog>
-    <el-dialog :model-value="Boolean(folderPreview)" title="文件夹位置预览（演示）" width="min(520px, 92vw)" append-to-body destroy-on-close @update:model-value="value => { if (!value) folderPreview = null }">
-      <template v-if="folderPreview"><el-alert title="当前仅演示入口，不会打开文件夹或连接 NAS。" type="info" :closable="false" />
-        <el-descriptions :column="1" border class="folder-preview"><el-descriptions-item label="版本">{{ folderPreview.versionNumber }}</el-descriptions-item><el-descriptions-item label="文件">{{ folderPreview.name }}</el-descriptions-item><el-descriptions-item label="已记录位置">{{ folderPreview.path || folderPreview.reason }}</el-descriptions-item></el-descriptions>
-      </template>
-      <template #footer><el-button @click="folderPreview = null">关闭预览</el-button></template>
-    </el-dialog>
     <ShotTaskFeedbackDialog ref="directFeedback" @closed="feedbackClosed" />
   </section>
 </template>
@@ -377,7 +359,6 @@ defineExpose({ canLeave, reload, dirty, previewApproved })
 <style scoped>
 .final-summary { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
 .shot-sidebar { min-width: 0; }.shot-sidebar__identity { color: var(--sg-text-muted); font-size: 12px; margin-bottom: 8px; }
-.folder-preview { margin-top: 16px; overflow-wrap: anywhere; }
 .shot-sidebar__tabs :deep(.el-tabs__header) { margin-bottom: 12px; }.shot-sidebar__tabs :deep(.el-tabs__item) { padding: 0 12px; }
 .result-version-card { margin-bottom: 12px; }.result-version-card.is-selected { border-color: var(--sg-accent); }
 .result-version-card :deep(.el-card__header),.result-version-card :deep(.el-card__body) { padding: 10px 12px; }
