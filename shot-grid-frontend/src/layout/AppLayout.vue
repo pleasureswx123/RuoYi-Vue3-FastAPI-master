@@ -733,6 +733,12 @@ onBeforeUnmount(() => {
   --el-button-disabled-border-color: rgba(221, 231, 242, 0.12);
 }
 
+.app-account > .el-button.is-text {
+  --el-fill-color-light: #303b47;
+  --el-fill-color: #202a34;
+  --el-button-outline-color: #ffce8d;
+}
+
 .app-header__navigation-toggle:focus-visible,
 .app-account > .el-button:focus-visible {
   outline: 2px solid #ffce8d;
