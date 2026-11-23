@@ -5537,3 +5537,5 @@ Windows 不得直接绕过 `rmtree.avoids_symlink_attacks` 检查。Windows 分�
 制作平台沿用 /realtime/ws。个人主题 shot-grid.inbox 只接受当前身份的 userId，事件只提示客户端重新查询。GET /shot-grid/my-messages/unread 返回未读数 count、最新未读消息 ID latestId 和包含已读记录的可见消息总数 total。GET /shot-grid/my-messages 接受 page、size 和可选 focus，按发送顺序倒序返回 rows、page、total。PUT /shot-grid/my-messages/{messageId}/read 只标记本人的该条记录，重复点击保留首次阅读时间。
 
 制作人从“我的任务 → 我的消息”逐行查看全文及附件。同一窗口聚合未读提醒；断线期间发布的消息在重连后补查，查看消息不改变任务状态。迁移 20261118_46 从启用时起记录反馈，不回填历史审核。
+
+资产成果通过版本 NAS 凭证打开。默认签发所选文件的源目录，传 location=final 时只签发该文件当前已发布且有效的定稿目录。服务端按候选及源文件编号匹配归档快照，版本文件的 finalNasPath 仅在匹配时返回；两类请求均不接受客户端路径。

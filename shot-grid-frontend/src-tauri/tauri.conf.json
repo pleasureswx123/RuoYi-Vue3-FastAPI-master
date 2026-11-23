@@ -1,7 +1,7 @@
 {
   "$schema": "./node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Shot Grid",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "identifier": "cn.laputta.shotgrid",
   "build": {
     "beforeBuildCommand": "npm.cmd run build:desktop-ui",

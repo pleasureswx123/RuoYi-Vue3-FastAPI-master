@@ -91,6 +91,9 @@ async function loadFolders(autoLaunch = true) {
     } else {
       // 文件入口只打开指定文件的目录，不默认为本版本其他文件。
       files.value = (response.data.files || []).filter(file => !current.fileId || file.fileId === current.fileId)
+      if (current.kind === 'final') {
+        files.value = files.value.map(file => ({ ...file, nasPath: file.finalNasPath }))
+      }
       folders.value = versionNasFolders({ ...response.data, files: files.value }, current)
     }
     selected.value = folders.value[0] || ''
@@ -118,7 +121,7 @@ async function launch() {
   try {
     const response = current.kind === 'project'
       ? await getProjectNasOpenTicket(current.projectId, { signal: controller?.signal })
-      : await getNasOpenTicket(current.versionId, { projectId: current.projectId, taskId: current.taskId, fileId: file.fileId }, { signal: controller?.signal })
+      : await getNasOpenTicket(current.versionId, { projectId: current.projectId, taskId: current.taskId, fileId: file.fileId, ...(current.kind === 'final' ? { location: 'final' } : {}) }, { signal: controller?.signal })
     if (ticket !== generation) return
     const { uri, folder: signedFolder } = response.data
     if (signedFolder !== folder || !/^shotgrid-nas:\/\/open-v1\/[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(uri) || uri.length > 14000) throw new Error('打开凭证不符合安全规则')

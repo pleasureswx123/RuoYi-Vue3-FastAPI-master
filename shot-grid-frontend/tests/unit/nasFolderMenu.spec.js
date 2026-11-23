@@ -108,6 +108,24 @@ describe('列表 NAS 右键入口', () => {
     expect(wrapper.text()).toContain('下载 Windows 安装工具')
     wrapper.unmount()
   })
+  it('定稿入口按当前文件请求归档目录，缺少定稿路径时不回退到源文件', async () => {
+    const root = '\\\\192.168.10.64\\share\\V001'
+    const folder = root + '\\FINAL\\T2-V001-R001'
+    const file = { fileId: 'b', nasPath: root + '\\b.png', finalNasPath: folder + '\\b.png' }
+    const detail = { projectId: 7, taskId: 2, versionId: 3, files: [file] }
+    getVersionDetail.mockResolvedValue({ data: detail })
+    getNasOpenTicket.mockResolvedValue({ data: { folder, uri: 'shotgrid-nas://open-v1/YQ.Yg' } })
+    const wrapper = render()
+    const target = { kind: 'final', taskId: 2, versionId: 3, fileId: 'b' }
+    try {
+      await wrapper.vm.openTarget(target)
+      expect(getNasOpenTicket).toHaveBeenCalledWith(3, { projectId: 7, taskId: 2, fileId: 'b', location: 'final' }, { signal: expect.any(AbortSignal) })
+      file.finalNasPath = null
+      await wrapper.vm.openTarget(target)
+      expect(getNasOpenTicket).toHaveBeenCalledTimes(1)
+      expect(wrapper.text()).toContain('暂无可用的 NAS 文件路径')
+    } finally { wrapper.unmount() }
+  })
   it('签名返回其他目录时拒绝启动', async () => {
     getVersionDetail.mockResolvedValue({ data: { projectId: 7, taskId: 2, versionId: 3, files: [{ fileId: 'a', nasPath: '\\\\192.168.10.64\\share\\project\\a.png' }] } })
     getNasOpenTicket.mockResolvedValue({ data: { folder: 'other', uri: 'shotgrid-nas://open-v1/YQ.Yg' } })

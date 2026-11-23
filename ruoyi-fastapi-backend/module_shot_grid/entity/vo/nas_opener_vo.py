@@ -1,3 +1,4 @@
+from typing import Literal
 from uuid import UUID
 
 from pydantic import ConfigDict, Field
@@ -10,3 +11,4 @@ class NasOpenCommand(ShotGridApiModel):
     project_id: int = Field(gt=0, le=9_223_372_036_854_775_807)
     task_id: int = Field(gt=0, le=9_223_372_036_854_775_807)
     file_id: UUID
+    location: Literal['source', 'final'] = 'source'

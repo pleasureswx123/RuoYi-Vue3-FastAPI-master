@@ -62,3 +62,24 @@ def test_local_folder_projection_never_exposes_disk_root(relative: str, expected
     file = {'project_path_snapshot': r'D:\private\演示项目', 'nas_relative_path': relative, 'role': 'review_media'}
     assert ShotGridReviewService._version_folder_relative_path(file) == expected
     assert ShotGridReviewService._version_folder_relative_path({**file, 'role': 'thumbnail'}) is None
+
+
+@pytest.mark.parametrize(
+    'overrides',
+    [{}, {'delivery_status': 'pending'}, {'validity_status': 'revoked'}, {'review_cycle': 2}, {'operation': 'revoke'}],
+)
+def test_final_paths_require_current_published_files(overrides: dict) -> None:
+    primary = {'candidate_id': 2, 'source_file_id': 'a', 'final_nas_relative_path': 'V001/FINAL/a.png'}
+    additional = {'candidate_id': 3, 'source_file_id': 'b', 'final_nas_relative_path': 'V001/FINAL/T1-V001-R001/b.png'}
+    delivery = {
+        **primary,
+        'additional_files': [additional],
+        'operation': 'publish',
+        'validity_status': 'current',
+        'delivery_status': 'published',
+        'review_cycle': 1,
+        **overrides,
+    }
+    paths = ShotGridReviewService._published_file_paths({'version_status': 'final', 'review_cycle': 1}, delivery)
+    expected = {(2, 'a'): primary['final_nas_relative_path'], (3, 'b'): additional['final_nas_relative_path']}
+    assert paths == ({} if overrides else expected)

@@ -320,14 +320,16 @@ defineExpose({ canLeave, reload, dirty, previewApproved })
               <section v-for="output in finalOutputs" :key="output.candidateId" class="candidate-file">
                 <el-button class="candidate-tile" :disabled="!canDownload" :aria-label="`预览候选 ${output.candidateNumber}`" @click="previewCandidate(output.candidateId)"><ReviewCandidateThumbnail :version-id="item.versionId" :candidate="output" :can-preview="canDownload" /><span>{{ output.candidateNumber }}</span></el-button>
                 <div class="candidate-file__info"><el-text size="small" class="candidate-file__name">{{ outputName(output) }}</el-text><el-text v-if="output.candidateNote" size="small">{{ output.candidateNote }}</el-text>
-                  <el-button v-if="isApproved" size="small" :icon="FolderOpened" :disabled="!canDownload || !finalFolder(output) || localFolderDemo && !finalFolder(output)?.files[0]?.folderRelativePath" @click="openFinalFolder(output)">打开定稿文件夹{{ localFolderDemo ? '（本地模拟）' : '（演示）' }}</el-button>
-                  <NasOpenButton v-else-if="desktop" text :project-id="projectId" :task-id="taskId" :version-id="item.versionId"
+                  <NasOpenButton v-if="isAsset && isApproved" text kind="final" :project-id="projectId" :task-id="taskId" :version-id="item.versionId"
+                    :file-id="reviewFile(output)?.fileId" :disabled="!canDownload || !reviewFile(output)?.fileId || !reviewFile(output)?.finalNasPath" />
+                  <el-button v-else-if="isApproved" size="small" :icon="FolderOpened" :disabled="!canDownload || !finalFolder(output) || localFolderDemo && !finalFolder(output)?.files[0]?.folderRelativePath" @click="openFinalFolder(output)">打开定稿文件夹{{ localFolderDemo ? '（本地模拟）' : '（演示）' }}</el-button>
+                  <NasOpenButton v-else-if="desktop || isAsset" text :project-id="projectId" :task-id="taskId" :version-id="item.versionId"
                     :file-id="reviewFile(output)?.fileId" :disabled="!canDownload || !reviewFile(output)?.fileId" />
                   <el-tooltip v-else :content="localFolderDemo ? '打开本机的模拟成果副本，不连接 NAS' : '当前为演示，仅查看位置，不会实际打开文件夹'"><span><el-button size="small" :icon="FolderOpened" :disabled="!canDownload" :aria-label="`打开 ${output.candidateNumber} 所在文件夹（${localFolderDemo ? '本地模拟' : '演示'}）`" @click="openFolder(output)">{{ folderButtonLabel }}</el-button></span></el-tooltip>
                 </div>
               </section>
               <el-alert v-if="isApproved && !finalOutputs.length" title="定稿文件信息暂不可用，请刷新后重试" type="warning" :closable="false" /><template v-if="!isApproved && !candidates.length && version"><el-button :disabled="!canDownload" @click="mediaVisible = true">查看成果</el-button>
-                <NasOpenButton v-if="desktop" text :project-id="projectId" :task-id="taskId" :version-id="item.versionId"
+                <NasOpenButton v-if="desktop || isAsset" text :project-id="projectId" :task-id="taskId" :version-id="item.versionId"
                   :file-id="reviewFile(version)?.fileId" :disabled="!canDownload || !reviewFile(version)?.fileId" />
                 <el-button v-else :icon="FolderOpened" :disabled="!canDownload" @click="openFolder(version)">{{ folderButtonLabel }}</el-button></template>
             </div>

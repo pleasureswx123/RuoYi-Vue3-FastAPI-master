@@ -86,6 +86,26 @@ describe('镜头三页签侧栏', () => {
     getTaskDetail.mockResolvedValue({ data: { ...task, taskKind: 'asset_image', target: { targetType: 'asset_item', assetId: 31, assetItemId: 51 }, latestVersion: { versionId: 2 } } })
     return { assetId: 31, assetItemId: 51, shotId: 0 }
   }
+  it('资产定稿绑定已归档的候选文件，切换历史版本后绑定该版本的源文件', async () => {
+    const props = assetFixture()
+    const final = { ...versionRow(2), versionStatus: 'final' }
+    getTaskVersions.mockResolvedValue({ rows: [final, versionRow(1)], hasNext: false })
+    const detail = versionDetail(2)
+    detail.candidates[1].files[0].finalNasPath = 'archive'
+    getVersionDetail.mockResolvedValueOnce({ data: { ...detail, versionStatus: 'final',
+      finalDelivery: { versionId: 2, candidateId: 22, deliveryStatus: 'published' }
+    } })
+    const wrapper = await mountPanel(['*:*:*'], props)
+    try {
+      expect(wrapper.getComponent(NasOpenButton).props()).toMatchObject({ kind: 'final', fileId: 'file-2-2', disabled: false })
+      expect(wrapper.text()).not.toContain('打开定稿文件夹')
+      await wrapper.findAllComponents(ElButton).find(button => button.text() === '历史版本').trigger('click')
+      await wrapper.get('[aria-label="查看成果 V001"]').trigger('click')
+      await flushPromises()
+      expect(wrapper.findAllComponents(NasOpenButton).map(button => [button.props('kind'), button.props('fileId')]))
+        .toEqual([['version', 'file-1-1'], ['version', 'file-1-2']])
+    } finally { wrapper.unmount() }
+  })
   it('资产分项复用三页签，提交与反馈只关联当前分项', async () => {
     const wrapper = await mountPanel(['*:*:*'], assetFixture())
     try {

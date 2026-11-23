@@ -236,12 +236,18 @@ class ShotGridReviewService:
         )
         values['ai_params'] = row.get('ai_params') if access.has_all_scope or access.has_role('director') else None
         values['production_target'] = cls._version_production_target(row)
+        final_paths = cls._published_file_paths(row, final_delivery)
         version_files = [
             ShotGridVersionFileModel.model_validate(
                 {
                     **file,
                     'is_primary': file['is_primary'] == '1',
                     'nas_path': cls._version_file_nas_path(file),
+                    'final_nas_path': cls._version_file_nas_path(
+                        {**file, 'nas_relative_path': final_paths.get((file['candidate_id'], str(file['file_id'])))}
+                    )
+                    if file['role'] == 'review_media'
+                    else None,
                     'folder_relative_path': cls._version_folder_relative_path(file),
                     'url': f'/shot-grid/versions/{version_id}/files/{file["file_id"]}/download',
                 }
@@ -264,6 +270,23 @@ class ShotGridReviewService:
             for item in await ShotGridFinalDeliveryDao.get_history(db, version_id)
         ]
         return ShotGridVersionDetailModel.model_validate(values)
+
+    @staticmethod
+    def _published_file_paths(row: dict, final_delivery: dict | None) -> dict[tuple[int, str], str]:
+        # 用归档快照绑定具体源文件，兼容旧 FINAL 和按审核周期隔离的目录。
+        if (
+            final_delivery
+            and final_delivery.get('operation') == 'publish'
+            and final_delivery.get('validity_status') == 'current'
+            and final_delivery.get('delivery_status') == 'published'
+            and row.get('version_status') == 'final'
+            and final_delivery.get('review_cycle') == row.get('review_cycle', 1)
+        ):
+            return {
+                (item['candidate_id'], str(item.get('source_file_id'))): item['final_nas_relative_path']
+                for item in [final_delivery, *(final_delivery.get('additional_files') or [])]
+            }
+        return {}
 
     @staticmethod
     def _version_folder_relative_path(file: dict) -> str | None:

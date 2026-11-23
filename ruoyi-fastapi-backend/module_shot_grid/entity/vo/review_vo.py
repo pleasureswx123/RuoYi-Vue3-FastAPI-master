@@ -170,6 +170,7 @@ class ShotGridVersionFileModel(ShotGridApiModel):
     file_size: int
     url: str
     nas_path: str | None = None
+    final_nas_path: str | None = None
     folder_relative_path: str | None = None
 
 

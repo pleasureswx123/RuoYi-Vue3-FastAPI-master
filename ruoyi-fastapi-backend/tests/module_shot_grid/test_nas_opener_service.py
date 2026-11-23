@@ -77,10 +77,17 @@ async def test_issue_rechecks_access_and_file(key, monkeypatch) -> None:
     detail = SimpleNamespace(project_id=7, task_id=2, files=[file])
     get = AsyncMock(return_value=detail)
     monkeypatch.setattr(nas.ShotGridReviewService, 'get_version_detail', get)
-    command = SimpleNamespace(project_id=7, task_id=2, file_id='a')
+    command = SimpleNamespace(project_id=7, task_id=2, file_id='a', location='source')
     result = await nas.ShotGridNasOpenerService.issue(None, 3, 'user', command)
     get.assert_awaited_once_with(None, 3, 'user')
     assert result['folder'] == r'\\192.168.10.64\share\项目'
+    command.location = 'final'
+    file.final_nas_path = None
+    with pytest.raises(ShotGridDomainException):
+        await nas.ShotGridNasOpenerService.issue(None, 3, 'user', command)
+    file.final_nas_path = result['folder'] + r'\FINAL\T2-V003-R001\a.png'
+    archived = await nas.ShotGridNasOpenerService.issue(None, 3, 'user', command)
+    assert archived['folder'] == result['folder'] + r'\FINAL\T2-V003-R001'
     command.project_id = 8
     with pytest.raises(ShotGridDomainException):
         await nas.ShotGridNasOpenerService.issue(None, 3, 'user', command)
@@ -107,7 +114,9 @@ async def test_invalid_file_not_signed(key, monkeypatch, role, path) -> None:
     detail = SimpleNamespace(project_id=7, task_id=2, files=[SimpleNamespace(file_id='a', nas_path=path, role=role)])
     monkeypatch.setattr(nas.ShotGridReviewService, 'get_version_detail', AsyncMock(return_value=detail))
     with pytest.raises(ShotGridDomainException):
-        await nas.ShotGridNasOpenerService.issue(None, 3, 'user', SimpleNamespace(project_id=7, task_id=2, file_id='a'))
+        await nas.ShotGridNasOpenerService.issue(
+            None, 3, 'user', SimpleNamespace(project_id=7, task_id=2, file_id='a', location='source')
+        )
 
 
 @pytest.mark.asyncio

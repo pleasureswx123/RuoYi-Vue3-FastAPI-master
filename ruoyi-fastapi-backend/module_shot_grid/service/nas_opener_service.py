@@ -104,11 +104,14 @@ class ShotGridNasOpenerService:
         if detail.project_id != command.project_id or detail.task_id != command.task_id:
             raise shot_grid_error(409, 'SG_NAS_TARGET_CHANGED', '版本归属已变化，请刷新列表')
         file = next((item for item in detail.files if str(item.file_id) == str(command.file_id)), None)
-        if file is None or not file.nas_path or file.role in ('thumbnail', 'proxy_media'):
+        if file is None or file.role in ('thumbnail', 'proxy_media'):
+            raise shot_grid_error(404, 'SG_NAS_FILE_NOT_FOUND', '该版本没有可打开的文件目录')
+        path = file.final_nas_path if command.location == 'final' else file.nas_path
+        if not path:
             raise shot_grid_error(404, 'SG_NAS_FILE_NOT_FOUND', '该版本没有可打开的文件目录')
         try:
-            validate_folder(file.nas_path)
-            folder = validate_folder(file.nas_path.rsplit('\\', 1)[0])
+            validate_folder(path)
+            folder = validate_folder(path.rsplit('\\', 1)[0])
         except ValueError:
             raise shot_grid_error(422, 'SG_NAS_PATH_INVALID', '文件目录不符合安全规则') from None
         uri = await asyncio.to_thread(sign_folder, folder)

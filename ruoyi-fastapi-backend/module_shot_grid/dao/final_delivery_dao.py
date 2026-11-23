@@ -110,6 +110,7 @@ class ShotGridFinalDeliveryDao:
                         ShotGridFinalDelivery.operation,
                         ShotGridFinalDelivery.validity_status,
                         ShotGridFinalDelivery.version_id,
+                        ShotGridFinalDelivery.source_file_id,
                         ShotGridFinalDelivery.additional_files,
                         ShotGridFinalDelivery.candidate_id,
                         ShotGridFinalDelivery.business_file_name,

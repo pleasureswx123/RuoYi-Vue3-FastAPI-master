@@ -20,7 +20,7 @@ const activated = ref(false)
 const busy = ref(false)
 const opener = ref(null)
 // 每行只渲染按钮，使用时才挂载目录选择和安装帮助。
-watch(() => [props.projectId, props.taskId, props.versionId, props.fileId, allowed.value], () => { activated.value = false; busy.value = false })
+watch(() => [props.projectId, props.taskId, props.versionId, props.fileId, props.kind, allowed.value], () => { activated.value = false; busy.value = false })
 async function open() {
   if (busy.value || props.disabled || !allowed.value) return
   busy.value = true
