@@ -127,7 +127,7 @@ export const useSessionStore = defineStore('session', {
       if (!response.token) {
         throw new Error('登录未完成，请稍后重试')
       }
-      setToken(response.token)
+      setToken(response.token, credentials.remember)
       this.token = response.token
       this.initialized = false
       this.status = 'idle'

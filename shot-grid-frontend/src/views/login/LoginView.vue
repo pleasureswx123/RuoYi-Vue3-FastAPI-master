@@ -1,11 +1,14 @@
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, onBeforeUnmount, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
 import { Lock, Refresh, User } from '@element-plus/icons-vue'
 
 import LoginStageMedia from '@/components/login/LoginStageMedia.vue'
 import { useSessionStore } from '@/store/modules/session'
 import { sanitizeInternalRedirect } from '@/router/routeRegistry'
+
+import { forgetLogin, readRememberedLogin, rememberLogin, rememberedLoginKey, rememberPreferenceKey, shouldRememberLogin } from '@/utils/rememberedLogin'
 
 const route = useRoute()
 const router = useRouter()
@@ -13,7 +16,58 @@ const sessionStore = useSessionStore()
 const formRef = ref()
 const submitting = ref(false)
 const errorMessage = ref('')
-const form = reactive({ username: '', password: '', code: '' })
+const form = reactive({ username: '', password: '', code: '', remember: false })
+const restoring = ref(true)
+let restored = false
+let savedSnapshot = null
+let active = true
+
+async function restoreLogin() {
+  try {
+    form.remember = shouldRememberLogin()
+    if (!form.remember) return
+    savedSnapshot = localStorage.getItem(rememberedLoginKey)
+    const saved = await readRememberedLogin()
+    if (!saved) savedSnapshot = localStorage.getItem(rememberedLoginKey)
+    if (saved && active && form.remember && shouldRememberLogin()) {
+      Object.assign(form, saved)
+      restored = true
+    }
+  } catch {
+    errorMessage.value = '无法读取本机保存的账号和密码，请手动输入'
+  } finally {
+    restoring.value = false
+  }
+}
+
+function clearRestoredForm() {
+  if (!restored) return
+  form.username = ''
+  form.password = ''
+  restored = false
+}
+
+function changeRemember(checked) {
+  try {
+    if (!checked) {
+      forgetLogin()
+      clearRestoredForm()
+    }
+    localStorage.setItem(rememberPreferenceKey, String(checked))
+    savedSnapshot = localStorage.getItem(rememberedLoginKey)
+  } catch {
+    form.remember = !checked
+    errorMessage.value = '本机存储不可用，无法更新记住账号和密码的设置'
+  }
+}
+
+function onStorage(event) {
+  if (event.key === rememberPreferenceKey || event.key === null || event.key === rememberedLoginKey) {
+    form.remember = shouldRememberLogin()
+    if (!form.remember || !localStorage.getItem(rememberedLoginKey)) clearRestoredForm()
+  }
+}
+
 const companyLogoUrl = `${import.meta.env.BASE_URL}company_logo.svg`
 
 const captcha = computed(() => sessionStore.captcha || {})
@@ -55,17 +109,27 @@ async function submit() {
   await formRef.value?.validate(result => {
     valid = result
   })
-  if (!valid || submitting.value) return
+  if (!valid || submitting.value || restoring.value) return
 
   submitting.value = true
   errorMessage.value = ''
   try {
+    const username = form.username.trim()
+    const password = form.password
     await sessionStore.signIn({
-      username: form.username.trim(),
-      password: form.password,
+      username,
+      password,
+      remember: form.remember,
       code: form.code.trim(),
       uuid: captcha.value.uuid || ''
     })
+    if (form.remember) {
+      try {
+        await rememberLogin(username, password, savedSnapshot)
+      } catch {
+        ElMessage.warning('登录成功，本机未能保存账号和密码')
+      }
+    }
     await router.replace(getSafeRedirect())
   } catch (error) {
     errorMessage.value = error?.message || '登录失败，请稍后重试'
@@ -77,7 +141,15 @@ async function submit() {
   }
 }
 
-onMounted(() => refreshCaptcha().catch(() => undefined))
+onMounted(() => {
+  window.addEventListener('storage', onStorage)
+  restoreLogin()
+  refreshCaptcha().catch(() => undefined)
+})
+onBeforeUnmount(() => {
+  active = false
+  window.removeEventListener('storage', onStorage)
+})
 </script>
 
 <template>
@@ -117,10 +189,11 @@ onMounted(() => refreshCaptcha().catch(() => undefined))
           <span>使用平台分配的账号继续工作</span>
         </div>
 
-        <el-form ref="formRef" :model="form" :rules="rules" label-position="top" aria-label="登录制作工作区">
+        <el-form ref="formRef" :model="form" :disabled="restoring || submitting" :rules="rules" label-position="top" aria-label="登录制作工作区">
           <el-form-item label="账号" prop="username">
             <el-input
               v-model="form.username"
+              @input="restored = false"
               :prefix-icon="User"
               autocomplete="username"
               placeholder="请输入账号"
@@ -130,6 +203,7 @@ onMounted(() => refreshCaptcha().catch(() => undefined))
           <el-form-item label="密码" prop="password">
             <el-input
               v-model="form.password"
+              @input="restored = false"
               :prefix-icon="Lock"
               type="password"
               autocomplete="current-password"
@@ -158,6 +232,10 @@ onMounted(() => refreshCaptcha().catch(() => undefined))
                 <el-icon v-else :class="{ 'is-loading': captchaLoading }"><Refresh /></el-icon>
               </el-button>
             </div>
+          </el-form-item>
+
+          <el-form-item prop="remember">
+            <el-checkbox v-model="form.remember" @change="changeRemember">记住账号和密码</el-checkbox>
           </el-form-item>
 
           <el-alert v-if="errorMessage" class="login-error" :title="errorMessage" type="error" :closable="false" show-icon />

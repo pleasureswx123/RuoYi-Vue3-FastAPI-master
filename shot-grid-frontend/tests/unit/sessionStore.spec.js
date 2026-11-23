@@ -5,6 +5,7 @@ import AppLayout from '@/layout/AppLayout.vue'
 import { getEpisodePage, getScenePage, listShotAssignees } from '@/api/shot-grid/shots'
 import { getProjectDetail } from '@/api/shot-grid/projects'
 import { createPinia, setActivePinia } from 'pinia'
+import Cookies from 'js-cookie'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { getCaptcha, getCurrentUser, login, logout } from '@/api/platform/auth'
@@ -80,6 +81,26 @@ describe('独立业务端会话状态', () => {
     expect(session.displayName).toBe('creator')
     expect(getCurrentUser).toHaveBeenCalledTimes(1)
     expect(getShotGridNavigation).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([[true, true], [true, false], [false, true]])('按桌面环境 %s 和记忆选择 %s 设置会话期限', async (desktop, remember) => {
+    vi.stubGlobal('__SHOTGRID_DESKTOP__', desktop)
+    try {
+      const exp = Math.floor(Date.now() / 1000) + 3600
+      const token = 'test.' + btoa(JSON.stringify({ exp })) + '.test'
+      login.mockResolvedValueOnce({ token })
+      const write = vi.spyOn(Cookies, 'set')
+      const session = useSessionStore()
+      await session.signIn({ username: 'creator', password: 'secret', remember })
+      expect(write).toHaveBeenCalledWith('Admin-Token', token, expect.objectContaining({
+        expires: desktop && remember ? new Date(exp * 1000) : undefined
+      }))
+      expect(login.mock.calls[0][0]).not.toHaveProperty('remember')
+      await session.signOut()
+      expect(Cookies.get('Admin-Token')).toBeUndefined()
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 
   it('退出接口失败也清理本地登录态', async () => {
