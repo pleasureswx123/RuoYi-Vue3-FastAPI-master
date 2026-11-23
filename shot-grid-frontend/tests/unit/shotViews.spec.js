@@ -266,6 +266,16 @@ describe('镜头管理真实列表页', () => {
     } finally { wrapper.unmount() }
   })
 
+  it.each(['编辑镜头号', '编辑制作内容', '编辑时长', '编辑制作人'])('点击%s所在单元格的正文打开当前镜头成果', async label => {
+    const { wrapper } = await mountView(['*:*:*'], null, { resultsStub: true })
+    try {
+      const field = wrapper.get(`[aria-label="${label} 0001"]`).element.parentElement
+      field.querySelector('.shot-table-field__value').click()
+      await flushPromises()
+      expect(wrapper.getComponent({ name: 'ShotResultsPanel' }).props('shotId')).toBe(41)
+    } finally { wrapper.unmount() }
+  })
+
   it('镜头侧栏未保存时取消切项目、切模块及切视图，确认后可离开', async () => {
     const leave = vi.fn().mockResolvedValue(false)
     const { wrapper, router } = await mountView(['*:*:*'], null, { routed: true, resultsStub: true, resultsCanLeave: leave })
@@ -350,7 +360,7 @@ describe('镜头管理真实列表页', () => {
       expect(wrapper.find('.el-splitter').exists()).toBe(false)
       expect(wrapper.findComponent(ElTable).props('height')).toBeUndefined()
       const drawer = wrapper.findAllComponents(ElDrawer).find(item => item.props('title') === '镜头')
-      expect(drawer.props()).toMatchObject({ modal: false, modalPenetrable: true, size: 'min(440px, 92vw)' })
+      expect(drawer.props()).toMatchObject({ modal: false, modalPenetrable: true, resizable: true })
       await wrapper.find('[aria-label="查看镜头成果 0002"]').trigger('click'); await flushPromises()
       expect(wrapper.findComponent({ name: 'ShotResultsPanel' }).props('shotId')).toBe(42)
       const done = vi.fn(); await drawer.props('beforeClose')(done); await flushPromises()
@@ -1294,8 +1304,8 @@ describe('镜头管理真实列表页', () => {
     await flushPromises()
     expect(getShotPage).toHaveBeenCalledWith(8, expect.objectContaining({ pageNum: 1 }), expect.anything())
     expect(wrapper.text()).toContain('LCFR · 罗刹夫人')
-    expect(wrapper.find('[aria-label="编辑镜头号 0001"]').text()).toBe('0001')
-    expect(wrapper.find('[aria-label="编辑时长 0001"]').text()).toBe('3.5 秒')
+    expect(wrapper.find('[aria-label="编辑镜头号 0001"]').element.parentElement.textContent.trim()).toBe('0001')
+    expect(wrapper.find('[aria-label="编辑时长 0001"]').element.parentElement.textContent.trim()).toBe('3.5 秒')
     expect(wrapper.text()).toContain('镜头缓慢推进动力舱')
     await wrapper.find('.el-table__expand-icon').trigger('click')
     await flushPromises()
@@ -1501,7 +1511,7 @@ describe('镜头管理真实列表页', () => {
 
     expect(reorderShot).not.toHaveBeenCalled()
     expect(document.body.textContent).toContain('0002：该镜头目录已冻结，不能调整顺序')
-    expect(wrapper.findAll('button[aria-label^="编辑镜头号"]').map(row => row.text())).toEqual([
+    expect(wrapper.findAll('button[aria-label^="编辑镜头号"]').map(row => row.element.parentElement.textContent.trim())).toEqual([
       expect.stringContaining('0001'),
       expect.stringContaining('0002'),
       expect.stringContaining('0003')

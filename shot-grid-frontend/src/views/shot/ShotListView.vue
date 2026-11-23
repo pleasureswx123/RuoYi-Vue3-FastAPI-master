@@ -18,6 +18,7 @@ import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, r
 import { useRoute, useRouter } from 'vue-router'
 import { useLeaveProtection } from '@/composables/useLeaveProtection'
 import { ElCheckbox, ElCheckboxGroup, ElDatePicker, ElPopover, ElSlider, ElMessage, ElMessageBox } from 'element-plus'
+import ShotTableField from './components/ShotTableField.vue'
 import { shotDetailColumns, useShotTablePresentation } from './useShotTablePresentation'
 import { Calendar, Clock, Delete, Edit, Filter, List, Plus, Refresh, RefreshLeft, Search, Switch, Upload, User, VideoCamera, VideoPlay, View } from '@element-plus/icons-vue'
 import Sortable from 'sortablejs'
@@ -326,8 +327,8 @@ async function beforeCloseResults(done) {
   closeShotResults()
   done()
 }
-function selectShotResults(row, column, event) {
-  if (['selection', 'expand'].includes(column?.type) || event?.target?.closest('button, input, a, .el-checkbox, .el-table__expand-icon')) return
+function selectShotResults(row, _column, event) {
+  if (event?.target?.closest('button, input, a, .el-checkbox, .el-table__expand-icon')) return
   openShotResults(row)
 }
 function closeShotResults() {
@@ -1872,7 +1873,7 @@ onBeforeUnmount(() => { disposed = true; closeSingleAssign(); destroyRowSortable
         <el-empty v-else-if="viewMode !== 'table' && !shots.length" class="shot-empty" description="当前筛选没有镜头"><p>可以调整集、场次、状态或制作人筛选；项目管理人也可以新建或导入镜头。</p></el-empty>
 
         <div v-else-if="viewMode === 'table'" class="shot-table-wrap" :style="{ width: `min(100%, ${tableContentWidth}px)` }">
-          <el-table @row-contextmenu="(...args) => nasFolderMenu?.open(...args)" ref="shotTableRef" v-loading="shotsLoading" class="shot-data-table" :style="{ '--shot-row-height': `${tableRowHeight}px` }" :data="shots" row-key="shotId" :max-height="shotTableHeight" :row-class-name="({ row }) => Number(row.shotId) === resultsShotId ? 'shot-row--results' : ''" :fit="false" border empty-text="当前筛选没有镜头" @row-click="selectShotResults" @scroll="handleShotTableScroll" @selection-change="handleShotSelectionChange" @header-dragend="saveColumnWidth">
+          <el-table @row-contextmenu="(...args) => nasFolderMenu?.open(...args)" ref="shotTableRef" v-loading="shotsLoading" class="shot-data-table" :class="{ 'shot-data-table--openable': hasPermission('shotgrid:shot:query') }" :style="{ '--shot-row-height': `${tableRowHeight}px` }" :data="shots" row-key="shotId" :max-height="shotTableHeight" :row-class-name="({ row }) => Number(row.shotId) === resultsShotId ? 'shot-row--results' : ''" :fit="false" border empty-text="当前筛选没有镜头" @row-click="selectShotResults" @scroll="handleShotTableScroll" @selection-change="handleShotSelectionChange" @header-dragend="saveColumnWidth">
             <template #empty><el-empty class="shot-empty" description="当前筛选没有镜头"><p>可以调整集、场次、状态或制作人筛选；项目管理人也可以新建或导入镜头。</p></el-empty></template>
             <el-table-column type="selection" width="54" fixed="left" align="center" :selectable="isShotSelectable" reserve-selection />
             <el-table-column type="expand" width="40" fixed="left">
@@ -1896,7 +1897,7 @@ onBeforeUnmount(() => { disposed = true; closeSingleAssign(); destroyRowSortable
             </el-table-column>
             <el-table-column label="镜头" column-key="identity" :width="tableColumnWidths.identity || 132" fixed="left">
               <template #default="{ row }">
-                <el-button v-if="hasPermission('shotgrid:shot:query')" class="shot-results-trigger" text :aria-label="`查看镜头成果 ${row.shotCode}`" @click.stop="openShotResults(row, true)"><ProtectedThumbnail class="shot-thumb shot-thumb--small" :thumbnail="row.thumbnail" :alt="`${row.shotCode} 缩略图`" /><FinalVersionTag class="shot-final-position" :row="row" /></el-button>
+                <el-button v-if="hasPermission('shotgrid:shot:query')" class="shot-results-trigger" text :aria-label="`查看镜头成果 ${row.shotCode}`" @click.stop="openShotResults(row)"><ProtectedThumbnail class="shot-thumb shot-thumb--small" :thumbnail="row.thumbnail" :alt="`${row.shotCode} 缩略图`" /><FinalVersionTag class="shot-final-position" :row="row" /></el-button>
                 <ProtectedThumbnail v-else class="shot-thumb shot-thumb--small" :thumbnail="row.thumbnail" :video="row.proxyMedia" :alt="`${row.shotCode} 缩略图`" />
                 <div class="shot-media-links">
                   <el-button link type="primary" :aria-label="`查看镜头 ${row.shotCode}`" @click="openShot(row)">详情</el-button>
@@ -1910,31 +1911,32 @@ onBeforeUnmount(() => { disposed = true; closeSingleAssign(); destroyRowSortable
               </template>
             </el-table-column>
             <el-table-column label="镜头号" column-key="shotNo" :width="tableColumnWidths.shotNo || 104" fixed="left">
-              <template #default="{ row }"><el-button class="shot-cell-editor" text :title="fieldReadOnlyReason(row, 'shotNo')" :aria-label="`编辑镜头号 ${row.shotCode}`" :disabled="!canEditField(row, 'shotNo')" @click="editCell(row, 'shotNo', $event)">{{ row.shotCode }}<el-icon v-if="canEditField(row, 'shotNo')"><Edit /></el-icon></el-button></template>
+              <template #default="{ row }"><ShotTableField :title="fieldReadOnlyReason(row, 'shotNo')" :label="`编辑镜头号 ${row.shotCode}`" :disabled="!canEditField(row, 'shotNo')" @edit="editCell(row, 'shotNo', $event)">{{ row.shotCode }}</ShotTableField></template>
             </el-table-column>
             <el-table-column label="场次" column-key="scene" :width="tableColumnWidths.scene || 150">
               <template #header><span class="shot-column-heading">场次<el-button text circle size="small" :type="query.sceneId || query.episodeId ? 'primary' : ''" :icon="Filter" aria-label="筛选场次" @click="openHeaderFilter('scene', $event)" /></span></template>
-              <template #default="{ row }"><el-button class="shot-cell-editor" text :title="fieldReadOnlyReason(row, 'scene')" :aria-label="`编辑场次 ${row.shotCode}`" :disabled="!canEditField(row, 'scene')" @click="editCell(row, 'scene', $event)"><span>{{ row.episodeCode }} / {{ row.sceneCode }}<small>{{ row.sceneName || '未命名场次' }}</small></span><el-icon v-if="canEditField(row, 'scene')"><Edit /></el-icon></el-button></template>
+              <template #default="{ row }"><ShotTableField :title="fieldReadOnlyReason(row, 'scene')" :label="`编辑场次 ${row.shotCode}`" :disabled="!canEditField(row, 'scene')" @edit="editCell(row, 'scene', $event)"><span>{{ row.episodeCode }} / {{ row.sceneCode }}<small>{{ row.sceneName || '未命名场次' }}</small></span></ShotTableField></template>
             </el-table-column>
             <el-table-column label="时长" column-key="duration" :width="tableColumnWidths.duration || 96">
-              <template #default="{ row }"><el-button class="shot-cell-editor" text :title="fieldReadOnlyReason(row, 'durationSeconds')" :aria-label="`编辑时长 ${row.shotCode}`" :disabled="!canEditShot(row) && !canAdjustShot(row)" @click="editCell(row, 'durationSeconds', $event)">{{ formatShotDuration(row.durationMs) }}<el-icon v-if="canEditShot(row) || canAdjustShot(row)"><Edit /></el-icon></el-button></template>
+              <template #default="{ row }"><ShotTableField :title="fieldReadOnlyReason(row, 'durationSeconds')" :label="`编辑时长 ${row.shotCode}`" :disabled="!canEditShot(row) && !canAdjustShot(row)" @edit="editCell(row, 'durationSeconds', $event)">{{ formatShotDuration(row.durationMs) }}</ShotTableField></template>
             </el-table-column>
             <el-table-column label="制作内容" column-key="description" :width="tableColumnWidths.description || 300">
-              <template #default="{ row }"><el-button class="shot-cell-editor shot-cell-editor--content" text :title="fieldReadOnlyReason(row, 'description')" :aria-label="`编辑制作内容 ${row.shotCode}`" :disabled="!canEditShot(row) && !canAdjustShot(row)" @click="editCell(row, 'description', $event)"><span>{{ row.description || '点击填写制作内容' }}</span><el-icon v-if="canEditShot(row) || canAdjustShot(row)"><Edit /></el-icon></el-button></template>
+              <template #default="{ row }"><ShotTableField :title="fieldReadOnlyReason(row, 'description')" :label="`编辑制作内容 ${row.shotCode}`" :disabled="!canEditShot(row) && !canAdjustShot(row)" @edit="editCell(row, 'description', $event)"><span>{{ row.description || '未填写制作内容' }}</span></ShotTableField></template>
             </el-table-column>
             <el-table-column label="计划时间" column-key="plan" :width="tableColumnWidths.plan || 192">
               <template #header><span class="shot-column-heading">计划时间<el-button text circle size="small" :type="sessionStore.workspaceFilters.productionFrom ? 'primary' : ''" :icon="Filter" aria-label="筛选计划时间" @click="openHeaderFilter('plan', $event)" /></span></template>
-              <template #default="{ row }"><el-button class="shot-cell-editor" text :aria-label="`编辑计划时间 ${row.shotCode}`" :disabled="!canScheduleShot(row)" :title="canScheduleShot(row) ? '设置或调整预期制作时间' : !row.taskId ? '分配制作人后可设置排期' : '当前阶段或权限不允许调整排期'" @click="openBatchStart('schedule', [row], true)"><div class="shot-plan"><span><small>起</small> <span class="task-date-cell task-expected-start">{{ formatTaskDateTime(row.expectedStartTime) }}</span></span><span><small>止</small> <span class="task-date-cell task-expected-end">{{ formatTaskDateTime(row.expectedEndTime) }}</span></span><small v-if="!row.expectedStartTime">{{ row.taskId ? '点击设置排期' : '待分配制作人' }}</small></div><el-icon v-if="canScheduleShot(row)"><Edit /></el-icon></el-button><div class="task-time-state"><el-tag v-if="row.status !== 'completed'" size="small" :type="tagTypeFromTone(shotTimeState(row).tone)">{{ shotTimeState(row).label }}</el-tag></div></template>
+              <template #default="{ row }"><ShotTableField :label="`编辑计划时间 ${row.shotCode}`" :disabled="!canScheduleShot(row)" :title="canScheduleShot(row) ? '设置或调整预期制作时间' : !row.taskId ? '分配制作人后可设置排期' : '当前阶段或权限不允许调整排期'" @edit="openBatchStart('schedule', [row], true)"><div class="shot-plan"><span><small>起</small> <span class="task-date-cell task-expected-start">{{ formatTaskDateTime(row.expectedStartTime) }}</span></span><span><small>止</small> <span class="task-date-cell task-expected-end">{{ formatTaskDateTime(row.expectedEndTime) }}</span></span><small v-if="!row.expectedStartTime">{{ row.taskId ? '未设置排期' : '待分配制作人' }}</small></div></ShotTableField><div class="task-time-state"><el-tag v-if="row.status !== 'completed'" size="small" :type="tagTypeFromTone(shotTimeState(row).tone)">{{ shotTimeState(row).label }}</el-tag></div></template>
             </el-table-column>
             <el-table-column label="制作人" column-key="assignee" :width="tableColumnWidths.assignee || 140">
               <template #header><span class="shot-column-heading">制作人<el-button text circle size="small" :type="query.assigneeUserId ? 'primary' : ''" :icon="Filter" aria-label="筛选制作人" @click="openHeaderFilter('assignee', $event)" /></span></template>
-              <template #default="{ row }"><el-button class="shot-cell-editor" text :aria-label="`编辑制作人 ${row.shotCode}`" :disabled="!canOpenShotAssign(row) && !canAdjustShot(row)" :title="canOpenShotAssign(row) || canAdjustShot(row) ? '选择制作人' : row.status === 'pending_info' ? '请先填写制作内容' : '当前阶段或权限不允许改派'" @click="editProducer(row)"><span>{{ row.assignee ? shotAssigneeName(row.assignee, members) : '点击分配' }}<small v-if="row.previousAssigneeNames?.length">原：{{ row.previousAssigneeNames.join('、') }}</small></span><el-icon v-if="canOpenShotAssign(row) || canAdjustShot(row)"><Edit /></el-icon></el-button></template>
+              <template #default="{ row }"><ShotTableField :label="`编辑制作人 ${row.shotCode}`" :disabled="!canOpenShotAssign(row) && !canAdjustShot(row)" :title="canOpenShotAssign(row) || canAdjustShot(row) ? '选择制作人' : row.status === 'pending_info' ? '请先填写制作内容' : '当前阶段或权限不允许改派'" @edit="editProducer(row)"><span>{{ row.assignee ? shotAssigneeName(row.assignee, members) : '未分配' }}<small v-if="row.previousAssigneeNames?.length">原：{{ row.previousAssigneeNames.join('、') }}</small></span></ShotTableField></template>
             </el-table-column>
             <el-table-column label="镜头状态" column-key="status" :width="tableColumnWidths.status || 150">
               <template #header><span class="shot-column-heading">镜头状态<el-button text circle size="small" :type="query.shotStatuses.length || query.shotStatus ? 'primary' : ''" :icon="Filter" aria-label="筛选镜头状态" @click="openHeaderFilter('status', $event)" /></span></template>
               <template #default="{ row }">
+                <el-tag :class="shotStatusTagClass(row)" :type="tagTypeFromTone(shotStatusMeta(row).tone)" size="small" round>{{ shotStatusMeta(row).label }}</el-tag>
                 <el-popover placement="bottom-end" :width="260" trigger="click">
-                  <template #reference><el-button text class="shot-cell-editor" :aria-label="`镜头状态操作 ${row.shotCode}`"><el-tag :class="shotStatusTagClass(row)" :type="tagTypeFromTone(shotStatusMeta(row).tone)" size="small" round>{{ shotStatusMeta(row).label }}</el-tag><span aria-hidden="true">⌄</span></el-button></template>
+                  <template #reference><el-button text circle size="small" :aria-label="`镜头状态操作 ${row.shotCode}`"><span aria-hidden="true">⌄</span></el-button></template>
                   <p class="shot-status-help">{{ shotStatusMeta(row).label }} · 选择下一步操作</p>
                   <ShotActionButtons v-if="statusActions(row).length" :actions="statusActions(row)" />
                   <el-empty v-else :image-size="36" :description="row.status === 'unassigned' ? '请在制作人栏分配任务' : '当前没有可执行的状态操作'" />
@@ -1943,7 +1945,7 @@ onBeforeUnmount(() => { disposed = true; closeSingleAssign(); destroyRowSortable
               </template>
             </el-table-column>
             <el-table-column v-for="column in shotDetailColumns.filter(item => visibleDetailColumns.includes(item.key))" :key="column.key" :column-key="column.key" :label="column.label" :width="tableColumnWidths[column.key] || column.width">
-              <template #default="{ row }"><el-button class="shot-cell-editor shot-cell-editor--content" text :aria-label="`编辑${column.label} ${row.shotCode}`" :disabled="!canEditShot(row) && !canAdjustShot(row)" @click="editCell(row, column.key, $event)"><span>{{ column.key === 'parameters' ? [row.shotSize, row.cameraPosition, row.cameraMovement, row.focalLength].filter(Boolean).join(' · ') || '点击填写' : column.key === 'references' ? row.referenceDescription || '查看 / 编辑参考内容' : row[column.key] || '点击填写' }}</span><el-icon v-if="canEditShot(row) || canAdjustShot(row)"><Edit /></el-icon></el-button></template>
+              <template #default="{ row }"><ShotTableField :label="`编辑${column.label} ${row.shotCode}`" :disabled="!canEditShot(row) && !canAdjustShot(row)" @edit="editCell(row, column.key, $event)"><span>{{ column.key === 'parameters' ? [row.shotSize, row.cameraPosition, row.cameraMovement, row.focalLength].filter(Boolean).join(' · ') || '未填写' : column.key === 'references' ? row.referenceDescription || '未填写参考内容' : row[column.key] || '未填写' }}</span></ShotTableField></template>
             </el-table-column>
             <el-table-column column-key="addColumn" width="104" fixed="right">
               <template #header><el-popover placement="bottom-end" :width="280" trigger="click">
@@ -2054,7 +2056,10 @@ onBeforeUnmount(() => { disposed = true; closeSingleAssign(); destroyRowSortable
 
   <ResultsDrawer :model-value="Boolean(resultsShotId)" title="镜头" :modal="false" modal-penetrable :lock-scroll="false" :close-on-click-modal="false" aria-modal="false" modal-class="shot-results-drawer" append-to-body destroy-on-close :before-close="beforeCloseResults">
     <template #header><div class="shot-results-navigation"><strong>镜头</strong><el-button size="small" :disabled="batchBusy || shotsLoading || resultsIndex <= 0" @click="moveShotResults(-1)">上一镜头</el-button><el-button size="small" :disabled="batchBusy || shotsLoading || resultsIndex < 0 || resultsIndex >= shots.length - 1" @click="moveShotResults(1)">下一镜头</el-button><el-text size="small" type="info">↑ ↓ 快速切换</el-text></div></template>
-    <ShotResultsPanel v-if="resultsShotId && currentProjectId" ref="resultsPanel" :key="`${currentProjectId}:${resultsShotId}`" :project-id="currentProjectId" :shot-id="resultsShotId" :preview-on-load="resultsPreview" @updated="refreshAfterBatch([])" />
+    <Suspense>
+      <ShotResultsPanel v-if="resultsShotId && currentProjectId" ref="resultsPanel" :key="`${currentProjectId}:${resultsShotId}`" :project-id="currentProjectId" :shot-id="resultsShotId" :preview-on-load="resultsPreview" @updated="refreshAfterBatch([])" />
+      <template #fallback><el-skeleton animated :rows="4" aria-label="正在加载镜头成果" /></template>
+    </Suspense>
   </ResultsDrawer>
 </template>
 
@@ -2075,14 +2080,13 @@ onBeforeUnmount(() => { disposed = true; closeSingleAssign(); destroyRowSortable
 .shot-results-navigation { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }.shot-results-navigation .el-button { margin-left: 0; }
 .shot-results-trigger :deep(> span) { display: block; width: 100%; }
 /* 行高统一调整；表格、列宽拖动及滚动仍使用 Element Plus 的原生契约。 */
+.shot-data-table--openable :deep(.el-table__row) { cursor: pointer; }
 .shot-data-table :deep(.el-table__row > td.el-table__cell) { height: var(--shot-row-height); padding: 6px 0; box-sizing: border-box; }
 .shot-data-table :deep(.el-table__row > td.el-table__cell > .cell) { max-height: calc(var(--shot-row-height) - 12px); overflow: hidden; }
 .shot-data-table :deep(th.el-table__cell) { padding: 5px 0; }
 .shot-data-table :deep(th.el-table__cell:not(:last-child)) { border-right-color: var(--sg-border-strong); }
 .shot-data-table .shot-thumb--small { width: min(80px, 100%); height: 44px; border-radius: 6px; }
 .shot-data-table .shot-media-links { margin-top: 3px; }
-.shot-data-table .shot-cell-editor { min-height: 28px; padding: 2px; }
-.shot-data-table .shot-cell-editor--content :deep(> span > span) { display: block; max-height: calc(var(--shot-row-height) - 20px); overflow: hidden; }
 .shot-plan { display: grid; gap: 2px; }
 .shot-plan > span { display: flex; gap: 6px; align-items: baseline; }
 .shot-plan small { display: inline; line-height: 1.2; }
@@ -2092,12 +2096,6 @@ onBeforeUnmount(() => { disposed = true; closeSingleAssign(); destroyRowSortable
 :global(.shot-inline-editor) { max-width: calc(100vw - 24px); }
 .shot-column-heading { display: flex; align-items: center; justify-content: space-between; gap: 4px; }
 .shot-media-links { display: flex; gap: 8px; margin-top: 5px; }
-.shot-cell-editor { width: 100%; height: auto; min-height: 38px; margin: 0; padding: 6px; justify-content: flex-start; white-space: normal; text-align: left; }
-.shot-cell-editor :deep(> span) { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 6px; min-width: 0; }
-.shot-cell-editor small { display: block; color: var(--sg-text-muted); font-size: 11px; line-height: 1.6; }
-.shot-cell-editor .el-icon { flex: 0 0 auto; font-size: 12px; color: var(--sg-text-muted); }
-.shot-cell-editor.is-disabled { cursor: default; color: var(--sg-text-secondary); }
-.shot-cell-editor--content :deep(> span > span) { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; line-height: 1.7; }
 .shot-status-help { margin: 0 0 12px; color: var(--sg-text-secondary); }
 
 .shot-data-table :deep(td.el-table__expanded-cell) { padding: 0; background: var(--sg-surface-soft); }
