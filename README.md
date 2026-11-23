@@ -83,6 +83,30 @@ docker compose -f docker-compose.dev.yml stop postgres redis
 
 首次使用需建立内容标记；换构建电脑或清理缓存后可能重新下载。需要强制进入构建流程时使用 `-BuildOnly -ForceBuild`，仍保留层缓存；已有全部匹配镜像时可用 `-SkipBuild` 严格校验后部署。通常直接运行默认命令即可。详细规则见[部署说明](deploy/README.md)。
 
+## 如何发布 Shot Grid 桌面新版（Windows）
+
+**在哪台电脑操作？** 用平时生成 Shot Grid 安装包的这台 Windows 电脑，登录原来打包用的 Windows 账号。发布签名密钥由这个账号保管。使用者只需在自己的电脑上安装或更新。
+
+1. 在 Windows 开始菜单打开 **PowerShell**。复制下面这行并按回车，进入项目最外层文件夹。这就是“项目根目录”，里面有本 README 和 `deploy` 文件夹。
+
+   ```powershell
+   Set-Location 'D:\work\RuoYi-Vue3-FastAPI-master\RuoYi-Vue3-FastAPI-master'
+   ```
+
+2. 确认本机项目代码是本次准备发布的内容，并连上公司内网。下面以发布 **V0.1.11** 为例。每次把 `0.1.11` 换成高于线上版本的新版本号，把引号里的文字换成用户在更新提示中应看到的说明。
+
+   ```powershell
+   .\deploy\publish-desktop.ps1 -Version 0.1.11 -Notes '优化镜头列表的点击响应。'
+   ```
+
+3. 等到终端显示 **Shot Grid V0.1.11 已发布**。这条命令会生成 Windows 安装包、为版本说明和安装包摘要签名、上传到内网服务器，并在校验成功后切换线上版本。下次只发桌面新版时，重复前两步即可。
+
+**安装包在哪？** 本地打开 `shot-grid-frontend\src-tauri\target\release\bundle\nsis\`，可找到例如 `Shot Grid_0.1.11_x64-setup.exe`。服务器上的固定下载路径为 `http://192.168.10.122:12581/desktop-updates/<版本号>/ShotGrid-setup.exe`，把占位符换成实际发布的数字版本号即可。
+
+**同事怎么更新？** 使用 V0.1.9 或更早版本的同事，先手动安装一次[支持更新的 V0.1.10](http://192.168.10.122:12581/desktop-updates/0.1.10/ShotGrid-setup.exe)。此后启动桌面端会自动检查，也可以在工作区右上角点「检查更新」。用户确认下载，保存工作后确认安装，安装成功后工作台会重新打开。
+
+如需先打包试用、验收后再上传同一个安装包，见[桌面版本发布说明](deploy/桌面版本发布.md)。
+
 ## 项目目录
 
 | 目录 | 用途 |

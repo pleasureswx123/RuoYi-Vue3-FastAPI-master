@@ -28,6 +28,10 @@ import { listAssetAssignees } from '@/api/shot-grid/assets'
 import { getMineReviewProducers } from '@/api/shot-grid/reviews'
 
 const route = useRoute()
+const desktopVersion = window.__SHOTGRID_VERSION__
+function checkDesktopUpdate() {
+  window.location.assign('/desktop-updates/check')
+}
 const router = useRouter()
 const sessionStore = useSessionStore()
 const inbox = useFeedbackInbox()
@@ -311,7 +315,7 @@ onBeforeUnmount(() => {
         </span>
         <span v-show="!collapsed" class="app-brand__copy">
           <strong>SHOT GRID</strong>
-          <small>影视制作协作平台</small>
+          <small>影视制作协作平台<span v-if="desktopVersion"> · V{{ desktopVersion }}</span></small>
         </span>
       </div>
 
@@ -417,6 +421,9 @@ onBeforeUnmount(() => {
             />
           </el-tooltip>
           <ThemeModeSwitch />
+          <el-button v-if="desktopVersion" text @click="checkDesktopUpdate">
+            {{ collapsed ? `V${desktopVersion} · 检查更新` : '检查更新' }}
+          </el-button>
           <el-avatar class="app-account__avatar" :size="32" aria-hidden="true">{{ userDisplayName.slice(0, 1) }}</el-avatar>
           <span class="app-account__name">{{ userDisplayName }}</span>
           <el-button text :icon="SwitchButton" aria-label="退出登录" @click="handleSignOut">

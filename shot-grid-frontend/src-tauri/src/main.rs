@@ -23,6 +23,22 @@ const ORIGIN: &str = "http://192.168.10.122:12581";
 const APP_PATH: &str = "/shot-grid-app/";
 static NEXT_WINDOW: AtomicUsize = AtomicUsize::new(1);
 
+fn check_update(app: AppHandle, manual: bool) {
+    std::thread::spawn(move || {
+        let result = std::env::current_exe().and_then(|exe| {
+            std::process::Command::new(exe.with_file_name("tools").join("ShotGridUpdate.exe"))
+                .arg(app.package_info().version.to_string())
+                .arg(if manual { "manual" } else { "startup" })
+                .status()
+        });
+        match result {
+            Ok(status) if status.code() == Some(42) => app.exit(0),
+            Err(_) if manual => show_error("无法启动桌面更新工具，请重新安装桌面端。"),
+            _ => {}
+        }
+    });
+}
+
 fn frontend_path(url: &Url) -> Option<&str> {
     if url.origin().ascii_serialization() != ORIGIN
         || !url.username().is_empty()
@@ -138,17 +154,22 @@ fn load_frontend(
 fn open_window(app: &AppHandle, label: String, start: Url) -> tauri::Result<()> {
     let assets = app.asset_resolver();
     let handle = app.clone();
+    let update_handle = app.clone();
     let window = WebviewWindowBuilder::new(
         app,
         label,
         WebviewUrl::External("about:blank".parse().unwrap()),
     )
-    .initialization_script("Object.defineProperty(window, '__SHOTGRID_DESKTOP__', {value: true});")
+    .initialization_script(format!("Object.defineProperties(window, {{__SHOTGRID_DESKTOP__: {{value:true}}, __SHOTGRID_VERSION__: {{value:'{}'}}}});", app.package_info().version))
     .title("Shot Grid 制作工作台")
     .inner_size(1360.0, 860.0)
     .min_inner_size(900.0, 600.0)
     .disable_drag_drop_handler()
-    .on_navigation(|url| {
+    .on_navigation(move |url| {
+        if url.origin().ascii_serialization() == ORIGIN && url.path() == "/desktop-updates/check" {
+            check_update(update_handle.clone(), true);
+            return false;
+        }
         url.as_str() == "about:blank"
             || frontend_path(url).is_some()
             || url.scheme() == "shotgrid-nas" && url.host_str() == Some("open-v1")
@@ -182,6 +203,7 @@ fn main() {
                 "main".into(),
                 format!("{ORIGIN}{APP_PATH}workbench").parse()?,
             )?;
+            check_update(app.handle().clone(), false);
             Ok(())
         })
         .run(tauri::generate_context!())

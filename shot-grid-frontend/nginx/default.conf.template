@@ -9,6 +9,12 @@ server {
         return 200 'ok';
     }
 
+    location /desktop-updates/ {
+        root /srv;
+        add_header Cache-Control "no-store";
+        try_files $uri =404;
+    }
+
     location = / {
         return 302 /shot-grid-app/;
     }

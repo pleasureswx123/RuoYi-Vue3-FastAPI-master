@@ -1,7 +1,7 @@
 {
   "$schema": "./node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Shot Grid",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "identifier": "cn.laputta.shotgrid",
   "build": {
     "beforeBuildCommand": "npm.cmd run build:desktop-ui",
@@ -14,7 +14,7 @@
   "bundle": {
     "active": true,
     "targets": ["nsis"],
-    "resources": { "gen/native/ShotGridNas.exe": "tools/ShotGridNas.exe" },
+    "resources": { "gen/native/ShotGridNas.exe": "tools/ShotGridNas.exe", "gen/native/ShotGridUpdate.exe": "tools/ShotGridUpdate.exe" },
     "icon": ["icons/icon.ico"],
     "windows": { "nsis": { "template": "installer.nsi", "languages": ["SimpChinese"], "installMode": "currentUser" } }
   }

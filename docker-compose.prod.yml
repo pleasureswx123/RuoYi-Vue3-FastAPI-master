@@ -147,6 +147,8 @@ services:
       BACKEND_UPSTREAM: http://backend:9099
     ports:
       - "${BIND_ADDRESS:-0.0.0.0}:${SHOT_GRID_PORT:-12581}:80"
+    volumes:
+      - /var/lib/ruoyi-shot-grid/desktop-updates:/srv/desktop-updates:ro
     depends_on:
       backend:
         condition: service_healthy
